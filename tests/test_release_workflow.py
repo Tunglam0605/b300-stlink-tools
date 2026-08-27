@@ -56,6 +56,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     encoding="utf-8"
                 )
                 self.assertIn("libglib2.0-0", text)
+                self.assertIn("libdbus-1-3", text)
 
     def test_workflow_mentions_every_downloadable_package(self) -> None:
         text = (ROOT / ".github" / "workflows" / "release.yml").read_text(
