@@ -52,6 +52,7 @@ class GuiPackagingTests(unittest.TestCase):
                       gui_spec)
         self.assertIn('project_root / "CHANGELOG.md"', gui_spec)
         self.assertIn('"BUILD-COMMIT.txt"', gui_spec)
+        self.assertNotIn("Path(WORKPATH)", gui_spec)
         self.assertIn('"--icon", str(ROOT / "branding" / "b300-stlink-icon.ico")',
                       native_builder)
         linux_resources = {path.name for path in build_native_bundle.gui_resources("linux-x64")}

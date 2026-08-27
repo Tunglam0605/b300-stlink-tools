@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 project_root = Path(SPECPATH)
@@ -10,7 +11,7 @@ if not build_commit:
     build_commit = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=project_root, text=True
     ).strip().lower()
-build_commit_file = Path(WORKPATH) / "BUILD-COMMIT.txt"
+build_commit_file = Path(tempfile.mkdtemp(prefix="b300-stlink-build-")) / "BUILD-COMMIT.txt"
 build_commit_file.parent.mkdir(parents=True, exist_ok=True)
 build_commit_file.write_text(build_commit + "\n", encoding="ascii")
 
