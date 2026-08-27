@@ -5,3 +5,4 @@ dist/
 release/
 *.spec
 vendor/
+.worktrees/
