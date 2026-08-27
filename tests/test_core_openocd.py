@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from b300_core.hex_image import inspect_image
 from b300_core.models import ProbeRef
@@ -77,6 +78,19 @@ class OpenOcdCoreTests(unittest.TestCase):
         result = OpenOcdRunner().run(["definitely-missing-b300-openocd"])
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("not found", result.output.lower())
+
+    def test_frozen_app_resolves_bundled_openocd(self) -> None:
+        from b300_core.openocd import resolve_openocd
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "b300-stlink-gui.exe"
+            bundled = root / "vendor" / "openocd" / "bin" / "openocd.exe"
+            bundled.parent.mkdir(parents=True)
+            bundled.write_bytes(b"")
+            with mock.patch.object(sys, "frozen", True, create=True), \
+                 mock.patch.object(sys, "executable", str(executable)):
+                self.assertEqual(resolve_openocd(), str(bundled))
 
 
 if __name__ == "__main__":

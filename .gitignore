@@ -4,5 +4,6 @@ build/
 dist/
 release/
 *.spec
+!b300_gui.spec
 vendor/
 .worktrees/

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=B300 ST-Link Provisioning
+Comment=Safe STM32F407 Application provisioning over ST-Link/SWD
+Exec=b300-stlink-gui
+Icon=b300-stlink-gui
+Terminal=false
+Categories=Development;Electronics;
+Keywords=STM32;ST-Link;Firmware;B300;

@@ -31,6 +31,8 @@ def add_tree_tar(archive: tarfile.TarFile, root: Path) -> None:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--executable", required=True, type=Path)
+    parser.add_argument("--gui-executable", type=Path)
+    parser.add_argument("--resource", action="append", default=[], type=Path)
     parser.add_argument("--openocd-root", required=True, type=Path)
     parser.add_argument("--bootstrap", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
@@ -39,13 +41,22 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if not args.internal_distribution_approved:
         parser.error("--internal-distribution-approved is required.")
-    if not all(item.exists() for item in (args.executable, args.openocd_root, args.bootstrap)):
+    required = [args.executable, args.openocd_root, args.bootstrap]
+    if args.gui_executable is not None:
+        required.append(args.gui_executable)
+    required.extend(args.resource)
+    if not all(item.exists() for item in required):
         parser.error("A required bundle input is missing.")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     metadata = ("platform=%s\n" % args.platform).encode("ascii")
     if args.output.name.endswith(".tar.gz"):
         with tarfile.open(args.output, "w:gz") as archive:
             archive.add(args.executable, arcname=args.executable.name, filter=executable)
+            if args.gui_executable is not None:
+                archive.add(args.gui_executable, arcname=args.gui_executable.name,
+                            filter=executable)
+            for resource in args.resource:
+                archive.add(resource, arcname=resource.name)
             archive.add(args.bootstrap, arcname=args.bootstrap.name, filter=executable)
             add_tree_tar(archive, args.openocd_root)
             info = tarfile.TarInfo("BUNDLE-METADATA.txt")
@@ -54,6 +65,10 @@ def main(argv=None) -> int:
     elif args.output.suffix == ".zip":
         with zipfile.ZipFile(args.output, "w", zipfile.ZIP_DEFLATED) as archive:
             archive.write(args.executable, args.executable.name)
+            if args.gui_executable is not None:
+                archive.write(args.gui_executable, args.gui_executable.name)
+            for resource in args.resource:
+                archive.write(resource, resource.name)
             archive.write(args.bootstrap, args.bootstrap.name)
             add_tree_zip(archive, args.openocd_root)
             archive.writestr("BUNDLE-METADATA.txt", metadata)

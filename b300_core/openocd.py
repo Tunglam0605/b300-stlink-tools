@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Callable, List, Optional, Sequence
 
@@ -17,7 +18,15 @@ EventSink = Callable[[str], None]
 
 
 def resolve_openocd(explicit: Optional[str] = None) -> str:
-    return explicit or os.environ.get("B300_OPENOCD") or shutil.which("openocd") or "openocd"
+    configured = explicit or os.environ.get("B300_OPENOCD")
+    if configured:
+        return configured
+    if getattr(sys, "frozen", False):
+        name = "openocd.exe" if os.name == "nt" else "openocd"
+        bundled = Path(sys.executable).resolve().parent / "vendor" / "openocd" / "bin" / name
+        if bundled.is_file():
+            return str(bundled)
+    return shutil.which("openocd") or "openocd"
 
 
 def validate_openocd_value(value: object, label: str) -> None:
