@@ -56,8 +56,9 @@ class LatestRelease:
     platforms: Dict[str, ReleaseAsset]
 
     def select(self, platform_name: str) -> ReleaseAsset:
+        key = getattr(platform_name, "value", platform_name)
         try:
-            return self.platforms[str(platform_name)]
+            return self.platforms[str(key)]
         except KeyError as error:
             raise ManifestError(
                 "The release does not provide an update for %s." % platform_name

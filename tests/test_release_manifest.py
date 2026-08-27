@@ -11,6 +11,7 @@ from b300_core.release_manifest import (
     parse_latest_manifest,
     verify_minisign,
 )
+from b300_core.update_platform import UpdatePlatform
 
 
 TEST_PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
@@ -44,6 +45,10 @@ class ReleaseManifestTests(unittest.TestCase):
         self.assertEqual(asset.filename, "B300-STLink-GUI-Windows-x64.exe")
         self.assertEqual(asset.size, 123)
         self.assertEqual(asset.sha256, "a" * 64)
+        self.assertEqual(
+            release.select(UpdatePlatform.WINDOWS_X64).filename,
+            "B300-STLink-GUI-Windows-x64.exe",
+        )
 
     def test_rejects_modified_message_and_trusted_comment(self) -> None:
         with self.assertRaises(SignatureError):

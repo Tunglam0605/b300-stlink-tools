@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
-from PySide6.QtCore import QSettings, Qt
-from PySide6.QtGui import QIcon, QPixmap, QTextCursor
+from PySide6.QtCore import QSettings, Qt, QTimer, QUrl
+from PySide6.QtGui import QDesktopServices, QIcon, QPixmap, QTextCursor
 from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
@@ -44,11 +46,22 @@ from b300_core import __version__ as CORE_VERSION
 from b300_core.policy import SECTORS
 from b300_core.probe import list_probes
 from b300_core.service import B300Service, FlashResult
+from b300_core.updater import UpdateCheckResult, should_auto_check
+from b300_core.update_install import launch_install_plan, prepare_install
+from b300_core.update_platform import detect_update_platform
+from b300_core.build_info import build_commit
+from b300_core.release_notes import current_release_notes
+from b300_core.versioning import SemVer
 
 from .viewmodels import FlashViewState, confirmation_text
 from .workers import FunctionWorker
 from .memory_tab import MemoryTab
 from .branding import asset_path
+from .about_dialog import AboutDialog
+from .operation_state import OperationState
+from .update_dialog import UpdateDialog
+from .update_worker import UpdateCheckWorker, UpdateDownloadWorker
+from .whats_new_dialog import WhatsNewDialog
 from . import __version__
 
 
@@ -59,13 +72,17 @@ class MainWindow(QMainWindow):
     def __init__(self, service: Optional[B300Service] = None,
                  probe_loader: Callable = list_probes,
                  setup_bundle_provider: Optional[Callable[[], Optional[Path]]] = None,
-                 setup_installer: Callable[[Path], Path] = install_offline_bundle) -> None:
+                 setup_installer: Callable[[Path], Path] = install_offline_bundle,
+                 update_client=None, automatic_updates: bool = False,
+                 update_installer=None, settings=None) -> None:
         super().__init__()
         self.service = service or B300Service()
         self.probe_loader = probe_loader
         self.setup_bundle_provider = setup_bundle_provider or self._select_offline_bundle
         self.setup_installer = setup_installer
-        self.settings = QSettings("TungLamAutomation", "B300-STLink")
+        self.update_client = update_client
+        self.update_installer = update_installer or launch_install_plan
+        self.settings = settings or QSettings("TungLamAutomation", "B300-STLink")
         self.image_info = None
         self.flash_plan: Optional[FlashPlan] = None
         self.target_info: Optional[TargetInfo] = None
@@ -75,6 +92,12 @@ class MainWindow(QMainWindow):
         self._probe_selection_required = False
         self._threads = []
         self._cancellable_worker = None
+        self._update_workers = []
+        self.update_dialog = None
+        self.about_dialog = None
+        self.whats_new_dialog = None
+        self._update_result = None
+        self._downloaded_update = None
 
         self.setWindowTitle("B300 ST-Link Provisioning")
         self.setWindowIcon(QIcon(str(asset_path("b300-stlink-icon.png"))))
@@ -89,6 +112,13 @@ class MainWindow(QMainWindow):
         )
         self.refresh_probes()
         self._restore_last_image()
+        QTimer.singleShot(0, self._show_whats_new_if_needed)
+        if (
+            automatic_updates and self.update_client is not None and
+            self.settings.value("updates/automatic", True, type=bool) and
+            should_auto_check(self.settings.value("updates/last_check_utc"))
+        ):
+            QTimer.singleShot(2000, lambda: self.check_for_updates(manual=False))
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -146,25 +176,214 @@ class MainWindow(QMainWindow):
         self.memory_tab = MemoryTab(
             self.service, self._selected_probe, log_sink=self.append_log
         )
+        self.memory_tab.operation_state_changed.connect(
+            lambda _busy: self._refresh_update_install_state()
+        )
         self.tabs.addTab(self.memory_tab, "Memory / Metadata")
         root.addWidget(self.tabs, 1)
         self.setCentralWidget(central)
 
     def _build_menu(self) -> None:
         help_menu = self.menuBar().addMenu("Trợ giúp")
+        self.check_updates_action = help_menu.addAction("Kiểm tra cập nhật")
+        self.check_updates_action.triggered.connect(
+            lambda: self.check_for_updates(manual=True)
+        )
+        self.release_notes_action = help_menu.addAction("Ghi chú phiên bản")
+        self.release_notes_action.triggered.connect(self.show_release_notes)
+        help_menu.addSeparator()
         self.about_action = help_menu.addAction("Giới thiệu")
         self.about_action.triggered.connect(self.show_about)
 
     def show_about(self) -> None:
-        QMessageBox.about(
-            self,
-            "B300 ST-Link Provisioning",
-            "B300 ST-Link Provisioning v%s\n\n"
-            "GUI v%s · Core v%s\n"
-            "GUI và CLI dùng chung một core an toàn.\n"
-            "Target: STM32F407 · Application base: 0x08010000\n"
-            "OpenOCD xPack: 0.12.0-7" % (__version__, __version__, CORE_VERSION),
+        if self.about_dialog is None:
+            self.about_dialog = AboutDialog(
+                __version__, CORE_VERSION, build_commit(), self
+            )
+            self.about_dialog.check_updates_requested.connect(
+                lambda: self.check_for_updates(manual=True)
+            )
+        self.about_dialog.show()
+        self.about_dialog.raise_()
+
+    def _show_whats_new_if_needed(self) -> None:
+        seen_text = self.settings.value("updates/last_seen_version")
+        self.settings.setValue("updates/last_seen_version", __version__)
+        if seen_text is None:
+            return
+        try:
+            should_show = SemVer.parse(str(seen_text)) < SemVer.parse(__version__)
+        except ValueError:
+            return
+        if not should_show or self.whats_new_dialog is not None:
+            return
+        try:
+            notes = current_release_notes(__version__)
+        except (OSError, ValueError) as error:
+            self.append_log("What's New unavailable: %s" % error)
+            return
+        self.whats_new_dialog = WhatsNewDialog(__version__, notes, self)
+        self.whats_new_dialog.show()
+
+    def show_release_notes(self) -> None:
+        if self._update_result is not None:
+            QDesktopServices.openUrl(QUrl(self._update_result.release.release_page))
+        else:
+            QDesktopServices.openUrl(QUrl(
+                "https://github.com/Tunglam0605/b300-stlink-tools/releases/latest"
+            ))
+
+    @staticmethod
+    def _utc_now_text() -> str:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def check_for_updates(self, manual: bool = False) -> None:
+        if self.update_client is None:
+            if manual:
+                QMessageBox.warning(
+                    self, "Không thể kiểm tra cập nhật",
+                    "Bản chạy này không có cấu hình updater cho nền tảng hiện tại.",
+                )
+            return
+        if any(isinstance(worker, UpdateCheckWorker) for worker in self._update_workers):
+            return
+        worker = UpdateCheckWorker(self.update_client, __version__, self)
+        worker.completed.connect(
+            lambda result, selected=manual: self._update_check_finished(result, selected)
         )
+        worker.failed.connect(
+            lambda error, selected=manual: self._update_check_failed(error, selected)
+        )
+        worker.finished.connect(self._update_worker_finished)
+        self._update_workers.append(worker)
+        self.check_updates_action.setEnabled(False)
+        worker.start()
+
+    def _update_check_finished(
+            self, result: UpdateCheckResult, manual: bool = False) -> None:
+        self.settings.setValue("updates/last_check_utc", self._utc_now_text())
+        self._update_result = result
+        if not result.available or result.asset is None:
+            if manual:
+                QMessageBox.information(
+                    self, "Đã cập nhật",
+                    "Bạn đang dùng phiên bản mới nhất (%s)." % __version__,
+                )
+            return
+        if self.update_dialog is not None:
+            self.update_dialog.close()
+        self.update_dialog = UpdateDialog(__version__, result.release, result.asset, self)
+        self.update_dialog.download_requested.connect(self._start_update_download)
+        self.update_dialog.install_requested.connect(self._install_downloaded_update)
+        self.update_dialog.release_requested.connect(
+            lambda url: QDesktopServices.openUrl(QUrl(url))
+        )
+        self.update_dialog.show()
+        self._refresh_update_install_state()
+
+    def _update_check_failed(self, error, manual: bool = False) -> None:
+        self.settings.setValue("updates/last_check_utc", self._utc_now_text())
+        self.append_log("Update check failed: %s" % error)
+        if manual:
+            QMessageBox.warning(self, "Không thể kiểm tra cập nhật", str(error))
+
+    def _update_worker_finished(self) -> None:
+        worker = self.sender()
+        if worker in self._update_workers:
+            self._update_workers.remove(worker)
+        self.check_updates_action.setEnabled(True)
+        worker.deleteLater()
+
+    def _update_cache_dir(self) -> Path:
+        if sys.platform == "win32":
+            base = Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
+            return base / "B300-STLink" / "updates"
+        base = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
+        return base / "b300-stlink" / "updates"
+
+    def _start_update_download(self) -> None:
+        if (
+            self.update_client is None or self._update_result is None or
+            self._update_result.asset is None or self.update_dialog is None
+        ):
+            return
+        if any(isinstance(worker, UpdateDownloadWorker) for worker in self._update_workers):
+            return
+        self.update_dialog.set_downloading()
+        worker = UpdateDownloadWorker(
+            self.update_client, self._update_result.asset, self._update_cache_dir(), self
+        )
+        worker.progress.connect(self.update_dialog.set_download_progress)
+        worker.completed.connect(self._update_download_finished)
+        worker.failed.connect(self._update_download_failed)
+        worker.finished.connect(self._update_worker_finished)
+        self._update_workers.append(worker)
+        worker.start()
+
+    def _update_download_finished(self, package: Path) -> None:
+        self._downloaded_update = Path(package)
+        if self.update_dialog is not None:
+            self.update_dialog.set_ready(self._downloaded_update)
+        self._refresh_update_install_state()
+
+    def _update_download_failed(self, error) -> None:
+        self.append_log("Update download failed: %s" % error)
+        if self.update_dialog is not None:
+            self.update_dialog.action_button.setText("Thử tải lại")
+            self.update_dialog.action_button.setEnabled(True)
+        QMessageBox.warning(self, "Tải cập nhật thất bại", str(error))
+
+    def _operation_state(self) -> OperationState:
+        return OperationState(
+            main_hardware_busy=self.busy or bool(self._threads),
+            memory_hardware_busy=self.memory_tab.has_active_operation,
+        )
+
+    def _refresh_update_install_state(self) -> None:
+        if self.update_dialog is None or self.update_dialog.ready_package is None:
+            return
+        busy = self._operation_state().is_hardware_busy
+        self.update_dialog.set_install_allowed(
+            not busy,
+            "Bản cập nhật đã tải xong; chờ thao tác phần cứng hiện tại hoàn tất.",
+        )
+
+    def _install_downloaded_update(self) -> None:
+        if self._downloaded_update is None or self._operation_state().is_hardware_busy:
+            self._refresh_update_install_state()
+            return
+        try:
+            platform_name = detect_update_platform(Path(sys.executable))
+            plan = prepare_install(self._downloaded_update, platform_name)
+        except (RuntimeError, ValueError) as error:
+            QMessageBox.warning(self, "Không thể cài cập nhật", str(error))
+            return
+        if not plan.managed:
+            if plan.open_directory is not None:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(plan.open_directory)))
+            QMessageBox.information(
+                self, "Gói cập nhật đã được xác minh",
+                "Chạy lệnh sau để cài đặt:\n\n%s" % plan.instructions,
+            )
+            return
+        answer = QMessageBox.question(
+            self,
+            "Cài đặt bản cập nhật",
+            "Gói cập nhật đã vượt qua kiểm tra chữ ký và SHA-256.\n\n"
+            "Đóng B300 ST-Link Tools và chạy trình cài đặt ngay?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self.update_installer(plan)
+        except OSError as error:
+            QMessageBox.warning(self, "Không thể mở trình cài đặt", str(error))
+            return
+        if self.update_dialog is not None:
+            self.update_dialog.close()
+        self.close()
 
     def _build_flash_tab(self) -> QWidget:
         page = QWidget()
@@ -530,6 +749,7 @@ class MainWindow(QMainWindow):
         self.probe_combo.setEnabled(not self.busy)
         self.setup_button.setVisible(not self.openocd_ready)
         self.setup_button.setEnabled(not self.busy)
+        self._refresh_update_install_state()
 
     def show_dry_run(self) -> None:
         if self.flash_plan is None:

@@ -3,30 +3,9 @@
 from __future__ import annotations
 
 import argparse
-import re
 from pathlib import Path
 
-from .version_tools import parse_semver
-
-
-HEADING_RE = re.compile(r"(?m)^## \[([^\]]+)\](?: - [^\r\n]+)?\s*$")
-
-
-def extract_release_notes(text: str, version: str) -> str:
-    parse_semver(version)
-    headings = list(HEADING_RE.finditer(text))
-    matches = [index for index, match in enumerate(headings) if match.group(1) == version]
-    if not matches:
-        raise ValueError("CHANGELOG release %s was not found." % version)
-    if len(matches) != 1:
-        raise ValueError("CHANGELOG release %s appears more than once." % version)
-    index = matches[0]
-    start = headings[index].end()
-    end = headings[index + 1].start() if index + 1 < len(headings) else len(text)
-    notes = text[start:end].strip()
-    if not notes:
-        raise ValueError("CHANGELOG release %s is empty." % version)
-    return notes
+from b300_core.release_notes import extract_release_notes
 
 
 def main(argv=None) -> int:

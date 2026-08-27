@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 
 from .main_window import MainWindow
+from b300_core.update_platform import detect_update_platform
+from b300_core.update_public_key import MINISIGN_PUBLIC_KEY
+from b300_core.updater import UpdateClient
 
 
 def main(argv=None) -> int:
@@ -16,7 +20,17 @@ def main(argv=None) -> int:
                         help="Construct the GUI offscreen and exit without hardware access.")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     app = QApplication.instance() or QApplication([])
-    window = MainWindow()
+    update_client = None
+    if not args.smoke_test:
+        try:
+            update_platform = detect_update_platform(Path(sys.executable))
+            update_client = UpdateClient(MINISIGN_PUBLIC_KEY, update_platform.value)
+        except RuntimeError:
+            update_client = None
+    window = MainWindow(
+        update_client=update_client,
+        automatic_updates=not args.smoke_test,
+    )
     if args.smoke_test:
         app.processEvents()
         window.close()

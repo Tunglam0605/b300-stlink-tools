@@ -29,6 +29,10 @@ class UpdaterVersioningTests(unittest.TestCase):
             detect_update_platform(Path("B300.AppImage"), "Linux", "aarch64"),
             UpdatePlatform.LINUX_ARM64_APPIMAGE,
         )
+        self.assertEqual(
+            detect_update_platform(Path("B300.exe"), "Windows", ""),
+            UpdatePlatform.WINDOWS_X64,
+        )
 
     def test_linux_installed_package_defaults_to_deb_identity(self) -> None:
         self.assertEqual(

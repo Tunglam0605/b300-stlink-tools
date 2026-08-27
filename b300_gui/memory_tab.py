@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
+from PySide6.QtCore import Signal
+
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -41,6 +43,8 @@ def format_hex_preview(data: bytes, limit: int = 4096) -> str:
 
 
 class MemoryTab(QWidget):
+    operation_state_changed = Signal(bool)
+
     def __init__(self, service, probe_provider: Callable[[], ProbeRef],
                  log_sink: Callable[[str], None] = lambda _line: None) -> None:
         super().__init__()
@@ -180,6 +184,7 @@ class MemoryTab(QWidget):
         worker.finished.connect(self._worker_finished)
         self._threads.append(worker)
         self._active_worker = worker
+        self.operation_state_changed.emit(True)
         self.cancel_button.setEnabled(True)
         worker.start()
 
@@ -190,6 +195,7 @@ class MemoryTab(QWidget):
         if worker is self._active_worker:
             self._active_worker = None
             self.cancel_button.setEnabled(False)
+        self.operation_state_changed.emit(self.has_active_operation)
         worker.deleteLater()
 
     def cancel_current(self) -> None:

@@ -1,8 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
+import subprocess
 from pathlib import Path
 
 project_root = Path(SPECPATH)
+build_commit = os.environ.get("B300_BUILD_COMMIT", "").strip().lower()
+if not build_commit:
+    build_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=project_root, text=True
+    ).strip().lower()
+build_commit_file = Path(WORKPATH) / "BUILD-COMMIT.txt"
+build_commit_file.parent.mkdir(parents=True, exist_ok=True)
+build_commit_file.write_text(build_commit + "\n", encoding="ascii")
 
 a = Analysis(
     [str(project_root / "b300_gui_entry.py")],
@@ -11,6 +21,8 @@ a = Analysis(
     datas=[
         (str(project_root / "branding" / "b300-stlink-icon.png"), "branding"),
         (str(project_root / "branding" / "b300-stlink-wordmark.png"), "branding"),
+        (str(project_root / "CHANGELOG.md"), "."),
+        (str(build_commit_file), "."),
     ],
     hiddenimports=[],
     hookspath=[],
