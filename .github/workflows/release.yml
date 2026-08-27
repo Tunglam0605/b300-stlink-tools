@@ -247,14 +247,31 @@ jobs:
           "$minisign_bin" -Vm release-assets/latest.json -x release-assets/latest.json.minisig -P "$MINISIGN_PUBLIC_KEY"
           rm -f "$RUNNER_TEMP/minisign.key"
       - name: Create draft release and upload exact assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.prepare-release.outputs.version }}
-        run: |
-          gh release create "$GITHUB_REF_NAME" release-assets/* \
-            --verify-tag --draft \
-            --title "B300 ST-Link Tools v${VERSION}" \
-            --notes-file release-notes/release-notes.md
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: B300 ST-Link Tools v${{ needs.prepare-release.outputs.version }}
+          body_path: release-notes/release-notes.md
+          draft: true
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          preserve_order: true
+          files: |
+            release-assets/B300-STLink-GUI-Windows-x64.exe
+            release-assets/B300-STLink-GUI-Windows-x64.zip
+            release-assets/B300-STLink-CLI-Windows-x64.zip
+            release-assets/B300-STLink-GUI-Ubuntu-x64.AppImage
+            release-assets/b300-stlink-gui_amd64.deb
+            release-assets/B300-STLink-CLI-Linux-x64.tar.gz
+            release-assets/B300-STLink-GUI-Ubuntu-arm64.AppImage
+            release-assets/b300-stlink-gui_arm64.deb
+            release-assets/B300-STLink-CLI-Linux-arm64.tar.gz
+            release-assets/SHA256SUMS.txt
+            release-assets/release-manifest.json
+            release-assets/release-manifest.json.minisig
+            release-assets/latest.json
+            release-assets/latest.json.minisig
+          token: ${{ github.token }}
       - name: Publish as Latest after upload validation
         env:
           GH_TOKEN: ${{ github.token }}

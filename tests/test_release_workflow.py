@@ -3,7 +3,10 @@ from pathlib import Path
 
 import yaml
 
-from scripts.release.release_contract import EXPECTED_PACKAGE_ASSETS
+from scripts.release.release_contract import (
+    EXPECTED_PACKAGE_ASSETS,
+    METADATA_ASSETS,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,8 +33,6 @@ class ReleaseWorkflowTests(unittest.TestCase):
         commands = "\n".join(
             step.get("run", "") for step in finalize["steps"] if isinstance(step, dict)
         )
-        self.assertIn("gh release create", commands)
-        self.assertIn("--draft", commands)
         self.assertIn("gh release edit", commands)
         downloads = [
             step.get("with", {}).get("name")
@@ -42,6 +43,27 @@ class ReleaseWorkflowTests(unittest.TestCase):
             downloads,
             ["release-windows-x64", "release-linux-x64", "release-linux-arm64", "release-notes"],
         )
+
+    def test_release_uses_action_uploader_for_only_the_signed_root_assets(self) -> None:
+        workflow = load_workflow("release.yml")
+        finalize_steps = workflow["jobs"]["finalize-release"]["steps"]
+        uploader = next(
+            step for step in finalize_steps
+            if step.get("name") == "Create draft release and upload exact assets"
+        )
+        self.assertTrue(uploader["uses"].startswith("softprops/action-gh-release@"))
+        self.assertEqual(uploader["with"]["draft"], "true")
+        self.assertEqual(uploader["with"]["fail_on_unmatched_files"], "true")
+        self.assertEqual(uploader["with"]["overwrite_files"], "true")
+        asset_paths = uploader["with"]["files"]
+        for asset in EXPECTED_PACKAGE_ASSETS + METADATA_ASSETS:
+            with self.subTest(asset=asset):
+                self.assertIn("release-assets/" + asset, asset_paths)
+
+        commands = "\n".join(
+            step.get("run", "") for step in finalize_steps if isinstance(step, dict)
+        )
+        self.assertNotIn("gh release create", commands)
 
     def test_linux_release_builds_inside_ubuntu_2204_userspace(self) -> None:
         workflow = load_workflow("release.yml")
