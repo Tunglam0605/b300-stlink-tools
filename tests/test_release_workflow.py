@@ -57,6 +57,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 )
                 self.assertIn("libglib2.0-0", text)
                 self.assertIn("libdbus-1-3", text)
+                self.assertIn(" file ", text)
 
     def test_workflow_mentions_every_downloadable_package(self) -> None:
         text = (ROOT / ".github" / "workflows" / "release.yml").read_text(
