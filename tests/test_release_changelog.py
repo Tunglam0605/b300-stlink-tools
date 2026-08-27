@@ -1,6 +1,9 @@
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
-from scripts.release.changelog import extract_release_notes
+from scripts.release.changelog import extract_release_notes, main
 
 
 CHANGELOG = """# Changelog
@@ -44,6 +47,23 @@ class ReleaseChangelogTests(unittest.TestCase):
     def test_unreleased_heading_is_not_a_release(self) -> None:
         with self.assertRaises(ValueError):
             extract_release_notes(CHANGELOG, "Unreleased")
+
+    def test_cli_output_is_compatible_with_python_39_pathlib(self) -> None:
+        original_write_text = Path.write_text
+
+        def python39_write_text(path, data, encoding=None, errors=None):
+            return original_write_text(path, data, encoding=encoding, errors=errors)
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            changelog, output = root / "CHANGELOG.md", root / "notes.md"
+            changelog.write_text(CHANGELOG, encoding="utf-8")
+            with mock.patch.object(Path, "write_text", python39_write_text):
+                self.assertEqual(main([
+                    "0.3.0", "--changelog", str(changelog), "--output", str(output),
+                ]), 0)
+            self.assertEqual(output.read_text(encoding="utf-8"),
+                             extract_release_notes(CHANGELOG, "0.3.0") + "\n")
 
 
 if __name__ == "__main__":

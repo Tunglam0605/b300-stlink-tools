@@ -23,7 +23,7 @@ def main(argv=None) -> int:
     if args.output is None:
         print(notes)
     else:
-        args.output.write_text(notes + "\n", encoding="utf-8", newline="\n")
+        args.output.write_bytes((notes + "\n").encode("utf-8"))
     return 0
 
 

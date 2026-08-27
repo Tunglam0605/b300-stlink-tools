@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scripts.release.build_metadata import build_release_metadata
 from scripts.release.release_contract import EXPECTED_PACKAGE_ASSETS
@@ -54,6 +55,25 @@ class ReleaseMetadataTests(unittest.TestCase):
             self.assertEqual(len(checksum_lines), len(EXPECTED_PACKAGE_ASSETS) + 2)
             expected_digest = hashlib.sha256(first["latest.json"]).hexdigest()
             self.assertIn(expected_digest + "  latest.json", checksum_lines)
+
+    def test_metadata_writer_is_compatible_with_python_39_pathlib(self) -> None:
+        original_write_text = Path.write_text
+
+        def python39_write_text(path, data, encoding=None, errors=None):
+            return original_write_text(path, data, encoding=encoding, errors=errors)
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self._write_packages(root)
+            with mock.patch.object(Path, "write_text", python39_write_text):
+                build_release_metadata(
+                    root, "0.3.0", "a" * 40, "2026-08-27T00:00:00Z",
+                    "https://github.com/Tunglam0605/b300-stlink-tools/releases/download/v0.3.0",
+                    "https://github.com/Tunglam0605/b300-stlink-tools/releases/tag/v0.3.0",
+                    "Notes",
+                )
+            self.assertEqual((root / "SHA256SUMS.txt").read_text("ascii").count("\n"),
+                             len(EXPECTED_PACKAGE_ASSETS) + 2)
 
     def test_rejects_missing_and_unexpected_package_assets(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

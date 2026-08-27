@@ -112,9 +112,7 @@ def build_release_metadata(
     checksum_text = "".join(
         "%s  %s\n" % (_sha256(root / name), name) for name in checksum_names
     )
-    (root / "SHA256SUMS.txt").write_text(
-        checksum_text, encoding="ascii", newline="\n"
-    )
+    (root / "SHA256SUMS.txt").write_bytes(checksum_text.encode("ascii"))
 
 
 def main(argv=None) -> int:
