@@ -78,6 +78,7 @@ def main(argv=None) -> int:
         subprocess.check_call([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
                                "--onefile",
                                "--name", "b300-stlink", "--distpath", str(args.output_dir),
+                               "--workpath", str(temp / "pyinstaller-cli"),
                                "--icon", str(ROOT / "branding" / "b300-stlink-icon.ico"),
                                str(ROOT / "b300_stlink.py")])
         gui_executable = "b300-stlink-gui.exe" if platform_name == "windows-x64" else "b300-stlink-gui"
@@ -85,7 +86,7 @@ def main(argv=None) -> int:
             subprocess.check_call([
                 sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
                 "--distpath", str(args.output_dir),
-                "--workpath", str(ROOT / "build" / "b300-stlink-gui"),
+                "--workpath", str(temp / "pyinstaller-gui"),
                 str(ROOT / "b300_gui.spec"),
             ])
         package_command = [
