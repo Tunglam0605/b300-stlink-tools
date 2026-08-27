@@ -1,16 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-import os
-import subprocess
 import tempfile
 from pathlib import Path
 
+from b300_core.build_info import build_commit as resolve_build_commit
+
 project_root = Path(SPECPATH)
-build_commit = os.environ.get("B300_BUILD_COMMIT", "").strip().lower()
-if not build_commit:
-    build_commit = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=project_root, text=True
-    ).strip().lower()
+build_commit = resolve_build_commit()
 build_commit_file = Path(tempfile.mkdtemp(prefix="b300-stlink-build-")) / "BUILD-COMMIT.txt"
 build_commit_file.parent.mkdir(parents=True, exist_ok=True)
 build_commit_file.write_text(build_commit + "\n", encoding="ascii")
