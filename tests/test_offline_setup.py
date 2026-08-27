@@ -365,7 +365,7 @@ class OfflineSetupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             expected, _ = write_bundle(root)
-            self.assertEqual(find_offline_bundle(root, "windows-x64"), expected)
+            self.assertEqual(find_offline_bundle(root, "windows-x64"), expected.resolve())
 
 
 if __name__ == "__main__":
