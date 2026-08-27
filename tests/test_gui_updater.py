@@ -40,7 +40,9 @@ class GuiUpdaterTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls) -> None:
         cls.app.processEvents()
-        cls.app.shutdown()
+        # GuiSmokeTests may already have finalized a previous process-wide Qt
+        # application. Keep this replacement instance alive through process
+        # exit, matching GuiMemoryTests and avoiding a second Linux teardown.
         cls.app = None
 
     def make_window(self, client=None, installer=None, settings=None,
