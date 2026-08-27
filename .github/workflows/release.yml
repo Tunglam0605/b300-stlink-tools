@@ -71,7 +71,7 @@ jobs:
       matrix:
         include:
           - architecture: x86_64
-            runner: ubuntu-latest
+            runner: ubuntu-22.04
             bundle_platform: linux-x64
             appimagetool_arch: x86_64
             appimagetool_sha256: A6D71E2B6CD66F8E8D16C37AD164658985E0CF5FCAA950C90A482890CB9D13E0

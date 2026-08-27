@@ -24,6 +24,15 @@ def gui_builder():
 
 
 class GuiPackagingTests(unittest.TestCase):
+    def test_linux_x64_release_uses_ubuntu_2204_compatibility_baseline(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
+        x64_entry = workflow.split("- architecture: x86_64", 1)[1].split(
+            "- architecture: aarch64", 1
+        )[0]
+        self.assertIn("runner: ubuntu-22.04", x64_entry)
+
     def test_brand_assets_are_wired_into_native_executables(self) -> None:
         self.assertTrue((ROOT / "branding" / "logo.png").is_file())
         self.assertTrue((ROOT / "branding" / "b300-stlink-icon.png").is_file())
