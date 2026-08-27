@@ -6,6 +6,14 @@ Hướng dẫn đầy đủ:
 
 - [Windows x64](docs/WINDOWS.md)
 - [Ubuntu IPC x64](docs/UBUNTU_IPC.md)
+- [Vận hành hằng ngày](docs/OPERATIONS.md)
+- [Quy tắc cho AI agent](AGENTS.md)
+
+Lộ trình tài liệu:
+
+1. Người mới cài tool: đọc hướng dẫn theo hệ điều hành.
+2. Người trực tiếp nạp/debug: đọc **Vận hành hằng ngày** trước khi dùng board.
+3. AI agent/automation: bắt buộc đọc `AGENTS.md` trước khi gọi lệnh flash/debug.
 
 ## An toàn bootloader/OTA
 
