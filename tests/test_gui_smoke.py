@@ -147,7 +147,7 @@ class GuiSmokeTests(unittest.TestCase):
         while window.busy and time.monotonic() < deadline:
             self.app.processEvents()
             time.sleep(0.01)
-        self.assertEqual(service.executable, "installed\\openocd.exe")
+        self.assertEqual(Path(service.executable), Path("installed/openocd.exe"))
         self.assertTrue(window.setup_button.isHidden())
         self.assertIn("OpenOCD sẵn sàng", window.status_banner.text())
         while window._threads and time.monotonic() < deadline:
