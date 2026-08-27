@@ -46,6 +46,40 @@ def target():
     return target_for(platform.system(), platform.machine(), sysconfig.get_platform())
 
 
+def release_names(platform_name: str):
+    if platform_name == "windows-x64":
+        return (
+            "B300-STLink-GUI-Windows-x64.zip",
+            "B300-STLink-CLI-Windows-x64.zip",
+        )
+    if platform_name == "linux-x64":
+        return (
+            "B300-STLink-GUI-Linux-x64.tar.gz",
+            "B300-STLink-CLI-Linux-x64.tar.gz",
+        )
+    if platform_name == "linux-arm64":
+        return (
+            "B300-STLink-GUI-Linux-arm64.tar.gz",
+            "B300-STLink-CLI-Linux-arm64.tar.gz",
+        )
+    raise RuntimeError("Unsupported release platform: %s" % platform_name)
+
+
+def gui_resources(platform_name: str):
+    resources = [
+        ROOT / "LICENSE",
+        ROOT / "branding" / "b300-stlink-icon.png",
+        ROOT / "branding" / "b300-stlink-icon.ico",
+        ROOT / "branding" / "b300-stlink-wordmark.png",
+    ]
+    if platform_name.startswith("linux-"):
+        resources.extend([
+            ROOT / "packaging" / "linux" / "b300-stlink-gui.desktop",
+            ROOT / "packaging" / "linux" / "b300-stlink-gui.svg",
+        ])
+    return resources
+
+
 def fetch(url: str, output: Path) -> None:
     with urllib.request.urlopen(url) as source, output.open("wb") as destination:
         shutil.copyfileobj(source, destination)
@@ -63,8 +97,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=ROOT / "release")
     parser.add_argument("--internal-distribution-approved", action="store_true")
-    parser.add_argument("--cli-only", action="store_true",
-                        help="Build the legacy CLI-only archive without the GUI executable.")
+    parser.add_argument("--flavor", choices=("all", "gui", "cli"), default="all")
     args = parser.parse_args(argv)
     if not args.internal_distribution_approved:
         parser.error("--internal-distribution-approved is required.")
@@ -84,40 +117,45 @@ def main(argv=None) -> int:
         extract_trusted_openocd_package(archive, openocd_root, platform_name)
         subprocess.check_call([sys.executable, "-m", "pip", "install", "--user",
                                "-r", str(ROOT / "requirements-build.txt")])
-        subprocess.check_call([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
-                               "--onefile",
-                               "--name", "b300-stlink", "--distpath", str(args.output_dir),
-                               "--workpath", str(temp / "pyinstaller-cli"),
-                               "--icon", str(ROOT / "branding" / "b300-stlink-icon.ico"),
-                               str(ROOT / "b300_stlink.py")])
+        if args.flavor in {"all", "cli"}:
+            subprocess.check_call([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
+                                   "--onefile",
+                                   "--name", "b300-stlink", "--distpath", str(args.output_dir),
+                                   "--workpath", str(temp / "pyinstaller-cli"),
+                                   "--icon", str(ROOT / "branding" / "b300-stlink-icon.ico"),
+                                   str(ROOT / "b300_stlink.py")])
         gui_executable = "b300-stlink-gui.exe" if platform_name == "windows-x64" else "b300-stlink-gui"
-        if not args.cli_only:
+        if args.flavor in {"all", "gui"}:
             subprocess.check_call([
                 sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
                 "--distpath", str(args.output_dir),
                 "--workpath", str(temp / "pyinstaller-gui"),
                 str(ROOT / "b300_gui.spec"),
             ])
-        package_command = [
-            sys.executable, str(ROOT / "package_internal.py"),
-            "--executable", str(args.output_dir / executable),
-            "--openocd-root", str(openocd_root), "--bootstrap", str(ROOT / installer),
-            "--output", str(args.output_dir / ("b300-stlink-%s%s" % (platform_name, extension))),
-            "--platform", platform_name, "--internal-distribution-approved",
-            "--version", TOOL_VERSION,
-            "--openocd-archive", filename,
-            "--openocd-sha256", verified_sha256,
-            "--openocd-package", str(archive),
-            "--resource", str(ROOT / "LICENSE"),
-            "--resource", str(ROOT / "packaging" / "linux" / "b300-stlink-gui.desktop"),
-            "--resource", str(ROOT / "packaging" / "linux" / "b300-stlink-gui.svg"),
-            "--resource", str(ROOT / "branding" / "b300-stlink-icon.png"),
-            "--resource", str(ROOT / "branding" / "b300-stlink-icon.ico"),
-            "--resource", str(ROOT / "branding" / "b300-stlink-wordmark.png"),
-        ]
-        if not args.cli_only:
-            package_command.extend(["--gui-executable", str(args.output_dir / gui_executable)])
-        subprocess.check_call(package_command)
+        gui_name, cli_name = release_names(platform_name)
+
+        def package(flavor_name, selected_executable, output_name, resources):
+            command = [
+                sys.executable, str(ROOT / "package_internal.py"),
+                "--flavor", flavor_name,
+                "--executable", str(args.output_dir / selected_executable),
+                "--openocd-root", str(openocd_root),
+                "--bootstrap", str(ROOT / installer),
+                "--output", str(args.output_dir / output_name),
+                "--platform", platform_name, "--internal-distribution-approved",
+                "--version", TOOL_VERSION,
+                "--openocd-archive", filename,
+                "--openocd-sha256", verified_sha256,
+                "--openocd-package", str(archive),
+            ]
+            for resource in resources:
+                command.extend(["--resource", str(resource)])
+            subprocess.check_call(command)
+
+        if args.flavor in {"all", "cli"}:
+            package("cli", executable, cli_name, [ROOT / "LICENSE"])
+        if args.flavor in {"all", "gui"}:
+            package("gui", gui_executable, gui_name, gui_resources(platform_name))
     return 0
 
 

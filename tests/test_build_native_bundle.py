@@ -71,6 +71,23 @@ class NativeBundleTargetTests(unittest.TestCase):
                 "0" * 64,
             )
 
+    def test_release_names_separate_gui_and_cli_by_platform(self) -> None:
+        module = builder()
+        self.assertEqual(
+            module.release_names("windows-x64"),
+            (
+                "B300-STLink-GUI-Windows-x64.zip",
+                "B300-STLink-CLI-Windows-x64.zip",
+            ),
+        )
+        self.assertEqual(
+            module.release_names("linux-x64"),
+            (
+                "B300-STLink-GUI-Linux-x64.tar.gz",
+                "B300-STLink-CLI-Linux-x64.tar.gz",
+            ),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -43,8 +43,8 @@ def openocd_manifest(root: Path) -> bytes:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--flavor", required=True, choices=("gui", "cli"))
     parser.add_argument("--executable", required=True, type=Path)
-    parser.add_argument("--gui-executable", type=Path)
     parser.add_argument("--resource", action="append", default=[], type=Path)
     parser.add_argument("--openocd-root", required=True, type=Path)
     parser.add_argument("--bootstrap", required=True, type=Path)
@@ -61,16 +61,15 @@ def main(argv=None) -> int:
     if not re.fullmatch(r"[0-9A-Fa-f]{64}", args.openocd_sha256):
         parser.error("--openocd-sha256 must contain exactly 64 hexadecimal characters.")
     required = [args.executable, args.openocd_root, args.bootstrap, args.openocd_package]
-    if args.gui_executable is not None:
-        required.append(args.gui_executable)
     required.extend(args.resource)
     if not all(item.exists() for item in required):
         parser.error("A required bundle input is missing.")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     metadata = (
-        "platform=%s\nversion=%s\nopenocd=0.12.0-7\n"
+        "platform=%s\nflavor=%s\nversion=%s\nopenocd=0.12.0-7\n"
         "openocd_archive=%s\nopenocd_sha256=%s\n" % (
             args.platform,
+            args.flavor,
             args.version,
             args.openocd_archive,
             args.openocd_sha256.upper(),
@@ -85,9 +84,6 @@ def main(argv=None) -> int:
     if args.output.name.endswith(".tar.gz"):
         with tarfile.open(args.output, "w:gz") as archive:
             archive.add(args.executable, arcname=args.executable.name, filter=executable)
-            if args.gui_executable is not None:
-                archive.add(args.gui_executable, arcname=args.gui_executable.name,
-                            filter=executable)
             for resource in args.resource:
                 archive.add(resource, arcname=resource.name)
             archive.add(args.bootstrap, arcname=args.bootstrap.name, filter=executable)
@@ -105,8 +101,6 @@ def main(argv=None) -> int:
     elif args.output.suffix == ".zip":
         with zipfile.ZipFile(args.output, "w", zipfile.ZIP_DEFLATED) as archive:
             archive.write(args.executable, args.executable.name)
-            if args.gui_executable is not None:
-                archive.write(args.gui_executable, args.gui_executable.name)
             for resource in args.resource:
                 archive.write(resource, resource.name)
             archive.write(args.bootstrap, args.bootstrap.name)

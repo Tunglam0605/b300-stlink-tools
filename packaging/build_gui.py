@@ -21,6 +21,14 @@ DESKTOP_SOURCE = ROOT / "packaging" / "linux" / "b300-stlink-gui.desktop"
 ICON_SOURCE = ROOT / "branding" / "b300-stlink-icon.png"
 
 
+def gui_output_names(architecture: str):
+    if architecture == "x86_64":
+        return "B300-STLink-GUI-Ubuntu-x64.AppImage", "b300-stlink-gui_amd64.deb"
+    if architecture == "aarch64":
+        return "B300-STLink-GUI-Ubuntu-arm64.AppImage", "b300-stlink-gui_arm64.deb"
+    raise ValueError("Unsupported GUI architecture: %s" % architecture)
+
+
 def write_text_lf(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="\n") as stream:
@@ -34,7 +42,6 @@ def write_executable(path: Path, content: str) -> None:
 
 def validate_bundle(bundle: Path) -> None:
     required = (
-        bundle / "b300-stlink",
         bundle / "b300-stlink-gui",
         bundle / "vendor" / "openocd" / "bin" / "openocd",
     )
@@ -61,11 +68,6 @@ exec "$appdir/usr/lib/b300-stlink/b300-stlink-gui" "$@"
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../lib/b300-stlink" && pwd)
 exec "$root/b300-stlink-gui" "$@"
-""")
-    write_executable(appdir / "usr" / "bin" / "b300-stlink", """#!/bin/sh
-set -eu
-root=$(CDPATH= cd -- "$(dirname -- "$0")/../lib/b300-stlink" && pwd)
-exec "$root/b300-stlink" "$@"
 """)
     shutil.copy2(DESKTOP_SOURCE, appdir / "b300-stlink-gui.desktop")
     shutil.copy2(ICON_SOURCE, appdir / "b300-stlink-gui.png")
@@ -96,16 +98,12 @@ def stage_deb_root(bundle: Path, output: Path, architecture: str, version: str) 
         "Maintainer: TungLamAutomation\n"
         "Section: devel\n"
         "Priority: optional\n"
-        "Description: Safe B300 STM32F407 ST-Link provisioning GUI and CLI\n" %
+        "Description: Safe B300 STM32F407 ST-Link provisioning GUI\n" %
         (version, architecture),
     )
     write_executable(debroot / "usr" / "local" / "bin" / "b300-stlink-gui", """#!/bin/sh
 set -eu
 exec /opt/b300-stlink/b300-stlink-gui "$@"
-""")
-    write_executable(debroot / "usr" / "local" / "bin" / "b300-stlink", """#!/bin/sh
-set -eu
-exec /opt/b300-stlink/b300-stlink "$@"
 """)
     desktop_dir = debroot / "usr" / "share" / "applications"
     icon_dir = debroot / "usr" / "share" / "icons" / "hicolor" / "512x512" / "apps"
@@ -128,12 +126,13 @@ def main(argv=None) -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     appdir = stage_linux_appdir(args.bundle_dir, args.output_dir, args.architecture)
+    appimage_name, deb_name = gui_output_names(args.architecture)
     if args.appimagetool:
         if not args.appimagetool.is_file():
             parser.error("--appimagetool does not exist")
         environment = os.environ.copy()
         environment["ARCH"] = args.architecture
-        appimage = args.output_dir / ("B300-STLink-GUI-%s.AppImage" % args.architecture)
+        appimage = args.output_dir / appimage_name
         subprocess.check_call([str(args.appimagetool), str(appdir), str(appimage)], env=environment)
 
     deb_arch = "amd64" if args.architecture == "x86_64" else "arm64"
@@ -144,7 +143,7 @@ def main(argv=None) -> int:
             parser.error("dpkg-deb is required for --build-deb")
         subprocess.check_call([
             dpkg, "--build", "--root-owner-group", str(debroot),
-            str(args.output_dir / ("b300-stlink-gui_%s_%s.deb" % (args.version, deb_arch))),
+            str(args.output_dir / deb_name),
         ])
     print("AppDir: %s" % appdir)
     print("DEB root: %s" % debroot)
