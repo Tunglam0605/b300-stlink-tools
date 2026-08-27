@@ -46,9 +46,22 @@ jobs:
           sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0
 
       - name: Run unit tests
+        if: matrix.name != 'Ubuntu ARM64'
         run: |
           python -m pip install -r requirements-gui.txt
           python -m unittest discover -s tests -q
+
+      - name: Run unit tests in isolated modules on Ubuntu ARM64
+        if: matrix.name == 'Ubuntu ARM64'
+        shell: bash
+        run: |
+          python -m pip install -r requirements-gui.txt
+          for test_file in tests/test_*.py; do
+            module="${test_file%.py}"
+            module="${module//\//.}"
+            echo "Running ${module}"
+            python -m unittest "${module}" -q
+          done
 
       - name: Compile Python sources
         run: >-
