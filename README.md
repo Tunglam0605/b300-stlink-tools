@@ -1,5 +1,9 @@
 # B300 ST-Link Tools
 
+<p align="center">
+  <img src="branding/b300-stlink-wordmark.png" alt="B300 ST-Link Tools" width="620">
+</p>
+
 [![CI](https://github.com/Tunglam0605/b300-stlink-tools/actions/workflows/ci.yml/badge.svg)](https://github.com/Tunglam0605/b300-stlink-tools/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Target: STM32F407](https://img.shields.io/badge/Target-STM32F407-03234B.svg)](#phạm-vi-phần-cứng)

@@ -77,6 +77,7 @@ def main(argv=None) -> int:
                                "-r", str(ROOT / "requirements-build.txt")])
         subprocess.check_call([sys.executable, "-m", "PyInstaller", "--noconfirm", "--onefile",
                                "--name", "b300-stlink", "--distpath", str(args.output_dir),
+                               "--icon", str(ROOT / "branding" / "b300-stlink-icon.ico"),
                                str(ROOT / "b300_stlink.py")])
         gui_executable = "b300-stlink-gui.exe" if platform_name == "windows-x64" else "b300-stlink-gui"
         if not args.cli_only:
@@ -96,7 +97,9 @@ def main(argv=None) -> int:
             "--openocd-sha256", verified_sha256,
             "--resource", str(ROOT / "LICENSE"),
             "--resource", str(ROOT / "packaging" / "linux" / "b300-stlink-gui.desktop"),
-            "--resource", str(ROOT / "packaging" / "linux" / "b300-stlink-gui.svg"),
+            "--resource", str(ROOT / "branding" / "b300-stlink-icon.png"),
+            "--resource", str(ROOT / "branding" / "b300-stlink-icon.ico"),
+            "--resource", str(ROOT / "branding" / "b300-stlink-wordmark.png"),
         ]
         if not args.cli_only:
             package_command.extend(["--gui-executable", str(args.output_dir / gui_executable)])

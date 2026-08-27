@@ -8,7 +8,10 @@ a = Analysis(
     [str(project_root / "b300_gui_entry.py")],
     pathex=[str(project_root)],
     binaries=[],
-    datas=[],
+    datas=[
+        (str(project_root / "branding" / "b300-stlink-icon.png"), "branding"),
+        (str(project_root / "branding" / "b300-stlink-wordmark.png"), "branding"),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -36,4 +39,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=str(project_root / "branding" / "b300-stlink-icon.ico"),
 )

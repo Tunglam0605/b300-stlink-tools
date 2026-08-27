@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from PySide6.QtCore import QSettings, Qt
-from PySide6.QtGui import QFont, QTextCursor
+from PySide6.QtGui import QIcon, QPixmap, QTextCursor
 from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
@@ -42,6 +42,7 @@ from b300_core.service import B300Service, FlashResult
 from .viewmodels import FlashViewState, confirmation_text
 from .workers import FunctionWorker
 from .memory_tab import MemoryTab
+from .branding import asset_path
 from . import __version__
 
 
@@ -92,6 +93,7 @@ class MainWindow(QMainWindow):
         self._cancellable_worker = None
 
         self.setWindowTitle("B300 ST-Link Provisioning")
+        self.setWindowIcon(QIcon(str(asset_path("b300-stlink-icon.png"))))
         self.setMinimumSize(900, 650)
         self.resize(1120, 780)
         self.setStyleSheet(APP_STYLE)
@@ -110,11 +112,20 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(16, 14, 16, 14)
         root.setSpacing(10)
 
-        title = QLabel("B300 ST-Link Provisioning")
-        title.setFont(QFont(title.font().family(), 18, QFont.Weight.DemiBold))
+        brand_row = QHBoxLayout()
+        brand_logo = QLabel()
+        brand_logo.setObjectName("brandLogo")
+        brand_logo.setAccessibleName("B300 ST-Link Tools")
+        brand_logo.setPixmap(
+            QPixmap(str(asset_path("b300-stlink-wordmark.png"))).scaledToHeight(
+                68, Qt.TransformationMode.SmoothTransformation
+            )
+        )
+        brand_row.addWidget(brand_logo)
+        brand_row.addStretch(1)
         subtitle = QLabel("Nạp Application STM32F407 an toàn · giữ nguyên Bootloader và đường OTA")
         subtitle.setStyleSheet("color: #475569;")
-        root.addWidget(title)
+        root.addLayout(brand_row)
         root.addWidget(subtitle)
 
         self.status_banner = QLabel("Sẵn sàng kiểm tra ST-Link")

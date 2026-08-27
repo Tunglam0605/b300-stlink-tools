@@ -23,6 +23,21 @@ def gui_builder():
 
 
 class GuiPackagingTests(unittest.TestCase):
+    def test_brand_assets_are_wired_into_native_executables(self) -> None:
+        self.assertTrue((ROOT / "branding" / "logo.png").is_file())
+        self.assertTrue((ROOT / "branding" / "b300-stlink-icon.png").is_file())
+        self.assertTrue((ROOT / "branding" / "b300-stlink-icon.ico").is_file())
+        self.assertTrue((ROOT / "branding" / "b300-stlink-wordmark.png").is_file())
+        gui_spec = (ROOT / "b300_gui.spec").read_text(encoding="utf-8")
+        native_builder = (ROOT / "build_native_bundle.py").read_text(encoding="utf-8")
+        installer = (ROOT / "packaging" / "windows" /
+                     "b300-stlink-gui.iss").read_text(encoding="utf-8")
+        self.assertIn('icon=str(project_root / "branding" / "b300-stlink-icon.ico")',
+                      gui_spec)
+        self.assertIn('"--icon", str(ROOT / "branding" / "b300-stlink-icon.ico")',
+                      native_builder)
+        self.assertIn("SetupIconFile={#SourceRoot}\\b300-stlink-icon.ico", installer)
+
     def test_linux_staging_uses_python_39_compatible_text_writes(self) -> None:
         original_write_text = Path.write_text
 
@@ -96,9 +111,11 @@ class GuiPackagingTests(unittest.TestCase):
 
             self.assertTrue((appdir / "AppRun").is_file())
             self.assertTrue((appdir / "b300-stlink-gui.desktop").is_file())
-            self.assertTrue((appdir / "b300-stlink-gui.svg").is_file())
+            self.assertTrue((appdir / "b300-stlink-gui.png").is_file())
             self.assertTrue((appdir / "usr" / "bin" / "b300-stlink-gui").is_file())
             self.assertTrue((debroot / "DEBIAN" / "control").is_file())
+            self.assertTrue((debroot / "usr" / "share" / "icons" / "hicolor" /
+                             "512x512" / "apps" / "b300-stlink-gui.png").is_file())
             self.assertTrue((debroot / "usr" / "local" / "bin" /
                              "b300-stlink-gui").is_file())
 

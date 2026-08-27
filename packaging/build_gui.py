@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DESKTOP_SOURCE = ROOT / "packaging" / "linux" / "b300-stlink-gui.desktop"
-ICON_SOURCE = ROOT / "packaging" / "linux" / "b300-stlink-gui.svg"
+ICON_SOURCE = ROOT / "branding" / "b300-stlink-icon.png"
 
 
 def write_text_lf(path: Path, content: str) -> None:
@@ -65,13 +65,13 @@ export B300_OPENOCD="$root/vendor/openocd/bin/openocd"
 exec "$root/b300-stlink" "$@"
 """)
     shutil.copy2(DESKTOP_SOURCE, appdir / "b300-stlink-gui.desktop")
-    shutil.copy2(ICON_SOURCE, appdir / "b300-stlink-gui.svg")
+    shutil.copy2(ICON_SOURCE, appdir / "b300-stlink-gui.png")
     desktop_dir = appdir / "usr" / "share" / "applications"
-    icon_dir = appdir / "usr" / "share" / "icons" / "hicolor" / "scalable" / "apps"
+    icon_dir = appdir / "usr" / "share" / "icons" / "hicolor" / "512x512" / "apps"
     desktop_dir.mkdir(parents=True)
     icon_dir.mkdir(parents=True)
     shutil.copy2(DESKTOP_SOURCE, desktop_dir / DESKTOP_SOURCE.name)
-    shutil.copy2(ICON_SOURCE, icon_dir / ICON_SOURCE.name)
+    shutil.copy2(ICON_SOURCE, icon_dir / "b300-stlink-gui.png")
     return appdir
 
 
@@ -107,11 +107,11 @@ export B300_OPENOCD="/opt/b300-stlink/vendor/openocd/bin/openocd"
 exec /opt/b300-stlink/b300-stlink "$@"
 """)
     desktop_dir = debroot / "usr" / "share" / "applications"
-    icon_dir = debroot / "usr" / "share" / "icons" / "hicolor" / "scalable" / "apps"
+    icon_dir = debroot / "usr" / "share" / "icons" / "hicolor" / "512x512" / "apps"
     desktop_dir.mkdir(parents=True)
     icon_dir.mkdir(parents=True)
     shutil.copy2(DESKTOP_SOURCE, desktop_dir / DESKTOP_SOURCE.name)
-    shutil.copy2(ICON_SOURCE, icon_dir / ICON_SOURCE.name)
+    shutil.copy2(ICON_SOURCE, icon_dir / "b300-stlink-gui.png")
     return debroot
 
 

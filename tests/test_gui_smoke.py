@@ -14,7 +14,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
 from b300_gui.main_window import MainWindow
 from b300_core.hex_image import inspect_image
@@ -80,6 +80,10 @@ class GuiSmokeTests(unittest.TestCase):
         window = MainWindow(service=FakeService(), probe_loader=lambda: ())
         window.show()
         self.app.processEvents()
+        self.assertFalse(window.windowIcon().isNull())
+        brand_logo = window.findChild(QLabel, "brandLogo")
+        self.assertIsNotNone(brand_logo)
+        self.assertFalse(brand_logo.pixmap().isNull())
         self.assertFalse(window.flash_button.isEnabled())
         disabled_pixel = window.flash_button.grab().toImage().pixelColor(
             10, window.flash_button.height() // 2

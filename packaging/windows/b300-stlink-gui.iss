@@ -23,6 +23,7 @@ PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 LicenseFile={#SourceRoot}\LICENSE
+SetupIconFile={#SourceRoot}\b300-stlink-icon.ico
 UninstallDisplayIcon={app}\b300-stlink-gui.exe
 
 [Files]
