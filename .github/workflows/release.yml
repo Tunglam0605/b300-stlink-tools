@@ -232,6 +232,7 @@ jobs:
         run: |
           test -n "$MINISIGN_SECRET_KEY"
           test -n "$MINISIGN_PUBLIC_KEY"
+          sudo add-apt-repository --yes universe
           sudo apt-get update
           sudo apt-get install -y minisign
           printf '%s\n' "$MINISIGN_SECRET_KEY" > "$RUNNER_TEMP/minisign.key"

@@ -75,6 +75,15 @@ class ReleaseWorkflowTests(unittest.TestCase):
         )
         self.assertIn("find release-assets -mindepth 2 -type f", commands)
 
+    def test_release_enables_universe_before_installing_minisign(self) -> None:
+        workflow = load_workflow("release.yml")
+        finalize_steps = workflow["jobs"]["finalize-release"]["steps"]
+        signing = next(
+            step for step in finalize_steps
+            if step.get("name") == "Sign and verify release manifests"
+        )
+        self.assertIn("add-apt-repository --yes universe", signing["run"])
+
     def test_dry_run_cannot_publish_release(self) -> None:
         workflow = load_workflow("release-dry-run.yml")
         self.assertIn("workflow_dispatch", workflow["on"])

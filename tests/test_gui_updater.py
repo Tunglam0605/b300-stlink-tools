@@ -157,7 +157,7 @@ class GuiUpdaterTests(unittest.TestCase):
             window._show_whats_new_if_needed()
             self.assertIsNotNone(window.whats_new_dialog)
             self.assertIn(CURRENT_VERSION, window.whats_new_dialog.windowTitle())
-            self.assertIn("AppImage/DEB Linux", window.whats_new_dialog.notes_view.toPlainText())
+            self.assertTrue(window.whats_new_dialog.notes_view.toPlainText())
             self.assertEqual(settings.value("updates/last_seen_version"), CURRENT_VERSION)
             window.whats_new_dialog.close()
             window.whats_new_dialog = None

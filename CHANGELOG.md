@@ -5,6 +5,13 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-08-27
+
+### Fixed
+
+- Bật Ubuntu Universe trước khi cài minisign trong release workflow để manifest
+  và checksum được ký/xác minh nhất quán trên GitHub-hosted runner.
+
 ## [0.3.1] - 2026-08-27
 
 ### Fixed
@@ -81,6 +88,7 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 - Revalidate target và immutable staged HEX ngay trước khi erase.
 
 [Unreleased]: https://github.com/Tunglam0605/b300-stlink-tools/commits/main
+[0.3.2]: https://github.com/Tunglam0605/b300-stlink-tools/releases/tag/v0.3.2
 [0.3.1]: https://github.com/Tunglam0605/b300-stlink-tools/releases/tag/v0.3.1
 [0.3.0]: https://github.com/Tunglam0605/b300-stlink-tools/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Tunglam0605/b300-stlink-tools/releases/tag/v0.2.0
