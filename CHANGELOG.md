@@ -5,6 +5,13 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-27
+
+### Fixed
+
+- Hoàn tất đóng gói artifact release từ các thư mục staging của GitHub Actions;
+  metadata, checksum và manifest đã ký giờ nhận đúng AppImage/DEB Linux.
+
 ## [0.3.0] - 2026-08-27
 
 ### Added
@@ -74,5 +81,6 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 - Revalidate target và immutable staged HEX ngay trước khi erase.
 
 [Unreleased]: https://github.com/Tunglam0605/b300-stlink-tools/commits/main
+[0.3.1]: https://github.com/Tunglam0605/b300-stlink-tools/releases/tag/v0.3.1
 [0.3.0]: https://github.com/Tunglam0605/b300-stlink-tools/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Tunglam0605/b300-stlink-tools/releases/tag/v0.2.0

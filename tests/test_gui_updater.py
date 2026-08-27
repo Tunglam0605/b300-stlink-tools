@@ -15,6 +15,7 @@ from b300_core.updater import UpdateCheckResult
 from b300_core.release_manifest import parse_latest_manifest
 from b300_core.update_platform import UpdatePlatform
 from b300_gui.main_window import MainWindow
+from b300_version import __version__ as CURRENT_VERSION
 from tests.test_gui_smoke import FakeService
 from tests.test_release_manifest import MESSAGE, SIGNATURE, TEST_PUBLIC_KEY
 
@@ -66,7 +67,7 @@ class GuiUpdaterTests(unittest.TestCase):
         self.assertEqual(window.release_notes_action.text(), "Ghi chú phiên bản")
         self.assertEqual(window.about_action.text(), "Giới thiệu")
         window.show_about()
-        self.assertEqual(window.about_dialog.version_value.text(), "0.3.0")
+        self.assertEqual(window.about_dialog.version_value.text(), CURRENT_VERSION)
         self.assertIn("0.12.0-7", window.about_dialog.openocd_value.text())
         self.assertTrue(window.about_dialog.build_value.text())
         window.about_dialog.close()
@@ -144,7 +145,7 @@ class GuiUpdaterTests(unittest.TestCase):
             settings = self.temporary_settings(Path(temp))
             window = self.make_window(settings=settings)
             window._show_whats_new_if_needed()
-            self.assertEqual(settings.value("updates/last_seen_version"), "0.3.0")
+            self.assertEqual(settings.value("updates/last_seen_version"), CURRENT_VERSION)
             self.assertIsNone(window.whats_new_dialog)
             window.close()
 
@@ -155,9 +156,9 @@ class GuiUpdaterTests(unittest.TestCase):
             window = self.make_window(settings=settings)
             window._show_whats_new_if_needed()
             self.assertIsNotNone(window.whats_new_dialog)
-            self.assertIn("0.3.0", window.whats_new_dialog.windowTitle())
-            self.assertIn("GitHub Releases", window.whats_new_dialog.notes_view.toPlainText())
-            self.assertEqual(settings.value("updates/last_seen_version"), "0.3.0")
+            self.assertIn(CURRENT_VERSION, window.whats_new_dialog.windowTitle())
+            self.assertIn("AppImage/DEB Linux", window.whats_new_dialog.notes_view.toPlainText())
+            self.assertEqual(settings.value("updates/last_seen_version"), CURRENT_VERSION)
             window.whats_new_dialog.close()
             window.whats_new_dialog = None
             window._show_whats_new_if_needed()
@@ -165,14 +166,14 @@ class GuiUpdaterTests(unittest.TestCase):
             window.close()
 
     def test_same_newer_or_corrupt_seen_version_does_not_show_whats_new(self) -> None:
-        for value in ("0.3.0", "0.4.0", "not-a-version"):
+        for value in (CURRENT_VERSION, "0.4.0", "not-a-version"):
             with self.subTest(value=value), tempfile.TemporaryDirectory() as temp:
                 settings = self.temporary_settings(Path(temp))
                 settings.setValue("updates/last_seen_version", value)
                 window = self.make_window(settings=settings)
                 window._show_whats_new_if_needed()
                 self.assertIsNone(window.whats_new_dialog)
-                self.assertEqual(settings.value("updates/last_seen_version"), "0.3.0")
+                self.assertEqual(settings.value("updates/last_seen_version"), CURRENT_VERSION)
                 window.close()
 
     def test_disabled_automatic_updates_do_not_schedule_check(self) -> None:

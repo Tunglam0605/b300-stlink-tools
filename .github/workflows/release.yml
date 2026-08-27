@@ -210,6 +210,8 @@ jobs:
         with:
           name: release-notes
           path: release-notes
+      - name: Flatten packaged release assets
+        run: find release-assets -mindepth 2 -type f -exec mv -t release-assets {} +
       - name: Generate deterministic metadata
         env:
           VERSION: ${{ needs.prepare-release.outputs.version }}

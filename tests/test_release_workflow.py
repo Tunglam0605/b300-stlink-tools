@@ -67,6 +67,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIn(name, text)
 
+    def test_final_release_flattens_downloaded_artifacts_before_metadata(self) -> None:
+        workflow = load_workflow("release.yml")
+        finalize_steps = workflow["jobs"]["finalize-release"]["steps"]
+        commands = "\n".join(
+            step.get("run", "") for step in finalize_steps if isinstance(step, dict)
+        )
+        self.assertIn("find release-assets -mindepth 2 -type f", commands)
+
     def test_dry_run_cannot_publish_release(self) -> None:
         workflow = load_workflow("release-dry-run.yml")
         self.assertIn("workflow_dispatch", workflow["on"])
