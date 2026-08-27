@@ -52,33 +52,7 @@ from .branding import asset_path
 from . import __version__
 
 
-APP_STYLE = """
-QMainWindow, QWidget { background: #F8FAFC; color: #1E293B; font-size: 13px; }
-QGroupBox { background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 8px;
-            margin-top: 14px; padding: 14px 12px 12px 12px; font-weight: 600; }
-QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 5px; }
-QLineEdit, QComboBox, QPlainTextEdit, QTableWidget { background: #FFFFFF;
-            border: 1px solid #94A3B8; border-radius: 5px; padding: 6px; }
-QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus, QTableWidget:focus {
-            border: 2px solid #2563EB; }
-QPushButton { min-height: 34px; padding: 2px 14px; border-radius: 6px;
-              border: 1px solid #64748B; background: #FFFFFF; font-weight: 600; }
-QPushButton:hover { background: #EFF6FF; border-color: #2563EB; }
-QPushButton:focus { border: 2px solid #2563EB; }
-QPushButton:disabled { color: #94A3B8; background: #E2E8F0; border-color: #CBD5E1; }
-QPushButton#flashButton { background: #C2410C; color: #FFFFFF; border-color: #9A3412; }
-QPushButton#flashButton:hover { background: #9A3412; }
-QPushButton#flashButton:disabled { color: #94A3B8; background: #E2E8F0;
-                                   border-color: #CBD5E1; }
-QLabel#statusBanner { border-radius: 6px; padding: 9px 12px; background: #E2E8F0;
-                      color: #334155; font-weight: 600; }
-QLabel#statusBanner[state="success"] { background: #DCFCE7; color: #166534; }
-QLabel#statusBanner[state="error"] { background: #FEE2E2; color: #991B1B; }
-QLabel#statusBanner[state="busy"] { background: #FFEDD5; color: #9A3412; }
-QTabWidget::pane { border: 1px solid #CBD5E1; background: #F8FAFC; }
-QTabBar::tab { min-width: 120px; padding: 9px 14px; }
-QTabBar::tab:selected { background: #FFFFFF; border-bottom: 3px solid #2563EB; }
-"""
+from .styles import APP_STYLE
 
 
 class MainWindow(QMainWindow):
@@ -128,15 +102,24 @@ class MainWindow(QMainWindow):
         brand_logo.setAccessibleName("B300 ST-Link Tools")
         brand_logo.setPixmap(
             QPixmap(str(asset_path("b300-stlink-wordmark.png"))).scaledToHeight(
-                68, Qt.TransformationMode.SmoothTransformation
+                60, Qt.TransformationMode.SmoothTransformation
             )
         )
         brand_row.addWidget(brand_logo)
         brand_row.addStretch(1)
+
+        brand_info = QVBoxLayout()
+        brand_info.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        eyebrow = QLabel("INDUSTRIAL PROVISIONING SYSTEM · STM32F407")
+        eyebrow.setObjectName("eyebrowLabel")
+        eyebrow.setAlignment(Qt.AlignmentFlag.AlignRight)
         subtitle = QLabel("Nạp Application STM32F407 an toàn · giữ nguyên Bootloader và đường OTA")
-        subtitle.setStyleSheet("color: #475569;")
+        subtitle.setObjectName("subtitleLabel")
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignRight)
+        brand_info.addWidget(eyebrow)
+        brand_info.addWidget(subtitle)
+        brand_row.addLayout(brand_info)
         root.addLayout(brand_row)
-        root.addWidget(subtitle)
 
         self.status_banner = QLabel("Sẵn sàng kiểm tra ST-Link")
         self.status_banner.setObjectName("statusBanner")
@@ -208,6 +191,7 @@ class MainWindow(QMainWindow):
         device_row.addWidget(self.refresh_button)
         device_row.addWidget(self.inspect_target_button)
         self.target_summary = QLabel("Chưa kiểm tra chip/điện áp/flash/WRP")
+        self.target_summary.setObjectName("targetSummaryBox")
         self.target_summary.setWordWrap(True)
         device_row.addWidget(self.target_summary, 2)
         left_layout.addWidget(device_group)
@@ -222,15 +206,23 @@ class MainWindow(QMainWindow):
         firmware_layout.addWidget(self.file_path, 0, 0)
         firmware_layout.addWidget(self.choose_button, 0, 1)
         self.image_summary = QLabel("Chưa chọn firmware")
+        self.image_summary.setObjectName("imageSummaryBox")
         self.image_summary.setWordWrap(True)
-        self.image_summary.setStyleSheet("color: #475569;")
+        self.image_summary.setStyleSheet("color: #64748B;")
         firmware_layout.addWidget(self.image_summary, 1, 0, 1, 2)
         left_layout.addWidget(firmware_group)
 
         plan_group = QGroupBox("3. Flash plan cố định")
         plan_layout = QVBoxLayout(plan_group)
+        plan_layout.setContentsMargins(8, 8, 8, 8)
+        plan_layout.setSpacing(6)
         self.flash_plan_label = QLabel(
             "Erase Sector 3–7 → Program/Verify Application → Provision marker → Reset"
+        )
+        self.flash_plan_label.setObjectName("flashPlanBadge")
+        self.flash_plan_label.setStyleSheet(
+            "background-color: #F8FAFC; color: #475569; border: 1px solid #E2E8F0; "
+            "border-radius: 6px; padding: 4px 8px; font-weight: 600;"
         )
         self.flash_plan_label.setWordWrap(True)
         plan_layout.addWidget(self.flash_plan_label)
@@ -238,6 +230,7 @@ class MainWindow(QMainWindow):
         self.plan_table.setHorizontalHeaderLabels(["Sector", "Vai trò", "Thao tác"])
         self.plan_table.verticalHeader().setVisible(False)
         self.plan_table.verticalHeader().setDefaultSectionSize(24)
+        self.plan_table.setMinimumHeight(160)
         self.plan_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.plan_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         for row, sector in enumerate(SECTORS[3:]):
@@ -249,8 +242,7 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self.plan_table.setFixedHeight(160)
-        plan_layout.addWidget(self.plan_table)
+        plan_layout.addWidget(self.plan_table, 1)
         left_layout.addWidget(plan_group, 1)
 
         actions = QHBoxLayout()
@@ -271,6 +263,7 @@ class MainWindow(QMainWindow):
         log_group = QGroupBox("Log thời gian thực")
         log_layout = QVBoxLayout(log_group)
         self.log_view = QPlainTextEdit()
+        self.log_view.setObjectName("logView")
         self.log_view.setReadOnly(True)
         self.log_view.setAccessibleName("Log OpenOCD")
         self.log_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
@@ -488,7 +481,7 @@ class MainWindow(QMainWindow):
             self.flash_plan = None
             self.file_path.setText(str(path))
             self.image_summary.setText("Không hợp lệ: %s" % error)
-            self.image_summary.setStyleSheet("color: #991B1B; font-weight: 600;")
+            self.image_summary.setStyleSheet("color: #DC2626; font-weight: 600;")
             self._set_status("Firmware không hợp lệ", "error")
             if not quiet:
                 self.append_log("Image validation failed: %s" % error)
@@ -496,7 +489,7 @@ class MainWindow(QMainWindow):
             return False
         self.file_path.setText(str(self.image_info.path))
         self.settings.setValue("lastImage", str(self.image_info.path))
-        self.image_summary.setStyleSheet("color: #166534; font-weight: 600;")
+        self.image_summary.setStyleSheet("color: #059669; font-weight: 600;")
         self.image_summary.setText(
             "%s bytes · 0x%08X..0x%08X\nSHA-256: %s" % (
                 self.image_info.size,

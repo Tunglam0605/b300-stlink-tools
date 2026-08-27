@@ -60,9 +60,7 @@ class MemoryTab(QWidget):
             "CHỈ ĐỌC (READ-ONLY) · CPU tạm dừng khi đọc và luôn tiếp tục chạy "
             "(resume) trước khi ngắt kết nối."
         )
-        warning.setStyleSheet(
-            "background: #DBEAFE; color: #1E3A8A; border-radius: 6px; padding: 8px; font-weight: 600;"
-        )
+        warning.setObjectName("readOnlyBanner")
         warning.setWordWrap(True)
         root.addWidget(warning)
 
@@ -94,13 +92,14 @@ class MemoryTab(QWidget):
         root.addLayout(controls)
 
         self.status_label = QLabel("Chưa đọc dữ liệu")
-        self.status_label.setStyleSheet("color: #475569;")
+        self.status_label.setStyleSheet("color: #94A3B8; font-weight: 600;")
         root.addWidget(self.status_label)
 
         splitter = QSplitter()
         preview_group = QGroupBox("Hex preview (tối đa 4096 byte)")
         preview_layout = QVBoxLayout(preview_group)
         self.hex_view = QPlainTextEdit()
+        self.hex_view.setObjectName("hexView")
         self.hex_view.setReadOnly(True)
         self.hex_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.hex_view.setAccessibleName("Nội dung Sector dạng hexadecimal")
@@ -123,6 +122,11 @@ class MemoryTab(QWidget):
         )
         for field, display_label in fields:
             value = QLabel("—")
+            value.setStyleSheet(
+                "color: #0369A1; font-family: 'Cascadia Code', 'Consolas', 'Courier New', monospace; "
+                "font-weight: 600; padding: 3px 8px; background-color: #F8FAFC; "
+                "border-radius: 4px; border: 1px solid #E2E8F0;"
+            )
             value.setTextInteractionFlags(value.textInteractionFlags() |
                                           value.textInteractionFlags().TextSelectableByMouse)
             self.metadata_values[field] = value
@@ -218,10 +222,17 @@ class MemoryTab(QWidget):
         }
         for field, value in values.items():
             self.metadata_values[field].setText(value)
-        color = "#166534" if metadata.valid else ("#475569" if
-                                                   metadata.classification == "ERASED" else "#991B1B")
+        color = "#059669" if metadata.valid else ("#64748B" if
+                                                   metadata.classification == "ERASED" else "#DC2626")
+        bg_color = "#ECFDF5" if metadata.valid else ("#F1F5F9" if
+                                                      metadata.classification == "ERASED" else "#FEF2F2")
+        border_color = "#A7F3D0" if metadata.valid else ("#CBD5E1" if
+                                                         metadata.classification == "ERASED" else "#FECACA")
         self.metadata_values["Classification"].setStyleSheet(
-            "color: %s; font-weight: 700;" % color
+            "color: %s; font-weight: 700; font-family: 'Cascadia Code', 'Consolas', monospace; "
+            "padding: 3px 8px; background-color: %s; border-radius: 4px; border: 1px solid %s;" % (
+                color, bg_color, border_color
+            )
         )
         self.status_label.setText("OTA metadata: %s" % metadata.classification)
         self._set_busy(False)

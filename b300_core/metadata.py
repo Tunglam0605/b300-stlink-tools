@@ -27,12 +27,16 @@ def decode_ota_metadata(data: bytes) -> OtaMetadata:
     values = struct.unpack("<IIIII16sII", record)
     magic, version, state, image_size, image_crc, token_raw, sequence, stored_crc = values
     calculated_crc = zlib.crc32(record[:-4]) & 0xFFFFFFFF
-    token = token_raw.split(b"\0", 1)[0].decode("ascii", errors="replace")
-
     if record == b"\xFF" * OTA_META_SIZE:
         classification = "ERASED"
         valid = False
+        token = ""
     else:
+        token_clean = token_raw.split(b"\0", 1)[0]
+        try:
+            token = token_clean.decode("ascii")
+        except UnicodeDecodeError:
+            token = ""
         valid = (
             magic == OTA_META_MAGIC
             and version == OTA_META_FORMAT_VERSION
