@@ -15,6 +15,13 @@ class ProbeRef:
 
 
 @dataclass(frozen=True)
+class ProbeInfo:
+    serial: str
+    name: str
+    source: str
+
+
+@dataclass(frozen=True)
 class SectorInfo:
     index: int
     start_address: int
@@ -58,3 +65,19 @@ class BootVerification:
     bkp4r: Optional[int]
     passed: bool
     reason: str
+
+
+@dataclass(frozen=True)
+class OtaMetadata:
+    classification: str
+    valid: bool
+    magic: int
+    format_version: int
+    state: int
+    state_name: str
+    image_size: int
+    image_crc32: int
+    board_token: str
+    sequence: int
+    meta_crc32: int
+    calculated_meta_crc32: int
