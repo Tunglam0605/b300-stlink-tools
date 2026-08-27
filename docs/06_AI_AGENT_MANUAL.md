@@ -73,3 +73,15 @@ b300-stlink doctor --json
 ```
 
 `available=true` là điều kiện trước khi dry-run/flash/debug.
+
+Trước flash thật, agent phải xác nhận đúng target F407 512 KiB và đúng probe
+serial khi có nhiều ST-Link. Các phase `validating`, `target_check`, `erasing`,
+`programming`, `verifying`, `marking`, `resetting`, `post_verifying` phải được
+ghi log. Khi lỗi, báo phase/nguyên nhân/hành động tiếp theo và không tự chạy lại.
+
+## GUI và AI automation
+
+GUI `b300-stlink-gui` là giao diện người vận hành của cùng core. AI không được
+điều khiển widget để lách CLI authorization/safety. GUI không có COM selector;
+mọi lựa chọn probe là ST-Link serial qua SWD. Với thao tác tự động, AI tiếp tục
+dùng CLI/skill và tuân thủ dry-run cùng authorization hiện có.

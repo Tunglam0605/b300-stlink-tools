@@ -4,10 +4,10 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Target: STM32F407](https://img.shields.io/badge/Target-STM32F407-03234B.svg)](#phạm-vi-phần-cứng)
 
-CLI đa nền tảng dùng ST-Link/SWD để provisioning Application và mở phiên debug
-OpenOCD cho Main Board B300 STM32F407. Tool giữ nguyên Bootloader, bảo toàn đường
-OTA sau khi nạp bằng ST-Link và cung cấp cùng một quy trình trên Windows, Ubuntu
-IPC và Linux ARM64.
+CLI và GUI đa nền tảng dùng ST-Link/SWD để provisioning Application cho Main
+Board B300 STM32F407. Cả hai dùng chung một core an toàn, giữ nguyên Bootloader,
+bảo toàn đường OTA sau khi nạp bằng ST-Link và cung cấp cùng một quy trình trên
+Windows và Ubuntu.
 
 ## Khả năng chính
 
@@ -16,6 +16,7 @@ IPC và Linux ARM64.
 | `doctor` | Kiểm tra OpenOCD đã sẵn sàng trong môi trường cài đặt. |
 | `flash` | Validate Intel HEX, chỉ xóa Sector 3–7, program, verify và ghi provisioning marker. |
 | `debug` | Mở GDB server local hoặc remote qua IPC; không tự ghi flash. |
+| GUI PySide6 | Chọn probe/HEX, inspect target, dry-run, flash, post-verify và đọc memory/metadata. |
 | Agent Skill | Cung cấp skill `b300-ota-stlink` và playbook cho AI agent. |
 | Native bundle | Đóng gói CLI và OpenOCD cho đúng hệ điều hành/kiến trúc đích. |
 
@@ -29,7 +30,9 @@ IPC và Linux ARM64.
 
 `flash` từ chối HEX chạm vùng được bảo vệ, không dùng mass erase và chỉ ghi
 `STLINK_PROVISION_MAGIC = 0x53544C4B` sau khi verify thành công. Bootloader B300
-phải hỗ trợ marker này.
+phải hỗ trợ marker này. Trước khi erase, core đọc lại đúng target F407 512 KiB,
+chép HEX đã duyệt vào staging riêng và kiểm tra lại SHA-256/range. Vì vậy file bị
+đổi sau xác nhận hoặc plan giả mạo đều bị chặn trước lệnh ghi.
 
 ## Phạm vi phần cứng
 
@@ -59,11 +62,12 @@ cd b300-stlink-tools
 b300-stlink doctor
 ```
 
-### 4. Nạp hoặc debug
+### 4. Nạp, mở GUI hoặc debug
 
 ```text
 b300-stlink flash <application.hex> --dry-run --json
 b300-stlink flash <application.hex>
+b300-stlink-gui
 b300-stlink debug --gdb-port 3333
 b300-stlink debug --bind-address 0.0.0.0 --gdb-port 3333
 ```
@@ -82,6 +86,7 @@ file HEX, probe trước khi chạy.
 | [Debug OpenOCD](docs/04_DEBUG.md) | Debug local hoặc remote qua IPC. |
 | [Xử lý lỗi](docs/05_TROUBLESHOOTING.md) | Chẩn đoán lỗi thường gặp. |
 | [Hướng dẫn AI agent](docs/06_AI_AGENT_MANUAL.md) | Dùng thủ công, playbook hoặc Agent Skill. |
+| [GUI Windows/Ubuntu](docs/07_GUI_WINDOWS_UBUNTU.md) | Vận hành giao diện theo 7 bước. |
 | [Handoff GUI cho Antigravity](docs/superpowers/specs/2026-08-27-b300-stlink-gui-design.md) | Thiết kế GUI nạp code Windows/Ubuntu dùng chung lõi CLI. |
 | [AGENTS.md](AGENTS.md) | Quy tắc bắt buộc cho AI/automation. |
 
@@ -89,6 +94,9 @@ file HEX, probe trước khi chạy.
 
 ```text
 b300_stlink.py          CLI doctor/flash/debug
+b300_core/              Core policy/OpenOCD/probe/memory dùng chung
+b300_gui/               Giao diện PySide6
+packaging/              Windows installer và Ubuntu AppImage/DEB staging
 build_native_bundle.py  Tạo bundle đúng nền tảng
 package_internal.py     Đóng gói executable + OpenOCD
 install.ps1             Cài bundle Windows
@@ -107,8 +115,8 @@ python3 -m unittest discover -s tests -q
 python3 -m py_compile b300_stlink.py build_native_bundle.py package_internal.py
 ```
 
-CI chạy các kiểm tra này trên Windows và Ubuntu cho mỗi push/pull request. Khi
-đóng góp thay đổi, đọc [CONTRIBUTING.md](CONTRIBUTING.md).
+CI chạy các kiểm tra này trên Windows x64, Ubuntu x64 và Ubuntu ARM64 cho mỗi
+push/pull request. Khi đóng góp thay đổi, đọc [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Tạo native bundle
 
@@ -119,7 +127,9 @@ python3 build_native_bundle.py --internal-distribution-approved
 ```
 
 Script tải OpenOCD xPack `0.12.0-7`, kiểm SHA-256 và tạo archive trong
-`release/`. Binary và release archive không được commit vào source repository.
+`release/`. Mỗi archive chứa `BUNDLE-METADATA.txt` ghi platform, version, đúng
+tên archive OpenOCD nguồn và SHA-256 đã xác minh. Binary và release archive
+không được commit vào source repository.
 
 ## AI agent
 

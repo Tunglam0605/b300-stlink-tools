@@ -13,7 +13,7 @@ Bundle phải được build trên đúng hệ điều hành/kiến trúc sẽ d
 |---|---|
 | Windows x64 | `b300-stlink-windows-x64.zip` |
 | Ubuntu x64 / IPC x64 | `b300-stlink-linux-x64.tar.gz` |
-| Linux ARM64 | `b300-stlink-linux-arm64.tar.gz` |
+| Ubuntu ARM64 / IPC ARM64 | `b300-stlink-linux-arm64.tar.gz` |
 
 Không dùng bundle Windows trên Ubuntu hoặc ngược lại.
 
@@ -29,7 +29,8 @@ cd b300-stlink-tools
 ## Bước 3: Đi tiếp theo hệ điều hành
 
 - Windows x64: [01 — Setup Windows](01_SETUP_WINDOWS.md)
-- Ubuntu IPC x64: [02 — Setup Ubuntu IPC](02_SETUP_UBUNTU_IPC.md)
+- Ubuntu IPC x64/ARM64: [02 — Setup Ubuntu IPC](02_SETUP_UBUNTU_IPC.md)
 
 Sau setup, dùng [03 — Nạp firmware](03_FLASH_FIRMWARE.md) để nạp Application
-hoặc [04 — Debug OpenOCD](04_DEBUG.md) để debug local/remote qua IPC.
+hoặc [04 — Debug OpenOCD](04_DEBUG.md) để debug local/remote qua IPC. Người vận
+hành không muốn dùng terminal đọc [07 — GUI Windows/Ubuntu](07_GUI_WINDOWS_UBUNTU.md).
