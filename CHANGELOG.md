@@ -7,6 +7,9 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ### Added
 
+- B300 ST-Link Tools branding for the GUI, EXE, installer, and Linux packages.
+- PySide6 6.10.3 with official Python 3.9 Ubuntu ARM64 wheels.
+
 - CLI `doctor`, safe Application provisioning và OpenOCD debugging.
 - Native bundle cho Windows x64, Linux x64 và Linux ARM64.
 - Quy trình ST-Link provisioning marker tương thích OTA recovery.
