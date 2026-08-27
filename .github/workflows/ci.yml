@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python 3.9
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.9"
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -q
+
+      - name: Compile Python sources
+        run: >-
+          python -m py_compile
+          b300_stlink.py
+          build_native_bundle.py
+          package_internal.py
+          scripts/install_skill.py
+
+      - name: Check CLI help
+        run: |
+          python b300_stlink.py --help
+          python b300_stlink.py debug --help
+          python scripts/install_skill.py --help
