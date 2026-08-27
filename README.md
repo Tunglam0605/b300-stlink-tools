@@ -10,7 +10,7 @@ Tool nội bộ để nạp Application STM32F407 qua ST-Link/SWD và chạy Ope
 3. Mỗi lần nạp, làm đúng [Bước 3 — Nạp firmware](docs/03_FLASH_FIRMWARE.md).
 4. Chỉ khi cần dừng CPU để debug, đọc [Debug OpenOCD](docs/04_DEBUG.md).
 5. Có lỗi thì đọc [Xử lý lỗi](docs/05_TROUBLESHOOTING.md).
-6. AI agent/automation phải đọc [AGENTS.md](AGENTS.md) trước khi dùng tool.
+6. AI agent/automation phải đọc [Playbook AI agent](AGENTS.md) trước khi dùng tool.
 
 ## An toàn bootloader/OTA
 
