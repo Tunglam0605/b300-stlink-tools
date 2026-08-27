@@ -81,6 +81,7 @@ class ProbeMemoryMetadataTests(unittest.TestCase):
         self.assertNotIn("erase", rendered)
         self.assertNotIn("program", rendered)
         self.assertNotIn("mww", rendered)
+        self.assertNotIn("reset", rendered)
 
 
 if __name__ == "__main__":

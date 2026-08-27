@@ -38,6 +38,7 @@ from b300_core.service import B300Service, FlashResult
 
 from .viewmodels import FlashViewState, confirmation_text
 from .workers import FunctionWorker
+from .memory_tab import MemoryTab
 
 
 APP_STYLE = """
@@ -108,11 +109,8 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_flash_tab(), "Nạp firmware")
-        self.memory_placeholder = QWidget()
-        memory_layout = QVBoxLayout(self.memory_placeholder)
-        memory_layout.addWidget(QLabel("Đọc Sector và OTA metadata qua SWD (read-only)."))
-        memory_layout.addStretch(1)
-        self.tabs.addTab(self.memory_placeholder, "Memory / Metadata")
+        self.memory_tab = MemoryTab(self.service, self._selected_probe)
+        self.tabs.addTab(self.memory_tab, "Memory / Metadata")
         root.addWidget(self.tabs, 1)
         self.setCentralWidget(central)
 
@@ -409,4 +407,3 @@ class MainWindow(QMainWindow):
         self.status_banner.setProperty("state", state)
         self.status_banner.style().unpolish(self.status_banner)
         self.status_banner.style().polish(self.status_banner)
-

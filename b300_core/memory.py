@@ -18,7 +18,7 @@ def build_read_memory_command(probe: ProbeRef, executable: str, output: Path,
     validate_openocd_value(output, "Memory output path")
     return _base_command(probe, executable) + [
         "-c", "init",
-        "-c", "reset halt",
+        "-c", "halt",
         "-c", "dump_image {%s} 0x%08X %d" % (output, address, length),
         "-c", "resume",
         "-c", "shutdown",
@@ -46,4 +46,3 @@ def read_memory(probe: ProbeRef, address: int, length: int,
             raise RuntimeError("Memory dump length mismatch: expected %d, got %d." %
                                (length, len(data)))
         return data
-
