@@ -34,3 +34,5 @@ cd b300-stlink-tools
 Sau setup, dùng [03 — Nạp firmware](03_FLASH_FIRMWARE.md) để nạp Application
 hoặc [04 — Debug OpenOCD](04_DEBUG.md) để debug local/remote qua IPC. Người vận
 hành không muốn dùng terminal đọc [07 — GUI Windows/Ubuntu](07_GUI_WINDOWS_UBUNTU.md).
+Biên bản artifact và checklist nghiệm thu F407 nằm tại
+[08 — Release/Acceptance](08_RELEASE_ACCEPTANCE.md).

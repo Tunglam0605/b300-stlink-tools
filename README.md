@@ -91,6 +91,7 @@ file HEX, probe trước khi chạy.
 | [Xử lý lỗi](docs/05_TROUBLESHOOTING.md) | Chẩn đoán lỗi thường gặp. |
 | [Hướng dẫn AI agent](docs/06_AI_AGENT_MANUAL.md) | Dùng thủ công, playbook hoặc Agent Skill. |
 | [GUI Windows/Ubuntu](docs/07_GUI_WINDOWS_UBUNTU.md) | Vận hành giao diện theo 7 bước. |
+| [Biên bản release/acceptance](docs/08_RELEASE_ACCEPTANCE.md) | Artifact đã build và checklist nghiệm thu phần cứng F407. |
 | [Handoff GUI cho Antigravity](docs/superpowers/specs/2026-08-27-b300-stlink-gui-design.md) | Thiết kế GUI nạp code Windows/Ubuntu dùng chung lõi CLI. |
 | [AGENTS.md](AGENTS.md) | Quy tắc bắt buộc cho AI/automation. |
 
