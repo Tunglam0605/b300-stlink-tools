@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from b300_core.update_platform import UpdatePlatform, detect_update_platform
@@ -29,10 +30,11 @@ class UpdaterVersioningTests(unittest.TestCase):
             detect_update_platform(Path("B300.AppImage"), "Linux", "aarch64"),
             UpdatePlatform.LINUX_ARM64_APPIMAGE,
         )
-        self.assertEqual(
-            detect_update_platform(Path("B300.exe"), "Windows", ""),
-            UpdatePlatform.WINDOWS_X64,
-        )
+        with mock.patch("b300_core.update_platform.platform.machine", return_value="AMD64"):
+            self.assertEqual(
+                detect_update_platform(Path("B300.exe"), "Windows", ""),
+                UpdatePlatform.WINDOWS_X64,
+            )
 
     def test_linux_installed_package_defaults_to_deb_identity(self) -> None:
         self.assertEqual(
