@@ -225,14 +225,14 @@ jobs:
             --notes-file release-notes/release-notes.md
       - name: Sign and verify release manifests
         env:
-          MINISIGN_SECRET_KEY_B64: ${{ secrets.MINISIGN_SECRET_KEY_B64 }}
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
           MINISIGN_PUBLIC_KEY: ${{ secrets.MINISIGN_PUBLIC_KEY }}
         run: |
-          test -n "$MINISIGN_SECRET_KEY_B64"
+          test -n "$MINISIGN_SECRET_KEY"
           test -n "$MINISIGN_PUBLIC_KEY"
           sudo apt-get update
           sudo apt-get install -y minisign
-          printf '%s' "$MINISIGN_SECRET_KEY_B64" | base64 --decode > "$RUNNER_TEMP/minisign.key"
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$RUNNER_TEMP/minisign.key"
           chmod 600 "$RUNNER_TEMP/minisign.key"
           minisign -S -W -s "$RUNNER_TEMP/minisign.key" -m release-assets/release-manifest.json -x release-assets/release-manifest.json.minisig
           minisign -S -W -s "$RUNNER_TEMP/minisign.key" -m release-assets/latest.json -x release-assets/latest.json.minisig
