@@ -6,7 +6,7 @@ on:
       version:
         description: Package version
         required: true
-        default: 0.1.0
+        default: 0.2.0
   push:
     tags:
       - "v*"
@@ -26,6 +26,14 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+      - name: Validate release version
+        id: version
+        shell: pwsh
+        run: |
+          $version = "${{ inputs.version }}"
+          if (-not $version) { $version = "${{ github.ref_name }}".TrimStart('v') }
+          python -m b300_version --check $version
+          "version=$version" >> $env:GITHUB_OUTPUT
       - name: Build self-contained native bundle
         shell: pwsh
         run: python build_native_bundle.py --internal-distribution-approved
@@ -44,12 +52,10 @@ jobs:
       - name: Build per-user installer
         shell: pwsh
         run: |
-          $version = "${{ inputs.version }}"
-          if (-not $version) { $version = "${{ github.ref_name }}".TrimStart('v') }
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
             "/DSourceRoot=$((Resolve-Path release\windows-bundle).Path)" `
             "/DOutputDir=$((Resolve-Path release).Path)" `
-            "/DAppVersion=$version" packaging\windows\b300-stlink-gui.iss
+            "/DAppVersion=${{ steps.version.outputs.version }}" packaging\windows\b300-stlink-gui.iss
       - uses: actions/upload-artifact@v7
         with:
           name: b300-stlink-windows-x64
@@ -81,6 +87,13 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+      - name: Validate release version
+        id: version
+        run: |
+          version="${{ inputs.version }}"
+          if [ -z "$version" ]; then version="${GITHUB_REF_NAME#v}"; fi
+          python -m b300_version --check "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Install GUI runtime libraries
         run: |
           sudo apt-get update
@@ -103,13 +116,11 @@ jobs:
         env:
           APPIMAGE_EXTRACT_AND_RUN: "1"
         run: |
-          version="${{ inputs.version }}"
-          if [ -z "$version" ]; then version="${GITHUB_REF_NAME#v}"; fi
           python packaging/build_gui.py \
             --bundle-dir release/linux-bundle \
             --output-dir release/gui \
             --architecture ${{ matrix.architecture }} \
-            --version "$version" \
+            --version "${{ steps.version.outputs.version }}" \
             --appimagetool release/appimagetool-${{ matrix.appimagetool_arch }}.AppImage \
             --build-deb
       - uses: actions/upload-artifact@v7

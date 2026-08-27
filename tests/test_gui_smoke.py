@@ -9,12 +9,13 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QApplication, QLabel, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QWidget
 
 from b300_gui.main_window import MainWindow
 from b300_core.hex_image import inspect_image
@@ -47,6 +48,14 @@ class FakeService:
         if event_sink:
             event_sink("read-only target inspection")
         return TargetInfo(0x101F6413, 512, 3.09, "S0-S2 protected")
+
+
+class MissingOpenOcdService(FakeService):
+    def __init__(self) -> None:
+        self.executable = "openocd"
+
+    def doctor(self):
+        return Path(self.executable).name == "openocd.exe", self.executable
 
 
 class GuiSmokeTests(unittest.TestCase):
@@ -98,7 +107,7 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(window.plan_table.verticalScrollBar().maximum(), 0)
         self.assertEqual(window.log_view.horizontalScrollBar().value(), 0)
         self.assertEqual(window.about_action.text(), "Giới thiệu")
-        self.assertIn("Core v0.1.0", window.log_view.toPlainText())
+        self.assertIn("Core v0.2.0", window.log_view.toPlainText())
         window.close()
 
     def test_valid_image_enables_dry_run_without_hardware_write(self) -> None:
@@ -112,6 +121,53 @@ class GuiSmokeTests(unittest.TestCase):
             window.show_dry_run()
         self.assertIn("DRY-RUN", window.log_view.toPlainText())
         self.assertIn("flash erase_sector 0 3 7", window.log_view.toPlainText())
+        window.close()
+
+    def test_missing_openocd_shows_accessible_offline_setup_action(self) -> None:
+        window = MainWindow(service=MissingOpenOcdService(), probe_loader=lambda: ())
+        self.assertFalse(window.setup_button.isHidden())
+        self.assertTrue(window.setup_button.isEnabled())
+        self.assertEqual(window.setup_button.text(), "Thiết lập môi trường")
+        self.assertIn("offline", window.setup_button.accessibleDescription().lower())
+        window.close()
+
+    def test_offline_setup_button_installs_then_rechecks_environment(self) -> None:
+        service = MissingOpenOcdService()
+        window = MainWindow(
+            service=service,
+            probe_loader=lambda: (),
+            setup_bundle_provider=lambda: Path("offline-bundle.zip"),
+            setup_installer=lambda bundle: Path("installed/openocd.exe"),
+        )
+        with mock.patch.object(
+            QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes
+        ):
+            window.setup_button.click()
+        deadline = time.monotonic() + 1.0
+        while window.busy and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.01)
+        self.assertEqual(service.executable, "installed\\openocd.exe")
+        self.assertTrue(window.setup_button.isHidden())
+        self.assertIn("OpenOCD sẵn sàng", window.status_banner.text())
+        while window._threads and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.01)
+        window.close()
+
+    def test_offline_setup_completion_does_not_discover_or_touch_probe(self) -> None:
+        service = MissingOpenOcdService()
+        window = MainWindow(service=service, probe_loader=lambda: ())
+
+        def forbidden_probe_discovery():
+            raise AssertionError("setup completion must not discover ST-Link probes")
+
+        window.probe_loader = forbidden_probe_discovery
+        window.busy = True
+        window._offline_setup_finished(Path("installed/openocd.exe"))
+        self.assertFalse(window.busy)
+        self.assertTrue(window.setup_button.isHidden())
+        self.assertIn("OpenOCD sẵn sàng", window.status_banner.text())
         window.close()
 
     def test_target_worker_survives_until_read_only_inspection_finishes(self) -> None:

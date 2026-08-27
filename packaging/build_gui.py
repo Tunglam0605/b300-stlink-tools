@@ -7,10 +7,16 @@ import argparse
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from b300_version import __version__ as TOOL_VERSION
+
 DESKTOP_SOURCE = ROOT / "packaging" / "linux" / "b300-stlink-gui.desktop"
 ICON_SOURCE = ROOT / "branding" / "b300-stlink-icon.png"
 
@@ -49,19 +55,16 @@ def stage_linux_appdir(bundle: Path, output: Path, architecture: str) -> Path:
     write_executable(appdir / "AppRun", """#!/bin/sh
 set -eu
 appdir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-export B300_OPENOCD="$appdir/usr/lib/b300-stlink/vendor/openocd/bin/openocd"
 exec "$appdir/usr/lib/b300-stlink/b300-stlink-gui" "$@"
 """)
     write_executable(appdir / "usr" / "bin" / "b300-stlink-gui", """#!/bin/sh
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../lib/b300-stlink" && pwd)
-export B300_OPENOCD="$root/vendor/openocd/bin/openocd"
 exec "$root/b300-stlink-gui" "$@"
 """)
     write_executable(appdir / "usr" / "bin" / "b300-stlink", """#!/bin/sh
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../lib/b300-stlink" && pwd)
-export B300_OPENOCD="$root/vendor/openocd/bin/openocd"
 exec "$root/b300-stlink" "$@"
 """)
     shutil.copy2(DESKTOP_SOURCE, appdir / "b300-stlink-gui.desktop")
@@ -98,12 +101,10 @@ def stage_deb_root(bundle: Path, output: Path, architecture: str, version: str) 
     )
     write_executable(debroot / "usr" / "local" / "bin" / "b300-stlink-gui", """#!/bin/sh
 set -eu
-export B300_OPENOCD="/opt/b300-stlink/vendor/openocd/bin/openocd"
 exec /opt/b300-stlink/b300-stlink-gui "$@"
 """)
     write_executable(debroot / "usr" / "local" / "bin" / "b300-stlink", """#!/bin/sh
 set -eu
-export B300_OPENOCD="/opt/b300-stlink/vendor/openocd/bin/openocd"
 exec /opt/b300-stlink/b300-stlink "$@"
 """)
     desktop_dir = debroot / "usr" / "share" / "applications"
@@ -120,7 +121,7 @@ def main(argv=None) -> int:
     parser.add_argument("--bundle-dir", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--architecture", choices=("x86_64", "aarch64"), required=True)
-    parser.add_argument("--version", default="0.1.0")
+    parser.add_argument("--version", default=TOOL_VERSION)
     parser.add_argument("--appimagetool", type=Path)
     parser.add_argument("--build-deb", action="store_true")
     args = parser.parse_args(argv)

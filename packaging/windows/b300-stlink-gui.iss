@@ -5,7 +5,7 @@
   #define OutputDir "."
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.1.0"
+  #error AppVersion must be passed from b300_version.py with /DAppVersion
 #endif
 
 [Setup]

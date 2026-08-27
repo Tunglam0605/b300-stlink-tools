@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -34,6 +35,11 @@ from PySide6.QtWidgets import (
 
 from b300_core.models import FlashPlan, ProbeRef
 from b300_core.models import TargetInfo
+from b300_core.offline_setup import (
+    current_platform_name,
+    find_offline_bundle,
+    install_offline_bundle,
+)
 from b300_core import __version__ as CORE_VERSION
 from b300_core.policy import SECTORS
 from b300_core.probe import list_probes
@@ -77,10 +83,14 @@ QTabBar::tab:selected { background: #FFFFFF; border-bottom: 3px solid #2563EB; }
 
 class MainWindow(QMainWindow):
     def __init__(self, service: Optional[B300Service] = None,
-                 probe_loader: Callable = list_probes) -> None:
+                 probe_loader: Callable = list_probes,
+                 setup_bundle_provider: Optional[Callable[[], Optional[Path]]] = None,
+                 setup_installer: Callable[[Path], Path] = install_offline_bundle) -> None:
         super().__init__()
         self.service = service or B300Service()
         self.probe_loader = probe_loader
+        self.setup_bundle_provider = setup_bundle_provider or self._select_offline_bundle
+        self.setup_installer = setup_installer
         self.settings = QSettings("TungLamAutomation", "B300-STLink")
         self.image_info = None
         self.flash_plan: Optional[FlashPlan] = None
@@ -131,7 +141,22 @@ class MainWindow(QMainWindow):
         self.status_banner = QLabel("Sẵn sàng kiểm tra ST-Link")
         self.status_banner.setObjectName("statusBanner")
         self.status_banner.setAccessibleName("Trạng thái phiên nạp")
-        root.addWidget(self.status_banner)
+        status_row = QHBoxLayout()
+        status_row.setSpacing(8)
+        status_row.addWidget(self.status_banner, 1)
+        self.setup_button = QPushButton("Thiết lập môi trường")
+        self.setup_button.setObjectName("setupButton")
+        self.setup_button.setAccessibleName("Thiết lập OpenOCD offline")
+        self.setup_button.setAccessibleDescription(
+            "Cài OpenOCD từ gói B300 offline đã kiểm tra checksum; không cần Internet."
+        )
+        self.setup_button.setToolTip(
+            "Cài OpenOCD 0.12.0-7 từ ZIP/tar.gz offline đầy đủ"
+        )
+        self.setup_button.clicked.connect(self.setup_environment)
+        self.setup_button.setVisible(False)
+        status_row.addWidget(self.setup_button)
+        root.addLayout(status_row)
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_flash_tab(), "Nạp firmware")
@@ -309,8 +334,98 @@ class MainWindow(QMainWindow):
             detail = "%d probe tìm thấy" % len(probes) if probes else "OpenOCD sẵn sàng"
             self._set_status("%s · %s" % (detail, executable), "normal")
         else:
-            self._set_status("Không tìm thấy OpenOCD; chạy setup/doctor trước", "error")
+            self._set_status(
+                "Không tìm thấy OpenOCD; dùng Thiết lập môi trường từ gói offline",
+                "error",
+            )
         self._rebuild_plan()
+
+    def _select_offline_bundle(self) -> Optional[Path]:
+        search_root = (Path(sys.executable).resolve().parent if getattr(sys, "frozen", False)
+                       else Path.cwd())
+        try:
+            discovered = find_offline_bundle(search_root, current_platform_name())
+        except RuntimeError as error:
+            QMessageBox.critical(self, "Nền tảng chưa được hỗ trợ", str(error))
+            return None
+        if discovered is not None:
+            return discovered
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            "Chọn gói B300 ST-Link offline đầy đủ",
+            str(search_root),
+            "B300 offline bundle (*.zip *.tar.gz)",
+        )
+        return Path(selected) if selected else None
+
+    def setup_environment(self) -> None:
+        if self.busy:
+            return
+        try:
+            bundle = self.setup_bundle_provider()
+        except Exception as error:
+            QMessageBox.critical(self, "Không thể chọn gói offline", str(error))
+            return
+        if bundle is None:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Thiết lập OpenOCD offline",
+            "Gói nguồn: %s\n\n"
+            "Cài OpenOCD xPack 0.12.0-7 từ gói này?\n"
+            "Tool sẽ kiểm tra SHA-256 tin cậy của archive và toàn bộ runtime.\n"
+            "Thao tác không dùng Internet và không kết nối STM32/ST-Link." % bundle,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.busy = True
+        self.setup_button.setText("Đang thiết lập…")
+        self.progress.setRange(0, 0)
+        self.progress.setFormat("Đang kiểm tra gói offline")
+        self._set_status("Đang thiết lập OpenOCD offline; không cần Internet", "busy")
+        self._update_controls()
+        self._start_worker(
+            lambda log, phase, cancel: self.setup_installer(Path(bundle)),
+            self._offline_setup_finished,
+            on_failed=self._offline_setup_failed,
+        )
+
+    def _offline_setup_finished(self, executable: Path) -> None:
+        self.service.executable = str(executable)
+        self.busy = False
+        self.setup_button.setText("Thiết lập môi trường")
+        self.progress.setRange(0, 1)
+        self.progress.setValue(1)
+        self.progress.setFormat("Thiết lập hoàn tất")
+        self.append_log("Offline OpenOCD installed and verified: %s" % executable)
+        available, resolved = self.service.doctor()
+        self.openocd_ready = available
+        self.target_ready = False
+        self.target_info = None
+        if available:
+            self._set_status(
+                "OpenOCD sẵn sàng · chưa quét ST-Link · %s" % resolved,
+                "normal",
+            )
+        else:
+            self._set_status("Không thể xác nhận OpenOCD sau thiết lập", "error")
+        self._rebuild_plan()
+
+    def _offline_setup_failed(self, failure) -> None:
+        self.busy = False
+        self.setup_button.setText("Thiết lập môi trường")
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        self.progress.setFormat("Setup lỗi")
+        message = getattr(failure, "message", str(failure))
+        self.append_log(getattr(failure, "traceback", str(failure)))
+        self._set_status(
+            "Thiết lập offline thất bại · %s · Chọn đúng bundle cho máy này" % message,
+            "error",
+        )
+        self._update_controls()
 
     def _probe_changed(self) -> None:
         self.target_ready = False
@@ -420,6 +535,8 @@ class MainWindow(QMainWindow):
             self.openocd_ready and probe_selected and not self.busy
         )
         self.probe_combo.setEnabled(not self.busy)
+        self.setup_button.setVisible(not self.openocd_ready)
+        self.setup_button.setEnabled(not self.busy)
 
     def show_dry_run(self) -> None:
         if self.flash_plan is None:
@@ -469,12 +586,13 @@ class MainWindow(QMainWindow):
             cancellable=False,
         )
 
-    def _start_worker(self, operation, on_finished, cancellable: bool = False) -> None:
+    def _start_worker(self, operation, on_finished, cancellable: bool = False,
+                      on_failed=None) -> None:
         worker = FunctionWorker(operation, self)
         worker.log.connect(self.append_log)
         worker.phase.connect(self._flash_phase_changed)
         worker.completed.connect(on_finished)
-        worker.failed.connect(self._operation_failed)
+        worker.failed.connect(on_failed or self._operation_failed)
         worker.finished.connect(self._worker_finished)
         self._threads.append(worker)
         if cancellable:
@@ -564,7 +682,7 @@ class MainWindow(QMainWindow):
         if self.busy or self._threads or self.memory_tab.has_active_operation:
             event.ignore()
             self._set_status(
-                "Thao tác phần cứng đang chạy; hãy chờ hoàn tất hoặc hủy khi nút Hủy được bật.",
+                "Thao tác đang chạy; hãy chờ hoàn tất hoặc hủy khi nút Hủy được bật.",
                 "error",
             )
             self.append_log("Close blocked: an ST-Link operation is still active.")

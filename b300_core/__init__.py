@@ -1,6 +1,6 @@
 """Shared, UI-independent B300 ST-Link provisioning services."""
 
-__version__ = "0.1.0"
+from b300_version import __version__
 
 from .hex_image import inspect_image
 from .models import FlashPlan, FlashPreview, ImageInfo, ProbeRef, SectorInfo

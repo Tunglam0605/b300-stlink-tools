@@ -9,11 +9,15 @@ import shutil
 import subprocess
 import sys
 import sysconfig
-import tarfile
 import tempfile
 import urllib.request
-import zipfile
 from pathlib import Path
+
+from b300_version import __version__ as TOOL_VERSION
+from b300_core.offline_setup import (
+    TRUSTED_OPENOCD_PACKAGES,
+    extract_trusted_openocd_package,
+)
 
 
 ROOT = Path(__file__).resolve().parent
@@ -47,6 +51,14 @@ def fetch(url: str, output: Path) -> None:
         shutil.copyfileobj(source, destination)
 
 
+def validate_trusted_package(platform_name: str, filename: str, digest: str) -> None:
+    trusted_name, trusted_digest = TRUSTED_OPENOCD_PACKAGES[platform_name]
+    if filename != trusted_name or digest.lower() != trusted_digest.lower():
+        raise RuntimeError(
+            "Downloaded OpenOCD package does not match the built-in trust anchor."
+        )
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=ROOT / "release")
@@ -67,12 +79,9 @@ def main(argv=None) -> int:
         verified_sha256 = checksum.read_text().split()[0].lower()
         if hashlib.sha256(archive.read_bytes()).hexdigest() != verified_sha256:
             raise RuntimeError("OpenOCD checksum mismatch.")
-        unpack = temp / "openocd"
-        if extension == ".zip":
-            with zipfile.ZipFile(archive) as content: content.extractall(unpack)
-        else:
-            with tarfile.open(archive) as content: content.extractall(unpack)
-        openocd_root = next(item for item in unpack.iterdir() if item.is_dir())
+        validate_trusted_package(platform_name, filename, verified_sha256)
+        openocd_root = temp / "openocd-runtime"
+        extract_trusted_openocd_package(archive, openocd_root, platform_name)
         subprocess.check_call([sys.executable, "-m", "pip", "install", "--user",
                                "-r", str(ROOT / "requirements-build.txt")])
         subprocess.check_call([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
@@ -95,8 +104,10 @@ def main(argv=None) -> int:
             "--openocd-root", str(openocd_root), "--bootstrap", str(ROOT / installer),
             "--output", str(args.output_dir / ("b300-stlink-%s%s" % (platform_name, extension))),
             "--platform", platform_name, "--internal-distribution-approved",
+            "--version", TOOL_VERSION,
             "--openocd-archive", filename,
             "--openocd-sha256", verified_sha256,
+            "--openocd-package", str(archive),
             "--resource", str(ROOT / "LICENSE"),
             "--resource", str(ROOT / "packaging" / "linux" / "b300-stlink-gui.desktop"),
             "--resource", str(ROOT / "branding" / "b300-stlink-icon.png"),

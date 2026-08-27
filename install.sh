@@ -10,7 +10,6 @@ cat > "$bin_root/b300-stlink" <<'EOF'
 set -eu
 runner_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 tool_root=$(CDPATH= cd -- "$runner_dir/../share/b300-stlink" && pwd)
-export B300_OPENOCD="$tool_root/vendor/openocd/bin/openocd"
 exec "$tool_root/b300-stlink" "$@"
 EOF
 chmod +x "$bin_root/b300-stlink"
@@ -20,7 +19,6 @@ cat > "$bin_root/b300-stlink-gui" <<'EOF'
 set -eu
 runner_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 tool_root=$(CDPATH= cd -- "$runner_dir/../share/b300-stlink" && pwd)
-export B300_OPENOCD="$tool_root/vendor/openocd/bin/openocd"
 exec "$tool_root/b300-stlink-gui" "$@"
 EOF
 chmod +x "$bin_root/b300-stlink-gui"

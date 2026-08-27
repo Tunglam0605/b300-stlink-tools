@@ -7,7 +7,7 @@ python3 packaging/build_gui.py \
   --bundle-dir ./bundle \
   --output-dir ./release/gui \
   --architecture x86_64 \
-  --version 0.1.0 \
+  --version 0.2.0 \
   --appimagetool /opt/appimagetool-x86_64.AppImage \
   --build-deb
 ```

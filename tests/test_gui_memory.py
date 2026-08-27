@@ -22,7 +22,7 @@ class GuiMemoryTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls) -> None:
         cls.app.processEvents()
-        cls.app.shutdown()
+        # Keep the process-wide Qt application alive for later GUI test modules.
         cls.app = None
 
     def test_memory_tab_lists_all_sectors_and_has_no_write_controls(self) -> None:

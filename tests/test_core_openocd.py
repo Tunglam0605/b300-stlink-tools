@@ -21,12 +21,42 @@ from b300_core.openocd import (
     parse_boot_verification,
     build_target_inspect_command,
     parse_target_info,
+    resolve_openocd,
 )
 from b300_core.policy import build_flash_plan
 from tests.test_core_hex_policy import write_hex
 
 
 class OpenOcdCoreTests(unittest.TestCase):
+    def test_frozen_runtime_ignores_tampered_adjacent_vendor_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "b300-stlink-gui.exe"
+            bundled = root / "vendor" / "openocd" / "bin" / "openocd.exe"
+            bundled.parent.mkdir(parents=True)
+            executable.write_bytes(b"gui")
+            bundled.write_bytes(b"tampered")
+            with mock.patch.object(sys, "frozen", True, create=True), \
+                    mock.patch.object(sys, "executable", str(executable)), \
+                    mock.patch("b300_core.openocd.verify_openocd_tree", return_value=False), \
+                    mock.patch("b300_core.openocd.installed_openocd_path") as installed, \
+                    mock.patch("b300_core.openocd.shutil.which", return_value=None):
+                installed.return_value = root / "missing-runtime" / "openocd.exe"
+                self.assertEqual(resolve_openocd(), "openocd")
+
+    def test_missing_environment_override_falls_back_to_verified_offline_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            installed = Path(directory) / "openocd.exe"
+            installed.write_bytes(b"runtime")
+            with mock.patch.dict(os.environ, {"B300_OPENOCD": "missing-openocd"}), \
+                    mock.patch(
+                        "b300_core.openocd.installed_openocd_path",
+                        return_value=installed,
+                    ), mock.patch(
+                        "b300_core.openocd.verify_openocd_tree", return_value=True
+                    ), mock.patch("b300_core.openocd.shutil.which", return_value=None):
+                self.assertEqual(resolve_openocd(), str(installed))
+
     def make_plan(self, directory: str):
         image = inspect_image(write_hex(directory, 0x08010000, b"\xAA"))
         return build_flash_plan(
@@ -141,7 +171,10 @@ class OpenOcdCoreTests(unittest.TestCase):
             bundled.parent.mkdir(parents=True)
             bundled.write_bytes(b"")
             with mock.patch.object(sys, "frozen", True, create=True), \
-                 mock.patch.object(sys, "executable", str(executable)):
+                 mock.patch.object(sys, "executable", str(executable)), \
+                 mock.patch(
+                     "b300_core.openocd.verify_openocd_tree", return_value=True
+                 ):
                 self.assertTrue(os.path.samefile(resolve_openocd(), bundled))
 
     def test_target_inspection_is_read_only_and_parses_f407(self) -> None:

@@ -6,13 +6,11 @@ New-Item -ItemType Directory -Force -Path $installRoot, $binRoot | Out-Null
 Get-ChildItem -LiteralPath $bundleRoot -Force | Copy-Item -Destination $installRoot -Recurse -Force
 @'
 @echo off
-set "B300_OPENOCD=%~dp0..\vendor\openocd\bin\openocd.exe"
 "%~dp0..\b300-stlink.exe" %*
 '@ | Set-Content -LiteralPath (Join-Path $binRoot 'b300-stlink.cmd') -Encoding ASCII
 if (Test-Path -LiteralPath (Join-Path $installRoot 'b300-stlink-gui.exe')) {
 @'
 @echo off
-set "B300_OPENOCD=%~dp0..\vendor\openocd\bin\openocd.exe"
 "%~dp0..\b300-stlink-gui.exe" %*
 '@ | Set-Content -LiteralPath (Join-Path $binRoot 'b300-stlink-gui.cmd') -Encoding ASCII
     $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'

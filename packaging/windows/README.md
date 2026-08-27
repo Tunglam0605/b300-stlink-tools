@@ -6,7 +6,7 @@ Build the native bundle on Windows, extract it, then compile
 ```powershell
 py build_native_bundle.py --internal-distribution-approved
 iscc /DSourceRoot="C:\path\to\extracted-bundle" `
-  /DOutputDir="C:\path\to\release" /DAppVersion="0.1.0" `
+  /DOutputDir="C:\path\to\release" /DAppVersion="0.2.0" `
   packaging\windows\b300-stlink-gui.iss
 ```
 

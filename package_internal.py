@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import re
 import sys
@@ -10,10 +11,17 @@ import tarfile
 import zipfile
 from pathlib import Path
 
+from b300_version import __version__ as TOOL_VERSION
+from b300_core.offline_setup import (
+    TREE_MANIFEST_NAME,
+    TRUSTED_TREE_MANIFESTS,
+    build_tree_manifest,
+)
+
 
 def add_tree_zip(archive: zipfile.ZipFile, root: Path) -> None:
     for source in root.rglob("*"):
-        if source.is_file():
+        if source.is_file() and source != root / TREE_MANIFEST_NAME:
             archive.write(source, "vendor/openocd/" + source.relative_to(root).as_posix())
 
 
@@ -24,9 +32,13 @@ def executable(info: tarfile.TarInfo) -> tarfile.TarInfo:
 
 def add_tree_tar(archive: tarfile.TarFile, root: Path) -> None:
     for source in root.rglob("*"):
-        if source.is_file():
+        if source.is_file() and source != root / TREE_MANIFEST_NAME:
             archive.add(source, "vendor/openocd/" + source.relative_to(root).as_posix(),
                         filter=executable if source.name == "openocd" else None)
+
+
+def openocd_manifest(root: Path) -> bytes:
+    return build_tree_manifest(root)
 
 
 def main(argv=None) -> int:
@@ -38,16 +50,17 @@ def main(argv=None) -> int:
     parser.add_argument("--bootstrap", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--platform", required=True)
-    parser.add_argument("--version", default="0.1.0")
+    parser.add_argument("--version", default=TOOL_VERSION)
     parser.add_argument("--openocd-archive", required=True)
     parser.add_argument("--openocd-sha256", required=True)
+    parser.add_argument("--openocd-package", required=True, type=Path)
     parser.add_argument("--internal-distribution-approved", action="store_true")
     args = parser.parse_args(argv)
     if not args.internal_distribution_approved:
         parser.error("--internal-distribution-approved is required.")
     if not re.fullmatch(r"[0-9A-Fa-f]{64}", args.openocd_sha256):
         parser.error("--openocd-sha256 must contain exactly 64 hexadecimal characters.")
-    required = [args.executable, args.openocd_root, args.bootstrap]
+    required = [args.executable, args.openocd_root, args.bootstrap, args.openocd_package]
     if args.gui_executable is not None:
         required.append(args.gui_executable)
     required.extend(args.resource)
@@ -63,6 +76,12 @@ def main(argv=None) -> int:
             args.openocd_sha256.upper(),
         )
     ).encode("ascii")
+    manifest = openocd_manifest(args.openocd_root)
+    manifest_digest = hashlib.sha256(manifest).hexdigest()
+    if manifest_digest != TRUSTED_TREE_MANIFESTS.get(args.platform):
+        raise ValueError(
+            "Expanded OpenOCD runtime does not match the built-in tree trust anchor."
+        )
     if args.output.name.endswith(".tar.gz"):
         with tarfile.open(args.output, "w:gz") as archive:
             archive.add(args.executable, arcname=args.executable.name, filter=executable)
@@ -76,6 +95,13 @@ def main(argv=None) -> int:
             info = tarfile.TarInfo("BUNDLE-METADATA.txt")
             info.size = len(metadata)
             archive.addfile(info, io.BytesIO(metadata))
+            manifest_info = tarfile.TarInfo("vendor/openocd/%s" % TREE_MANIFEST_NAME)
+            manifest_info.size = len(manifest)
+            archive.addfile(manifest_info, io.BytesIO(manifest))
+            archive.add(
+                args.openocd_package,
+                arcname="vendor/packages/%s" % args.openocd_archive,
+            )
     elif args.output.suffix == ".zip":
         with zipfile.ZipFile(args.output, "w", zipfile.ZIP_DEFLATED) as archive:
             archive.write(args.executable, args.executable.name)
@@ -86,6 +112,11 @@ def main(argv=None) -> int:
             archive.write(args.bootstrap, args.bootstrap.name)
             add_tree_zip(archive, args.openocd_root)
             archive.writestr("BUNDLE-METADATA.txt", metadata)
+            archive.writestr("vendor/openocd/%s" % TREE_MANIFEST_NAME, manifest)
+            archive.write(
+                args.openocd_package,
+                "vendor/packages/%s" % args.openocd_archive,
+            )
     else:
         parser.error("Output must end with .zip or .tar.gz.")
     print("Created: %s" % args.output)

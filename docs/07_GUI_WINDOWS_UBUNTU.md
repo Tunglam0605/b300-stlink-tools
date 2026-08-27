@@ -37,6 +37,21 @@ b300-stlink-gui
 Quyền USB/udev vẫn phải được setup theo [Setup Ubuntu IPC](02_SETUP_UBUNTU_IPC.md).
 Không chạy GUI bằng `sudo`.
 
+### Setup offline khi GUI báo thiếu OpenOCD
+
+1. Giữ nguyên native bundle ZIP/tar.gz đầy đủ trên máy; không chỉ chép riêng
+   `b300-stlink-gui.exe`.
+2. Nhấn **Thiết lập môi trường** trên thanh cảnh báo.
+3. Nếu bundle nằm cạnh GUI, tool tự chọn; nếu không, chọn đúng ZIP/tar.gz cho
+   hệ điều hành và kiến trúc hiện tại.
+4. Xác nhận OpenOCD `0.12.0-7`. Tool kiểm platform và SHA-256 tin cậy cố định
+   của archive xPack gốc trước khi giải nén an toàn vào thư mục người dùng;
+   manifest runtime cũng được neo vào digest cố định trong executable.
+5. Chờ GUI báo `OpenOCD sẵn sàng`; không cần Internet hoặc khởi động lại.
+
+Setup này không kết nối ST-Link, không reset chip và không ghi flash. Bundle
+sai nền tảng, thiếu archive xPack gốc hoặc sai SHA-256 tin cậy sẽ bị từ chối.
+
 ### Ubuntu ARM64
 
 Dùng artifact ARM64 của cùng release:

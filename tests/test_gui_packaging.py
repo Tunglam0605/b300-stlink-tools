@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import tempfile
 import unittest
 import zipfile
@@ -69,30 +70,53 @@ class GuiPackagingTests(unittest.TestCase):
             gui = root / "b300-stlink-gui.exe"
             bootstrap = root / "install.ps1"
             openocd = root / "openocd"
+            xpack = root / "xpack-openocd.zip"
             (openocd / "bin").mkdir(parents=True)
             for path in (cli, gui, bootstrap, openocd / "bin" / "openocd.exe"):
                 path.write_bytes(b"test")
+            xpack.write_bytes(b"trusted archive")
+            unicode_resource = openocd / "share" / "tài-liệu.txt"
+            unicode_resource.parent.mkdir(parents=True)
+            unicode_resource.write_bytes(b"offline docs")
             output = root / "bundle.zip"
             openocd_sha256 = "A" * 64
-            result = package_internal.main([
-                "--executable", str(cli),
-                "--gui-executable", str(gui),
-                "--openocd-root", str(openocd),
-                "--bootstrap", str(bootstrap),
-                "--output", str(output),
-                "--platform", "windows-x64",
-                "--openocd-archive", "xpack-openocd-0.12.0-7-win32-x64.zip",
-                "--openocd-sha256", openocd_sha256,
-                "--internal-distribution-approved",
-            ])
+            manifest_digest = hashlib.sha256(
+                package_internal.openocd_manifest(openocd)
+            ).hexdigest()
+            with mock.patch.object(
+                package_internal,
+                "TRUSTED_TREE_MANIFESTS",
+                {"windows-x64": manifest_digest},
+            ):
+                result = package_internal.main([
+                    "--executable", str(cli),
+                    "--gui-executable", str(gui),
+                    "--openocd-root", str(openocd),
+                    "--bootstrap", str(bootstrap),
+                    "--output", str(output),
+                    "--platform", "windows-x64",
+                    "--openocd-archive", "xpack-openocd-0.12.0-7-win32-x64.zip",
+                    "--openocd-sha256", openocd_sha256,
+                    "--openocd-package", str(xpack),
+                    "--internal-distribution-approved",
+                ])
             with zipfile.ZipFile(output) as archive:
                 names = set(archive.namelist())
                 metadata = archive.read("BUNDLE-METADATA.txt").decode("ascii")
+                manifest = archive.read(
+                    "vendor/openocd/OPENOCD-MANIFEST.sha256"
+                ).decode("utf-8")
         self.assertEqual(result, 0)
         self.assertIn("b300-stlink.exe", names)
         self.assertIn("b300-stlink-gui.exe", names)
         self.assertIn("vendor/openocd/bin/openocd.exe", names)
         self.assertIn("BUNDLE-METADATA.txt", names)
+        self.assertIn("vendor/openocd/OPENOCD-MANIFEST.sha256", names)
+        self.assertIn(
+            "vendor/packages/xpack-openocd-0.12.0-7-win32-x64.zip", names
+        )
+        self.assertIn("vendor/openocd/share/tài-liệu.txt", names)
+        self.assertIn("vendor/openocd/share/tài-liệu.txt", manifest)
         self.assertIn(
             "openocd_archive=xpack-openocd-0.12.0-7-win32-x64.zip", metadata
         )

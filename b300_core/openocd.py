@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Callable, List, Optional, Sequence
 
 from .models import BootVerification, CommandResult, FlashPlan, ProbeRef, TargetInfo
+from .offline_setup import installed_openocd_path, verify_openocd_tree
 from .policy import APPLICATION_ADDRESS, FLASH_END_ADDRESS, STLINK_PROVISION_MAGIC
 
 
@@ -20,14 +21,19 @@ EventSink = Callable[[str], None]
 
 
 def resolve_openocd(explicit: Optional[str] = None) -> str:
-    configured = explicit or os.environ.get("B300_OPENOCD")
-    if configured:
+    if explicit:
+        return explicit
+    configured = os.environ.get("B300_OPENOCD")
+    if configured and (Path(configured).is_file() or shutil.which(configured)):
         return configured
     if getattr(sys, "frozen", False):
         name = "openocd.exe" if os.name == "nt" else "openocd"
         bundled = Path(sys.executable).resolve().parent / "vendor" / "openocd" / "bin" / name
-        if bundled.is_file():
+        if bundled.is_file() and verify_openocd_tree(bundled.parent.parent):
             return str(bundled)
+    installed = installed_openocd_path()
+    if installed.is_file() and verify_openocd_tree(installed.parent.parent):
+        return str(installed)
     return shutil.which("openocd") or "openocd"
 
 
