@@ -82,6 +82,7 @@ file HEX, probe trước khi chạy.
 | [Debug OpenOCD](docs/04_DEBUG.md) | Debug local hoặc remote qua IPC. |
 | [Xử lý lỗi](docs/05_TROUBLESHOOTING.md) | Chẩn đoán lỗi thường gặp. |
 | [Hướng dẫn AI agent](docs/06_AI_AGENT_MANUAL.md) | Dùng thủ công, playbook hoặc Agent Skill. |
+| [Handoff GUI cho Antigravity](docs/superpowers/specs/2026-08-27-b300-stlink-gui-design.md) | Thiết kế GUI nạp code Windows/Ubuntu dùng chung lõi CLI. |
 | [AGENTS.md](AGENTS.md) | Quy tắc bắt buộc cho AI/automation. |
 
 ## Cấu trúc repository

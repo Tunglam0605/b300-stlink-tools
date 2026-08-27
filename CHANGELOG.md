@@ -13,6 +13,8 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 - Debug local/remote với loopback mặc định và Telnet/TCL disabled.
 - Agent Skill `b300-ota-stlink` và playbook cho AI automation.
 - CI kiểm thử trên Windows và Ubuntu.
+- Tài liệu kiểm chứng metadata OTA cũ chặn raw ST-Link Application mới.
+- Handoff thiết kế GUI PySide6 chuyên dụng cho Windows và Ubuntu.
 
 ### Security
 
