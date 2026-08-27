@@ -232,15 +232,19 @@ jobs:
         run: |
           test -n "$MINISIGN_SECRET_KEY"
           test -n "$MINISIGN_PUBLIC_KEY"
-          sudo add-apt-repository --yes universe
-          sudo apt-get update
-          sudo apt-get install -y minisign
+          minisign_archive="$RUNNER_TEMP/minisign-0.12-linux.tar.gz"
+          curl -fL --retry 3 -o "$minisign_archive" \
+            "https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz"
+          echo "9A599B48BA6EB7B1E80F12F36B94CECA7C00B7A5173C95C3EFC88D9822957E73  $minisign_archive" | sha256sum -c -
+          tar -xzf "$minisign_archive" -C "$RUNNER_TEMP"
+          minisign_bin="$RUNNER_TEMP/minisign-linux/x86_64/minisign"
+          chmod +x "$minisign_bin"
           printf '%s\n' "$MINISIGN_SECRET_KEY" > "$RUNNER_TEMP/minisign.key"
           chmod 600 "$RUNNER_TEMP/minisign.key"
-          minisign -S -W -s "$RUNNER_TEMP/minisign.key" -m release-assets/release-manifest.json -x release-assets/release-manifest.json.minisig
-          minisign -S -W -s "$RUNNER_TEMP/minisign.key" -m release-assets/latest.json -x release-assets/latest.json.minisig
-          minisign -Vm release-assets/release-manifest.json -x release-assets/release-manifest.json.minisig -P "$MINISIGN_PUBLIC_KEY"
-          minisign -Vm release-assets/latest.json -x release-assets/latest.json.minisig -P "$MINISIGN_PUBLIC_KEY"
+          "$minisign_bin" -S -W -s "$RUNNER_TEMP/minisign.key" -m release-assets/release-manifest.json -x release-assets/release-manifest.json.minisig
+          "$minisign_bin" -S -W -s "$RUNNER_TEMP/minisign.key" -m release-assets/latest.json -x release-assets/latest.json.minisig
+          "$minisign_bin" -Vm release-assets/release-manifest.json -x release-assets/release-manifest.json.minisig -P "$MINISIGN_PUBLIC_KEY"
+          "$minisign_bin" -Vm release-assets/latest.json -x release-assets/latest.json.minisig -P "$MINISIGN_PUBLIC_KEY"
           rm -f "$RUNNER_TEMP/minisign.key"
       - name: Create draft release and upload exact assets
         env:

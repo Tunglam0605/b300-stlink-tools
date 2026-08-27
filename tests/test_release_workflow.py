@@ -75,14 +75,19 @@ class ReleaseWorkflowTests(unittest.TestCase):
         )
         self.assertIn("find release-assets -mindepth 2 -type f", commands)
 
-    def test_release_enables_universe_before_installing_minisign(self) -> None:
+    def test_release_uses_checksum_pinned_minisign_binary(self) -> None:
         workflow = load_workflow("release.yml")
         finalize_steps = workflow["jobs"]["finalize-release"]["steps"]
         signing = next(
             step for step in finalize_steps
             if step.get("name") == "Sign and verify release manifests"
         )
-        self.assertIn("add-apt-repository --yes universe", signing["run"])
+        self.assertIn("minisign-0.12-linux.tar.gz", signing["run"])
+        self.assertIn(
+            "9A599B48BA6EB7B1E80F12F36B94CECA7C00B7A5173C95C3EFC88D9822957E73",
+            signing["run"],
+        )
+        self.assertNotIn("apt-get install -y minisign", signing["run"])
 
     def test_dry_run_cannot_publish_release(self) -> None:
         workflow = load_workflow("release-dry-run.yml")
