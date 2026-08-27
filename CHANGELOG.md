@@ -5,6 +5,27 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-27
+
+### Added
+
+- GitHub Releases trở thành nguồn phân phối chính với link tải trực tiếp cho GUI
+  và CLI trên Windows x64, Ubuntu 22.04 x64 và Ubuntu 22.04 ARM64.
+- Manifest cập nhật có chữ ký, checksum toàn bộ artifact, update checker chạy nền,
+  Windows managed update và luồng tải/xác minh an toàn cho Linux.
+
+### Changed
+
+- Chuẩn hóa version từ một nguồn duy nhất và phát hành tự động theo Git tag.
+- Tách gói GUI và CLI để người dùng chỉ tải đúng thành phần cần sử dụng.
+
+### Security
+
+- Chặn cài đặt hoặc khởi động lại phần mềm trong khi đang flash, erase, verify,
+  đọc target/memory hoặc debug.
+- Mọi package cập nhật phải vượt qua xác minh chữ ký Ed25519, kích thước và
+  SHA-256 trước khi được chuyển sang trạng thái sẵn sàng cài đặt.
+
 ## [0.2.0] - 2026-08-27
 
 ### Added
@@ -53,4 +74,5 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 - Revalidate target và immutable staged HEX ngay trước khi erase.
 
 [Unreleased]: https://github.com/Tunglam0605/b300-stlink-tools/commits/main
+[0.3.0]: https://github.com/Tunglam0605/b300-stlink-tools/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Tunglam0605/b300-stlink-tools/releases/tag/v0.2.0
