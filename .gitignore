@@ -2,7 +2,7 @@ __pycache__/
 *.py[cod]
 build/
 dist/
-release/
+/release/
 *.spec
 !b300_gui.spec
 vendor/

@@ -22,6 +22,7 @@ from b300_core.hex_image import inspect_image
 from b300_core.models import FlashPhaseEvent, ProbeInfo, TargetInfo
 from b300_gui.workers import FunctionWorker
 from b300_core.policy import build_flash_plan
+from b300_version import __version__
 from tests.test_core_hex_policy import write_hex
 
 
@@ -107,7 +108,7 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(window.plan_table.verticalScrollBar().maximum(), 0)
         self.assertEqual(window.log_view.horizontalScrollBar().value(), 0)
         self.assertEqual(window.about_action.text(), "Giới thiệu")
-        self.assertIn("Core v0.2.0", window.log_view.toPlainText())
+        self.assertIn("Core v%s" % __version__, window.log_view.toPlainText())
         window.close()
 
     def test_valid_image_enables_dry_run_without_hardware_write(self) -> None:
