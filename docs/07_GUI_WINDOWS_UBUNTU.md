@@ -9,8 +9,8 @@ mass erase, ghi Bootloader, sửa Option Bytes hoặc WRP.
 
 Dùng một trong hai artifact của cùng release:
 
-- `B300-STLink-GUI-Setup-<version>-windows-x64.exe`: chạy installer per-user;
-- `b300-stlink-windows-x64.zip`: giải nén, chạy `install.ps1` hoặc chạy portable.
+- `B300-STLink-GUI-Windows-x64.exe`: installer per-user;
+- `B300-STLink-GUI-Windows-x64.zip`: giải nén, chạy `install.ps1` hoặc chạy portable.
 
 Sau khi cài, mở **B300 ST-Link Provisioning** từ Start Menu hoặc chạy:
 
@@ -23,14 +23,14 @@ b300-stlink-gui
 Dùng AppImage:
 
 ```bash
-chmod +x B300-STLink-GUI-x86_64.AppImage
-./B300-STLink-GUI-x86_64.AppImage
+chmod +x B300-STLink-GUI-Ubuntu-x64.AppImage
+./B300-STLink-GUI-Ubuntu-x64.AppImage
 ```
 
 Hoặc cài DEB:
 
 ```bash
-sudo apt install ./b300-stlink-gui_<version>_amd64.deb
+sudo apt install ./b300-stlink-gui_amd64.deb
 b300-stlink-gui
 ```
 
@@ -57,11 +57,11 @@ sai nền tảng, thiếu archive xPack gốc hoặc sai SHA-256 tin cậy sẽ 
 Dùng artifact ARM64 của cùng release:
 
 ```bash
-chmod +x B300-STLink-GUI-aarch64.AppImage
-./B300-STLink-GUI-aarch64.AppImage
+chmod +x B300-STLink-GUI-Ubuntu-arm64.AppImage
+./B300-STLink-GUI-Ubuntu-arm64.AppImage
 ```
 
-Hoặc cài `b300-stlink-gui_<version>_arm64.deb`. Không chạy artifact x86_64 trên
+Hoặc cài `b300-stlink-gui_arm64.deb`. Không chạy artifact x86_64 trên
 ARM64 hoặc ngược lại.
 
 ## Bước 2 — Chọn và kiểm tra ST-Link

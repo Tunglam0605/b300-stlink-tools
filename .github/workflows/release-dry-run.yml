@@ -18,12 +18,29 @@ jobs:
         with:
           python-version: "3.9"
       - run: python build_native_bundle.py --internal-distribution-approved
-      - run: .\release\b300-stlink.exe --help
+      - name: Smoke-test native executables
+        shell: pwsh
+        run: |
+          .\release\b300-stlink.exe --help
+          $process = Start-Process -FilePath .\release\b300-stlink-gui.exe `
+            -ArgumentList --smoke-test -Wait -PassThru -WindowStyle Hidden
+          exit $process.ExitCode
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          Expand-Archive release\B300-STLink-GUI-Windows-x64.zip release\windows-gui-bundle -Force
+          choco install innosetup --no-progress -y
+          $version = python -c "from b300_version import __version__; print(__version__)"
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
+            "/DSourceRoot=$((Resolve-Path release\windows-gui-bundle).Path)" `
+            "/DOutputDir=$((Resolve-Path release).Path)" `
+            "/DAppVersion=$version" packaging\windows\b300-stlink-gui.iss
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dry-run-windows
           path: |
             release/B300-STLink-GUI-Windows-x64.zip
+            release/B300-STLink-GUI-Windows-x64.exe
             release/B300-STLink-CLI-Windows-x64.zip
           if-no-files-found: error
 
@@ -36,27 +53,57 @@ jobs:
             platform: x64
             gui: B300-STLink-GUI-Linux-x64.tar.gz
             cli: B300-STLink-CLI-Linux-x64.tar.gz
+            architecture: x86_64
+            appimagetool: appimagetool-x86_64.AppImage
+            appimagetool_sha256: A6D71E2B6CD66F8E8D16C37AD164658985E0CF5FCAA950C90A482890CB9D13E0
+            appimage: B300-STLink-GUI-Ubuntu-x64.AppImage
+            deb: b300-stlink-gui_amd64.deb
           - runner: ubuntu-24.04-arm
             platform: arm64
             gui: B300-STLink-GUI-Linux-arm64.tar.gz
             cli: B300-STLink-CLI-Linux-arm64.tar.gz
+            architecture: aarch64
+            appimagetool: appimagetool-aarch64.AppImage
+            appimagetool_sha256: 1B00524BA8C6B678DC15EF88A5C25EC24DEF36CDFC7E3ABB32DDCD068E8007FE
+            appimage: B300-STLink-GUI-Ubuntu-arm64.AppImage
+            deb: b300-stlink-gui_arm64.deb
     runs-on: ${{ matrix.runner }}
     container: ubuntu:22.04
     steps:
       - run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            ca-certificates git python3 python3-pip \
+            ca-certificates curl git python3 python3-pip \
             libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: python3 build_native_bundle.py --internal-distribution-approved
       - run: |
           ./release/b300-stlink --help
           ./release/b300-stlink-gui --smoke-test
+      - name: Build AppImage and DEB
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          mkdir -p release/linux-gui-bundle release/gui
+          tar -xzf "release/${{ matrix.gui }}" -C release/linux-gui-bundle
+          curl -fL --retry 3 -o "release/${{ matrix.appimagetool }}" \
+            "https://github.com/AppImage/appimagetool/releases/download/continuous/${{ matrix.appimagetool }}"
+          echo "${{ matrix.appimagetool_sha256 }}  release/${{ matrix.appimagetool }}" | sha256sum -c -
+          chmod +x "release/${{ matrix.appimagetool }}"
+          version=$(python3 -c 'from b300_version import __version__; print(__version__)')
+          python3 packaging/build_gui.py \
+            --bundle-dir release/linux-gui-bundle \
+            --output-dir release/gui \
+            --architecture "${{ matrix.architecture }}" \
+            --version "$version" \
+            --appimagetool "release/${{ matrix.appimagetool }}" \
+            --build-deb
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dry-run-linux-${{ matrix.platform }}
           path: |
             release/${{ matrix.gui }}
             release/${{ matrix.cli }}
+            release/gui/${{ matrix.appimage }}
+            release/gui/${{ matrix.deb }}
           if-no-files-found: error

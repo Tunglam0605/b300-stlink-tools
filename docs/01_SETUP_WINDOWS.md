@@ -2,37 +2,28 @@
 
 ## Dùng khi nào
 
-Đầu tiên làm [00 — Git clone](00_START_HERE.md). Dùng file này **một lần cho mỗi
-máy Windows x64**. Sau khi cài xong, chuyển sang [Bước 3 — Nạp firmware](03_FLASH_FIRMWARE.md).
+Tải `B300-STLink-GUI-Windows-x64.exe` hoặc `B300-STLink-GUI-Windows-x64.zip`
+từ trang Release. Chỉ clone repo khi cần phát triển hoặc tự build. Sau khi cài
+xong, chuyển sang [Bước 3 — Nạp firmware](03_FLASH_FIRMWARE.md).
 
 ## Điều kiện
 
 - Windows 10/11 x64.
 - ST-Link đã được Windows nhận trong Device Manager.
-- Git và Python 3 trên PATH (`git --version`, `py --version`).
-
-Không cần STM32CubeProgrammer hay OpenOCD riêng. Python chỉ cần để tạo bundle
-lần đầu từ source clone.
+- Không cần Git, Python, STM32CubeProgrammer hoặc OpenOCD cài riêng.
 
 ## Các bước
 
-1. Trong thư mục repo đã clone, tạo bundle:
-
-   ```powershell
-   py build_native_bundle.py --internal-distribution-approved
-   ```
-
-2. Giải nén file `release\b300-stlink-windows-x64.zip` hoặc dùng installer EXE
-   sinh bởi release workflow.
-3. Mở PowerShell trong thư mục vừa giải nén.
-4. Chạy:
+1. Nếu dùng `B300-STLink-GUI-Windows-x64.exe`, chạy file và hoàn tất wizard.
+2. Nếu dùng `B300-STLink-GUI-Windows-x64.zip`, giải nén vào một thư mục riêng,
+   mở PowerShell tại đó rồi chạy:
 
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\install.ps1
    ```
 
-5. Đóng PowerShell, mở một PowerShell mới.
-6. Kiểm tra:
+3. Đóng PowerShell, mở một PowerShell mới.
+4. Kiểm tra:
 
    ```powershell
    b300-stlink doctor

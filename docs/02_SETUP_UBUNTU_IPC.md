@@ -2,8 +2,9 @@
 
 ## Dùng khi nào
 
-Đầu tiên làm [00 — Git clone](00_START_HERE.md). Dùng file này **một lần cho mỗi
-IPC Ubuntu x64 hoặc ARM64**. Sau khi cài xong, chuyển sang [Bước 3 — Nạp firmware](03_FLASH_FIRMWARE.md).
+Tải đúng AppImage, DEB hoặc CLI tar.gz cho Ubuntu x64/ARM64 từ Release. Chỉ clone
+repo khi cần phát triển hoặc tự build. Sau khi cài xong, chuyển sang [Bước 3 —
+Nạp firmware](03_FLASH_FIRMWARE.md).
 
 ## Kiểm tra ST-Link
 
@@ -26,35 +27,25 @@ sudo udevadm trigger --subsystem-match=usb --attr-match=idVendor=0483
 
 Rút/cắm lại ST-Link nếu cần. Không dùng `sudo b300-stlink`.
 
-## Các bước tạo và cài bundle
+## Các bước cài từ Release
 
-1. Cài dependency build một lần:
-
-   ```bash
-   sudo apt-get update
-   sudo apt-get install -y python3-pip python3-venv
-   ```
-
-2. Trong thư mục repo đã clone, tạo bundle:
-
-   ```bash
-   python3 build_native_bundle.py --internal-distribution-approved
-   ```
-
-3. Xác định đúng kiến trúc:
+1. Xác định đúng kiến trúc:
 
    ```bash
    uname -m
    ```
 
-   `x86_64` dùng bundle `linux-x64`; `aarch64`/`arm64` dùng bundle
-   `linux-arm64`. Ví dụ với x64:
+   `x86_64` dùng gói x64; `aarch64`/`arm64` dùng gói ARM64.
+
+2. Nếu dùng GUI, tải AppImage hoặc DEB đúng kiến trúc theo hướng dẫn
+   [GUI Windows/Ubuntu](07_GUI_WINDOWS_UBUNTU.md). Không chạy GUI bằng `sudo`.
+
+3. Nếu chỉ cần CLI, giải nén CLI tar.gz đúng kiến trúc. Ví dụ x64:
 
    ```bash
-   cd release
-   mkdir -p b300-stlink-linux-x64
-   tar -xzf b300-stlink-linux-x64.tar.gz -C b300-stlink-linux-x64
-   cd b300-stlink-linux-x64
+   mkdir -p b300-stlink-cli
+   tar -xzf B300-STLink-CLI-Linux-x64.tar.gz -C b300-stlink-cli
+   cd b300-stlink-cli
    chmod +x install.sh
    ./install.sh
    ```

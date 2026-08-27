@@ -67,6 +67,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("gh release create", text)
         self.assertNotIn("contents: write", text)
 
+    def test_dry_run_builds_every_final_downloadable_package(self) -> None:
+        text = (ROOT / ".github" / "workflows" / "release-dry-run.yml").read_text(
+            encoding="utf-8"
+        )
+        for name in EXPECTED_PACKAGE_ASSETS:
+            with self.subTest(name=name):
+                self.assertIn(name, text)
+
 
 if __name__ == "__main__":
     unittest.main()

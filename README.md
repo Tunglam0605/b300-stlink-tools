@@ -8,6 +8,19 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Target: STM32F407](https://img.shields.io/badge/Target-STM32F407-03234B.svg)](#phạm-vi-phần-cứng)
 
+## Tải bản mới nhất
+
+Không cần clone repository nếu chỉ cần sử dụng tool. Chọn đúng một gói cho hệ
+điều hành/mục đích sử dụng; các link dưới luôn trỏ đến GitHub Release `Latest`.
+
+| Hệ điều hành | GUI | CLI |
+|---|---|---|
+| Windows x64 | [Installer EXE](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-GUI-Windows-x64.exe) · [Portable ZIP](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-GUI-Windows-x64.zip) | [CLI ZIP](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-CLI-Windows-x64.zip) |
+| Ubuntu x64 | [AppImage](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-GUI-Ubuntu-x64.AppImage) · [DEB](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/b300-stlink-gui_amd64.deb) | [CLI tar.gz](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-CLI-Linux-x64.tar.gz) |
+| Ubuntu ARM64 | [AppImage](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-GUI-Ubuntu-arm64.AppImage) · [DEB](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/b300-stlink-gui_arm64.deb) | [CLI tar.gz](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-CLI-Linux-arm64.tar.gz) |
+
+Kiểm tra chữ ký/hash của Release bằng [SHA256SUMS.txt](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/SHA256SUMS.txt), [release-manifest.json](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/release-manifest.json) và [latest.json](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/latest.json). GUI chỉ nhận cập nhật khi manifest có chữ ký hợp lệ.
+
 CLI và GUI đa nền tảng dùng ST-Link/SWD để provisioning Application cho Main
 Board B300 STM32F407. Cả hai dùng chung một core an toàn, giữ nguyên Bootloader,
 bảo toàn đường OTA sau khi nạp bằng ST-Link và cung cấp cùng một quy trình trên

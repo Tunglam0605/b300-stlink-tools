@@ -50,6 +50,8 @@ class GuiPackagingTests(unittest.TestCase):
                      "b300-stlink-gui.iss").read_text(encoding="utf-8")
         self.assertIn('icon=str(project_root / "branding" / "b300-stlink-icon.ico")',
                       gui_spec)
+        self.assertIn('project_root / "CHANGELOG.md"', gui_spec)
+        self.assertIn('"BUILD-COMMIT.txt"', gui_spec)
         self.assertIn('"--icon", str(ROOT / "branding" / "b300-stlink-icon.ico")',
                       native_builder)
         linux_resources = {path.name for path in build_native_bundle.gui_resources("linux-x64")}
