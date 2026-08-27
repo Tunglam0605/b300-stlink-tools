@@ -128,8 +128,9 @@ class GuiUpdaterTests(unittest.TestCase):
             with mock.patch.object(
                 QMessageBox, "question",
                 return_value=QMessageBox.StandardButton.Yes,
-            ):
+            ), mock.patch.object(window, "close") as close:
                 window._install_downloaded_update()
+        close.assert_called_once_with()
         self.assertEqual(len(launched), 1)
         self.assertTrue(launched[0].managed)
         self.assertEqual(launched[0].package.name, result.asset.filename)
