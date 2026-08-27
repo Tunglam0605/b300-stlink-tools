@@ -12,6 +12,10 @@ Never use `mass_erase`, a chip erase, direct OpenOCD programming that bypasses
 the CLI, Option Bytes/WRP modifications, or bootloader flashing through this
 skill.
 
+The source HEX is immutable for one approved transaction: if its SHA-256/range
+changes before erase, stop and require a new approval. When multiple probes are
+present, require an explicit ST-Link serial.
+
 ## Post-flash verification
 
 Only when the user asks for hardware verification, read then resume the target.
@@ -21,5 +25,7 @@ Pass condition:
 - `BKP4R` at `0x40002860` is zero;
 - PC lies within `0x08010000..0x0807FFFF`.
 
-If verify fails or the board enters recovery, stop and preserve the log. Do not
-retry, mass erase, or alter bootloader protection.
+If any phase fails or the board enters recovery, stop and preserve the phase,
+cause, next action, and raw log. Do not retry, mass erase, or alter bootloader
+protection. Cancel is allowed only for preflight/read-only work; an interrupted
+halt/read must issue a separate resume recovery.

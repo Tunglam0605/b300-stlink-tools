@@ -1,0 +1,121 @@
+name: Build native CLI and GUI packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package version
+        required: true
+        default: 0.1.0
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.9"
+  QT_QPA_PLATFORM: offscreen
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Build self-contained native bundle
+        shell: pwsh
+        run: python build_native_bundle.py --internal-distribution-approved
+      - name: Smoke-test GUI executable
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath .\release\b300-stlink-gui.exe `
+            -ArgumentList --smoke-test -Wait -PassThru -WindowStyle Hidden
+          exit $process.ExitCode
+      - name: Stage installer source
+        shell: pwsh
+        run: Expand-Archive release\b300-stlink-windows-x64.zip release\windows-bundle -Force
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+      - name: Build per-user installer
+        shell: pwsh
+        run: |
+          $version = "${{ inputs.version }}"
+          if (-not $version) { $version = "${{ github.ref_name }}".TrimStart('v') }
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
+            "/DSourceRoot=$((Resolve-Path release\windows-bundle).Path)" `
+            "/DOutputDir=$((Resolve-Path release).Path)" `
+            "/DAppVersion=$version" packaging\windows\b300-stlink-gui.iss
+      - uses: actions/upload-artifact@v7
+        with:
+          name: b300-stlink-windows-x64
+          path: |
+            release/b300-stlink-windows-x64.zip
+            release/B300-STLink-GUI-Setup-*-windows-x64.exe
+
+  ubuntu:
+    name: Ubuntu ${{ matrix.architecture }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x86_64
+            runner: ubuntu-latest
+            bundle_platform: linux-x64
+            appimagetool_arch: x86_64
+            appimagetool_sha256: A6D71E2B6CD66F8E8D16C37AD164658985E0CF5FCAA950C90A482890CB9D13E0
+            artifact: b300-stlink-ubuntu-x64
+          - architecture: aarch64
+            runner: ubuntu-24.04-arm
+            bundle_platform: linux-arm64
+            appimagetool_arch: aarch64
+            appimagetool_sha256: 1B00524BA8C6B678DC15EF88A5C25EC24DEF36CDFC7E3ABB32DDCD068E8007FE
+            artifact: b300-stlink-ubuntu-arm64
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install GUI runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0
+      - name: Build self-contained native bundle
+        run: python build_native_bundle.py --internal-distribution-approved
+      - name: Smoke-test GUI executable
+        run: ./release/b300-stlink-gui --smoke-test
+      - name: Extract native bundle
+        run: |
+          mkdir -p release/linux-bundle
+          tar -xzf release/b300-stlink-${{ matrix.bundle_platform }}.tar.gz -C release/linux-bundle
+      - name: Fetch and verify pinned appimagetool
+        run: |
+          curl -fL --retry 3 -o release/appimagetool-${{ matrix.appimagetool_arch }}.AppImage \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${{ matrix.appimagetool_arch }}.AppImage
+          echo "${{ matrix.appimagetool_sha256 }}  release/appimagetool-${{ matrix.appimagetool_arch }}.AppImage" | sha256sum -c -
+          chmod +x release/appimagetool-${{ matrix.appimagetool_arch }}.AppImage
+      - name: Build AppImage and DEB
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          version="${{ inputs.version }}"
+          if [ -z "$version" ]; then version="${GITHUB_REF_NAME#v}"; fi
+          python packaging/build_gui.py \
+            --bundle-dir release/linux-bundle \
+            --output-dir release/gui \
+            --architecture ${{ matrix.architecture }} \
+            --version "$version" \
+            --appimagetool release/appimagetool-${{ matrix.appimagetool_arch }}.AppImage \
+            --build-deb
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            release/b300-stlink-${{ matrix.bundle_platform }}.tar.gz
+            release/gui/*.AppImage
+            release/gui/*.deb

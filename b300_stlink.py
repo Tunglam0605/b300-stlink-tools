@@ -6,18 +6,27 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
-import os
 import re
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional
 
-
-APPLICATION_ADDRESS = 0x08010000
-FLASH_END_ADDRESS = 0x08080000
-STLINK_PROVISION_MAGIC = 0x53544C4B
+from b300_core.hex_image import inspect_image
+from b300_core.models import ProbeRef
+from b300_core.openocd import (
+    OpenOcdRunner,
+    build_debug_command,
+    resolve_openocd,
+    validate_openocd_value,
+)
+from b300_core.policy import (
+    APPLICATION_ADDRESS,
+    FLASH_END_ADDRESS,
+    STLINK_PROVISION_MAGIC,
+    build_flash_plan,
+    build_flash_preview,
+)
+from b300_core.service import B300Service, ProvisioningError
 
 
 def parse_bind_address(value: str) -> str:
@@ -44,8 +53,7 @@ def parse_probe_serial(value: str) -> str:
 
 
 def validate_openocd_path(path: Path) -> None:
-    if any(character in str(path) for character in "{}\r\n"):
-        raise ValueError("Application path contains an unsafe character for OpenOCD.")
+    validate_openocd_value(path, "Application path")
 
 
 def validate_debug_args(args: argparse.Namespace) -> None:
@@ -94,81 +102,34 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
 
 
 def validate_application_hex(application: Path) -> None:
-    """Reject malformed HEX or data outside Application flash (S4--S7)."""
-    upper_address = 0
-    data_records = 0
-    try:
-        lines = application.read_text(encoding="ascii").splitlines()
-    except OSError as error:
-        raise ValueError("Cannot read application HEX: %s" % error) from error
-    for line_number, raw in enumerate(lines, start=1):
-        line = raw.strip()
-        if not line:
-            continue
-        if not line.startswith(":"):
-            raise ValueError("HEX line %d does not start with ':'." % line_number)
-        try:
-            record = bytes.fromhex(line[1:])
-        except ValueError as error:
-            raise ValueError("HEX line %d is not hexadecimal." % line_number) from error
-        if len(record) < 5 or len(record) != record[0] + 5:
-            raise ValueError("HEX line %d has an invalid length." % line_number)
-        if sum(record) & 0xFF:
-            raise ValueError("HEX line %d has an invalid checksum." % line_number)
-        length, record_type = record[0], record[3]
-        offset = (record[1] << 8) | record[2]
-        data = record[4:4 + length]
-        if record_type == 0x04:
-            if length != 2:
-                raise ValueError("HEX line %d has invalid extended address." % line_number)
-            upper_address = ((data[0] << 8) | data[1]) << 16
-        elif record_type == 0 and length:
-            start, end = upper_address + offset, upper_address + offset + length
-            if start < APPLICATION_ADDRESS or end > FLASH_END_ADDRESS:
-                raise ValueError("HEX touches protected range 0x%08X..0x%08X." %
-                                 (start, end - 1))
-            data_records += 1
-    if not data_records:
-        raise ValueError("Application HEX contains no application data records.")
+    inspect_image(application)
 
 
-def openocd_command(args: argparse.Namespace) -> List[str]:
-    executable = args.openocd or os.environ.get("B300_OPENOCD") or shutil.which("openocd") or "openocd"
-    telnet_port = getattr(args, "telnet_port", None)
-    telnet_setting = "telnet port %d" % telnet_port if telnet_port else "telnet port disabled"
-    command = [executable, "-c", "bindto %s" % getattr(args, "bind_address", "127.0.0.1"),
-               "-f", "interface/stlink.cfg", "-c", "transport select swd",
-               "-f", "target/stm32f4x.cfg", "-c", "gdb port %d" % getattr(args, "gdb_port", 3333),
-               "-c", telnet_setting, "-c", "tcl port disabled"]
-    if args.probe_serial:
-        command.extend(["-c", "adapter serial %s" % args.probe_serial])
-    command.extend(["-c", "init"])
-    return command
+def openocd_command(args: argparse.Namespace):
+    return build_debug_command(
+        ProbeRef(args.probe_serial),
+        resolve_openocd(args.openocd),
+        args.bind_address,
+        args.gdb_port,
+        args.telnet_port,
+    )
 
 
-def flash_command(args: argparse.Namespace) -> List[str]:
-    command = openocd_command(args)
-    del command[-2:]
-    command.extend([
-        "-c", "init", "-c", "reset init",
-        "-c", "flash erase_sector 0 3 7",
-        "-c", "program {%s} verify" % args.application,
-        "-c", "mww 0x40023840 0x10000000",
-        "-c", "mww 0x40007000 0x00000100",
-        "-c", "mww 0x40002860 0x%08X" % STLINK_PROVISION_MAGIC,
-        "-c", "reset run", "-c", "shutdown",
-    ])
-    return command
+def flash_command(args: argparse.Namespace):
+    image = inspect_image(args.application)
+    plan = build_flash_preview(image, ProbeRef(args.probe_serial))
+    return B300Service(executable=args.openocd).flash_command(plan)
 
 
-def run_openocd(command: List[str], dry_run: bool, reporter: Reporter) -> int:
+def run_openocd(command, dry_run: bool, reporter: Reporter) -> int:
     reporter.emit("openocd", command=command, dry_run=dry_run)
     if dry_run:
         return 0
-    if shutil.which(command[0]) is None and not Path(command[0]).is_file():
-        reporter.emit("error", message="OpenOCD was not found.")
-        return 1
-    return subprocess.call(command)
+    result = OpenOcdRunner().run(
+        command,
+        event_sink=lambda line: reporter.emit("openocd_output", line=line),
+    )
+    return result.returncode
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -176,19 +137,111 @@ def main(argv: Optional[List[str]] = None) -> int:
     reporter = Reporter(args.json)
     try:
         if args.command == "doctor":
-            tool = os.environ.get("B300_OPENOCD") or shutil.which("openocd")
-            reporter.emit("dependency", name="OpenOCD", available=bool(tool), path=tool)
-            return 0 if tool else 1
+            available, executable = B300Service().doctor()
+            reporter.emit("dependency", name="OpenOCD", available=available, path=executable)
+            return 0 if available else 1
+
         if args.command == "debug":
             validate_debug_args(args)
             return run_openocd(openocd_command(args), args.dry_run, reporter)
-        args.application = args.application.resolve()
-        validate_openocd_path(args.application)
-        validate_application_hex(args.application)
-        reporter.emit("flash_start", application=str(args.application), dry_run=args.dry_run)
-        return run_openocd(flash_command(args), args.dry_run, reporter)
+
+        args.application = args.application.expanduser().resolve()
+        service = B300Service(executable=args.openocd)
+        try:
+            validate_openocd_path(args.application)
+            image = service.inspect_image(args.application)
+        except ValueError as error:
+            raise ProvisioningError(
+                "validating",
+                str(error),
+                "Select a valid B300 F407 Application HEX linked at 0x08010000.",
+            ) from error
+        probe = ProbeRef(args.probe_serial)
+        if args.dry_run:
+            plan = service.preview_plan(image, probe)
+        else:
+            try:
+                target = service.inspect_target(
+                    probe,
+                    event_sink=lambda line: reporter.emit("openocd_output", line=line),
+                )
+                plan = service.plan(image, probe, target)
+            except (RuntimeError, ValueError) as error:
+                if isinstance(error, ProvisioningError):
+                    raise
+                raise ProvisioningError(
+                    "target_check",
+                    str(error),
+                    "Check the selected ST-Link serial, cable, power, and F407 target.",
+                ) from error
+            reporter.emit(
+                "target",
+                device_id="0x%08X" % target.device_id,
+                flash_kib=target.flash_kib,
+                voltage=target.target_voltage,
+                protection=target.protection_summary,
+            )
+        reporter.emit(
+            "flash_start",
+            application=str(image.path),
+            sha256=image.sha256,
+            start="0x%08X" % image.start_address,
+            end="0x%08X" % image.end_address,
+            dry_run=args.dry_run,
+        )
+        transactions = (
+            ("program_verify", service.flash_command(plan)),
+            ("mark", service.marker_command(plan.probe)),
+            ("reset", service.reset_command(plan.probe)),
+        )
+        for phase, command in transactions:
+            reporter.emit(
+                "openocd",
+                phase=phase,
+                command=command,
+                dry_run=args.dry_run,
+                condition=("after_verified_ok" if phase == "mark" else
+                           "after_marker" if phase == "reset" else "always"),
+            )
+        if args.dry_run:
+            return 0
+
+        outcome = service.flash(
+            plan,
+            event_sink=lambda line: reporter.emit("openocd_output", line=line),
+            phase_sink=lambda event: reporter.emit(
+                "flash_phase",
+                phase=event.phase,
+                progress=event.progress,
+                message=event.message,
+                cancellable=event.cancellable,
+            ),
+        )
+        fields = {
+            "status": outcome.status,
+            "failure_phase": outcome.failure_phase,
+            "reason": outcome.reason,
+            "next_action": outcome.next_action,
+        }
+        if outcome.boot_verification is not None:
+            fields.update({
+                "pc": "0x%08X" % outcome.boot_verification.pc
+                if outcome.boot_verification.pc is not None else None,
+                "bkp1r": outcome.boot_verification.bkp1r,
+                "bkp4r": outcome.boot_verification.bkp4r,
+                "reason": outcome.boot_verification.reason,
+            })
+        reporter.emit("flash_result", **fields)
+        return 0 if outcome.succeeded else 1
     except (OSError, RuntimeError, ValueError) as error:
-        reporter.emit("error", message=str(error))
+        fields = {"message": str(error)}
+        if hasattr(error, "phase"):
+            fields.update({
+                "phase": error.phase,
+                "reason": error.reason,
+                "next_action": error.next_action,
+            })
+        reporter.emit("error", **fields)
         return 1
 
 

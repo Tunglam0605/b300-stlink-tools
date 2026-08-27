@@ -39,6 +39,9 @@ release archive vào Git source repository.
    reset run
    ```
 
+   Đây là ba transaction nối tiếp có điều kiện. Lệnh marker không được nằm
+   trong cùng process program/verify; reset chạy sau marker.
+
 Nếu transaction khác, HEX bị từ chối, hoặc có `mass_erase`/Sector 0--2: dừng
 và báo lỗi. Không sửa transaction để ép nạp.
 
@@ -54,8 +57,9 @@ xác nhận rõ file/board được phép nạp trong phiên hiện tại.
    ```
 
 2. Không chạy OpenOCD/ST-Link song song.
-3. Chỉ báo thành công khi có `Verified OK` và exit code 0.
-4. Nếu lỗi erase/program/verify: dừng, giữ log, báo bước lỗi; không retry mù.
+3. Chỉ báo thành công khi có exact `** Verified OK **`, marker/reset thành công
+   và post-verify xác nhận PC/BKP hợp lệ.
+4. Nếu lỗi: dừng, giữ log, báo `failure_phase`, `reason`, `next_action`; không retry mù.
 
 Marker `0x53544C4B` chỉ được ghi sau program + verify. Sau reset Bootloader tiêu
 thụ marker, xóa recovery marker cũ khi Application hợp lệ và chạy Application.

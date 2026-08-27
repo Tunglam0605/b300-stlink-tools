@@ -3,7 +3,7 @@
 ## Dùng khi nào
 
 Đầu tiên làm [00 — Git clone](00_START_HERE.md). Dùng file này **một lần cho mỗi
-IPC Ubuntu x64**. Sau khi cài xong, chuyển sang [Bước 3 — Nạp firmware](03_FLASH_FIRMWARE.md).
+IPC Ubuntu x64 hoặc ARM64**. Sau khi cài xong, chuyển sang [Bước 3 — Nạp firmware](03_FLASH_FIRMWARE.md).
 
 ## Kiểm tra ST-Link
 
@@ -41,11 +41,19 @@ Rút/cắm lại ST-Link nếu cần. Không dùng `sudo b300-stlink`.
    python3 build_native_bundle.py --internal-distribution-approved
    ```
 
-3. Giải nén và cài:
+3. Xác định đúng kiến trúc:
+
+   ```bash
+   uname -m
+   ```
+
+   `x86_64` dùng bundle `linux-x64`; `aarch64`/`arm64` dùng bundle
+   `linux-arm64`. Ví dụ với x64:
 
    ```bash
    cd release
-   tar -xzf b300-stlink-linux-x64.tar.gz
+   mkdir -p b300-stlink-linux-x64
+   tar -xzf b300-stlink-linux-x64.tar.gz -C b300-stlink-linux-x64
    cd b300-stlink-linux-x64
    chmod +x install.sh
    ./install.sh
@@ -61,10 +69,15 @@ Rút/cắm lại ST-Link nếu cần. Không dùng `sudo b300-stlink`.
 
    ```bash
    b300-stlink doctor
+   b300-stlink-gui
    ```
 
 Kết quả đúng: `OpenOCD available=true`. `doctor` kiểm tra bộ OpenOCD trong máy;
 probe thật được kiểm tra khi bắt đầu lệnh flash/debug.
+
+Release Ubuntu còn cung cấp AppImage và DEB theo
+[GUI Windows/Ubuntu](07_GUI_WINDOWS_UBUNTU.md). AppImage/DEB dùng cùng core và
+OpenOCD pin như native tar bundle.
 
 Nếu ST-Link cắm tại IPC nhưng GDB chạy trên máy phát triển, đọc
 [Bước 4 — Debug OpenOCD](04_DEBUG.md). Chỉ mở remote GDB port trong mạng nội bộ

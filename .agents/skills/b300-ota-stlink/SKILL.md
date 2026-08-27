@@ -18,6 +18,11 @@ fixed: Bootloader is Sector 0--2; metadata is Sector 3; Application is Sector
 4. Confirm the transaction contains only `flash erase_sector 0 3 7`,
    `program {...} verify`, `mww 0x40002860 0x53544C4B`, and `reset run`.
 
+The preview must show three separate conditional transactions: program/verify;
+marker with `condition=after_verified_ok`; reset with `condition=after_marker`.
+Before erase, the core must re-check an F407/512-KiB target and stage/revalidate
+the approved HEX hash and address range.
+
 Do not flash if HEX validation fails or the command includes mass/chip erase,
 Sector 0--2, Option Bytes, or WRP changes. Dry-run is safe; actual flash erases
 Sector 3--7 and requires the user's explicit authorization for that board and
@@ -26,8 +31,9 @@ file in the current session.
 ## Flash and confirm
 
 Run `b300-stlink flash <application.hex> --json` only after authorization. Do
-not retry automatically on an erase/program/verify failure. Success requires
-OpenOCD `Verified OK` and exit code zero.
+not retry automatically on any phase failure. Success requires the exact
+`** Verified OK **` event, successful marker/reset, and post-verify PC/BKP state.
+On failure, report `failure_phase`, `reason`, and `next_action` from JSON.
 
 The marker is written after verify; Bootloader consumes it on reset so a valid
 ST-Link provisioned Application is not treated as an interrupted OTA.

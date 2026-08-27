@@ -42,3 +42,6 @@ Save a structured flash log with:
 ```text
 b300-stlink flash <application.hex> --json > b300-flash.log
 ```
+
+The JSON stream includes `flash_phase` events and a final `flash_result` with
+`failure_phase`, `reason`, and `next_action` when unsuccessful.

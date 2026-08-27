@@ -22,7 +22,8 @@ lần đầu từ source clone.
    py build_native_bundle.py --internal-distribution-approved
    ```
 
-2. Giải nén file `release\b300-stlink-windows-x64.zip`.
+2. Giải nén file `release\b300-stlink-windows-x64.zip` hoặc dùng installer EXE
+   sinh bởi release workflow.
 3. Mở PowerShell trong thư mục vừa giải nén.
 4. Chạy:
 
@@ -35,10 +36,14 @@ lần đầu từ source clone.
 
    ```powershell
    b300-stlink doctor
+   b300-stlink-gui
    ```
 
 Kết quả đúng: `OpenOCD available=true`. `doctor` kiểm tra bộ OpenOCD trong máy;
 probe thật được kiểm tra khi bắt đầu lệnh flash/debug.
+
+GUI được thêm vào Start Menu với tên **B300 ST-Link Provisioning**. Hướng dẫn
+vận hành ở [GUI Windows/Ubuntu](07_GUI_WINDOWS_UBUNTU.md).
 
 Nếu báo không tìm thấy ST-Link, kiểm tra cáp USB/driver trước khi nạp firmware.
 Nếu cần debug source, đọc [Bước 4 — Debug OpenOCD](04_DEBUG.md) và chuẩn bị

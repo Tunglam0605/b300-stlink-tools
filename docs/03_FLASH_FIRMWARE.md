@@ -19,6 +19,9 @@ mww 0x40002860 0x53544C4B
 reset run
 ```
 
+Ba phần được hiển thị như transaction riêng: program/verify; marker chỉ với
+`condition=after_verified_ok`; reset chỉ với `condition=after_marker`.
+
 Không tiếp tục nếu thấy `mass_erase`, Sector 0--2, hoặc lỗi HEX protected range.
 
 ## Bước 2: Nạp thật
@@ -47,10 +50,12 @@ b300-stlink flash <duong-dan-file.hex> --probe-serial <ST-LINK-SN>
 
 ## Bước 3: Xác nhận kết quả
 
-Nạp thành công khi OpenOCD báo `Verified OK`. Tool chỉ xóa Sector 3--7,
-giữ Sector 0--2 Bootloader, ghi provisioning marker rồi reset chạy Application.
+Nạp thành công khi OpenOCD báo đúng event `** Verified OK **`, marker/reset đều
+thành công và post-verify xác nhận PC ở Application cùng BKP1R/BKP4R đã clear.
+Tool chỉ xóa Sector 3--7 và giữ Sector 0--2 Bootloader.
 
-Không tự retry nếu verify fail. Lưu log và xem [Xử lý lỗi](05_TROUBLESHOOTING.md).
+Không tự retry nếu bất kỳ phase nào lỗi. Lưu `failure_phase`, `reason`,
+`next_action` trong log và xem [Xử lý lỗi](05_TROUBLESHOOTING.md).
 
 ## Vì sao không nạp raw bằng OpenOCD/CubeProgrammer
 
