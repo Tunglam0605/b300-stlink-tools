@@ -77,6 +77,17 @@ def build_boot_verify_command(probe: ProbeRef, executable: str) -> List[str]:
     ]
 
 
+def build_debug_command(probe: ProbeRef, executable: str, bind_address: str,
+                        gdb_port: int, telnet_port: Optional[int] = None) -> List[str]:
+    return _base_command(
+        probe,
+        executable,
+        gdb_port=gdb_port,
+        telnet_port=telnet_port,
+        bind_address=bind_address,
+    ) + ["-c", "init"]
+
+
 def parse_boot_verification(output: str) -> BootVerification:
     pc_match = re.search(r"pc\s+\(/32\):\s+0x([0-9A-Fa-f]+)", output)
     bkp_match = re.search(

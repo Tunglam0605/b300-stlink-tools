@@ -39,6 +39,9 @@ class B300StlinkTests(unittest.TestCase):
         self.assertIn("program", rendered)
         self.assertIn("verify", rendered)
         self.assertIn("mww 0x40002860 0x53544C4B", rendered)
+        self.assertIn("gdb port disabled", rendered)
+        self.assertIn("telnet port disabled", rendered)
+        self.assertIn("tcl port disabled", rendered)
         self.assertNotIn("mass_erase", rendered)
 
     def test_flash_rejects_bootloader_hex(self) -> None:
