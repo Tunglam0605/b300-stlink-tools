@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import re
 import sys
 import tarfile
 import zipfile
@@ -37,10 +38,15 @@ def main(argv=None) -> int:
     parser.add_argument("--bootstrap", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--platform", required=True)
+    parser.add_argument("--version", default="0.1.0")
+    parser.add_argument("--openocd-archive", required=True)
+    parser.add_argument("--openocd-sha256", required=True)
     parser.add_argument("--internal-distribution-approved", action="store_true")
     args = parser.parse_args(argv)
     if not args.internal_distribution_approved:
         parser.error("--internal-distribution-approved is required.")
+    if not re.fullmatch(r"[0-9A-Fa-f]{64}", args.openocd_sha256):
+        parser.error("--openocd-sha256 must contain exactly 64 hexadecimal characters.")
     required = [args.executable, args.openocd_root, args.bootstrap]
     if args.gui_executable is not None:
         required.append(args.gui_executable)
@@ -48,7 +54,15 @@ def main(argv=None) -> int:
     if not all(item.exists() for item in required):
         parser.error("A required bundle input is missing.")
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    metadata = ("platform=%s\n" % args.platform).encode("ascii")
+    metadata = (
+        "platform=%s\nversion=%s\nopenocd=0.12.0-7\n"
+        "openocd_archive=%s\nopenocd_sha256=%s\n" % (
+            args.platform,
+            args.version,
+            args.openocd_archive,
+            args.openocd_sha256.upper(),
+        )
+    ).encode("ascii")
     if args.output.name.endswith(".tar.gz"):
         with tarfile.open(args.output, "w:gz") as archive:
             archive.add(args.executable, arcname=args.executable.name, filter=executable)

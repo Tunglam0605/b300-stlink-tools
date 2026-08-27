@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 import struct
 import tempfile
+import threading
 import unittest
 import zlib
 from pathlib import Path
 
-from b300_core.memory import build_read_memory_command
+from b300_core.memory import build_read_memory_command, read_memory
 from b300_core.metadata import decode_ota_metadata
-from b300_core.models import ProbeRef
+from b300_core.models import CommandResult, ProbeRef
 from b300_core.policy import validate_read_range
 from b300_core.probe import parse_linux_sysfs, parse_windows_pnp_output
 
@@ -76,12 +77,45 @@ class ProbeMemoryMetadataTests(unittest.TestCase):
             ProbeRef("SAFE123"), "openocd", Path("memory.bin"), 0x0800C000, 44
         )
         rendered = " ".join(command)
-        self.assertIn("dump_image", rendered)
+        read_step = next(item for item in command if "dump_image" in item)
+        self.assertIn("catch {dump_image", read_step)
+        self.assertLess(command.index(read_step), command.index("resume"))
+        self.assertIn("shutdown error", rendered)
         self.assertIn("adapter serial SAFE123", rendered)
         self.assertNotIn("erase", rendered)
         self.assertNotIn("program", rendered)
         self.assertNotIn("mww", rendered)
         self.assertNotIn("reset", rendered)
+
+    def test_cancelled_read_runs_separate_resume_recovery(self) -> None:
+        class CancelledRunner:
+            def __init__(self):
+                self.commands = []
+
+            def run(self, command, event_sink=None, **options):
+                self.commands.append(tuple(command))
+                if len(self.commands) == 1:
+                    return CommandResult(
+                        tuple(command), -1, "cancelled", cancelled=True
+                    )
+                return CommandResult(tuple(command), 0, "resumed")
+
+        runner = CancelledRunner()
+        cancel = threading.Event()
+        cancel.set()
+        with self.assertRaisesRegex(RuntimeError, "cancelled"):
+            read_memory(
+                ProbeRef("SAFE123"),
+                0x0800C000,
+                44,
+                executable="openocd",
+                runner=runner,
+                cancel_event=cancel,
+            )
+        self.assertEqual(len(runner.commands), 2)
+        recovery = " ".join(runner.commands[1])
+        self.assertIn("resume", recovery)
+        self.assertNotIn("halt", recovery)
 
 
 if __name__ == "__main__":

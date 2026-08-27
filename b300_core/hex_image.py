@@ -22,6 +22,7 @@ def inspect_image(path: Path) -> ImageInfo:
     first_address: Optional[int] = None
     last_address: Optional[int] = None
     data_record_count = 0
+    data_byte_count = 0
     eof_seen = False
 
     for line_number, raw_line in enumerate(lines, start=1):
@@ -58,6 +59,7 @@ def inspect_image(path: Path) -> ImageInfo:
             first_address = start if first_address is None else min(first_address, start)
             last_address = end - 1 if last_address is None else max(last_address, end - 1)
             data_record_count += 1
+            data_byte_count += length
         elif record_type == 0x01:
             if length != 0:
                 raise ValueError("HEX line %d has an invalid EOF record." % line_number)
@@ -92,6 +94,6 @@ def inspect_image(path: Path) -> ImageInfo:
         sha256=hashlib.sha256(raw_file).hexdigest().upper(),
         start_address=first_address,
         end_address=last_address,
-        size=last_address - first_address + 1,
+        size=data_byte_count,
         data_record_count=data_record_count,
     )

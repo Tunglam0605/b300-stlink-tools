@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Tuple
 
-from .models import FlashPlan, ImageInfo, ProbeRef, SectorInfo
+from .models import FlashPlan, FlashPreview, ImageInfo, ProbeRef, SectorInfo, TargetInfo
 
 
 FLASH_START_ADDRESS = 0x08000000
@@ -12,6 +12,8 @@ METADATA_ADDRESS = 0x0800C000
 APPLICATION_ADDRESS = 0x08010000
 FLASH_END_ADDRESS = 0x08080000
 STLINK_PROVISION_MAGIC = 0x53544C4B
+SUPPORTED_DEVICE_ID = 0x413
+SUPPORTED_FLASH_KIB = 512
 
 SECTORS: Tuple[SectorInfo, ...] = (
     SectorInfo(0, 0x08000000, 0x08003FFF, "Bootloader", False),
@@ -25,12 +27,39 @@ SECTORS: Tuple[SectorInfo, ...] = (
 )
 
 
-def build_flash_plan(image: ImageInfo, probe: ProbeRef) -> FlashPlan:
+def _validate_image_policy(image: ImageInfo) -> None:
     if image.start_address != APPLICATION_ADDRESS:
         raise ValueError("Application image must start at 0x08010000.")
     if image.end_address >= FLASH_END_ADDRESS:
         raise ValueError("Application image exceeds B300 F407 flash.")
-    return FlashPlan(image=image, probe=probe, erase_sectors=(3, 4, 5, 6, 7))
+
+
+def build_flash_preview(image: ImageInfo, probe: ProbeRef) -> FlashPreview:
+    _validate_image_policy(image)
+    return FlashPreview(image=image, probe=probe, erase_sectors=(3, 4, 5, 6, 7))
+
+
+def build_flash_plan(image: ImageInfo, probe: ProbeRef,
+                     target: TargetInfo) -> FlashPlan:
+    _validate_image_policy(image)
+    validate_target_for_provisioning(target)
+    return FlashPlan(
+        image=image,
+        probe=probe,
+        erase_sectors=(3, 4, 5, 6, 7),
+        target=target,
+    )
+
+
+def validate_target_for_provisioning(target: TargetInfo) -> None:
+    """Reject targets outside the fixed B300 STM32F407 512-KiB policy."""
+    if ((target.device_id & 0xFFF) != SUPPORTED_DEVICE_ID or
+            target.flash_kib != SUPPORTED_FLASH_KIB):
+        raise ValueError(
+            "Unsupported target: expected STM32F407 device 0x413 with 512 KiB flash; "
+            "found device 0x%03X with %d KiB." %
+            (target.device_id & 0xFFF, target.flash_kib)
+        )
 
 
 def sector_by_index(index: int) -> SectorInfo:
@@ -45,4 +74,3 @@ def validate_read_range(address: int, length: int) -> None:
         raise ValueError("Read length must be positive.")
     if address < FLASH_START_ADDRESS or address + length > FLASH_END_ADDRESS:
         raise ValueError("Read range is outside B300 flash.")
-

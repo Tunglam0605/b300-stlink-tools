@@ -1,14 +1,18 @@
 """Shared, UI-independent B300 ST-Link provisioning services."""
 
+__version__ = "0.1.0"
+
 from .hex_image import inspect_image
-from .models import FlashPlan, ImageInfo, ProbeRef, SectorInfo
-from .policy import build_flash_plan
+from .models import FlashPlan, FlashPreview, ImageInfo, ProbeRef, SectorInfo
+from .policy import build_flash_plan, build_flash_preview
 
 __all__ = [
     "FlashPlan",
+    "FlashPreview",
     "ImageInfo",
     "ProbeRef",
     "SectorInfo",
     "build_flash_plan",
+    "build_flash_preview",
     "inspect_image",
 ]

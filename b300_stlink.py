@@ -24,8 +24,9 @@ from b300_core.policy import (
     FLASH_END_ADDRESS,
     STLINK_PROVISION_MAGIC,
     build_flash_plan,
+    build_flash_preview,
 )
-from b300_core.service import B300Service
+from b300_core.service import B300Service, ProvisioningError
 
 
 def parse_bind_address(value: str) -> str:
@@ -116,7 +117,7 @@ def openocd_command(args: argparse.Namespace):
 
 def flash_command(args: argparse.Namespace):
     image = inspect_image(args.application)
-    plan = build_flash_plan(image, ProbeRef(args.probe_serial))
+    plan = build_flash_preview(image, ProbeRef(args.probe_serial))
     return B300Service(executable=args.openocd).flash_command(plan)
 
 
@@ -145,10 +146,41 @@ def main(argv: Optional[List[str]] = None) -> int:
             return run_openocd(openocd_command(args), args.dry_run, reporter)
 
         args.application = args.application.expanduser().resolve()
-        validate_openocd_path(args.application)
         service = B300Service(executable=args.openocd)
-        image = service.inspect_image(args.application)
-        plan = service.plan(image, ProbeRef(args.probe_serial))
+        try:
+            validate_openocd_path(args.application)
+            image = service.inspect_image(args.application)
+        except ValueError as error:
+            raise ProvisioningError(
+                "validating",
+                str(error),
+                "Select a valid B300 F407 Application HEX linked at 0x08010000.",
+            ) from error
+        probe = ProbeRef(args.probe_serial)
+        if args.dry_run:
+            plan = service.preview_plan(image, probe)
+        else:
+            try:
+                target = service.inspect_target(
+                    probe,
+                    event_sink=lambda line: reporter.emit("openocd_output", line=line),
+                )
+                plan = service.plan(image, probe, target)
+            except (RuntimeError, ValueError) as error:
+                if isinstance(error, ProvisioningError):
+                    raise
+                raise ProvisioningError(
+                    "target_check",
+                    str(error),
+                    "Check the selected ST-Link serial, cable, power, and F407 target.",
+                ) from error
+            reporter.emit(
+                "target",
+                device_id="0x%08X" % target.device_id,
+                flash_kib=target.flash_kib,
+                voltage=target.target_voltage,
+                protection=target.protection_summary,
+            )
         reporter.emit(
             "flash_start",
             application=str(image.path),
@@ -157,16 +189,40 @@ def main(argv: Optional[List[str]] = None) -> int:
             end="0x%08X" % image.end_address,
             dry_run=args.dry_run,
         )
-        command = service.flash_command(plan)
-        reporter.emit("openocd", command=command, dry_run=args.dry_run)
+        transactions = (
+            ("program_verify", service.flash_command(plan)),
+            ("mark", service.marker_command(plan.probe)),
+            ("reset", service.reset_command(plan.probe)),
+        )
+        for phase, command in transactions:
+            reporter.emit(
+                "openocd",
+                phase=phase,
+                command=command,
+                dry_run=args.dry_run,
+                condition=("after_verified_ok" if phase == "mark" else
+                           "after_marker" if phase == "reset" else "always"),
+            )
         if args.dry_run:
             return 0
 
         outcome = service.flash(
             plan,
             event_sink=lambda line: reporter.emit("openocd_output", line=line),
+            phase_sink=lambda event: reporter.emit(
+                "flash_phase",
+                phase=event.phase,
+                progress=event.progress,
+                message=event.message,
+                cancellable=event.cancellable,
+            ),
         )
-        fields = {"status": outcome.status}
+        fields = {
+            "status": outcome.status,
+            "failure_phase": outcome.failure_phase,
+            "reason": outcome.reason,
+            "next_action": outcome.next_action,
+        }
         if outcome.boot_verification is not None:
             fields.update({
                 "pc": "0x%08X" % outcome.boot_verification.pc
@@ -178,7 +234,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         reporter.emit("flash_result", **fields)
         return 0 if outcome.succeeded else 1
     except (OSError, RuntimeError, ValueError) as error:
-        reporter.emit("error", message=str(error))
+        fields = {"message": str(error)}
+        if hasattr(error, "phase"):
+            fields.update({
+                "phase": error.phase,
+                "reason": error.reason,
+                "next_action": error.next_action,
+            })
+        reporter.emit("error", **fields)
         return 1
 
 

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import os
+import time
 import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtCore import QCoreApplication, QEvent
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 
 from b300_core.metadata import decode_ota_metadata
 from b300_gui.memory_tab import MemoryTab, format_hex_preview
@@ -38,6 +40,33 @@ class GuiMemoryTests(unittest.TestCase):
         self.assertEqual(tab.metadata_values["Classification"].text(), "VALID")
         self.assertEqual(tab.metadata_values["State"].text(), "CONFIRMED (3)")
         self.assertEqual(tab.metadata_values["Board token"].text(), "B300_F407ZE")
+
+    def test_memory_labels_pair_vietnamese_with_technical_english(self) -> None:
+        tab = MemoryTab(service=object(), probe_provider=lambda: None)
+        labels = {label.text() for label in tab.findChildren(QLabel)}
+        self.assertIn("CHỈ ĐỌC (READ-ONLY) · CPU tạm dừng khi đọc", " ".join(labels))
+        self.assertIn("Phân loại (Classification):", labels)
+        self.assertIn("Trạng thái (State):", labels)
+        self.assertIn("Kích thước image (Image size):", labels)
+
+    def test_sector_worker_survives_until_read_finishes(self) -> None:
+        class ReadService:
+            def read_sector(self, probe, sector_index, event_sink=None,
+                            cancel_event=None):
+                return b"\x12\x34"
+
+        tab = MemoryTab(service=ReadService(), probe_provider=lambda: None)
+        tab.read_selected_sector()
+        deadline = time.monotonic() + 1.0
+        while not tab.current_data and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.01)
+        self.assertEqual(tab.current_data, b"\x12\x34")
+        self.assertTrue(tab.read_button.isEnabled())
+        while tab._threads and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.01)
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 if __name__ == "__main__":

@@ -17,14 +17,18 @@ concurrency:
 
 jobs:
   test:
-    name: ${{ matrix.os }} / Python 3.9
-    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.name }} / Python 3.9
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - windows-latest
+        include:
+          - name: Ubuntu x64
+            runner: ubuntu-latest
+          - name: Ubuntu ARM64
+            runner: ubuntu-24.04-arm
+          - name: Windows x64
+            runner: windows-latest
 
     steps:
       - name: Checkout

@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QThread
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -42,20 +41,24 @@ def format_hex_preview(data: bytes, limit: int = 4096) -> str:
 
 
 class MemoryTab(QWidget):
-    def __init__(self, service, probe_provider: Callable[[], ProbeRef]) -> None:
+    def __init__(self, service, probe_provider: Callable[[], ProbeRef],
+                 log_sink: Callable[[str], None] = lambda _line: None) -> None:
         super().__init__()
         self.service = service
         self.probe_provider = probe_provider
+        self.log_sink = log_sink
         self.current_data = b""
         self.current_sector = None
         self._threads = []
+        self._active_worker = None
         self._build_ui()
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
         warning = QLabel(
-            "READ-ONLY · thao tác này halt CPU trong lúc đọc và luôn resume trước khi disconnect."
+            "CHỈ ĐỌC (READ-ONLY) · CPU tạm dừng khi đọc và luôn tiếp tục chạy "
+            "(resume) trước khi ngắt kết nối."
         )
         warning.setStyleSheet(
             "background: #DBEAFE; color: #1E3A8A; border-radius: 6px; padding: 8px; font-weight: 600;"
@@ -80,10 +83,14 @@ class MemoryTab(QWidget):
         self.export_button.clicked.connect(self.export_sector)
         self.metadata_button = QPushButton("Đọc OTA metadata")
         self.metadata_button.clicked.connect(self.read_metadata)
+        self.cancel_button = QPushButton("Hủy đọc")
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.clicked.connect(self.cancel_current)
         controls.addWidget(self.sector_combo, 1)
         controls.addWidget(self.read_button)
         controls.addWidget(self.export_button)
         controls.addWidget(self.metadata_button)
+        controls.addWidget(self.cancel_button)
         root.addLayout(controls)
 
         self.status_label = QLabel("Chưa đọc dữ liệu")
@@ -102,16 +109,24 @@ class MemoryTab(QWidget):
         metadata_group = QGroupBox("OTA metadata · 0x0800C000")
         metadata_form = QFormLayout(metadata_group)
         self.metadata_values = {}
-        for field in (
-            "Classification", "Magic", "Format", "State", "Image size",
-            "Image CRC32", "Board token", "Sequence", "Metadata CRC32",
-            "Calculated CRC32",
-        ):
+        fields = (
+            ("Classification", "Phân loại (Classification)"),
+            ("Magic", "Giá trị nhận dạng (Magic)"),
+            ("Format", "Phiên bản định dạng (Format)"),
+            ("State", "Trạng thái (State)"),
+            ("Image size", "Kích thước image (Image size)"),
+            ("Image CRC32", "CRC32 image (Image CRC32)"),
+            ("Board token", "Mã board (Board token)"),
+            ("Sequence", "Số thứ tự (Sequence)"),
+            ("Metadata CRC32", "CRC32 metadata (Metadata CRC32)"),
+            ("Calculated CRC32", "CRC32 tính lại (Calculated CRC32)"),
+        )
+        for field, display_label in fields:
             value = QLabel("—")
             value.setTextInteractionFlags(value.textInteractionFlags() |
                                           value.textInteractionFlags().TextSelectableByMouse)
             self.metadata_values[field] = value
-            metadata_form.addRow(field + ":", value)
+            metadata_form.addRow(display_label + ":", value)
 
         splitter.addWidget(preview_group)
         splitter.addWidget(metadata_group)
@@ -124,6 +139,11 @@ class MemoryTab(QWidget):
         self.metadata_button.setEnabled(not busy)
         self.sector_combo.setEnabled(not busy)
         self.export_button.setEnabled(not busy and bool(self.current_data))
+        self.cancel_button.setEnabled(busy and self._active_worker is not None)
+
+    @property
+    def has_active_operation(self) -> bool:
+        return bool(self._threads)
 
     def read_selected_sector(self) -> None:
         sector_index = int(self.sector_combo.currentData())
@@ -131,7 +151,9 @@ class MemoryTab(QWidget):
         self.status_label.setText("Đang đọc Sector %d…" % sector_index)
         self._set_busy(True)
         self._start_worker(
-            lambda emit: self.service.read_sector(probe, sector_index, event_sink=emit),
+            lambda log, phase, cancel: self.service.read_sector(
+                probe, sector_index, event_sink=log, cancel_event=cancel
+            ),
             lambda data: self.show_sector(sector_index, data),
         )
 
@@ -140,25 +162,38 @@ class MemoryTab(QWidget):
         self.status_label.setText("Đang đọc OTA metadata…")
         self._set_busy(True)
         self._start_worker(
-            lambda emit: self.service.read_metadata(probe, event_sink=emit),
+            lambda log, phase, cancel: self.service.read_metadata(
+                probe, event_sink=log, cancel_event=cancel
+            ),
             self.show_metadata,
         )
 
     def _start_worker(self, operation, on_finished) -> None:
-        thread = QThread(self)
-        worker = FunctionWorker(operation)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.finished.connect(on_finished)
-        worker.finished.connect(thread.quit)
+        worker = FunctionWorker(operation, self)
+        worker.log.connect(self.log_sink)
+        worker.completed.connect(on_finished)
         worker.failed.connect(self._failed)
-        worker.failed.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda: self._threads.remove(thread)
-                                if thread in self._threads else None)
-        self._threads.append(thread)
-        thread.start()
+        worker.finished.connect(self._worker_finished)
+        self._threads.append(worker)
+        self._active_worker = worker
+        self.cancel_button.setEnabled(True)
+        worker.start()
+
+    def _worker_finished(self) -> None:
+        worker = self.sender()
+        if worker in self._threads:
+            self._threads.remove(worker)
+        if worker is self._active_worker:
+            self._active_worker = None
+            self.cancel_button.setEnabled(False)
+        worker.deleteLater()
+
+    def cancel_current(self) -> None:
+        if self._active_worker is None:
+            return
+        self._active_worker.cancel()
+        self.cancel_button.setEnabled(False)
+        self.status_label.setText("Đang hủy thao tác đọc an toàn…")
 
     def show_sector(self, sector_index: int, data: bytes) -> None:
         self.current_sector = sector_index
@@ -191,10 +226,16 @@ class MemoryTab(QWidget):
         self.status_label.setText("OTA metadata: %s" % metadata.classification)
         self._set_busy(False)
 
-    def _failed(self, message: str) -> None:
-        self.status_label.setText("Đọc thất bại; target đã được yêu cầu resume")
+    def _failed(self, failure) -> None:
+        message = getattr(failure, "message", str(failure))
+        next_action = getattr(failure, "next_action", "Review the log.")
+        self.log_sink(getattr(failure, "traceback", str(failure)))
+        self.status_label.setText(
+            "Đọc thất bại: %s · Tiếp theo: %s" % (message, next_action)
+        )
         self._set_busy(False)
-        QMessageBox.critical(self, "Không thể đọc target", message)
+        if "cancel" not in message.lower():
+            QMessageBox.critical(self, "Không thể đọc target", message)
 
     def export_sector(self) -> None:
         if not self.current_data:

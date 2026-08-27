@@ -64,7 +64,8 @@ def main(argv=None) -> int:
         archive, checksum = temp / filename, temp / (filename + ".sha")
         fetch("%s/%s" % (BASE, filename), archive)
         fetch("%s/%s.sha" % (BASE, filename), checksum)
-        if hashlib.sha256(archive.read_bytes()).hexdigest() != checksum.read_text().split()[0].lower():
+        verified_sha256 = checksum.read_text().split()[0].lower()
+        if hashlib.sha256(archive.read_bytes()).hexdigest() != verified_sha256:
             raise RuntimeError("OpenOCD checksum mismatch.")
         unpack = temp / "openocd"
         if extension == ".zip":
@@ -91,6 +92,8 @@ def main(argv=None) -> int:
             "--openocd-root", str(openocd_root), "--bootstrap", str(ROOT / installer),
             "--output", str(args.output_dir / ("b300-stlink-%s%s" % (platform_name, extension))),
             "--platform", platform_name, "--internal-distribution-approved",
+            "--openocd-archive", filename,
+            "--openocd-sha256", verified_sha256,
             "--resource", str(ROOT / "LICENSE"),
             "--resource", str(ROOT / "packaging" / "linux" / "b300-stlink-gui.desktop"),
             "--resource", str(ROOT / "packaging" / "linux" / "b300-stlink-gui.svg"),

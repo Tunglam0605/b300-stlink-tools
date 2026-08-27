@@ -33,6 +33,7 @@ class GuiPackagingTests(unittest.TestCase):
             for path in (cli, gui, bootstrap, openocd / "bin" / "openocd.exe"):
                 path.write_bytes(b"test")
             output = root / "bundle.zip"
+            openocd_sha256 = "A" * 64
             result = package_internal.main([
                 "--executable", str(cli),
                 "--gui-executable", str(gui),
@@ -40,15 +41,22 @@ class GuiPackagingTests(unittest.TestCase):
                 "--bootstrap", str(bootstrap),
                 "--output", str(output),
                 "--platform", "windows-x64",
+                "--openocd-archive", "xpack-openocd-0.12.0-7-win32-x64.zip",
+                "--openocd-sha256", openocd_sha256,
                 "--internal-distribution-approved",
             ])
             with zipfile.ZipFile(output) as archive:
                 names = set(archive.namelist())
+                metadata = archive.read("BUNDLE-METADATA.txt").decode("ascii")
         self.assertEqual(result, 0)
         self.assertIn("b300-stlink.exe", names)
         self.assertIn("b300-stlink-gui.exe", names)
         self.assertIn("vendor/openocd/bin/openocd.exe", names)
         self.assertIn("BUNDLE-METADATA.txt", names)
+        self.assertIn(
+            "openocd_archive=xpack-openocd-0.12.0-7-win32-x64.zip", metadata
+        )
+        self.assertIn("openocd_sha256=%s" % openocd_sha256, metadata)
 
     def test_linux_staging_contains_launchers_desktop_icon_and_control(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

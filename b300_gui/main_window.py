@@ -6,14 +6,15 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Optional
 
-from PySide6.QtCore import QSettings, QThread, Qt
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QSettings, Qt
+from PySide6.QtGui import QFont, QTextCursor
 from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
     QGridLayout,
     QGroupBox,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -32,6 +33,8 @@ from PySide6.QtWidgets import (
 )
 
 from b300_core.models import FlashPlan, ProbeRef
+from b300_core.models import TargetInfo
+from b300_core import __version__ as CORE_VERSION
 from b300_core.policy import SECTORS
 from b300_core.probe import list_probes
 from b300_core.service import B300Service, FlashResult
@@ -39,6 +42,7 @@ from b300_core.service import B300Service, FlashResult
 from .viewmodels import FlashViewState, confirmation_text
 from .workers import FunctionWorker
 from .memory_tab import MemoryTab
+from . import __version__
 
 
 APP_STYLE = """
@@ -57,6 +61,8 @@ QPushButton:focus { border: 2px solid #2563EB; }
 QPushButton:disabled { color: #94A3B8; background: #E2E8F0; border-color: #CBD5E1; }
 QPushButton#flashButton { background: #C2410C; color: #FFFFFF; border-color: #9A3412; }
 QPushButton#flashButton:hover { background: #9A3412; }
+QPushButton#flashButton:disabled { color: #94A3B8; background: #E2E8F0;
+                                   border-color: #CBD5E1; }
 QLabel#statusBanner { border-radius: 6px; padding: 9px 12px; background: #E2E8F0;
                       color: #334155; font-weight: 600; }
 QLabel#statusBanner[state="success"] { background: #DCFCE7; color: #166534; }
@@ -77,15 +83,24 @@ class MainWindow(QMainWindow):
         self.settings = QSettings("TungLamAutomation", "B300-STLink")
         self.image_info = None
         self.flash_plan: Optional[FlashPlan] = None
+        self.target_info: Optional[TargetInfo] = None
         self.target_ready = False
+        self.openocd_ready = False
         self.busy = False
+        self._probe_selection_required = False
         self._threads = []
+        self._cancellable_worker = None
 
         self.setWindowTitle("B300 ST-Link Provisioning")
         self.setMinimumSize(900, 650)
         self.resize(1120, 780)
         self.setStyleSheet(APP_STYLE)
         self._build_ui()
+        self._build_menu()
+        self.append_log(
+            "B300 ST-Link GUI v%s · Core v%s · OpenOCD profile 0.12.0-7" %
+            (__version__, CORE_VERSION)
+        )
         self.refresh_probes()
         self._restore_last_image()
 
@@ -109,10 +124,28 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_flash_tab(), "Nạp firmware")
-        self.memory_tab = MemoryTab(self.service, self._selected_probe)
+        self.memory_tab = MemoryTab(
+            self.service, self._selected_probe, log_sink=self.append_log
+        )
         self.tabs.addTab(self.memory_tab, "Memory / Metadata")
         root.addWidget(self.tabs, 1)
         self.setCentralWidget(central)
+
+    def _build_menu(self) -> None:
+        help_menu = self.menuBar().addMenu("Trợ giúp")
+        self.about_action = help_menu.addAction("Giới thiệu")
+        self.about_action.triggered.connect(self.show_about)
+
+    def show_about(self) -> None:
+        QMessageBox.about(
+            self,
+            "B300 ST-Link Provisioning",
+            "B300 ST-Link Provisioning v%s\n\n"
+            "GUI v%s · Core v%s\n"
+            "GUI và CLI dùng chung một core an toàn.\n"
+            "Target: STM32F407 · Application base: 0x08010000\n"
+            "OpenOCD xPack: 0.12.0-7" % (__version__, __version__, CORE_VERSION),
+        )
 
     def _build_flash_tab(self) -> QWidget:
         page = QWidget()
@@ -133,8 +166,14 @@ class MainWindow(QMainWindow):
         self.probe_combo.currentIndexChanged.connect(self._probe_changed)
         self.refresh_button = QPushButton("Làm mới")
         self.refresh_button.clicked.connect(self.refresh_probes)
+        self.inspect_target_button = QPushButton("Kiểm tra target")
+        self.inspect_target_button.clicked.connect(self.inspect_target)
         device_row.addWidget(self.probe_combo, 1)
         device_row.addWidget(self.refresh_button)
+        device_row.addWidget(self.inspect_target_button)
+        self.target_summary = QLabel("Chưa kiểm tra chip/điện áp/flash/WRP")
+        self.target_summary.setWordWrap(True)
+        device_row.addWidget(self.target_summary, 2)
         left_layout.addWidget(device_group)
 
         firmware_group = QGroupBox("2. Application HEX")
@@ -162,6 +201,7 @@ class MainWindow(QMainWindow):
         self.plan_table = QTableWidget(5, 3)
         self.plan_table.setHorizontalHeaderLabels(["Sector", "Vai trò", "Thao tác"])
         self.plan_table.verticalHeader().setVisible(False)
+        self.plan_table.verticalHeader().setDefaultSectionSize(24)
         self.plan_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.plan_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         for row, sector in enumerate(SECTORS[3:]):
@@ -169,7 +209,11 @@ class MainWindow(QMainWindow):
             self.plan_table.setItem(row, 0, QTableWidgetItem(str(sector.index)))
             self.plan_table.setItem(row, 1, QTableWidgetItem(sector.role))
             self.plan_table.setItem(row, 2, QTableWidgetItem(action))
-        self.plan_table.resizeColumnsToContents()
+        header = self.plan_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.plan_table.setFixedHeight(160)
         plan_layout.addWidget(self.plan_table)
         left_layout.addWidget(plan_group, 1)
 
@@ -179,7 +223,11 @@ class MainWindow(QMainWindow):
         self.flash_button = QPushButton("Nạp Application")
         self.flash_button.setObjectName("flashButton")
         self.flash_button.clicked.connect(self.confirm_flash)
+        self.cancel_button = QPushButton("Hủy thao tác an toàn")
+        self.cancel_button.clicked.connect(self.cancel_operation)
+        self.cancel_button.setEnabled(False)
         actions.addWidget(self.dry_run_button)
+        actions.addWidget(self.cancel_button)
         actions.addStretch(1)
         actions.addWidget(self.flash_button)
         left_layout.addLayout(actions)
@@ -224,9 +272,6 @@ class MainWindow(QMainWindow):
 
     def refresh_probes(self) -> None:
         current = self.probe_combo.currentData() if self.probe_combo.count() else None
-        self.probe_combo.blockSignals(True)
-        self.probe_combo.clear()
-        self.probe_combo.addItem("Auto-select (single ST-Link)", None)
         try:
             probes = self.probe_loader()
             available, executable = self.service.doctor()
@@ -234,12 +279,21 @@ class MainWindow(QMainWindow):
             probes = ()
             available, executable = False, ""
             self.append_log("Probe check failed: %s" % error)
+        self.probe_combo.blockSignals(True)
+        self.probe_combo.clear()
+        self._probe_selection_required = len(probes) > 1
+        if self._probe_selection_required:
+            self.probe_combo.addItem("Chọn ST-Link theo serial…", None)
+        else:
+            self.probe_combo.addItem("Auto-select (single ST-Link)", None)
         for probe in probes:
             self.probe_combo.addItem("%s · %s" % (probe.name, probe.serial), probe.serial)
         restore_index = self.probe_combo.findData(current)
         self.probe_combo.setCurrentIndex(max(0, restore_index))
         self.probe_combo.blockSignals(False)
-        self.target_ready = available
+        self.openocd_ready = available
+        self.target_ready = False
+        self.target_info = None
         if available:
             detail = "%d probe tìm thấy" % len(probes) if probes else "OpenOCD sẵn sàng"
             self._set_status("%s · %s" % (detail, executable), "normal")
@@ -248,10 +302,49 @@ class MainWindow(QMainWindow):
         self._rebuild_plan()
 
     def _probe_changed(self) -> None:
+        self.target_ready = False
+        self.target_info = None
+        self.target_summary.setText("Probe đã đổi; cần kiểm tra target lại")
         self._rebuild_plan()
 
     def _selected_probe(self) -> ProbeRef:
+        if self._probe_selection_required and self.probe_combo.currentData() is None:
+            raise ValueError("Multiple ST-Link probes detected; select one serial explicitly.")
         return ProbeRef(self.probe_combo.currentData())
+
+    def inspect_target(self) -> None:
+        if not self.openocd_ready or self.busy:
+            return
+        probe = self._selected_probe()
+        self.busy = True
+        self._set_status("Đang đọc chip/điện áp/flash/WRP qua SWD…", "busy")
+        self._update_controls()
+        self._start_worker(
+            lambda log, phase, cancel: self.service.inspect_target(
+                probe, event_sink=log, cancel_event=cancel
+            ),
+            self.apply_target_info,
+            cancellable=True,
+        )
+
+    def apply_target_info(self, info: TargetInfo) -> None:
+        self.busy = False
+        is_f407 = (info.device_id & 0xFFF) == 0x413 and info.flash_kib == 512
+        self.target_ready = is_f407
+        self.target_info = info if is_f407 else None
+        self.target_summary.setText(
+            "Device ID: 0x%08X · Flash: %d KiB · Voltage: %.3f V\nWRP: %s" % (
+                info.device_id,
+                info.flash_kib,
+                info.target_voltage,
+                info.protection_summary,
+            )
+        )
+        if is_f407:
+            self._set_status("Đúng target B300 STM32F407ZE; có thể chọn/nạp HEX", "success")
+        else:
+            self._set_status("Target không phải cấu hình B300 STM32F407ZE 512 KiB", "error")
+        self._rebuild_plan()
 
     def choose_file(self) -> None:
         initial = str(Path(self.file_path.text()).parent) if self.file_path.text() else ""
@@ -291,11 +384,14 @@ class MainWindow(QMainWindow):
         return True
 
     def _rebuild_plan(self) -> None:
-        if self.image_info is None:
+        if (self.image_info is None or self.target_info is None or
+                (self._probe_selection_required and self.probe_combo.currentData() is None)):
             self.flash_plan = None
         else:
             try:
-                self.flash_plan = self.service.plan(self.image_info, self._selected_probe())
+                self.flash_plan = self.service.plan(
+                    self.image_info, self._selected_probe(), self.target_info
+                )
             except Exception as error:
                 self.flash_plan = None
                 self.append_log("Flash plan failed: %s" % error)
@@ -307,14 +403,26 @@ class MainWindow(QMainWindow):
         self.dry_run_button.setEnabled(self.flash_plan is not None and not self.busy)
         self.choose_button.setEnabled(not self.busy)
         self.refresh_button.setEnabled(not self.busy)
+        probe_selected = not self._probe_selection_required or \
+            self.probe_combo.currentData() is not None
+        self.inspect_target_button.setEnabled(
+            self.openocd_ready and probe_selected and not self.busy
+        )
         self.probe_combo.setEnabled(not self.busy)
 
     def show_dry_run(self) -> None:
         if self.flash_plan is None:
             return
-        command = self.service.flash_command(self.flash_plan)
         self.append_log("DRY-RUN (không ghi phần cứng)")
-        self.append_log(subprocess.list2cmdline(command))
+        transactions = (
+            ("Program/Verify", self.service.flash_command(self.flash_plan)),
+            ("Mark (chỉ sau verify thành công)",
+             self.service.marker_command(self.flash_plan.probe)),
+            ("Reset (chỉ sau khi ghi marker)",
+             self.service.reset_command(self.flash_plan.probe)),
+        )
+        for label, command in transactions:
+            self.append_log("%s: %s" % (label, subprocess.list2cmdline(command)))
         self._set_status("Dry-run hợp lệ; kiểm tra probe/file trước khi nạp", "normal")
 
     def confirm_flash(self) -> None:
@@ -334,31 +442,60 @@ class MainWindow(QMainWindow):
         assert self.flash_plan is not None
         plan = self.flash_plan
         self.busy = True
-        self.progress.setRange(0, 0)
-        self.progress.setFormat("Đang nạp và verify…")
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.setFormat("0% · Chuẩn bị")
         self._set_status("Đang ghi Sector 3–7; không rút ST-Link hoặc mất nguồn", "busy")
         self._update_controls()
         self._start_worker(
-            lambda emit: self.service.flash(plan, event_sink=emit),
+            lambda log, phase, cancel: self.service.flash(
+                plan,
+                event_sink=log,
+                phase_sink=phase,
+                cancel_event=cancel,
+            ),
             self._flash_finished,
+            cancellable=False,
         )
 
-    def _start_worker(self, operation, on_finished) -> None:
-        thread = QThread(self)
-        worker = FunctionWorker(operation)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
+    def _start_worker(self, operation, on_finished, cancellable: bool = False) -> None:
+        worker = FunctionWorker(operation, self)
         worker.log.connect(self.append_log)
-        worker.finished.connect(on_finished)
-        worker.finished.connect(thread.quit)
+        worker.phase.connect(self._flash_phase_changed)
+        worker.completed.connect(on_finished)
         worker.failed.connect(self._operation_failed)
-        worker.failed.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda: self._threads.remove(thread)
-                                if thread in self._threads else None)
-        self._threads.append(thread)
-        thread.start()
+        worker.finished.connect(self._worker_finished)
+        self._threads.append(worker)
+        if cancellable:
+            self._cancellable_worker = worker
+            self.cancel_button.setEnabled(True)
+        worker.start()
+
+    def _worker_finished(self) -> None:
+        worker = self.sender()
+        if worker in self._threads:
+            self._threads.remove(worker)
+        if worker is self._cancellable_worker:
+            self._cancellable_worker = None
+            self.cancel_button.setEnabled(False)
+        worker.deleteLater()
+
+    def cancel_operation(self) -> None:
+        if self._cancellable_worker is None:
+            return
+        self._cancellable_worker.cancel()
+        self.cancel_button.setEnabled(False)
+        self._set_status("Đang hủy thao tác read-only an toàn…", "busy")
+
+    def _flash_phase_changed(self, event) -> None:
+        self.progress.setRange(0, 100)
+        self.progress.setValue(event.progress)
+        self.progress.setFormat("%d%% · %s" % (event.progress, event.message))
+        if event.phase not in {"succeeded", "failed"}:
+            self._set_status(
+                "%s · không rút ST-Link hoặc mất nguồn" % event.message,
+                "busy",
+            )
 
     def _flash_finished(self, result: FlashResult) -> None:
         self.busy = False
@@ -374,24 +511,64 @@ class MainWindow(QMainWindow):
             )
         elif result.status == "programmed_boot_failed":
             self.progress.setFormat("Boot verify lỗi")
-            reason = result.boot_verification.reason if result.boot_verification else "Unknown"
-            self._set_status("Đã program nhưng Boot verification thất bại: %s" % reason, "error")
+            self._set_status(
+                "Phase %s · %s · Tiếp theo: %s" % (
+                    result.failure_phase,
+                    result.reason,
+                    result.next_action,
+                ),
+                "error",
+            )
         else:
             self.progress.setFormat("Flash lỗi")
-            self._set_status("Nạp/verify thất bại; đã dừng và không tự retry", "error")
+            self._set_status(
+                "Phase %s · %s · Tiếp theo: %s" % (
+                    result.failure_phase or "unknown",
+                    result.reason or "OpenOCD transaction failed",
+                    result.next_action or "Xem log; không tự retry.",
+                ),
+                "error",
+            )
         self._update_controls()
 
-    def _operation_failed(self, message: str) -> None:
+    def _operation_failed(self, failure) -> None:
         self.busy = False
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
         self.progress.setFormat("Lỗi")
-        self.append_log(message)
-        self._set_status("Thao tác thất bại; xem log và không retry mù", "error")
+        phase = getattr(failure, "phase", "operation")
+        message = getattr(failure, "message", str(failure))
+        next_action = getattr(
+            failure, "next_action", "Xem log; không tự retry."
+        )
+        detail = getattr(failure, "traceback", str(failure))
+        self.append_log(detail)
+        self._set_status(
+            "Phase %s · %s · Tiếp theo: %s" % (phase, message, next_action),
+            "error",
+        )
         self._update_controls()
+
+    def closeEvent(self, event) -> None:
+        if self.busy or self._threads or self.memory_tab.has_active_operation:
+            event.ignore()
+            self._set_status(
+                "Thao tác phần cứng đang chạy; hãy chờ hoàn tất hoặc hủy khi nút Hủy được bật.",
+                "error",
+            )
+            self.append_log("Close blocked: an ST-Link operation is still active.")
+            return
+        event.accept()
 
     def append_log(self, line: str) -> None:
         self.log_view.appendPlainText(str(line))
+        cursor = self.log_view.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.StartOfLine)
+        self.log_view.setTextCursor(cursor)
+        self.log_view.verticalScrollBar().setValue(
+            self.log_view.verticalScrollBar().maximum()
+        )
+        self.log_view.horizontalScrollBar().setValue(0)
 
     def export_log(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Xuất log", "b300-stlink.log", "Log (*.log *.txt)")

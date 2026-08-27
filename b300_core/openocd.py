@@ -7,10 +7,12 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Callable, List, Optional, Sequence
 
-from .models import BootVerification, CommandResult, FlashPlan, ProbeRef
+from .models import BootVerification, CommandResult, FlashPlan, ProbeRef, TargetInfo
 from .policy import APPLICATION_ADDRESS, FLASH_END_ADDRESS, STLINK_PROVISION_MAGIC
 
 
@@ -65,12 +67,42 @@ def build_flash_command(plan: FlashPlan, executable: str) -> List[str]:
         "-c", "reset init",
         "-c", "flash erase_sector 0 3 7",
         "-c", "program {%s} verify" % plan.image.path,
+        "-c", "shutdown",
+    ]
+
+
+def build_marker_command(probe: ProbeRef, executable: str) -> List[str]:
+    """Write the provisioning marker only after a separate verified transaction."""
+    return _base_command(probe, executable) + [
+        "-c", "init",
+        "-c", "reset init",
         "-c", "mww 0x40023840 0x10000000",
         "-c", "mww 0x40007000 0x00000100",
         "-c", "mww 0x40002860 0x%08X" % STLINK_PROVISION_MAGIC,
+        "-c", "shutdown",
+    ]
+
+
+def build_reset_command(probe: ProbeRef, executable: str) -> List[str]:
+    return _base_command(probe, executable) + [
+        "-c", "init",
         "-c", "reset run",
         "-c", "shutdown",
     ]
+
+
+def build_resume_command(probe: ProbeRef, executable: str) -> List[str]:
+    """Best-effort recovery for an interrupted read-only halt session."""
+    return _base_command(probe, executable) + [
+        "-c", "init",
+        "-c", "resume",
+        "-c", "shutdown",
+    ]
+
+
+def program_verify_succeeded(output: str) -> bool:
+    """Accept only OpenOCD's complete verified-success event line."""
+    return any(line.strip() == "** Verified OK **" for line in output.splitlines())
 
 
 def build_boot_verify_command(probe: ProbeRef, executable: str) -> List[str]:
@@ -95,6 +127,64 @@ def build_debug_command(probe: ProbeRef, executable: str, bind_address: str,
         telnet_port=telnet_port,
         bind_address=bind_address,
     ) + ["-c", "init"]
+
+
+def build_target_inspect_command(probe: ProbeRef, executable: str) -> List[str]:
+    return _base_command(probe, executable) + [
+        "-c", "init",
+        "-c", "flash info 0",
+        "-c", "shutdown",
+    ]
+
+
+def parse_target_info(output: str) -> TargetInfo:
+    voltage_match = re.search(r"Target voltage:\s*([0-9]+(?:\.[0-9]+)?)", output,
+                              re.IGNORECASE)
+    device_match = re.search(r"device id\s*=\s*0x([0-9A-Fa-f]+)", output,
+                             re.IGNORECASE)
+    flash_match = re.search(r"flash size\s*=\s*([0-9]+)\s*KiB", output,
+                            re.IGNORECASE)
+    protection_lines = []
+    sector_states = []
+    for line in output.splitlines():
+        if "protect" in line.lower():
+            protection_lines.append(line.strip())
+        sector_match = re.search(
+            r"#\s*(\d+):.*?\b(not protected|protected)\s*$",
+            line,
+            re.IGNORECASE,
+        )
+        if sector_match:
+            sector_states.append((
+                int(sector_match.group(1)),
+                sector_match.group(2).lower() == "protected",
+            ))
+    if not voltage_match or not device_match or not flash_match:
+        raise ValueError("OpenOCD target inspection did not identify voltage/device/flash size.")
+    protection_summary = " | ".join(protection_lines) or "Protection status not reported"
+    if sector_states:
+        groups = []
+        start, end, protected = sector_states[0][0], sector_states[0][0], sector_states[0][1]
+        for sector, state in sector_states[1:]:
+            if sector == end + 1 and state == protected:
+                end = sector
+                continue
+            groups.append((start, end, protected))
+            start, end, protected = sector, sector, state
+        groups.append((start, end, protected))
+        protection_summary = "; ".join(
+            "Sector %s %s" % (
+                str(first) if first == last else "%d–%d" % (first, last),
+                "protected" if state else "not protected",
+            )
+            for first, last, state in groups
+        )
+    return TargetInfo(
+        device_id=int(device_match.group(1), 16),
+        flash_kib=int(flash_match.group(1)),
+        target_voltage=float(voltage_match.group(1)),
+        protection_summary=protection_summary,
+    )
 
 
 def parse_boot_verification(output: str) -> BootVerification:
@@ -125,7 +215,9 @@ def parse_boot_verification(output: str) -> BootVerification:
 class OpenOcdRunner:
     """Execute one command without a shell and stream normalized log lines."""
 
-    def run(self, command: Sequence[str], event_sink: Optional[EventSink] = None) -> CommandResult:
+    def run(self, command: Sequence[str], event_sink: Optional[EventSink] = None,
+            timeout_seconds: Optional[float] = 60.0,
+            cancel_event: Optional[threading.Event] = None) -> CommandResult:
         normalized = tuple(str(item) for item in command)
         try:
             process = subprocess.Popen(
@@ -143,11 +235,57 @@ class OpenOcdRunner:
 
         lines = []
         assert process.stdout is not None
-        for raw_line in process.stdout:
-            line = raw_line.rstrip("\r\n")
-            lines.append(line)
-            if event_sink is not None:
-                event_sink(line)
-        process.stdout.close()
+        reader_done = threading.Event()
+
+        def read_output() -> None:
+            try:
+                for raw_line in process.stdout:
+                    line = raw_line.rstrip("\r\n")
+                    lines.append(line)
+                    if event_sink is not None:
+                        event_sink(line)
+            finally:
+                process.stdout.close()
+                reader_done.set()
+
+        reader = threading.Thread(
+            target=read_output,
+            name="b300-openocd-output",
+            daemon=True,
+        )
+        reader.start()
+        deadline = (time.monotonic() + timeout_seconds
+                    if timeout_seconds is not None else None)
+        timed_out = False
+        cancelled = False
+
+        while process.poll() is None:
+            if cancel_event is not None and cancel_event.is_set():
+                cancelled = True
+                break
+            if deadline is not None and time.monotonic() >= deadline:
+                timed_out = True
+                break
+            reader_done.wait(0.02)
+
+        if timed_out or cancelled:
+            try:
+                process.terminate()
+                process.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2.0)
+
         returncode = process.wait()
-        return CommandResult(normalized, returncode, "\n".join(lines))
+        reader.join(timeout=2.0)
+        if timed_out:
+            lines.append("OpenOCD operation timed out after %.1f seconds." % timeout_seconds)
+        elif cancelled:
+            lines.append("OpenOCD operation was cancelled.")
+        return CommandResult(
+            normalized,
+            returncode,
+            "\n".join(lines),
+            timed_out=timed_out,
+            cancelled=cancelled,
+        )

@@ -49,6 +49,14 @@ class FlashPlan:
     image: ImageInfo
     probe: ProbeRef
     erase_sectors: Tuple[int, ...]
+    target: TargetInfo
+
+
+@dataclass(frozen=True)
+class FlashPreview:
+    image: ImageInfo
+    probe: ProbeRef
+    erase_sectors: Tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -56,6 +64,8 @@ class CommandResult:
     command: Tuple[str, ...]
     returncode: int
     output: str
+    timed_out: bool = False
+    cancelled: bool = False
 
 
 @dataclass(frozen=True)
@@ -81,3 +91,19 @@ class OtaMetadata:
     sequence: int
     meta_crc32: int
     calculated_meta_crc32: int
+
+
+@dataclass(frozen=True)
+class TargetInfo:
+    device_id: int
+    flash_kib: int
+    target_voltage: float
+    protection_summary: str
+
+
+@dataclass(frozen=True)
+class FlashPhaseEvent:
+    phase: str
+    progress: int
+    message: str
+    cancellable: bool = False
