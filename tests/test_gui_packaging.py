@@ -36,6 +36,11 @@ class GuiPackagingTests(unittest.TestCase):
             ("B300-STLink-GUI-Ubuntu-arm64.AppImage", "b300-stlink-gui_arm64.deb"),
         )
 
+    def test_arm64_build_uses_an_available_pyside_release(self) -> None:
+        requirements = (ROOT / "requirements-gui.txt").read_text(encoding="utf-8")
+        self.assertIn("PySide6==6.10.3; platform_machine != 'aarch64'", requirements)
+        self.assertIn("PySide6==6.8.0.2; platform_machine == 'aarch64'", requirements)
+
     def test_brand_assets_are_wired_into_native_executables(self) -> None:
         self.assertTrue((ROOT / "branding" / "logo.png").is_file())
         self.assertTrue((ROOT / "branding" / "b300-stlink-icon.png").is_file())

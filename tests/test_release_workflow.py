@@ -49,6 +49,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
             job = workflow["jobs"][job_name]
             self.assertEqual(job["container"], "ubuntu:22.04")
 
+    def test_linux_release_installs_glib_for_the_packaged_gui_smoke_test(self) -> None:
+        for name in ("release.yml", "release-dry-run.yml"):
+            with self.subTest(workflow=name):
+                text = (ROOT / ".github" / "workflows" / name).read_text(
+                    encoding="utf-8"
+                )
+                self.assertIn("libglib2.0-0", text)
+
     def test_workflow_mentions_every_downloadable_package(self) -> None:
         text = (ROOT / ".github" / "workflows" / "release.yml").read_text(
             encoding="utf-8"

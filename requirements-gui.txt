@@ -1,2 +1,3 @@
-PySide6==6.10.3
+PySide6==6.10.3; platform_machine != 'aarch64'
+PySide6==6.8.0.2; platform_machine == 'aarch64'
 cryptography==45.0.7
