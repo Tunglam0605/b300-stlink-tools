@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from b300_core.updater import UpdateCheckResult
 from b300_core.release_manifest import parse_latest_manifest
+from b300_core.update_platform import UpdatePlatform
 from b300_gui.main_window import MainWindow
 from tests.test_gui_smoke import FakeService
 from tests.test_release_manifest import MESSAGE, SIGNATURE, TEST_PUBLIC_KEY
@@ -128,7 +129,10 @@ class GuiUpdaterTests(unittest.TestCase):
             with mock.patch.object(
                 QMessageBox, "question",
                 return_value=QMessageBox.StandardButton.Yes,
-            ), mock.patch.object(window, "close") as close:
+            ), mock.patch.object(window, "close") as close, mock.patch(
+                "b300_gui.main_window.detect_update_platform",
+                return_value=UpdatePlatform.WINDOWS_X64,
+            ):
                 window._install_downloaded_update()
         close.assert_called_once_with()
         self.assertEqual(len(launched), 1)
