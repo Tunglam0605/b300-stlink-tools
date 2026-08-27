@@ -43,3 +43,18 @@ class FlashPlan:
     probe: ProbeRef
     erase_sectors: Tuple[int, ...]
 
+
+@dataclass(frozen=True)
+class CommandResult:
+    command: Tuple[str, ...]
+    returncode: int
+    output: str
+
+
+@dataclass(frozen=True)
+class BootVerification:
+    pc: Optional[int]
+    bkp1r: Optional[int]
+    bkp4r: Optional[int]
+    passed: bool
+    reason: str
