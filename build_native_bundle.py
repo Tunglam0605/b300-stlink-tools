@@ -110,6 +110,7 @@ def main(argv=None) -> int:
             "--openocd-package", str(archive),
             "--resource", str(ROOT / "LICENSE"),
             "--resource", str(ROOT / "packaging" / "linux" / "b300-stlink-gui.desktop"),
+            "--resource", str(ROOT / "packaging" / "linux" / "b300-stlink-gui.svg"),
             "--resource", str(ROOT / "branding" / "b300-stlink-icon.png"),
             "--resource", str(ROOT / "branding" / "b300-stlink-icon.ico"),
             "--resource", str(ROOT / "branding" / "b300-stlink-wordmark.png"),

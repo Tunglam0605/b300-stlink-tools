@@ -29,6 +29,9 @@ class GuiPackagingTests(unittest.TestCase):
         self.assertTrue((ROOT / "branding" / "b300-stlink-icon.png").is_file())
         self.assertTrue((ROOT / "branding" / "b300-stlink-icon.ico").is_file())
         self.assertTrue((ROOT / "branding" / "b300-stlink-wordmark.png").is_file())
+        self.assertTrue(
+            (ROOT / "packaging" / "linux" / "b300-stlink-gui.svg").is_file()
+        )
         gui_spec = (ROOT / "b300_gui.spec").read_text(encoding="utf-8")
         native_builder = (ROOT / "build_native_bundle.py").read_text(encoding="utf-8")
         installer = (ROOT / "packaging" / "windows" /
@@ -37,6 +40,11 @@ class GuiPackagingTests(unittest.TestCase):
                       gui_spec)
         self.assertIn('"--icon", str(ROOT / "branding" / "b300-stlink-icon.ico")',
                       native_builder)
+        self.assertIn(
+            '"--resource", str(ROOT / "packaging" / "linux" / '
+            '"b300-stlink-gui.svg")',
+            native_builder,
+        )
         self.assertGreaterEqual(native_builder.count('"--clean"'), 2)
         self.assertGreaterEqual(native_builder.count('"--workpath"'), 2)
         self.assertNotIn('ROOT / "build"', native_builder)
