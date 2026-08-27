@@ -2,6 +2,11 @@
 
 Tool nội bộ để nạp Application STM32F407 qua ST-Link/SWD và chạy OpenOCD debug.
 
+Hướng dẫn đầy đủ:
+
+- [Windows x64](docs/WINDOWS.md)
+- [Ubuntu IPC x64](docs/UBUNTU_IPC.md)
+
 ## An toàn bootloader/OTA
 
 `flash` chỉ cho phép Intel HEX trong vùng Application `0x08010000..0x0807FFFF`.
