@@ -5,7 +5,7 @@ import io
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 
@@ -60,6 +60,80 @@ class B300StlinkTests(unittest.TestCase):
         self.assertNotIn("erase_sector", rendered)
         self.assertNotIn("program {", rendered)
         self.assertNotIn("mww ", rendered)
+
+    def test_debug_binds_to_loopback_by_default(self) -> None:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            result = tool().main(["debug", "--dry-run", "--json"])
+        self.assertEqual(result, 0)
+        command = json.loads(output.getvalue())["command"]
+        self.assertIn("bindto 127.0.0.1", command)
+        self.assertIn("telnet port disabled", command)
+        self.assertIn("tcl port disabled", command)
+
+    def test_debug_can_explicitly_listen_for_remote_gdb(self) -> None:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            result = tool().main([
+                "debug", "--bind-address", "0.0.0.0",
+                "--gdb-port", "4333",
+                "--probe-serial", "TEST-PROBE", "--dry-run", "--json",
+            ])
+        self.assertEqual(result, 0)
+        command = json.loads(output.getvalue())["command"]
+        self.assertIn("bindto 0.0.0.0", command)
+        self.assertIn("gdb port 4333", command)
+        self.assertIn("telnet port disabled", command)
+        self.assertIn("tcl port disabled", command)
+        self.assertIn("adapter serial TEST-PROBE", command)
+
+    def test_debug_allows_explicit_telnet_on_loopback(self) -> None:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            result = tool().main([
+                "debug", "--telnet-port", "4444", "--dry-run", "--json",
+            ])
+        self.assertEqual(result, 0)
+        command = json.loads(output.getvalue())["command"]
+        self.assertIn("telnet port 4444", command)
+
+    def test_remote_debug_rejects_telnet_listener(self) -> None:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            result = tool().main([
+                "debug", "--bind-address", "0.0.0.0", "--telnet-port", "4444",
+                "--dry-run", "--json",
+            ])
+        self.assertEqual(result, 1)
+        self.assertIn("Telnet", output.getvalue())
+
+    def test_debug_rejects_command_in_bind_address(self) -> None:
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            tool().main([
+                "debug", "--bind-address", "127.0.0.1; flash erase_sector 0 0 7",
+                "--dry-run",
+            ])
+
+    def test_debug_rejects_port_outside_tcp_range(self) -> None:
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            tool().main(["debug", "--gdb-port", "70000", "--dry-run"])
+
+    def test_debug_rejects_command_in_probe_serial(self) -> None:
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            tool().main([
+                "debug", "--probe-serial", "SAFE; flash erase_sector 0 0 7",
+                "--dry-run",
+            ])
+
+    def test_flash_rejects_path_that_can_break_openocd_braces(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "bad}name.hex"
+            image.write_text(VALID_HEX, encoding="ascii")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                result = tool().main(["flash", str(image), "--dry-run", "--json"])
+        self.assertEqual(result, 1)
+        self.assertIn("unsafe character", output.getvalue())
 
 
 if __name__ == "__main__":

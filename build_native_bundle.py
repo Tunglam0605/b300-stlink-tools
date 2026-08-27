@@ -8,6 +8,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tarfile
 import tempfile
 import urllib.request
@@ -20,8 +21,14 @@ VERSION = "0.12.0-7"
 BASE = "https://github.com/xpack-dev-tools/openocd-xpack/releases/download/v%s" % VERSION
 
 
-def target():
-    system, machine = platform.system().lower(), platform.machine().lower()
+def target_for(system: str, machine: str, python_platform: str):
+    system, machine, python_platform = system.lower(), machine.lower(), python_platform.lower()
+    if not machine:
+        machine = {
+            "win-amd64": "x86_64",
+            "linux-x86_64": "x86_64",
+            "linux-aarch64": "aarch64",
+        }.get(python_platform, "")
     if system == "windows" and machine in {"amd64", "x86_64"}:
         return "windows-x64", "win32-x64", ".zip", "install.ps1", "b300-stlink.exe"
     if system == "linux" and machine in {"amd64", "x86_64"}:
@@ -29,6 +36,10 @@ def target():
     if system == "linux" and machine in {"aarch64", "arm64"}:
         return "linux-arm64", "linux-arm64", ".tar.gz", "install.sh", "b300-stlink"
     raise RuntimeError("Unsupported target: %s/%s" % (system, machine))
+
+
+def target():
+    return target_for(platform.system(), platform.machine(), sysconfig.get_platform())
 
 
 def fetch(url: str, output: Path) -> None:

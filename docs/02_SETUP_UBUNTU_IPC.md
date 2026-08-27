@@ -63,4 +63,9 @@ Rút/cắm lại ST-Link nếu cần. Không dùng `sudo b300-stlink`.
    b300-stlink doctor
    ```
 
-Kết quả đúng: `OpenOCD available=true`.
+Kết quả đúng: `OpenOCD available=true`. `doctor` kiểm tra bộ OpenOCD trong máy;
+probe thật được kiểm tra khi bắt đầu lệnh flash/debug.
+
+Nếu ST-Link cắm tại IPC nhưng GDB chạy trên máy phát triển, đọc
+[Bước 4 — Debug OpenOCD](04_DEBUG.md). Chỉ mở remote GDB port trong mạng nội bộ
+tin cậy.

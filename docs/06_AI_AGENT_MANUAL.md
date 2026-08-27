@@ -4,10 +4,12 @@ Repo hỗ trợ ba cách. Chọn **một** cách phù hợp với AI bạn đang
 
 ## Cách 1 — Người dùng chạy lệnh trực tiếp
 
-Không cần AI. Làm theo [Bước 3 — Nạp firmware](03_FLASH_FIRMWARE.md):
+Không cần AI. Làm theo [Bước 3 — Nạp firmware](03_FLASH_FIRMWARE.md) hoặc
+[Bước 4 — Debug OpenOCD](04_DEBUG.md):
 
 ```text
 b300-stlink flash <application.hex>
+b300-stlink debug --gdb-port 3333
 ```
 
 ## Cách 2 — Bảo bất kỳ AI nào đọc repo
@@ -47,6 +49,13 @@ Sau đó khởi động lại agent và yêu cầu:
 
 ```text
 Use the b300-ota-stlink skill to provision this B300 F407 Application HEX.
+```
+
+Hoặc để debug qua IPC:
+
+```text
+Use the b300-ota-stlink skill to start a safe remote debug session through the IPC.
+Do not flash firmware. Use this matching AXF/ELF only for symbols: <application.axf>.
 ```
 
 Với Codex chạy trong repo này, skill nằm sẵn ở

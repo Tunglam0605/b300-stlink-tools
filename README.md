@@ -31,9 +31,13 @@ b300-stlink doctor
 b300-stlink flash /path/Main_V2_F407.hex
 b300-stlink flash /path/Main_V2_F407.hex --probe-serial <ST-LINK-SN>
 b300-stlink debug --gdb-port 3333
+b300-stlink debug --bind-address 0.0.0.0 --gdb-port 3333
 ```
 
 `debug` chỉ mở OpenOCD GDB server, không có lệnh erase/program/register write.
+Mặc định GDB server chỉ nghe tại `127.0.0.1`; remote qua IPC phải chủ động dùng
+`--bind-address 0.0.0.0`. Telnet/TCL bị tắt mặc định. Cần file AXF/ELF đúng bản
+firmware để GDB đọc symbol.
 `flash --dry-run --json` cho phép xem transaction mà không thao tác probe.
 
 ## Tạo release native

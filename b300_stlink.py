@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -16,6 +18,39 @@ from typing import List, Optional
 APPLICATION_ADDRESS = 0x08010000
 FLASH_END_ADDRESS = 0x08080000
 STLINK_PROVISION_MAGIC = 0x53544C4B
+
+
+def parse_bind_address(value: str) -> str:
+    try:
+        return str(ipaddress.ip_address(value))
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("bind address must be a valid IP address") from error
+
+
+def parse_tcp_port(value: str) -> int:
+    try:
+        port = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("port must be an integer") from error
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("port must be in range 1..65535")
+    return port
+
+
+def parse_probe_serial(value: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]+", value):
+        raise argparse.ArgumentTypeError("probe serial contains unsupported characters")
+    return value
+
+
+def validate_openocd_path(path: Path) -> None:
+    if any(character in str(path) for character in "{}\r\n"):
+        raise ValueError("Application path contains an unsafe character for OpenOCD.")
+
+
+def validate_debug_args(args: argparse.Namespace) -> None:
+    if args.telnet_port is not None and not ipaddress.ip_address(args.bind_address).is_loopback:
+        raise ValueError("Telnet is allowed only when OpenOCD binds to a loopback address.")
 
 
 class Reporter:
@@ -37,14 +72,20 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     flash = commands.add_parser("flash", help="Provision an Application HEX safely.")
     flash.add_argument("application", type=Path)
     flash.add_argument("--openocd")
-    flash.add_argument("--probe-serial")
+    flash.add_argument("--probe-serial", type=parse_probe_serial,
+                       help="Select one ST-Link when multiple probes are connected.")
     flash.add_argument("--dry-run", action="store_true")
     flash.add_argument("--json", action="store_true")
     debug = commands.add_parser("debug", help="Start non-mutating OpenOCD debugging.")
     debug.add_argument("--openocd")
-    debug.add_argument("--probe-serial")
-    debug.add_argument("--gdb-port", type=int, default=3333)
-    debug.add_argument("--telnet-port", type=int, default=4444)
+    debug.add_argument("--probe-serial", type=parse_probe_serial,
+                       help="Select one ST-Link when multiple probes are connected.")
+    debug.add_argument("--bind-address", type=parse_bind_address, default="127.0.0.1",
+                       help="OpenOCD listen address (default: 127.0.0.1).")
+    debug.add_argument("--gdb-port", type=parse_tcp_port, default=3333,
+                       help="GDB server TCP port (default: 3333).")
+    debug.add_argument("--telnet-port", type=parse_tcp_port,
+                       help="Optional OpenOCD telnet port; loopback only (default: disabled).")
     debug.add_argument("--dry-run", action="store_true")
     debug.add_argument("--json", action="store_true")
     doctor = commands.add_parser("doctor", help="Inspect local tool availability.")
@@ -93,9 +134,12 @@ def validate_application_hex(application: Path) -> None:
 
 def openocd_command(args: argparse.Namespace) -> List[str]:
     executable = args.openocd or os.environ.get("B300_OPENOCD") or shutil.which("openocd") or "openocd"
-    command = [executable, "-f", "interface/stlink.cfg", "-c", "transport select swd",
+    telnet_port = getattr(args, "telnet_port", None)
+    telnet_setting = "telnet port %d" % telnet_port if telnet_port else "telnet port disabled"
+    command = [executable, "-c", "bindto %s" % getattr(args, "bind_address", "127.0.0.1"),
+               "-f", "interface/stlink.cfg", "-c", "transport select swd",
                "-f", "target/stm32f4x.cfg", "-c", "gdb port %d" % getattr(args, "gdb_port", 3333),
-               "-c", "telnet port %d" % getattr(args, "telnet_port", 4444)]
+               "-c", telnet_setting, "-c", "tcl port disabled"]
     if args.probe_serial:
         command.extend(["-c", "adapter serial %s" % args.probe_serial])
     command.extend(["-c", "init"])
@@ -136,8 +180,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             reporter.emit("dependency", name="OpenOCD", available=bool(tool), path=tool)
             return 0 if tool else 1
         if args.command == "debug":
+            validate_debug_args(args)
             return run_openocd(openocd_command(args), args.dry_run, reporter)
         args.application = args.application.resolve()
+        validate_openocd_path(args.application)
         validate_application_hex(args.application)
         reporter.emit("flash_start", application=str(args.application), dry_run=args.dry_run)
         return run_openocd(flash_command(args), args.dry_run, reporter)

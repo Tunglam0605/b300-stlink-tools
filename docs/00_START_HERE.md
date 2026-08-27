@@ -31,4 +31,5 @@ cd b300-stlink-tools
 - Windows x64: [01 — Setup Windows](01_SETUP_WINDOWS.md)
 - Ubuntu IPC x64: [02 — Setup Ubuntu IPC](02_SETUP_UBUNTU_IPC.md)
 
-Sau setup, mỗi lần nạp chỉ cần làm [03 — Nạp firmware](03_FLASH_FIRMWARE.md).
+Sau setup, dùng [03 — Nạp firmware](03_FLASH_FIRMWARE.md) để nạp Application
+hoặc [04 — Debug OpenOCD](04_DEBUG.md) để debug local/remote qua IPC.

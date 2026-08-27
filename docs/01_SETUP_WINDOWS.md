@@ -37,6 +37,9 @@ lần đầu từ source clone.
    b300-stlink doctor
    ```
 
-Kết quả đúng: `OpenOCD available=true`.
+Kết quả đúng: `OpenOCD available=true`. `doctor` kiểm tra bộ OpenOCD trong máy;
+probe thật được kiểm tra khi bắt đầu lệnh flash/debug.
 
 Nếu báo không tìm thấy ST-Link, kiểm tra cáp USB/driver trước khi nạp firmware.
+Nếu cần debug source, đọc [Bước 4 — Debug OpenOCD](04_DEBUG.md) và chuẩn bị
+`arm-none-eabi-gdb` cùng file AXF/ELF đúng bản firmware.
