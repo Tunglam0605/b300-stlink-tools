@@ -36,6 +36,7 @@ class GuiPackagingTests(unittest.TestCase):
                       gui_spec)
         self.assertIn('"--icon", str(ROOT / "branding" / "b300-stlink-icon.ico")',
                       native_builder)
+        self.assertGreaterEqual(native_builder.count('"--clean"'), 2)
         self.assertIn("SetupIconFile={#SourceRoot}\\b300-stlink-icon.ico", installer)
 
     def test_linux_staging_uses_python_39_compatible_text_writes(self) -> None:

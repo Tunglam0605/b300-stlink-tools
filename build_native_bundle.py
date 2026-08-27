@@ -75,14 +75,15 @@ def main(argv=None) -> int:
         openocd_root = next(item for item in unpack.iterdir() if item.is_dir())
         subprocess.check_call([sys.executable, "-m", "pip", "install", "--user",
                                "-r", str(ROOT / "requirements-build.txt")])
-        subprocess.check_call([sys.executable, "-m", "PyInstaller", "--noconfirm", "--onefile",
+        subprocess.check_call([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
+                               "--onefile",
                                "--name", "b300-stlink", "--distpath", str(args.output_dir),
                                "--icon", str(ROOT / "branding" / "b300-stlink-icon.ico"),
                                str(ROOT / "b300_stlink.py")])
         gui_executable = "b300-stlink-gui.exe" if platform_name == "windows-x64" else "b300-stlink-gui"
         if not args.cli_only:
             subprocess.check_call([
-                sys.executable, "-m", "PyInstaller", "--noconfirm",
+                sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
                 "--distpath", str(args.output_dir),
                 "--workpath", str(ROOT / "build" / "b300-stlink-gui"),
                 str(ROOT / "b300_gui.spec"),
