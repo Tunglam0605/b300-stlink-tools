@@ -19,6 +19,12 @@ class GuiMemoryTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
 
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.app.processEvents()
+        cls.app.shutdown()
+        cls.app = None
+
     def test_memory_tab_lists_all_sectors_and_has_no_write_controls(self) -> None:
         tab = MemoryTab(service=object(), probe_provider=lambda: None)
         self.assertEqual(tab.sector_combo.count(), 8)

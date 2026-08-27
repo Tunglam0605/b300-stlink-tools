@@ -20,6 +20,8 @@ def main(argv=None) -> int:
     if args.smoke_test:
         app.processEvents()
         window.close()
+        app.processEvents()
+        app.shutdown()
         print("B300 GUI smoke test OK")
         return 0
     window.show()

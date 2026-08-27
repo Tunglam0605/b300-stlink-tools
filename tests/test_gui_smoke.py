@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -51,6 +53,28 @@ class GuiSmokeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.app.processEvents()
+        cls.app.shutdown()
+        cls.app = None
+
+    def test_smoke_entry_point_finalizes_qapplication(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from b300_gui.__main__ import main; "
+                "from PySide6.QtWidgets import QApplication; "
+                "assert main(['--smoke-test']) == 0; "
+                "assert QApplication.instance() is None",
+            ],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_main_window_starts_safe_and_has_no_com_selector(self) -> None:
         window = MainWindow(service=FakeService(), probe_loader=lambda: ())

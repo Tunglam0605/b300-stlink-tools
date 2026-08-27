@@ -142,7 +142,7 @@ class OpenOcdCoreTests(unittest.TestCase):
             bundled.write_bytes(b"")
             with mock.patch.object(sys, "frozen", True, create=True), \
                  mock.patch.object(sys, "executable", str(executable)):
-                self.assertEqual(resolve_openocd(), str(bundled))
+                self.assertTrue(os.path.samefile(resolve_openocd(), bundled))
 
     def test_target_inspection_is_read_only_and_parses_f407(self) -> None:
         command = build_target_inspect_command(ProbeRef("SAFE123"), "openocd")
