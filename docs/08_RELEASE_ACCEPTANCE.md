@@ -1,5 +1,30 @@
 # Biên bản nghiệm thu và phát hành B300 ST-Link Tools
 
+## Bản 0.2.0
+
+- Nhánh phát hành: `main`
+- Commit artifact: `7ffe377`
+- OpenOCD đóng gói: xPack `0.12.0-7`, có SHA-256 archive và manifest runtime cố định
+- CI nguồn: [GitHub Actions run 33059887603](https://github.com/Tunglam0605/b300-stlink-tools/actions/runs/33059887603)
+- Release workflow: [GitHub Actions run 33060015914](https://github.com/Tunglam0605/b300-stlink-tools/actions/runs/33060015914)
+
+| Cổng kiểm tra | Bằng chứng | Kết quả |
+|---|---|---|
+| Unit/integration/GUI tests | `python -m unittest discover -s tests -q`: 95 tests | PASS |
+| CI đa nền tảng | Windows x64, Ubuntu x64, Ubuntu ARM64 | PASS |
+| Release native | Windows installer/ZIP, Ubuntu x64 và ARM64 tar/AppImage/DEB | PASS |
+| Ubuntu offline acceptance | `aubot-tech`, Ubuntu 26.04 x86_64, HOME tạm, không `sudo` | PASS |
+| Portable CLI/GUI | `b300-stlink --help`, GUI `--smoke-test` offscreen | PASS |
+| Cài offline | `install.sh`, CLI `doctor`, GUI smoke sau cài | PASS |
+| OpenOCD | `0.12.0-7`, `available=True`, runtime lấy từ bundle | PASS |
+| Desktop asset | `b300-stlink-gui.svg` có trong archive và sau cài | PASS |
+
+SHA-256 của native bundle Ubuntu x64 đã nghiệm thu:
+`485f8a2af95863622ed5221bf38dd33394b96569a74623b225d0f3907eace7b9`.
+
+Phiên nghiệm thu 0.2.0 không dò probe, không kết nối ST-Link, không reset chip, không
+đọc/ghi flash và không sửa Option Bytes. Nghiệm thu phần cứng vẫn là cổng riêng bên dưới.
+
 ## Bản 0.1.0
 
 - Nhánh phát hành: `main`
@@ -50,4 +75,3 @@ Mở workflow Release ở trên, tải artifact đúng hệ điều hành:
 Windows có thể dùng ngay bằng cách giải nén ZIP và chạy
 `b300-stlink-gui.exe`, hoặc chạy installer per-user. Ubuntu không chạy GUI bằng
 `sudo`; cài udev rule theo [Setup Ubuntu IPC](02_SETUP_UBUNTU_IPC.md).
-
