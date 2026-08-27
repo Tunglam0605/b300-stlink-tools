@@ -11,6 +11,7 @@ Tool nội bộ để nạp Application STM32F407 qua ST-Link/SWD và chạy Ope
 4. Chỉ khi cần dừng CPU để debug, đọc [Debug OpenOCD](docs/04_DEBUG.md).
 5. Có lỗi thì đọc [Xử lý lỗi](docs/05_TROUBLESHOOTING.md).
 6. AI agent/automation phải đọc [Playbook AI agent](AGENTS.md) trước khi dùng tool.
+7. Chọn một trong ba cách dùng AI ở [Dùng với mọi AI agent](docs/06_AI_AGENT_MANUAL.md).
 
 ## An toàn bootloader/OTA
 
