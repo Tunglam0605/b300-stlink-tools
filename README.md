@@ -2,18 +2,15 @@
 
 Tool nội bộ để nạp Application STM32F407 qua ST-Link/SWD và chạy OpenOCD debug.
 
-Hướng dẫn đầy đủ:
+## Đọc theo thứ tự
 
-- [Windows x64](docs/WINDOWS.md)
-- [Ubuntu IPC x64](docs/UBUNTU_IPC.md)
-- [Vận hành hằng ngày](docs/OPERATIONS.md)
-- [Quy tắc cho AI agent](AGENTS.md)
-
-Lộ trình tài liệu:
-
-1. Người mới cài tool: đọc hướng dẫn theo hệ điều hành.
-2. Người trực tiếp nạp/debug: đọc **Vận hành hằng ngày** trước khi dùng board.
-3. AI agent/automation: bắt buộc đọc `AGENTS.md` trước khi gọi lệnh flash/debug.
+1. [Bắt đầu từ Git clone](docs/00_START_HERE.md).
+2. Cài một lần trên [Windows](docs/01_SETUP_WINDOWS.md) hoặc
+   [Ubuntu IPC](docs/02_SETUP_UBUNTU_IPC.md).
+3. Mỗi lần nạp, làm đúng [Bước 3 — Nạp firmware](docs/03_FLASH_FIRMWARE.md).
+4. Chỉ khi cần dừng CPU để debug, đọc [Debug OpenOCD](docs/04_DEBUG.md).
+5. Có lỗi thì đọc [Xử lý lỗi](docs/05_TROUBLESHOOTING.md).
+6. AI agent/automation phải đọc [AGENTS.md](AGENTS.md) trước khi dùng tool.
 
 ## An toàn bootloader/OTA
 

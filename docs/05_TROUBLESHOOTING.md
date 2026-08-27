@@ -1,0 +1,15 @@
+# Xử lý lỗi
+
+| Lỗi | Làm gì |
+|---|---|
+| `OpenOCD was not found` | Chạy lại setup của đúng hệ điều hành, sau đó mở terminal mới. |
+| Không thấy ST-Link | Kiểm tra cáp/driver Windows; Ubuntu kiểm tra `lsusb` và `plugdev`. |
+| `HEX touches protected range` | Dừng; dùng đúng HEX Application F407 tại `0x08010000`. |
+| Verify fail | Dừng, kiểm tra nguồn/cáp/SWD/probe serial; không retry mù. |
+| Board vào recovery sau nạp | Lưu log, không mass erase; kiểm tra đúng bootloader đã hỗ trợ provisioning marker. |
+
+Lưu log dạng JSON khi cần báo lỗi:
+
+```text
+b300-stlink flash <file.hex> --json > b300-flash.log
+```

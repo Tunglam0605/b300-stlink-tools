@@ -50,5 +50,6 @@ Kiểm thử tối thiểu phải chứng minh: HEX ngoài vùng Application b�
 transaction flash chỉ xóa S3--S7 và có verify/marker/reset; debug không có
 erase/program/write-register command.
 
-Đọc thêm: [README](README.md), [Windows](docs/WINDOWS.md),
-[Ubuntu IPC](docs/UBUNTU_IPC.md), [Operations](docs/OPERATIONS.md).
+Đọc thêm: [README](README.md), [Windows](docs/01_SETUP_WINDOWS.md),
+[Ubuntu IPC](docs/02_SETUP_UBUNTU_IPC.md),
+[Flash](docs/03_FLASH_FIRMWARE.md), [Debug](docs/04_DEBUG.md).
