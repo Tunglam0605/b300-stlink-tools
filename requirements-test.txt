@@ -1,0 +1,2 @@
+-r requirements-gui.txt
+PyYAML==6.0.2

@@ -1,12 +1,6 @@
-name: Build native CLI and GUI packages
+name: Publish B300 ST-Link Tools release
 
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: Package version
-        required: true
-        default: 0.2.0
   push:
     tags:
       - "v*"
@@ -19,33 +13,56 @@ env:
   QT_QPA_PLATFORM: offscreen
 
 jobs:
-  windows:
-    runs-on: windows-latest
+  prepare-release:
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - name: Validate release version
+      - name: Validate tag and source version
         id: version
-        shell: pwsh
         run: |
-          $version = "${{ inputs.version }}"
-          if (-not $version) { $version = "${{ github.ref_name }}".TrimStart('v') }
-          python -m b300_version --check $version
-          "version=$version" >> $env:GITHUB_OUTPUT
-      - name: Build self-contained native bundle
+          version="${GITHUB_REF_NAME#v}"
+          python -m scripts.release.validate_version --check-tag "$GITHUB_REF_NAME"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Extract release notes
+        run: >-
+          python -m scripts.release.changelog
+          "${GITHUB_REF_NAME#v}"
+          --output release-notes.md
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-notes
+          path: release-notes.md
+          if-no-files-found: error
+
+  build-windows:
+    needs: prepare-release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Build independent native GUI and CLI bundles
         shell: pwsh
         run: python build_native_bundle.py --internal-distribution-approved
-      - name: Smoke-test GUI executable
+      - name: Smoke-test executables
         shell: pwsh
         run: |
+          .\release\b300-stlink.exe --help
           $process = Start-Process -FilePath .\release\b300-stlink-gui.exe `
             -ArgumentList --smoke-test -Wait -PassThru -WindowStyle Hidden
           exit $process.ExitCode
-      - name: Stage installer source
+      - name: Stage Windows installer source
         shell: pwsh
-        run: Expand-Archive release\b300-stlink-windows-x64.zip release\windows-bundle -Force
+        run: >-
+          Expand-Archive
+          release\B300-STLink-GUI-Windows-x64.zip
+          release\windows-gui-bundle -Force
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --no-progress -y
@@ -53,80 +70,197 @@ jobs:
         shell: pwsh
         run: |
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
-            "/DSourceRoot=$((Resolve-Path release\windows-bundle).Path)" `
+            "/DSourceRoot=$((Resolve-Path release\windows-gui-bundle).Path)" `
             "/DOutputDir=$((Resolve-Path release).Path)" `
-            "/DAppVersion=${{ steps.version.outputs.version }}" packaging\windows\b300-stlink-gui.iss
-      - uses: actions/upload-artifact@v7
+            "/DAppVersion=${{ needs.prepare-release.outputs.version }}" `
+            packaging\windows\b300-stlink-gui.iss
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: b300-stlink-windows-x64
+          name: release-windows-x64
           path: |
-            release/b300-stlink-windows-x64.zip
-            release/B300-STLink-GUI-Setup-*-windows-x64.exe
+            release/B300-STLink-GUI-Windows-x64.exe
+            release/B300-STLink-GUI-Windows-x64.zip
+            release/B300-STLink-CLI-Windows-x64.zip
+          if-no-files-found: error
 
-  ubuntu:
-    name: Ubuntu ${{ matrix.architecture }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - architecture: x86_64
-            runner: ubuntu-22.04
-            bundle_platform: linux-x64
-            appimagetool_arch: x86_64
-            appimagetool_sha256: A6D71E2B6CD66F8E8D16C37AD164658985E0CF5FCAA950C90A482890CB9D13E0
-            artifact: b300-stlink-ubuntu-x64
-          - architecture: aarch64
-            runner: ubuntu-24.04-arm
-            bundle_platform: linux-arm64
-            appimagetool_arch: aarch64
-            appimagetool_sha256: 1B00524BA8C6B678DC15EF88A5C25EC24DEF36CDFC7E3ABB32DDCD068E8007FE
-            artifact: b300-stlink-ubuntu-arm64
+  build-linux-x64:
+    needs: prepare-release
+    runs-on: ubuntu-22.04
+    container: ubuntu:22.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - name: Validate release version
-        id: version
+      - name: Install Ubuntu 22.04 build prerequisites
         run: |
-          version="${{ inputs.version }}"
-          if [ -z "$version" ]; then version="${GITHUB_REF_NAME#v}"; fi
-          python -m b300_version --check "$version"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-      - name: Install GUI runtime libraries
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            ca-certificates curl git python3 python3-pip \
+            libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Build independent native GUI and CLI bundles
+        run: python3 build_native_bundle.py --internal-distribution-approved
+      - name: Smoke-test executables
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0
-      - name: Build self-contained native bundle
-        run: python build_native_bundle.py --internal-distribution-approved
-      - name: Smoke-test GUI executable
-        run: ./release/b300-stlink-gui --smoke-test
-      - name: Extract native bundle
+          ./release/b300-stlink --help
+          ./release/b300-stlink-gui --smoke-test
+      - name: Stage Linux GUI bundle
         run: |
-          mkdir -p release/linux-bundle
-          tar -xzf release/b300-stlink-${{ matrix.bundle_platform }}.tar.gz -C release/linux-bundle
-      - name: Fetch and verify pinned appimagetool
+          mkdir -p release/linux-gui-bundle
+          tar -xzf release/B300-STLink-GUI-Linux-x64.tar.gz -C release/linux-gui-bundle
+      - name: Fetch verified appimagetool
         run: |
-          curl -fL --retry 3 -o release/appimagetool-${{ matrix.appimagetool_arch }}.AppImage \
-            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${{ matrix.appimagetool_arch }}.AppImage
-          echo "${{ matrix.appimagetool_sha256 }}  release/appimagetool-${{ matrix.appimagetool_arch }}.AppImage" | sha256sum -c -
-          chmod +x release/appimagetool-${{ matrix.appimagetool_arch }}.AppImage
+          curl -fL --retry 3 -o release/appimagetool-x86_64.AppImage \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          echo "A6D71E2B6CD66F8E8D16C37AD164658985E0CF5FCAA950C90A482890CB9D13E0  release/appimagetool-x86_64.AppImage" | sha256sum -c -
+          chmod +x release/appimagetool-x86_64.AppImage
       - name: Build AppImage and DEB
         env:
           APPIMAGE_EXTRACT_AND_RUN: "1"
         run: |
-          python packaging/build_gui.py \
-            --bundle-dir release/linux-bundle \
+          python3 packaging/build_gui.py \
+            --bundle-dir release/linux-gui-bundle \
             --output-dir release/gui \
-            --architecture ${{ matrix.architecture }} \
-            --version "${{ steps.version.outputs.version }}" \
-            --appimagetool release/appimagetool-${{ matrix.appimagetool_arch }}.AppImage \
+            --architecture x86_64 \
+            --version "${{ needs.prepare-release.outputs.version }}" \
+            --appimagetool release/appimagetool-x86_64.AppImage \
             --build-deb
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: ${{ matrix.artifact }}
+          name: release-linux-x64
           path: |
-            release/b300-stlink-${{ matrix.bundle_platform }}.tar.gz
-            release/gui/*.AppImage
-            release/gui/*.deb
+            release/gui/B300-STLink-GUI-Ubuntu-x64.AppImage
+            release/gui/b300-stlink-gui_amd64.deb
+            release/B300-STLink-CLI-Linux-x64.tar.gz
+          if-no-files-found: error
+
+  build-linux-arm64:
+    needs: prepare-release
+    runs-on: ubuntu-24.04-arm
+    container: ubuntu:22.04
+    steps:
+      - name: Install Ubuntu 22.04 ARM64 build prerequisites
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            ca-certificates curl git python3 python3-pip \
+            libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Build independent native GUI and CLI bundles
+        run: python3 build_native_bundle.py --internal-distribution-approved
+      - name: Smoke-test executables
+        run: |
+          ./release/b300-stlink --help
+          ./release/b300-stlink-gui --smoke-test
+      - name: Stage Linux GUI bundle
+        run: |
+          mkdir -p release/linux-gui-bundle
+          tar -xzf release/B300-STLink-GUI-Linux-arm64.tar.gz -C release/linux-gui-bundle
+      - name: Fetch verified ARM64 appimagetool
+        run: |
+          curl -fL --retry 3 -o release/appimagetool-aarch64.AppImage \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-aarch64.AppImage
+          echo "1B00524BA8C6B678DC15EF88A5C25EC24DEF36CDFC7E3ABB32DDCD068E8007FE  release/appimagetool-aarch64.AppImage" | sha256sum -c -
+          chmod +x release/appimagetool-aarch64.AppImage
+      - name: Build AppImage and DEB
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          python3 packaging/build_gui.py \
+            --bundle-dir release/linux-gui-bundle \
+            --output-dir release/gui \
+            --architecture aarch64 \
+            --version "${{ needs.prepare-release.outputs.version }}" \
+            --appimagetool release/appimagetool-aarch64.AppImage \
+            --build-deb
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-linux-arm64
+          path: |
+            release/gui/B300-STLink-GUI-Ubuntu-arm64.AppImage
+            release/gui/b300-stlink-gui_arm64.deb
+            release/B300-STLink-CLI-Linux-arm64.tar.gz
+          if-no-files-found: error
+
+  finalize-release:
+    needs:
+      - prepare-release
+      - build-windows
+      - build-linux-x64
+      - build-linux-arm64
+    runs-on: ubuntu-22.04
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: release-windows-x64
+          path: release-assets
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: release-linux-x64
+          path: release-assets
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: release-linux-arm64
+          path: release-assets
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: release-notes
+          path: release-notes
+      - name: Generate deterministic metadata
+        env:
+          VERSION: ${{ needs.prepare-release.outputs.version }}
+        run: |
+          published_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          python -m scripts.release.build_metadata \
+            --asset-dir release-assets \
+            --version "$VERSION" \
+            --commit "$GITHUB_SHA" \
+            --published-at "$published_at" \
+            --base-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}" \
+            --release-page "https://github.com/${GITHUB_REPOSITORY}/releases/tag/v${VERSION}" \
+            --notes-file release-notes/release-notes.md
+      - name: Sign and verify release manifests
+        env:
+          MINISIGN_SECRET_KEY_B64: ${{ secrets.MINISIGN_SECRET_KEY_B64 }}
+          MINISIGN_PUBLIC_KEY: ${{ secrets.MINISIGN_PUBLIC_KEY }}
+        run: |
+          test -n "$MINISIGN_SECRET_KEY_B64"
+          test -n "$MINISIGN_PUBLIC_KEY"
+          sudo apt-get update
+          sudo apt-get install -y minisign
+          printf '%s' "$MINISIGN_SECRET_KEY_B64" | base64 --decode > "$RUNNER_TEMP/minisign.key"
+          chmod 600 "$RUNNER_TEMP/minisign.key"
+          minisign -S -W -s "$RUNNER_TEMP/minisign.key" -m release-assets/release-manifest.json -x release-assets/release-manifest.json.minisig
+          minisign -S -W -s "$RUNNER_TEMP/minisign.key" -m release-assets/latest.json -x release-assets/latest.json.minisig
+          minisign -Vm release-assets/release-manifest.json -x release-assets/release-manifest.json.minisig -P "$MINISIGN_PUBLIC_KEY"
+          minisign -Vm release-assets/latest.json -x release-assets/latest.json.minisig -P "$MINISIGN_PUBLIC_KEY"
+          rm -f "$RUNNER_TEMP/minisign.key"
+      - name: Create draft release and upload exact assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare-release.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release-assets/* \
+            --verify-tag --draft \
+            --title "B300 ST-Link Tools v${VERSION}" \
+            --notes-file release-notes/release-notes.md
+      - name: Publish as Latest after upload validation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length')" -eq 14
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+      - name: Verify stable direct-download links
+        run: |
+          for asset in \
+            B300-STLink-GUI-Windows-x64.exe \
+            B300-STLink-GUI-Ubuntu-x64.AppImage \
+            B300-STLink-GUI-Ubuntu-arm64.AppImage \
+            latest.json latest.json.minisig; do
+            curl -fIL --retry 8 --retry-all-errors --retry-delay 5 \
+              "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/${asset}"
+          done

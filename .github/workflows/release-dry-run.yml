@@ -1,0 +1,62 @@
+name: Build release packages without publishing
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  QT_QPA_PLATFORM: offscreen
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.9"
+      - run: python build_native_bundle.py --internal-distribution-approved
+      - run: .\release\b300-stlink.exe --help
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dry-run-windows
+          path: |
+            release/B300-STLink-GUI-Windows-x64.zip
+            release/B300-STLink-CLI-Windows-x64.zip
+          if-no-files-found: error
+
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            platform: x64
+            gui: B300-STLink-GUI-Linux-x64.tar.gz
+            cli: B300-STLink-CLI-Linux-x64.tar.gz
+          - runner: ubuntu-24.04-arm
+            platform: arm64
+            gui: B300-STLink-GUI-Linux-arm64.tar.gz
+            cli: B300-STLink-CLI-Linux-arm64.tar.gz
+    runs-on: ${{ matrix.runner }}
+    container: ubuntu:22.04
+    steps:
+      - run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            ca-certificates git python3 python3-pip \
+            libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - run: python3 build_native_bundle.py --internal-distribution-approved
+      - run: |
+          ./release/b300-stlink --help
+          ./release/b300-stlink-gui --smoke-test
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dry-run-linux-${{ matrix.platform }}
+          path: |
+            release/${{ matrix.gui }}
+            release/${{ matrix.cli }}
+          if-no-files-found: error
