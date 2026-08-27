@@ -15,9 +15,14 @@ DESKTOP_SOURCE = ROOT / "packaging" / "linux" / "b300-stlink-gui.desktop"
 ICON_SOURCE = ROOT / "packaging" / "linux" / "b300-stlink-gui.svg"
 
 
-def write_executable(path: Path, content: str) -> None:
+def write_text_lf(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8", newline="\n")
+    with path.open("w", encoding="utf-8", newline="\n") as stream:
+        stream.write(content)
+
+
+def write_executable(path: Path, content: str) -> None:
+    write_text_lf(path, content)
     path.chmod(path.stat().st_mode | 0o111)
 
 
@@ -80,7 +85,8 @@ def stage_deb_root(bundle: Path, output: Path, architecture: str, version: str) 
     shutil.copytree(bundle, tool_root)
     control = debroot / "DEBIAN" / "control"
     control.parent.mkdir(parents=True)
-    control.write_text(
+    write_text_lf(
+        control,
         "Package: b300-stlink-gui\n"
         "Version: %s\n"
         "Architecture: %s\n"
@@ -89,8 +95,6 @@ def stage_deb_root(bundle: Path, output: Path, architecture: str, version: str) 
         "Priority: optional\n"
         "Description: Safe B300 STM32F407 ST-Link provisioning GUI and CLI\n" %
         (version, architecture),
-        encoding="utf-8",
-        newline="\n",
     )
     write_executable(debroot / "usr" / "local" / "bin" / "b300-stlink-gui", """#!/bin/sh
 set -eu

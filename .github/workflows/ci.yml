@@ -39,6 +39,12 @@ jobs:
         with:
           python-version: "3.9"
 
+      - name: Install Ubuntu GUI runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0
+
       - name: Run unit tests
         run: |
           python -m pip install -r requirements-gui.txt

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import tempfile
 import threading
@@ -133,8 +134,10 @@ class OpenOcdCoreTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            executable = root / "b300-stlink-gui.exe"
-            bundled = root / "vendor" / "openocd" / "bin" / "openocd.exe"
+            executable = root / ("b300-stlink-gui.exe" if os.name == "nt" else
+                                 "b300-stlink-gui")
+            openocd_name = "openocd.exe" if os.name == "nt" else "openocd"
+            bundled = root / "vendor" / "openocd" / "bin" / openocd_name
             bundled.parent.mkdir(parents=True)
             bundled.write_bytes(b"")
             with mock.patch.object(sys, "frozen", True, create=True), \

@@ -5,6 +5,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 import package_internal
 
@@ -22,6 +23,27 @@ def gui_builder():
 
 
 class GuiPackagingTests(unittest.TestCase):
+    def test_linux_staging_uses_python_39_compatible_text_writes(self) -> None:
+        original_write_text = Path.write_text
+
+        def python39_write_text(path, data, encoding=None, errors=None):
+            return original_write_text(path, data, encoding=encoding, errors=errors)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bundle = root / "bundle"
+            (bundle / "vendor" / "openocd" / "bin").mkdir(parents=True)
+            for relative in (
+                "b300-stlink", "b300-stlink-gui", "vendor/openocd/bin/openocd"
+            ):
+                (bundle / relative).write_bytes(b"binary")
+
+            with mock.patch.object(Path, "write_text", python39_write_text):
+                gui_builder().stage_linux_appdir(bundle, root / "output", "x86_64")
+                gui_builder().stage_deb_root(
+                    bundle, root / "output", "amd64", "0.1.0"
+                )
+
     def test_internal_zip_contains_cli_gui_openocd_and_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

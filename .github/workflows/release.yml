@@ -81,6 +81,10 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install GUI runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libxcb-cursor0
       - name: Build self-contained native bundle
         run: python build_native_bundle.py --internal-distribution-approved
       - name: Smoke-test GUI executable
