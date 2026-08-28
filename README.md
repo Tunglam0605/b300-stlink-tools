@@ -9,23 +9,31 @@
 [![Latest Release](https://img.shields.io/github/v/release/Tunglam0605/b300-stlink-tools?label=Latest&logo=github)](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest)
 [![Target: STM32F407](https://img.shields.io/badge/Target-STM32F407-03234B.svg)](#phạm-vi-phần-cứng)
 
-## Tải về — chọn đúng file trong 10 giây
+## Tải B300 ST-Link Tools
 
-> [!TIP]
-> **Nếu bạn dùng Windows 10/11 64-bit như đa số laptop/PC:** tải **[B300-STLink-GUI-Windows-x64.exe](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-GUI-Windows-x64.exe)**. Đây là bản **khuyến nghị**: có giao diện và trình cài đặt, không cần clone source code.
+Nếu chỉ muốn sử dụng tool, **không cần clone repository**. Hãy chọn đúng gói theo máy đang dùng.
 
-### Tôi nên tải file nào?
+### Bản khuyến nghị
 
-| Máy bạn đang dùng | File nên tải | Dùng khi nào |
-|---|---|---|
-| 🪟 **Windows 10/11 64-bit** | **[GUI Installer `.exe` — KHUYẾN NGHỊ](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-GUI-Windows-x64.exe)** | Hầu hết người dùng Windows. Cài đặt rồi mở B300 ST-Link Tools như ứng dụng bình thường. |
-| 🪟 Windows 10/11 nhưng **không muốn cài** | [GUI Portable `.zip`](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-GUI-Windows-x64.zip) | Giải nén và chạy trực tiếp. |
-| 🐧 **Ubuntu PC/IPC Intel hoặc AMD 64-bit** | **[GUI `.deb` amd64 — KHUYẾN NGHỊ](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/b300-stlink-gui_amd64.deb)** | Máy tính/IPC Ubuntu thông thường dùng CPU Intel/AMD. |
-| 🐧 Ubuntu Intel/AMD nhưng **không muốn cài** | [GUI `.AppImage` x64](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-GUI-Ubuntu-x64.AppImage) | Chạy portable trên Linux x64. |
-| 🤖 **Ubuntu ARM64** — Jetson, Raspberry Pi 64-bit, ARM IPC | **[GUI `.deb` arm64 — KHUYẾN NGHỊ](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/b300-stlink-gui_arm64.deb)** | Thiết bị dùng CPU ARM 64-bit. |
-| 🤖 Ubuntu ARM64 nhưng **không muốn cài** | [GUI `.AppImage` ARM64](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-GUI-Ubuntu-arm64.AppImage) | Chạy portable trên ARM64. |
+- **Windows 10/11 64-bit:** [Tải B300-STLink-GUI-Windows-x64.exe](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-GUI-Windows-x64.exe) — bộ cài GUI, phù hợp với hầu hết laptop/PC Windows.
+- **Ubuntu x64 (Intel/AMD):** [Tải b300-stlink-gui_amd64.deb](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/b300-stlink-gui_amd64.deb) — gói cài GUI cho PC/IPC Ubuntu thông thường.
+- **Ubuntu ARM64 (Jetson, Raspberry Pi 64-bit, ARM IPC):** [Tải b300-stlink-gui_arm64.deb](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/b300-stlink-gui_arm64.deb) — gói cài GUI cho ARM 64-bit.
 
-**Không biết máy Linux là x64 hay ARM64?** Chạy:
+### Bản portable — không cần cài đặt
+
+- **Windows x64:** [B300-STLink-GUI-Windows-x64.zip](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-GUI-Windows-x64.zip)
+- **Ubuntu x64:** [B300-STLink-GUI-Ubuntu-x64.AppImage](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-GUI-Ubuntu-x64.AppImage)
+- **Ubuntu ARM64:** [B300-STLink-GUI-Ubuntu-arm64.AppImage](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-GUI-Ubuntu-arm64.AppImage)
+
+### CLI — chỉ dùng cho terminal, script hoặc automation
+
+- **Windows x64:** [B300-STLink-CLI-Windows-x64.zip](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-CLI-Windows-x64.zip)
+- **Linux x64:** [B300-STLink-CLI-Linux-x64.tar.gz](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-CLI-Linux-x64.tar.gz)
+- **Linux ARM64:** [B300-STLink-CLI-Linux-arm64.tar.gz](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-CLI-Linux-arm64.tar.gz)
+
+### Không biết Linux là x64 hay ARM64?
+
+Chạy:
 
 ```bash
 uname -m
@@ -34,24 +42,13 @@ uname -m
 - `x86_64` → chọn **x64 / amd64**.
 - `aarch64` hoặc `arm64` → chọn **ARM64 / arm64**.
 
-### Chỉ tải CLI nếu bạn thực sự cần terminal/automation
+**Lưu ý:** `Source code (zip)` và `Source code (tar.gz)` trên GitHub Release là mã nguồn, **không phải bộ cài**.
 
-CLI `/ˌsiː el ˈaɪ/ – giao diện dòng lệnh` dành cho script, automation hoặc máy không chạy GUI:
+Các link ở trên luôn trỏ tới [Stable Release mới nhất](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest). Nếu cần đúng một phiên bản đã nghiệm thu, hãy mở release theo tag `vX.Y.Z` thay vì dùng `latest`.
 
-| Hệ điều hành | CLI |
-|---|---|
-| Windows x64 | [B300-STLink-CLI-Windows-x64.zip](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-CLI-Windows-x64.zip) |
-| Linux x64 | [B300-STLink-CLI-Linux-x64.tar.gz](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-CLI-Linux-x64.tar.gz) |
-| Linux ARM64 | [B300-STLink-CLI-Linux-arm64.tar.gz](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-CLI-Linux-arm64.tar.gz) |
+**Hướng dẫn tải và cài đặt đầy đủ cho người dùng và AI agent:** [DOWNLOAD.md](DOWNLOAD.md). Tài liệu này mô tả cách chọn Stable hoặc exact version, xác định kiến trúc CPU, chọn GUI/CLI và mapping chính xác từ platform sang artifact.
 
-> [!IMPORTANT]
-> Nếu bạn chỉ muốn **cài và sử dụng tool**, **không tải** hai mục GitHub tự tạo có tên **Source code (zip)** hoặc **Source code (tar.gz)**. Đó là mã nguồn dành cho lập trình viên, không phải bộ cài B300 ST-Link Tools.
-
-Các link trên luôn trỏ tới **Latest Release `/ˈleɪtɪst rɪˈliːs/ – bản phát hành mới nhất ổn định`**. Nếu muốn xem toàn bộ file, changelog và checksum, mở **[trang Releases](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest)**.
-
-📘 **Hướng dẫn đầy đủ cho người dùng và AI agent:** [DOWNLOAD.md](DOWNLOAD.md) — cách chọn Stable/exact version, xác định x64/ARM64, GUI/CLI, cài đặt và quy tắc chọn artifact deterministic.
-
-Kiểm tra chữ ký/hash của Release bằng [SHA256SUMS.txt](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/SHA256SUMS.txt), [release-manifest.json](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/release-manifest.json) và [latest.json](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/latest.json). GUI chỉ nhận cập nhật khi manifest có chữ ký hợp lệ.
+Các file kiểm chứng release: [SHA256SUMS.txt](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/SHA256SUMS.txt), [release-manifest.json](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/release-manifest.json) và [latest.json](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/latest.json).
 
 CLI và GUI đa nền tảng dùng ST-Link/SWD để provisioning Application cho Main
 Board B300 STM32F407. Cả hai dùng chung một core an toàn, giữ nguyên Bootloader,
@@ -126,7 +123,7 @@ Factory không bao giờ là một phần của normal Application flash.
 
 ## Chạy từ source — dành cho developer
 
-> Người dùng chỉ muốn cài và sử dụng tool **không cần làm phần này**. Hãy tải gói GUI phù hợp ở mục [Tải về](#tải-về--chọn-đúng-file-trong-10-giây) phía trên.
+> Người dùng chỉ muốn cài và sử dụng tool **không cần làm phần này**. Hãy tải gói GUI phù hợp ở mục [Tải B300 ST-Link Tools](#tải-b300-st-link-tools) phía trên.
 
 ### 1. Clone repository
 
