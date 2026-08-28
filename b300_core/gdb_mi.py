@@ -67,6 +67,82 @@ class MiResult:
         return bytes(match.group(1), "utf-8").decode("unicode_escape")
 
 
+@dataclass(frozen=True)
+class FrameInfo:
+    level: int
+    address: Optional[int]
+    function: Optional[str]
+    file: Optional[str]
+    fullname: Optional[str]
+    line: Optional[int]
+
+
+@dataclass(frozen=True)
+class RegisterValue:
+    number: int
+    name: str
+    value: str
+
+
+@dataclass(frozen=True)
+class EvaluatedValue:
+    expression: str
+    value: str
+
+
+@dataclass(frozen=True)
+class BreakpointInfo:
+    number: int
+    kind: str
+    location: str
+
+
+_SAFE_EXPRESSION = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*(?:(?:\.|->)[A-Za-z_][A-Za-z0-9_]*|\[[0-9]+\])*$"
+)
+_SAFE_BREAK_LOCATION = re.compile(
+    r"^(?:[A-Za-z_][A-Za-z0-9_:]*|[A-Za-z0-9_.-]+:[1-9][0-9]*)$"
+)
+_MI_FIELD = re.compile(r'([A-Za-z0-9_-]+)="((?:\\.|[^"\\])*)"')
+
+
+def _decode_mi_string(value: str) -> str:
+    return bytes(value, "utf-8").decode("unicode_escape")
+
+
+def _mi_fields(payload: str) -> Dict[str, str]:
+    return {key: _decode_mi_string(value) for key, value in _MI_FIELD.findall(payload)}
+
+
+def _parse_address(value: Optional[str]) -> Optional[int]:
+    if not value:
+        return None
+    try:
+        return int(value, 0)
+    except ValueError:
+        return None
+
+
+def _frame_from_payload(payload: str) -> FrameInfo:
+    fields = _mi_fields(payload)
+    try:
+        level = int(fields.get("level", "0"))
+    except ValueError:
+        level = 0
+    try:
+        line = int(fields["line"]) if "line" in fields else None
+    except ValueError:
+        line = None
+    return FrameInfo(
+        level=level,
+        address=_parse_address(fields.get("addr")),
+        function=fields.get("func"),
+        file=fields.get("file"),
+        fullname=fields.get("fullname"),
+        line=line,
+    )
+
+
 _MI_RECORD = re.compile(r"^(?:(?P<token>[0-9]+))?(?P<prefix>[\^*+=~@&])(?P<body>.*)$")
 
 
@@ -172,8 +248,117 @@ class GdbMiBackend:
     def interrupt(self) -> MiResult:
         return self._request("-exec-interrupt", ("done", "running"))
 
+    def interrupt_and_wait_stopped(self, timeout_seconds: Optional[float] = None) -> MiRecord:
+        with self._condition:
+            start_index = len(self._async_records)
+        self.interrupt()
+        return self.wait_for_stopped(start_index=start_index, timeout_seconds=timeout_seconds)
+
+    def wait_for_stopped(self, *, start_index: int = 0,
+                         timeout_seconds: Optional[float] = None) -> MiRecord:
+        timeout = self.response_timeout_seconds if timeout_seconds is None else timeout_seconds
+        if timeout <= 0:
+            raise ValueError("GDB stop timeout must be positive.")
+        deadline = time.monotonic() + timeout
+        with self._condition:
+            while True:
+                for record in self._async_records[max(0, start_index):]:
+                    if record.prefix == "*" and record.body.startswith("stopped"):
+                        return record
+                process = self._process
+                if process is None or process.poll() is not None:
+                    code = None if process is None else process.poll()
+                    raise GdbMiProcessError(
+                        "GDB exited before target stop notification (exit code %s)." % code
+                    )
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise GdbMiTimeoutError("Timed out waiting for GDB *stopped notification.")
+                self._condition.wait(timeout=min(remaining, 0.05))
+
     def disconnect(self) -> MiResult:
         return self._request("-target-disconnect", ("done",))
+
+    def current_frame(self) -> FrameInfo:
+        result = self._request("-stack-info-frame", ("done",))
+        match = re.search(r"(?:^|,)frame=\{(.*)\}(?:,|$)", result.payload)
+        if match is None:
+            raise GdbMiCommandError("GDB did not return the current stack frame.")
+        return _frame_from_payload(match.group(1))
+
+    def stack_frames(self, max_frames: int = 16) -> Tuple[FrameInfo, ...]:
+        if not 1 <= max_frames <= 64:
+            raise ValueError("Stack frame limit must be in range 1..64.")
+        result = self._request("-stack-list-frames 0 %d" % (max_frames - 1), ("done",))
+        return tuple(
+            _frame_from_payload(match.group(1))
+            for match in re.finditer(r"frame=\{([^{}]*)\}", result.payload)
+        )
+
+    def register_values(self) -> Tuple[RegisterValue, ...]:
+        names_result = self._request("-data-list-register-names", ("done",))
+        values_result = self._request("-data-list-register-values x", ("done",))
+        names_match = re.search(r"register-names=\[(.*)\]$", names_result.payload)
+        if names_match is None:
+            raise GdbMiCommandError("GDB did not return register names.")
+        names = [
+            _decode_mi_string(item)
+            for item in re.findall(r'"((?:\\.|[^"\\])*)"', names_match.group(1))
+        ]
+        values = []
+        for match in re.finditer(
+                r'\{number="([0-9]+)",value="((?:\\.|[^"\\])*)"\}',
+                values_result.payload):
+            number = int(match.group(1))
+            name = names[number] if number < len(names) and names[number] else "reg%d" % number
+            values.append(RegisterValue(number, name, _decode_mi_string(match.group(2))))
+        return tuple(values)
+
+    def evaluate_variable(self, expression: str) -> EvaluatedValue:
+        if not _SAFE_EXPRESSION.fullmatch(expression):
+            raise ValueError("Variable expression contains unsupported characters or operations.")
+        result = self._request(
+            '-data-evaluate-expression "%s"' % self._quote(expression), ("done",)
+        )
+        fields = _mi_fields(result.payload)
+        if "value" not in fields:
+            raise GdbMiCommandError("GDB did not return a value for %s." % expression)
+        return EvaluatedValue(expression, fields["value"])
+
+    def insert_hardware_breakpoint(self, location: str) -> BreakpointInfo:
+        if not _SAFE_BREAK_LOCATION.fullmatch(location):
+            raise ValueError("Breakpoint location must be a function or basename:line.")
+        result = self._request(
+            '-break-insert -h "%s"' % self._quote(location), ("done",)
+        )
+        fields = _mi_fields(result.payload)
+        try:
+            number = int(fields["number"])
+        except (KeyError, ValueError) as error:
+            raise GdbMiCommandError("GDB did not return a hardware breakpoint number.") from error
+        return BreakpointInfo(number, "hardware-breakpoint", location)
+
+    def insert_watchpoint(self, expression: str) -> BreakpointInfo:
+        if not _SAFE_EXPRESSION.fullmatch(expression):
+            raise ValueError("Watch expression contains unsupported characters or operations.")
+        result = self._request(
+            '-break-watch "%s"' % self._quote(expression), ("done",)
+        )
+        match = re.search(r'(?:number|wpt)="([0-9]+)"', result.payload)
+        if match is None:
+            raise GdbMiCommandError("GDB did not return a watchpoint number.")
+        return BreakpointInfo(int(match.group(1)), "watchpoint", expression)
+
+    def delete_breakpoint(self, number: int) -> MiResult:
+        if not 1 <= number <= 9999:
+            raise ValueError("Breakpoint number must be in range 1..9999.")
+        return self._request("-break-delete %d" % number, ("done",))
+
+    def step(self) -> MiResult:
+        return self._request("-exec-step", ("running", "done"))
+
+    def next(self) -> MiResult:
+        return self._request("-exec-next", ("running", "done"))
 
     def stop(self) -> None:
         process = self._process

@@ -35,6 +35,7 @@ from b300_core.linux_usb import (
 from b300_core.models import ProbeRef
 from b300_core.openocd import build_debug_command, resolve_openocd, validate_openocd_value
 from b300_core.debug_service import DebugConfig, DebugService, DebugState
+from b300_core.debug_session import DebugSession, DebugSessionConfig
 from b300_core.offline_setup import OPENOCD_VERSION, current_platform_name
 from b300_core.policy import (
     APPLICATION_ADDRESS,
@@ -80,6 +81,122 @@ def flash_command(args: argparse.Namespace):
     image = inspect_image(args.application)
     plan = build_flash_preview(image, ProbeRef(args.probe_serial))
     return B300Service(executable=args.openocd).flash_command(plan)
+
+
+def _frame_record(frame):
+    return {
+        "level": frame.level,
+        "address": ("0x%08X" % frame.address) if frame.address is not None else None,
+        "function": frame.function,
+        "file": frame.file,
+        "fullname": frame.fullname,
+        "line": frame.line,
+    }
+
+
+def _register_record(item):
+    return {"number": item.number, "name": item.name, "value": item.value}
+
+
+def run_integrated_debug(args: argparse.Namespace, reporter: Reporter) -> int:
+    if args.telnet_port is not None:
+        raise ValueError("Integrated debug diagnostics do not enable Telnet.")
+    if not 1 <= args.frames <= 64:
+        raise ValueError("--frames must be in range 1..64.")
+    if args.debug_mode == "variable" and not args.expression:
+        raise ValueError("debug variable requires --expression NAME.")
+    if args.debug_mode == "read-words" and args.address is None:
+        raise ValueError("debug read-words requires --address ADDRESS.")
+
+    tcl_port = args.tcl_port if args.tcl_port is not None else 6666
+    symbols = args.symbols.expanduser().resolve() if args.symbols is not None else None
+    config = DebugSessionConfig(
+        ProbeRef(args.probe_serial), symbols, args.bind_address, args.gdb_port, tcl_port
+    )
+    config.validate()
+    command = build_debug_command(
+        config.probe, resolve_openocd(args.openocd), config.bind_address,
+        config.gdb_port, None, config.tcl_port,
+    )
+    if args.dry_run:
+        reporter.emit(
+            "debug_plan", mode=args.debug_mode, command=command, symbols=str(symbols) if symbols else None,
+            gdb_endpoint="%s:%d" % (config.bind_address, config.gdb_port),
+            tcl_endpoint="%s:%d" % (config.bind_address, config.tcl_port),
+            preserve_target_state=True, dry_run=True,
+        )
+        return 0
+
+    session = DebugSession(service=DebugService(executable=args.openocd))
+    try:
+        info = session.start(config)
+        base = {
+            "schema_version": 1,
+            "command": "debug %s" % args.debug_mode,
+            "status": "ok",
+            "gdb_endpoint": info.gdb_endpoint,
+            "tcl_endpoint": info.tcl_endpoint,
+            "tcl_version": info.tcl_version,
+            "initial_target_state": info.initial_target_state,
+            "symbols": info.symbols,
+        }
+        if args.debug_mode == "poll":
+            base["target_state"] = session.target_poll()
+            text = base["target_state"]
+        elif args.debug_mode == "read-words":
+            values = session.read_words(args.address, args.count)
+            base.update({
+                "address": "0x%08X" % args.address,
+                "count": args.count,
+                "words": ["0x%08X" % value for value in values],
+            })
+            text = "%s: %s" % (base["address"], " ".join(base["words"]))
+        elif args.debug_mode == "where":
+            frame = session.capture_where()
+            base["frame"] = _frame_record(frame)
+            text = "%s %s:%s" % (
+                base["frame"]["function"] or "?",
+                base["frame"]["file"] or "?",
+                base["frame"]["line"] if base["frame"]["line"] is not None else "?",
+            )
+        elif args.debug_mode == "stack":
+            frames = session.capture_stack(args.frames)
+            base["frames"] = [_frame_record(frame) for frame in frames]
+            text = "\n".join(
+                "#%d %s %s:%s" % (
+                    item["level"], item["function"] or "?", item["file"] or "?",
+                    item["line"] if item["line"] is not None else "?",
+                ) for item in base["frames"]
+            ) or "No stack frames reported."
+        elif args.debug_mode == "registers":
+            registers = session.capture_registers()
+            base["registers"] = [_register_record(item) for item in registers]
+            text = "\n".join("%s=%s" % (item["name"], item["value"]) for item in base["registers"])
+        elif args.debug_mode == "variable":
+            value = session.capture_variable(args.expression)
+            base["variable"] = {"expression": value.expression, "value": value.value}
+            text = "%s=%s" % (value.expression, value.value)
+        elif args.debug_mode == "inspect":
+            snapshot = session.inspect(args.frames)
+            base.update({
+                "target_state_before": snapshot.target_state_before,
+                "resumed_to_initial_state": snapshot.resumed,
+                "frame": _frame_record(snapshot.frame),
+                "frames": [_frame_record(frame) for frame in snapshot.stack],
+                "registers": [_register_record(item) for item in snapshot.registers],
+            })
+            frame = base["frame"]
+            text = "state=%s\nPC=%s\n%s %s:%s" % (
+                snapshot.target_state_before,
+                frame["address"] or "?", frame["function"] or "?",
+                frame["file"] or "?", frame["line"] if frame["line"] is not None else "?",
+            )
+        else:
+            raise ValueError("Unsupported integrated debug mode: %s" % args.debug_mode)
+        emit_snapshot(base, args.json, text)
+        return 0
+    finally:
+        session.stop()
 
 
 def run_debug(args: argparse.Namespace, reporter: Reporter) -> int:
@@ -450,8 +567,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
         if args.command == "debug":
-            validate_debug_args(args)
-            return run_debug(args, reporter)
+            if args.debug_mode == "server":
+                validate_debug_args(args)
+                return run_debug(args, reporter)
+            return run_integrated_debug(args, reporter)
 
         if args.command == "provision-bootloader":
             if not args.dry_run and not args.confirm_factory_provision:

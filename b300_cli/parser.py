@@ -81,8 +81,10 @@ def build_parser() -> argparse.ArgumentParser:
         "debug", help="Start non-mutating OpenOCD debugging.", parents=[json_parent],
     )
     debug.add_argument(
-        "debug_mode", nargs="?", choices=("server",), default="server", metavar="server",
-        help="Optional compatibility spelling for the OpenOCD debug server.",
+        "debug_mode", nargs="?",
+        choices=("server", "inspect", "where", "registers", "stack", "variable", "poll", "read-words"),
+        default="server", metavar="mode",
+        help="Debug mode: server (legacy) or one-shot integrated diagnostics.",
     )
     debug.add_argument("--openocd")
     debug.add_argument("--probe-serial", type=parse_probe_serial,
@@ -95,6 +97,16 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Optional OpenOCD TCL port; loopback only (recommended: 6666).")
     debug.add_argument("--telnet-port", type=parse_tcp_port,
                        help="Optional OpenOCD telnet port; loopback only (default: disabled).")
+    debug.add_argument("--symbols", type=Path,
+                       help="ELF/AXF symbol file for integrated debug diagnostics.")
+    debug.add_argument("--frames", type=parse_integer, default=8,
+                       help="Maximum stack frames for inspect/stack (default: 8).")
+    debug.add_argument("--expression",
+                       help="Allow-listed variable expression for debug variable.")
+    debug.add_argument("--address", type=parse_integer,
+                       help="32-bit aligned address for debug read-words.")
+    debug.add_argument("--count", type=parse_integer, default=1,
+                       help="Word count for debug read-words (default: 1, max: 256).")
     debug.add_argument("--dry-run", action="store_true")
 
     doctor = commands.add_parser(

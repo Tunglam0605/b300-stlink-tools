@@ -1,0 +1,115 @@
+"""Loopback-only, read-only OpenOCD TCL client for B300 diagnostics."""
+
+from __future__ import annotations
+
+import ipaddress
+import re
+import socket
+from dataclasses import dataclass
+from typing import Callable, Optional, Tuple
+
+
+_TCL_EOF = b"\x1a"
+_REGISTER_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+
+
+class TclClientError(RuntimeError):
+    """OpenOCD TCL transport or protocol failure."""
+
+
+@dataclass(frozen=True)
+class TclEndpoint:
+    host: str = "127.0.0.1"
+    port: int = 6666
+
+    def validate(self) -> None:
+        address = ipaddress.ip_address(self.host)
+        if not address.is_loopback:
+            raise ValueError("OpenOCD TCL is allowed only on a loopback address.")
+        if not 1 <= self.port <= 65535:
+            raise ValueError("TCL port must be in range 1..65535.")
+
+
+SocketFactory = Callable[..., socket.socket]
+
+
+class SafeTclClient:
+    """Small allow-listed TCL surface; arbitrary OpenOCD commands are intentionally absent."""
+
+    def __init__(self, endpoint: TclEndpoint = TclEndpoint(), *,
+                 socket_factory: Optional[SocketFactory] = None,
+                 timeout_seconds: float = 2.0,
+                 max_response_bytes: int = 256 * 1024) -> None:
+        endpoint.validate()
+        if timeout_seconds <= 0:
+            raise ValueError("TCL timeout must be positive.")
+        if not 1024 <= max_response_bytes <= 4 * 1024 * 1024:
+            raise ValueError("TCL response limit is outside the supported range.")
+        self.endpoint = endpoint
+        self.timeout_seconds = timeout_seconds
+        self.max_response_bytes = max_response_bytes
+        self._socket_factory = socket_factory or socket.create_connection
+
+    def version(self) -> str:
+        return self._request("version")
+
+    def targets(self) -> str:
+        return self._request("targets")
+
+    def poll(self) -> str:
+        return self._request("poll")
+
+    def read_words(self, address: int, count: int = 1) -> Tuple[int, ...]:
+        if not 0 <= address <= 0xFFFFFFFF or address % 4:
+            raise ValueError("TCL word-read address must be a 32-bit aligned address.")
+        if not 1 <= count <= 256:
+            raise ValueError("TCL word-read count must be in range 1..256.")
+        text = self._request("mdw 0x%08X %d" % (address, count))
+        values = []
+        for line in text.splitlines():
+            match = re.search(r"0x[0-9A-Fa-f]+:\s+((?:[0-9A-Fa-f]{8}\s*)+)$", line.strip())
+            if match:
+                values.extend(int(item, 16) for item in match.group(1).split())
+        if len(values) != count:
+            raise TclClientError(
+                "OpenOCD TCL returned %d words; expected %d." % (len(values), count)
+            )
+        return tuple(values)
+
+    def read_register(self, name: str) -> str:
+        if not _REGISTER_NAME.fullmatch(name):
+            raise ValueError("Register name contains unsupported characters.")
+        return self._request("reg %s" % name)
+
+    def _request(self, command: str) -> str:
+        payload = command.encode("ascii") + _TCL_EOF
+        try:
+            connection = self._socket_factory(
+                (self.endpoint.host, self.endpoint.port), timeout=self.timeout_seconds
+            )
+        except OSError as error:
+            raise TclClientError("Unable to connect to OpenOCD TCL: %s" % error) from error
+        data = bytearray()
+        try:
+            if hasattr(connection, "settimeout"):
+                connection.settimeout(self.timeout_seconds)
+            connection.sendall(payload)
+            while True:
+                chunk = connection.recv(min(4096, self.max_response_bytes - len(data) + 1))
+                if not chunk:
+                    raise TclClientError("OpenOCD TCL closed before the response terminator.")
+                data.extend(chunk)
+                marker = data.find(_TCL_EOF)
+                if marker >= 0:
+                    response = bytes(data[:marker])
+                    break
+                if len(data) > self.max_response_bytes:
+                    raise TclClientError("OpenOCD TCL response exceeded the configured limit.")
+        except (OSError, socket.timeout) as error:
+            raise TclClientError("OpenOCD TCL request failed: %s" % error) from error
+        finally:
+            try:
+                connection.close()
+            except OSError:
+                pass
+        return response.decode("utf-8", "replace").strip()

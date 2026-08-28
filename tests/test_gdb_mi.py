@@ -172,6 +172,20 @@ class GdbMiBackendTests(unittest.TestCase):
         self.assertEqual(process.stdin.writes[1], '2-interpreter-exec console "monitor reset halt"\n')
         backend.stop()
 
+    def test_interrupt_waits_for_verified_stopped_notification(self) -> None:
+        backend, process = self.make_backend()
+        thread, captured = self.invoke(backend.interrupt_and_wait_stopped)
+        process.stdout.emit('1^done\n')
+        process.stdout.emit('*running,thread-id="all"\n')
+        time.sleep(0.02)
+        self.assertTrue(thread.is_alive())
+        process.stdout.emit('*stopped,reason="signal-received",thread-id="1"\n')
+        thread.join(timeout=1)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(captured[0].prefix, "*")
+        self.assertTrue(captured[0].body.startswith("stopped"))
+        backend.stop()
+
     def test_timeout_is_bounded_and_raises_meaningful_error(self) -> None:
         backend, _process = self.make_backend(timeout=0.03)
         with self.assertRaises(GdbMiTimeoutError):
@@ -218,6 +232,75 @@ class GdbMiBackendTests(unittest.TestCase):
         self.assertTrue(process.terminated)
         self.assertFalse(backend.running)
         self.assertFalse(backend.reader_alive)
+
+    def test_current_frame_resolves_function_file_and_line(self) -> None:
+        backend, process = self.make_backend()
+        thread, captured = self.invoke(backend.current_frame)
+        process.stdout.emit(
+            '1^done,frame={level="0",addr="0x08012345",func="Motor_Update",'
+            'file="motor.c",fullname="C:/fw/motor.c",line="417"}\n'
+        )
+        thread.join(timeout=1)
+        frame = captured[0]
+        self.assertEqual(frame.address, 0x08012345)
+        self.assertEqual(frame.function, "Motor_Update")
+        self.assertEqual(frame.file, "motor.c")
+        self.assertEqual(frame.line, 417)
+        backend.stop()
+
+    def test_register_values_pairs_names_and_values(self) -> None:
+        backend, process = self.make_backend()
+        thread, captured = self.invoke(backend.register_values)
+        process.stdout.emit('1^done,register-names=["r0","r1","pc"]\n')
+        deadline = time.monotonic() + 1.0
+        while len(process.stdin.writes) < 2 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        process.stdout.emit(
+            '2^done,register-values=[{number="0",value="0x1"},'
+            '{number="2",value="0x08010001"}]\n'
+        )
+        thread.join(timeout=1)
+        self.assertEqual(
+            [(item.number, item.name, item.value) for item in captured[0]],
+            [(0, "r0", "0x1"), (2, "pc", "0x08010001")],
+        )
+        backend.stop()
+
+    def test_variable_evaluation_is_allowlisted_and_verified(self) -> None:
+        backend, process = self.make_backend()
+        thread, captured = self.invoke(lambda: backend.evaluate_variable("motor.speed[0]"))
+        process.stdout.emit('1^done,value="1264.3"\n')
+        thread.join(timeout=1)
+        self.assertEqual(captured[0].expression, "motor.speed[0]")
+        self.assertEqual(captured[0].value, "1264.3")
+        with self.assertRaisesRegex(ValueError, "unsupported"):
+            backend.evaluate_variable("danger(); monitor erase")
+        backend.stop()
+
+    def test_hardware_breakpoint_uses_hardware_flag(self) -> None:
+        backend, process = self.make_backend()
+        thread, captured = self.invoke(lambda: backend.insert_hardware_breakpoint("Motor_Update"))
+        process.stdout.emit(
+            '1^done,bkpt={number="3",type="hw breakpoint",disp="keep",'
+            'enabled="y",addr="0x08012345",func="Motor_Update"}\n'
+        )
+        thread.join(timeout=1)
+        self.assertEqual(captured[0].number, 3)
+        self.assertEqual(captured[0].kind, "hardware-breakpoint")
+        self.assertEqual(process.stdin.writes[0], '1-break-insert -h "Motor_Update"\n')
+        backend.stop()
+
+    def test_watchpoint_and_step_commands_are_verified_mi(self) -> None:
+        backend, process = self.make_backend()
+        watch_thread, watch = self.invoke(lambda: backend.insert_watchpoint("motor_speed"))
+        process.stdout.emit('1^done,wpt={number="2",exp="motor_speed"}\n')
+        watch_thread.join(timeout=1)
+        self.assertEqual(watch[0].number, 2)
+        step_thread, step = self.invoke(backend.step)
+        process.stdout.emit('2^running\n')
+        step_thread.join(timeout=1)
+        self.assertEqual(step[0].result_class, "running")
+        backend.stop()
 
 
 if __name__ == "__main__":
