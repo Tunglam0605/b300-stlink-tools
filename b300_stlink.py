@@ -55,8 +55,10 @@ def validate_openocd_path(path: Path) -> None:
 
 
 def validate_debug_args(args: argparse.Namespace) -> None:
-    if args.telnet_port is not None and not ipaddress.ip_address(args.bind_address).is_loopback:
-        raise ValueError("Telnet is allowed only when OpenOCD binds to a loopback address.")
+    DebugConfig(
+        ProbeRef(args.probe_serial), args.bind_address, args.gdb_port,
+        args.telnet_port, args.tcl_port,
+    ).validate()
 
 
 def validate_application_hex(application: Path) -> None:
@@ -70,6 +72,7 @@ def openocd_command(args: argparse.Namespace):
         args.bind_address,
         args.gdb_port,
         args.telnet_port,
+        args.tcl_port,
     )
 
 
@@ -93,7 +96,8 @@ def run_debug(args: argparse.Namespace, reporter: Reporter) -> int:
         return 0
     service = DebugService(executable=args.openocd)
     config = DebugConfig(
-        ProbeRef(args.probe_serial), args.bind_address, args.gdb_port, args.telnet_port,
+        ProbeRef(args.probe_serial), args.bind_address, args.gdb_port,
+        args.telnet_port, args.tcl_port,
     )
     try:
         service.start(config, event_sink=lambda line: reporter.emit("openocd_output", line=line))

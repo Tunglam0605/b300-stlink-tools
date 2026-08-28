@@ -91,6 +91,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="OpenOCD listen address (default: 127.0.0.1).")
     debug.add_argument("--gdb-port", type=parse_tcp_port, default=3333,
                        help="GDB server TCP port (default: 3333).")
+    debug.add_argument("--tcl-port", type=parse_tcp_port,
+                       help="Optional OpenOCD TCL port; loopback only (recommended: 6666).")
     debug.add_argument("--telnet-port", type=parse_tcp_port,
                        help="Optional OpenOCD telnet port; loopback only (default: disabled).")
     debug.add_argument("--dry-run", action="store_true")

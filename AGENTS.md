@@ -103,9 +103,12 @@ cơ cấu thật.
 1. Có thể dry-run: `b300-stlink debug --dry-run --json`.
 2. Local dùng mặc định loopback:
    `b300-stlink debug --gdb-port 3333`.
+   Khi cần OpenOCD TCL automation local, dùng:
+   `b300-stlink debug --gdb-port 3333 --tcl-port 6666`.
 3. Remote qua IPC chỉ khi user cho phép và mạng tin cậy:
    `b300-stlink debug --bind-address 0.0.0.0 --gdb-port 3333`.
 4. Telnet/TCL phải giữ disabled cho remote; không lách validation để mở cổng.
+   Các debug port đang bật phải khác nhau; `3333`/`6666` là cặp chuẩn local.
 5. Dùng đúng AXF/ELF tương ứng để đọc symbol. Không chạy GDB `load`, `restore`
    hoặc lệnh flash trong mode debug.
 6. Trước khi đóng, chạy `monitor reset run`, `detach`, `quit`; dừng OpenOCD và

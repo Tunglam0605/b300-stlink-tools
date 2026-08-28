@@ -83,7 +83,8 @@ def validate_openocd_value(value: object, label: str) -> None:
 
 
 def _base_command(probe: ProbeRef, executable: str, *, gdb_port: Optional[int] = None,
-                  telnet_port: Optional[int] = None, bind_address: str = "127.0.0.1") -> List[str]:
+                  telnet_port: Optional[int] = None, tcl_port: Optional[int] = None,
+                  bind_address: str = "127.0.0.1") -> List[str]:
     validate_openocd_value(executable, "OpenOCD path")
     validate_openocd_value(bind_address, "Bind address")
     command = [
@@ -94,7 +95,7 @@ def _base_command(probe: ProbeRef, executable: str, *, gdb_port: Optional[int] =
         "-f", "target/stm32f4x.cfg",
         "-c", "gdb port %s" % (gdb_port if gdb_port is not None else "disabled"),
         "-c", "telnet port %s" % (telnet_port if telnet_port is not None else "disabled"),
-        "-c", "tcl port disabled",
+        "-c", "tcl port %s" % (tcl_port if tcl_port is not None else "disabled"),
     ]
     if probe.serial:
         validate_openocd_value(probe.serial, "Probe serial")
@@ -180,12 +181,14 @@ def build_boot_verify_command(probe: ProbeRef, executable: str) -> List[str]:
 
 
 def build_debug_command(probe: ProbeRef, executable: str, bind_address: str,
-                        gdb_port: int, telnet_port: Optional[int] = None) -> List[str]:
+                        gdb_port: int, telnet_port: Optional[int] = None,
+                        tcl_port: Optional[int] = None) -> List[str]:
     return _base_command(
         probe,
         executable,
         gdb_port=gdb_port,
         telnet_port=telnet_port,
+        tcl_port=tcl_port,
         bind_address=bind_address,
     ) + ["-c", "init"]
 

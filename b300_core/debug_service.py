@@ -35,14 +35,21 @@ class DebugConfig:
     bind_address: str = "127.0.0.1"
     gdb_port: int = 3333
     telnet_port: Optional[int] = None
+    tcl_port: Optional[int] = None
 
     def validate(self) -> None:
         address = ipaddress.ip_address(self.bind_address)
-        for label, port in (("GDB", self.gdb_port), ("telnet", self.telnet_port)):
+        named_ports = (("GDB", self.gdb_port), ("telnet", self.telnet_port), ("TCL", self.tcl_port))
+        for label, port in named_ports:
             if port is not None and not 1 <= port <= 65535:
                 raise ValueError("%s port must be in range 1..65535." % label)
         if self.telnet_port is not None and not address.is_loopback:
             raise ValueError("Telnet is allowed only when OpenOCD binds to a loopback address.")
+        if self.tcl_port is not None and not address.is_loopback:
+            raise ValueError("TCL is allowed only when OpenOCD binds to a loopback address.")
+        enabled_ports = [port for _label, port in named_ports if port is not None]
+        if len(enabled_ports) != len(set(enabled_ports)):
+            raise ValueError("OpenOCD debug ports must be distinct.")
 
 
 class DebugProcess(Protocol):
@@ -96,14 +103,15 @@ class DebugService:
                 session_lease = self.session_manager.acquire_debugging(config.probe)
                 command = build_debug_command(
                     config.probe, self.executable, config.bind_address,
-                    config.gdb_port, config.telnet_port,
+                    config.gdb_port, config.telnet_port, config.tcl_port,
                 )
                 self._process = self._process_factory(
                     command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                     shell=False, **child_process_kwargs(self._platform_name),
                 )
                 ready, logs, log_lock = self._forward_output(
-                    self._process, config.gdb_port, event_sink
+                    self._process, config.gdb_port, event_sink,
+                    config.telnet_port, config.tcl_port,
                 )
                 self._wait_for_listener_locked(ready, logs, log_lock, readiness_timeout_seconds)
             except BaseException:
@@ -158,11 +166,19 @@ class DebugService:
 
     @staticmethod
     def _forward_output(process: DebugProcess, gdb_port: int,
-                        event_sink: Optional[EventSink]):
+                        event_sink: Optional[EventSink],
+                        telnet_port: Optional[int] = None,
+                        tcl_port: Optional[int] = None):
         stdout = getattr(process, "stdout", None)
         ready = threading.Event()
         logs = deque(maxlen=10)
         log_lock = threading.Lock()
+        expected = {"Info : Listening on port %d for gdb connections" % gdb_port}
+        if telnet_port is not None:
+            expected.add("Info : Listening on port %d for telnet connections" % telnet_port)
+        if tcl_port is not None:
+            expected.add("Info : Listening on port %d for tcl connections" % tcl_port)
+        seen = set()
         if stdout is None:
             return ready, logs, log_lock
 
@@ -172,8 +188,10 @@ class DebugService:
                 if text:
                     with log_lock:
                         logs.append(text)
-                    if text == "Info : Listening on port %d for gdb connections" % gdb_port:
-                        ready.set()
+                        if text in expected:
+                            seen.add(text)
+                            if expected.issubset(seen):
+                                ready.set()
                     if event_sink is not None:
                         event_sink(text)
 
@@ -192,7 +210,7 @@ class DebugService:
                 with log_lock:
                     context = " | ".join(logs) or "(none)"
                 raise RuntimeError(
-                    "OpenOCD exited before GDB listener became ready (exit code %s). Last log: %s" %
+                    "OpenOCD exited before requested debug listeners became ready (exit code %s). Last log: %s" %
                     (code, context)
                 )
             if process is None or process.poll() is not None:
@@ -200,7 +218,7 @@ class DebugService:
                 with log_lock:
                     context = " | ".join(logs) or "(none)"
                 raise RuntimeError(
-                    "OpenOCD exited before GDB listener became ready (exit code %s). Last log: %s" %
+                    "OpenOCD exited before requested debug listeners became ready (exit code %s). Last log: %s" %
                     (code, context)
                 )
             remaining = deadline - time.monotonic()
@@ -208,7 +226,7 @@ class DebugService:
                 with log_lock:
                     context = " | ".join(logs) or "(none)"
                 raise RuntimeError(
-                    "OpenOCD GDB listener was not ready before timeout. Last log: %s" %
+                    "OpenOCD requested debug listeners were not ready before timeout. Last log: %s" %
                     context
                 )
             ready.wait(min(remaining, 0.02))

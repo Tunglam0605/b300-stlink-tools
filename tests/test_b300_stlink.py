@@ -158,6 +158,38 @@ class B300StlinkTests(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertIn("Telnet", output.getvalue())
 
+    def test_debug_allows_explicit_tcl_on_loopback(self) -> None:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            result = tool().main([
+                "debug", "--gdb-port", "3333", "--tcl-port", "6666",
+                "--dry-run", "--json",
+            ])
+        self.assertEqual(result, 0)
+        command = json.loads(output.getvalue())["command"]
+        self.assertIn("gdb port 3333", command)
+        self.assertIn("tcl port 6666", command)
+
+    def test_remote_debug_rejects_tcl_listener(self) -> None:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            result = tool().main([
+                "debug", "--bind-address", "0.0.0.0", "--tcl-port", "6666",
+                "--dry-run", "--json",
+            ])
+        self.assertEqual(result, 1)
+        self.assertIn("TCL", output.getvalue())
+
+    def test_debug_rejects_duplicate_openocd_ports(self) -> None:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            result = tool().main([
+                "debug", "--gdb-port", "3333", "--tcl-port", "3333",
+                "--dry-run", "--json",
+            ])
+        self.assertEqual(result, 1)
+        self.assertIn("must be distinct", output.getvalue())
+
     def test_debug_rejects_command_in_bind_address(self) -> None:
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             tool().main([

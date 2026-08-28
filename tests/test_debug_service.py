@@ -75,6 +75,51 @@ class DebugServiceTests(unittest.TestCase):
         self.assertEqual(launched, [])
         self.assertEqual(service.state, DebugState.STOPPED)
 
+    def test_loopback_tcl_waits_for_both_gdb_and_tcl_listeners(self) -> None:
+        process = FakeProcess()
+        process.stdout = iter([
+            "Info : Listening on port 3333 for gdb connections\n",
+            "Info : Listening on port 6666 for tcl connections\n",
+        ])
+        commands = []
+        service = DebugService(
+            executable="openocd",
+            process_factory=lambda command, **kwargs: commands.append(command) or process,
+        )
+
+        state = service.start(DebugConfig(ProbeRef("DEBUG123"), tcl_port=6666))
+
+        self.assertEqual(state, DebugState.READY)
+        self.assertIn("gdb port 3333", commands[0])
+        self.assertIn("tcl port 6666", commands[0])
+        service.stop()
+
+    def test_non_loopback_tcl_is_rejected_before_process_launch(self) -> None:
+        launched = []
+        service = DebugService(
+            executable="openocd",
+            process_factory=lambda command, **kwargs: launched.append(command),
+        )
+
+        with self.assertRaisesRegex(ValueError, "TCL.*loopback"):
+            service.start(DebugConfig(ProbeRef("DEBUG123"), "10.1.2.3", 3333, None, 6666))
+
+        self.assertEqual(launched, [])
+        self.assertEqual(service.state, DebugState.STOPPED)
+
+    def test_duplicate_debug_ports_are_rejected_before_process_launch(self) -> None:
+        launched = []
+        service = DebugService(
+            executable="openocd",
+            process_factory=lambda command, **kwargs: launched.append(command),
+        )
+
+        with self.assertRaisesRegex(ValueError, "must be distinct"):
+            service.start(DebugConfig(ProbeRef("DEBUG123"), tcl_port=3333))
+
+        self.assertEqual(launched, [])
+        self.assertEqual(service.state, DebugState.STOPPED)
+
     def test_unrelated_or_wrong_port_logs_do_not_mark_debug_ready(self) -> None:
         process = FakeProcess()
         process.stdout = iter([
