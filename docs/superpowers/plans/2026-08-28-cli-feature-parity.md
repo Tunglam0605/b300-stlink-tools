@@ -238,10 +238,11 @@ git commit -m "feat(cli): add read-only target diagnostics"
 - Modify: `b300_cli/reporting.py`
 - Modify: `b300_stlink.py`
 - Modify: `b300_core/service.py`
+- Modify: `b300_core/policy.py`
 - Modify: `b300_core/metadata.py` only if a presentation-neutral normalized mapping is needed.
 
 **Interfaces:**
-- Consumes: `B300Service.read_memory`, `read_sector`, `read_metadata`, `sector_by_index`, `validate_read_range`, and `OtaMetadata`.
+- Consumes: `select_probe`, `B300Service.read_memory`, `read_sector`, `read_metadata`, `sector_by_index`, `validate_read_range`, and `OtaMetadata`.
 - Produces: CLI `metadata show`, `memory read ADDRESS LENGTH`, `memory read-sector SECTOR`, and `memory dump ADDRESS LENGTH OUTPUT.bin`; no write command.
 
 - [ ] **Step 1: Add failing parser and range tests**
@@ -256,7 +257,9 @@ def test_memory_range_outside_f407_is_rejected_before_service(self):
     self.assertEqual(value["reason_code"], "INVALID_MEMORY_RANGE")
 ```
 
-Cover invalid number, zero/negative length, overflow, Sector outside 0..7, and output path validation.
+Cover invalid number, zero/negative length, overflow, Sector outside 0..7 (including
+`-1`, which must never alias Sector 7 through Python negative indexing), and output
+path validation. Add explicit integer/range validation to `sector_by_index`.
 
 - [ ] **Step 2: Run tests and verify RED**
 
@@ -266,7 +269,7 @@ Expected: parser rejects `memory` and `metadata`.
 
 - [ ] **Step 3: Implement memory read and read-sector output**
 
-Text mode renders 16-byte rows with absolute addresses. JSON includes `address`, `end_address`, `size`, and lowercase hexadecimal data. The handler must call the bounded service API and never construct OpenOCD commands.
+Text mode renders 16-byte rows with absolute addresses. JSON includes `address`, `end_address`, `size`, and lowercase hexadecimal data. Every metadata/memory command accepts `--probe-serial` and calls centralized `select_probe`; exactly one physical serial-less probe may auto-select, while zero/multiple/unknown probes return its stable reason codes. The handler must call one public bounded service API directly, must not acquire another hardware session, and must never construct OpenOCD commands.
 
 - [ ] **Step 4: Add failing binary dump behavior tests**
 
@@ -280,7 +283,7 @@ Expected: `memory dump` is not implemented.
 
 - [ ] **Step 6: Implement atomic dump output**
 
-Read bytes first, write a sibling temporary file, flush and `os.replace` only after the complete read succeeds. Refuse directories and existing files without `--force`. The command remains read-only on the target.
+Read bytes first, write a sibling temporary file, flush/fsync and `os.replace` only after the complete read succeeds. Refuse directories and existing files without `--force`; check destination existence again immediately before replace. Always unlink the sibling temporary file on every exception path. Snapshot failures use stable codes `INVALID_MEMORY_RANGE`, `INVALID_SECTOR`, `INVALID_OUTPUT_PATH`, `OUTPUT_EXISTS`, `MEMORY_READ_FAILED`, plus centralized probe-selection codes. The command remains read-only on the target.
 
 - [ ] **Step 7: Add failing metadata presentation tests**
 
@@ -288,7 +291,7 @@ Cover ERASED fields rendered as `-`/`null` instead of `4294967295`, plus all VAL
 
 - [ ] **Step 8: Implement metadata snapshot output from `OtaMetadata`**
 
-Do not reimplement CRC or state parsing in CLI. ERASED preserves raw magic `0xFFFFFFFF` but semantic fields become null. VALID/CORRUPT use the decoder output verbatim.
+Do not reimplement CRC or state parsing in CLI. Keep presentation normalization in `b300_cli.reporting`: ERASED preserves raw magic `0xFFFFFFFF` but semantic fields become null/`-`. VALID/CORRUPT use the decoder output verbatim.
 
 - [ ] **Step 9: Verify help contains no target memory write surface**
 
@@ -305,7 +308,7 @@ Expected: PASS.
 - [ ] **Step 11: Commit Task 3**
 
 ```text
-git add b300_cli b300_stlink.py b300_core/service.py tests/test_cli_memory_metadata.py
+git add b300_cli b300_stlink.py b300_core/service.py b300_core/policy.py tests/test_cli_memory_metadata.py
 git commit -m "feat(cli): expose read-only memory and metadata"
 ```
 
