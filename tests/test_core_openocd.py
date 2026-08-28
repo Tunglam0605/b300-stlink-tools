@@ -283,6 +283,20 @@ class OpenOcdCoreTests(unittest.TestCase):
         self.assertTrue(info.readout_protected)
         self.assertEqual(info.protected_sectors, (0, 1, 2))
 
+    def test_target_parser_marks_truncated_sector_report_incomplete(self) -> None:
+        info = parse_target_info(
+            "Info : Target voltage: 3.10\n"
+            "Info : device id = 0x101f6413\n"
+            "Info : flash size = 512 KiB\n"
+            "#  0: 0x00000000 (0x4000 16kB) protected\n"
+            "#  1: 0x00004000 (0x4000 16kB) protected\n"
+            "#  2: 0x00008000 (0x4000 16kB) protected\n"
+            "#  3: 0x0000c000 (0x4000 16kB) not protected"
+        )
+
+        self.assertFalse(info.protection_reported)
+        self.assertEqual(info.protected_sectors, (0, 1, 2))
+
 
 
 if __name__ == "__main__":

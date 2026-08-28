@@ -137,6 +137,8 @@ def flash_result_fields(outcome, preflight_target: TargetInfo) -> dict:
         "reason": outcome.reason,
         "next_action": outcome.next_action,
         "wrp_summary": preflight_target.protection_summary,
+        "pc": None,
+        "bkp1r": None,
         "application_running": bool(
             outcome.boot_verification is not None and outcome.boot_verification.passed
         ),

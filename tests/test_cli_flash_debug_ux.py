@@ -35,6 +35,7 @@ class FakeFlashService:
         (0, 1, 2), True, False,
     )
     verification = BootVerification(0x08010101, 0, True, "Application is running.")
+    outcome = None
 
     def __init__(self, executable=None) -> None:
         self.calls = []
@@ -63,6 +64,8 @@ class FakeFlashService:
 
     def flash(self, plan, event_sink=None, phase_sink=None):
         self.calls.append(("flash", plan.probe))
+        if type(self).outcome is not None:
+            return type(self).outcome
         verification = self.verification
         return SimpleNamespace(
             status="succeeded" if verification.passed else "programmed_boot_failed",
@@ -80,6 +83,7 @@ class FlashCliUxTests(unittest.TestCase):
         FakeFlashService.verification = BootVerification(
             0x08010101, 0, True, "Application is running."
         )
+        FakeFlashService.outcome = None
 
     def make_image(self, directory: str) -> Path:
         return write_hex(directory, 0x08010000, APPLICATION_VECTOR + b"\xAA\x55")
@@ -164,6 +168,49 @@ class FlashCliUxTests(unittest.TestCase):
                      if json.loads(line)["event"] == "flash_result")
         self.assertFalse(final["application_running"])
         self.assertIsNone(FakeFlashService.created[-1].calls[0][1].serial)
+
+    def run_early_flash_failure(self, failure_phase: str) -> dict:
+        FakeFlashService.outcome = SimpleNamespace(
+            status="flash_failed",
+            succeeded=False,
+            boot_verification=None,
+            failure_phase=failure_phase,
+            reason="OpenOCD failed during %s." % failure_phase,
+            next_action="Review the OpenOCD log.",
+        )
+        module = tool()
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(module, "B300Service", FakeFlashService), \
+                mock.patch.object(
+                    module, "list_probes",
+                    return_value=(ProbeInfo("FLASH123", "ST-Link", "test"),),
+                ), redirect_stdout(output):
+            result = module.main(["flash", str(self.make_image(directory)), "--json"])
+
+        self.assertEqual(result, 1)
+        return next(json.loads(line) for line in output.getvalue().splitlines()
+                    if json.loads(line)["event"] == "flash_result")
+
+    def test_program_verify_failure_emits_stable_null_boot_fields(self) -> None:
+        final = self.run_early_flash_failure("verifying")
+
+        self.assertEqual(final["failure_phase"], "verifying")
+        self.assertIn("pc", final)
+        self.assertIn("bkp1r", final)
+        self.assertIsNone(final["pc"])
+        self.assertIsNone(final["bkp1r"])
+        self.assertFalse(final["application_running"])
+
+    def test_reset_failure_emits_stable_null_boot_fields(self) -> None:
+        final = self.run_early_flash_failure("resetting")
+
+        self.assertEqual(final["failure_phase"], "resetting")
+        self.assertIn("pc", final)
+        self.assertIn("bkp1r", final)
+        self.assertIsNone(final["pc"])
+        self.assertIsNone(final["bkp1r"])
+        self.assertFalse(final["application_running"])
 
     def test_probe_selection_failures_preserve_stable_reason_codes(self) -> None:
         cases = (

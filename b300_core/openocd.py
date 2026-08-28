@@ -223,6 +223,7 @@ def parse_target_info(output: str) -> TargetInfo:
     if not voltage_match or not device_match or not flash_match:
         raise ValueError("OpenOCD target inspection did not identify voltage/device/flash size.")
     protection_summary = " | ".join(protection_lines) or "Protection status not reported"
+    sector_states.sort(key=lambda item: item[0])
     if sector_states:
         groups = []
         start, end, protected = sector_states[0][0], sector_states[0][0], sector_states[0][1]
@@ -241,13 +242,16 @@ def parse_target_info(output: str) -> TargetInfo:
             for first, last, state in groups
         )
     protected_sectors = tuple(sector for sector, state in sector_states if state)
+    protection_reported = (
+        tuple(sector for sector, _state in sector_states) == tuple(range(8))
+    )
     return TargetInfo(
         device_id=int(device_match.group(1), 16),
         flash_kib=int(flash_match.group(1)),
         target_voltage=float(voltage_match.group(1)),
         protection_summary=protection_summary,
         protected_sectors=protected_sectors,
-        protection_reported=bool(sector_states),
+        protection_reported=protection_reported,
         readout_protected=("device security bit set" in output.lower()),
     )
 
