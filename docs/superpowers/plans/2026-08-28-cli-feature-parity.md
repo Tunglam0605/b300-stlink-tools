@@ -322,9 +322,15 @@ git commit -m "feat(cli): expose read-only memory and metadata"
 - Modify: `b300_core/hex_image.py`
 - Modify: `b300_core/models.py`
 - Modify: `b300_core/probe_selection.py`
+- Modify: `b300_core/factory_policy.py`
 - Modify: `b300_cli/parser.py`
 - Modify: `b300_cli/reporting.py`
 - Modify: `b300_stlink.py`
+- Modify: `tests/test_factory_policy.py`
+- Modify: `tests/test_flash_service.py`
+- Modify: `tests/test_core_openocd.py`
+- Modify: `tests/test_gui_interlocks.py`
+- Modify: `tests/test_gui_viewmodels.py`
 - Modify: `AGENTS.md` to replace the old mandatory-serial statement with the approved single-physical-probe rule.
 
 **Interfaces:**
@@ -344,10 +350,12 @@ Expected: `ImageInfo` lacks MSP and reset-vector fields.
 - [ ] **Step 3: Extend image inspection using the shared vector helper**
 
 Add optional fields with defaults so existing test factories remain compatible. Require the real Application vector for newly inspected Application HEX files, but keep Bootloader validation within its existing fixed range.
+Update every literal Application HEX fixture affected by strict vector validation so it contains eight contiguous vector bytes; do not weaken production validation to preserve one- or two-byte test fixtures.
 
 - [ ] **Step 4: Replace the old Factory serial test with failing one-probe policy tests**
 
 Cover zero probe blocked, one serialized probe allowed with confirmation, one serial-less probe allowed with confirmation and `ProbeRef(None)`, multiple probes blocked without an exact serial, bad target blocked, incomplete WRP report blocked, wrong F407/flash size/RDP blocked, and missing confirmation blocked before target access.
+The incomplete-WRP decision belongs in `factory_policy.build_factory_plan()`: `protection_reported=False` is blocked before `provision_bootloader`, while S0-S2 may initially be protected or unprotected because the existing Factory transaction owns their WRP transition and restoration.
 
 - [ ] **Step 5: Run Factory CLI tests and verify RED**
 
@@ -357,7 +365,7 @@ Expected: confirmed serial-less Factory is rejected by the current mandatory `--
 
 - [ ] **Step 6: Use centralized probe selection before real Factory inspection**
 
-Dry-run remains hardware-free and can use an explicit serial or auto placeholder. Real Factory first checks confirmation, then discovers/selects the physical probe, then performs the existing target/trusted artifact/WRP transaction unchanged. Multiple unpinnable probes remain blocked. Do not modify `FactoryService` transaction order.
+Dry-run remains hardware-free and must not enumerate probes or inspect a target. Real Factory first checks confirmation, then discovers/selects the physical probe through centralized `select_probe`, performs the required initial target inspection, and then calls the existing trusted-artifact/WRP transaction unchanged. Real Application Flash also uses centralized selection before its first target access, so OpenOCD never guesses among multiple probes. Multiple unpinnable probes remain blocked. Do not modify `FactoryService` transaction order.
 
 - [ ] **Step 7: Add failing flash UX tests**
 
@@ -365,7 +373,7 @@ Assert preflight reports SHA-256, image start/end/size, MSP/reset vector, select
 
 - [ ] **Step 8: Implement richer output without changing normal Flash commands**
 
-Derive presentation from `ImageInfo`, `FlashPlan`, `TargetInfo`, and `FlashResult`. Keep command generation and safety policy in core. Existing JSON event names and fields stay compatible; additions are append-only.
+Derive presentation from `ImageInfo`, `FlashPlan`, `TargetInfo`, and `FlashResult`. Keep command generation and safety policy in core. Existing JSON event names and fields stay compatible; additions are append-only on `flash_start` and `flash_result`. A hardware-free dry-run reports `target=null`, no fabricated selected-probe inspection, and an explicit `hardware_inspected=false`. Final WRP is the read-only preflight summary because Application Flash cannot change WRP; `application_running` is derived only from post-flash boot verification. Probe-selection failures include the centralized stable `reason_code`.
 
 - [ ] **Step 9: Add failing `debug server` and remote warning tests**
 
@@ -373,18 +381,18 @@ Assert `debug` and `debug server` build equivalent commands; default loopback, d
 
 - [ ] **Step 10: Implement optional debug mode token and warning**
 
-Do not add a new Debug service or any firmware-loading option. Preserve direct legacy flags after `debug`.
+Do not add a new Debug service or any firmware-loading option. Preserve direct legacy flags after `debug`. Any non-loopback bind, including dry-run, emits a stable `REMOTE_GDB_INSECURE` warning that states GDB Remote Protocol is unauthenticated/unencrypted and recommends an SSH tunnel.
 
 - [ ] **Step 11: Run focused safety regression**
 
-Run: `python -m unittest tests.test_cli_factory_probe_policy tests.test_cli_flash_debug_ux tests.test_b300_stlink tests.test_factory_service tests.test_factory_openocd tests.test_factory_policy tests.test_flash_service tests.test_debug_service -v`
+Run: `python -m unittest tests.test_cli_factory_probe_policy tests.test_cli_flash_debug_ux tests.test_core_hex_policy tests.test_b300_stlink tests.test_factory_service tests.test_factory_openocd tests.test_factory_policy tests.test_flash_service tests.test_core_openocd tests.test_gui_interlocks tests.test_gui_viewmodels tests.test_debug_service -v`
 
 Expected: PASS; normal Application path has no WRP/RDP/mass erase and Factory still programs only S0-S2 with WRP restore verification.
 
 - [ ] **Step 12: Commit Task 4**
 
 ```text
-git add AGENTS.md b300_core/hex_image.py b300_core/models.py b300_core/probe_selection.py b300_cli b300_stlink.py tests/test_cli_factory_probe_policy.py tests/test_cli_flash_debug_ux.py tests/test_core_hex_policy.py tests/test_b300_stlink.py
+git add AGENTS.md b300_core/hex_image.py b300_core/models.py b300_core/probe_selection.py b300_core/factory_policy.py b300_cli b300_stlink.py tests/test_cli_factory_probe_policy.py tests/test_cli_flash_debug_ux.py tests/test_core_hex_policy.py tests/test_b300_stlink.py tests/test_factory_policy.py tests/test_flash_service.py tests/test_core_openocd.py tests/test_gui_interlocks.py tests/test_gui_viewmodels.py
 git commit -m "feat(cli): harden factory selection and flash UX"
 ```
 
@@ -503,6 +511,7 @@ git commit -m "fix(debug): bundle GDB and hide backend processes"
 - Create: `b300_cli/update_commands.py`
 - Create: `tests/test_cli_update.py`
 - Modify: `b300_core/release_manifest.py`
+- Modify: `b300_core/update_platform.py`
 - Modify: `scripts/release/release_contract.py`
 - Modify: `scripts/release/build_metadata.py` only if required by the expanded mapping.
 - Modify: `scripts/release/verify_published.py`
@@ -511,6 +520,7 @@ git commit -m "fix(debug): bundle GDB and hide backend processes"
 - Modify: `tests/test_release_manifest.py`
 - Modify: `tests/test_release_metadata.py`
 - Modify: `tests/test_release_published_verifier.py`
+- Modify: `tests/test_updater_versioning.py`
 
 **Interfaces:**
 - Consumes: signed `latest.json`, Minisign public key, `UpdateClient.check/download`, CLI package names already present in the release contract.
@@ -542,7 +552,7 @@ Cover Windows AMD64/x86_64, Linux AMD64/x86_64, Linux ARM64/aarch64, empty machi
 
 - [ ] **Step 5: Implement CLI-only platform selection**
 
-Return only the three CLI keys and leave `detect_update_platform()` untouched for GUI consumers.
+Return only the three CLI keys from a separate `detect_cli_update_platform()` path and leave the GUI `UpdatePlatform`/`detect_update_platform()`/installer behavior untouched. Unsupported OS/CPU returns a stable CLI failure record rather than a traceback.
 
 - [ ] **Step 6: Add failing `update check/download` command tests with signed fixtures**
 
@@ -556,7 +566,7 @@ Expected: parser has no `update` command.
 
 - [ ] **Step 8: Implement update check and verified download handlers**
 
-Build `UpdateClient` with the embedded public key and detected CLI platform. Default downloads to the platform user cache and allow an explicit destination directory. Text/JSON must identify the signed version, asset, size, SHA-256, and final path. Never scrape a Release page and never install in this task step.
+Build `UpdateClient` with the embedded public key and detected CLI platform. Default downloads to the platform user cache and allow an explicit destination directory, never an arbitrary replacement filename; preserve the signed filename. Text/JSON must identify the signed version, asset, size, SHA-256, and final path. `update check` exits zero for both update-available and already-current snapshots, and nonzero only for operational/security failures. Never scrape a Release page and never install in this task step.
 
 - [ ] **Step 9: Run focused updater regression**
 
@@ -583,12 +593,14 @@ git commit -m "feat(cli): add signed update check and download"
 - Modify: `b300_stlink.py`
 - Modify: `build_native_bundle.py`
 - Modify: `package_internal.py`
+- Modify: `packaging/build_gui.py` only to consume the same canonical udev rule source as CLI setup.
 - Modify: `install.ps1`
 - Modify: `install.sh`
 - Modify: `.github/workflows/release.yml`
 - Modify: `.github/workflows/release-dry-run.yml`
 - Modify: `tests/test_build_native_bundle.py`
 - Modify: `tests/test_gui_packaging.py` only for shared package-helper behavior, not GUI behavior.
+- Modify: `tests/test_update_install.py` only if shared safe-install helpers are factored without changing GUI install behavior.
 - Modify: `tests/test_release_workflow.py`
 
 **Interfaces:**
@@ -607,7 +619,7 @@ Expected: import failure for `b300_core.cli_update_install`.
 
 - [ ] **Step 3: Implement verified CLI bundle installation and detached handoff**
 
-The active process rechecks the signed filename, size, and SHA-256 before extraction. Extract into a private user-cache staging directory using bounded safe-path rules. On Windows/Linux, spawn a staged helper process, wait for the parent PID to exit, atomically replace only the standard per-user B300 installation root, restore the previous tree on failure, recreate the CLI launcher, and emit a durable result log. Never invoke a shell with untrusted strings.
+The active process rechecks the signed filename, size, and SHA-256 before extraction. Extract into a private user-cache staging directory using bounded safe-path rules. On Windows, the only managed root is `%LOCALAPPDATA%\\B300-STLink` and launcher `%LOCALAPPDATA%\\B300-STLink\\bin\\b300-stlink.cmd`; on Linux they are `~/.local/share/b300-stlink` and `~/.local/bin/b300-stlink`. Spawn a staged helper process, wait for the parent PID to exit, atomically replace only that standard per-user root, restore the previous tree on failure, recreate the launcher, and emit a durable result log. Never invoke a shell with untrusted strings. Source-tree/portable execution returns stable `MANAGED_INSTALL_UNSUPPORTED` guidance instead of guessing another destination.
 
 - [ ] **Step 4: Add failing end-to-end command tests**
 
@@ -619,11 +631,11 @@ Keep signature and download verification in existing updater core. The install h
 
 - [ ] **Step 6: Add failing Linux USB/udev diagnostics and setup tests**
 
-Cover non-Linux unsupported, rule already present, missing rule dry-run, controlled install command, no full-CLI sudo, reload/trigger limited to VID `0483` PID `374?`, and actionable replug guidance. Inject filesystem and command runner dependencies; never modify the test host.
+Cover non-Linux unsupported, rule already present, missing rule dry-run, controlled install command, no full-CLI sudo, reload/trigger limited to VID `0483` PID `374?`, and actionable replug guidance. Reuse one canonical `49-b300-stlink.rules` content for both existing GUI packaging and CLI setup so the two cannot drift. Inject filesystem and command runner dependencies; never modify the test host.
 
 - [ ] **Step 7: Implement `setup` as an explicit controlled Ubuntu operation**
 
-Default is inspect/dry-run. Require `--install-udev-rule --confirm-system-change` before invoking `pkexec`/`sudo` for the one rule-copy/reload step. The main CLI process remains unprivileged and prints the exact proposed system change first.
+Default is inspect/dry-run. Require `--install-udev-rule --confirm-system-change` before invoking `pkexec` when available or `sudo` as a headless-IPC fallback for only the rule-copy plus narrowly scoped `udevadm control --reload-rules` and USB trigger step. The main CLI process remains unprivileged and prints the exact proposed system change first.
 
 - [ ] **Step 8: Add failing Windows onedir packaging tests**
 
@@ -646,7 +658,7 @@ Expected: PASS.
 - [ ] **Step 12: Commit Task 7**
 
 ```text
-git add b300_core/cli_update_install.py b300_core/linux_usb.py b300_cli build_native_bundle.py package_internal.py install.ps1 install.sh .github/workflows tests/test_cli_update_install.py tests/test_linux_usb_setup.py tests/test_build_native_bundle.py tests/test_gui_packaging.py tests/test_release_workflow.py
+git add b300_core/cli_update_install.py b300_core/linux_usb.py b300_cli build_native_bundle.py package_internal.py packaging/build_gui.py install.ps1 install.sh .github/workflows tests/test_cli_update_install.py tests/test_linux_usb_setup.py tests/test_build_native_bundle.py tests/test_gui_packaging.py tests/test_update_install.py tests/test_release_workflow.py
 git commit -m "feat(cli): add managed updates and native packaging"
 ```
 
@@ -685,11 +697,11 @@ Expected: missing CLI reference and new command coverage.
 
 - [ ] **Step 3: Write numbered operator and AI-agent documentation**
 
-Keep human operation to numbered steps: download/install, `doctor`, select probe, dry-run, run. Put complete schemas, exit codes, reason codes, update/setup behavior, debug tunnel guidance, and memory-read examples in `docs/10_CLI_REFERENCE.md`. Record version `0.5.3` source state in CHANGELOG without creating a new release tag.
+Keep human operation to numbered steps: download/install, `doctor`, select probe, dry-run, run. Put complete schemas, exit codes, reason codes, update/setup behavior, debug tunnel guidance, and memory-read examples in `docs/10_CLI_REFERENCE.md`, derived from the final live parser/runtime rather than planned commands. Record the source changes under `[Unreleased]`; do not fabricate another released `0.5.3` entry or create a tag.
 
 - [ ] **Step 4: Write the hardware acceptance checklist without running destructive tests**
 
-Provide Windows x64, Linux x64, and Linux ARM64 matrices for doctor/probes/target/metadata/memory/Application dry-run/Application real/Factory dry-run/Factory real/debug. Every destructive row records before state, command, after state, WRP, RDP, Sector 3, and Application state. Mark real hardware steps `NOT RUN` until explicitly authorized.
+Provide Windows x64, Linux x64, and Linux ARM64 matrices for doctor/probes/target/metadata/memory/Application dry-run/Application real/Factory dry-run/Factory real/debug. Preserve `docs/09_HARDWARE_ACCEPTANCE_2026-08-28.md` as historical PASS evidence; the new checklist is forward-looking. Every destructive row records before state, command, after state, WRP, RDP, Sector 3, and Application state. Mark every unexecuted real hardware step exactly `HARDWARE NOT RUN` until explicitly authorized.
 
 - [ ] **Step 5: Add static and behavioral safety-contract tests**
 
@@ -715,15 +727,15 @@ git diff --check origin/main...HEAD
 rg -n "mass_erase|stm32f2x (lock|unlock)|option_write|memory write|\bmww\b" b300_core b300_cli b300_stlink.py
 ```
 
-Expected: compile and diff checks pass; any search hit is confined to explicit rejection/tests or the approved Factory WRP builder, never Application/read-only production paths.
+Expected: compile and diff checks pass. Classify docs/tests/negative assertions separately. In production code, `flash protect 0 0 2` is permitted only in Factory-only builders/services; mass erase, RDP/option writes, `mww`, memory write, erase/program/load are forbidden in Application/read-only paths.
 
 - [ ] **Step 9: Build and smoke-test the Windows x64 CLI artifact locally**
 
-Run the native CLI-only build with `--internal-distribution-approved`, extract/stage it, then run packaged `--help`, `--version --json`, and `doctor --json`. Verify bundled OpenOCD `--version`. Record exact output and artifact SHA-256; do not discover/flash a board during packaging smoke.
+Run the native CLI-only build with `--internal-distribution-approved`, extract/stage `B300-STLink-CLI-Windows-x64.zip`, then run packaged `--help`, `--version --json`, and `doctor --json`. Verify `vendor/openocd/bin/openocd.exe --version`. Record exact output and artifact SHA-256; do not discover/flash a board during packaging smoke.
 
 - [ ] **Step 10: Verify Linux x64 and Linux ARM64 packaging gates**
 
-Use GitHub Actions workflow validation/tests as the authoritative cross-architecture evidence unless native runners are available. If a native runner is available, build and run the same artifact smoke commands. Clearly distinguish `PASS`, `CI-CONFIGURED NOT RUN`, and `HARDWARE NOT RUN`.
+Use GitHub Actions workflow validation/tests as the authoritative cross-architecture configuration evidence unless native runners are available. If native runners are available, extract the platform CLI tarball and run packaged `--help`, `--version --json`, `doctor --json`, and bundled OpenOCD `--version`, recording its SHA-256. Clearly distinguish actual `PASS`, `CI-CONFIGURED NOT RUN`, and `HARDWARE NOT RUN`; workflow text alone is never reported as an executed artifact PASS.
 
 - [ ] **Step 11: Run GUI regression after all shared-core changes**
 
