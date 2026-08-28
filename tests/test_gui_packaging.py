@@ -3,6 +3,9 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 import io
+import os
+import shutil
+import subprocess
 import tempfile
 import unittest
 import zipfile
@@ -16,6 +19,36 @@ import build_native_bundle
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "packaging" / "build_gui.py"
+
+
+def _windows_tool(name: str, fixed_path: str):
+    selected = shutil.which(name)
+    if selected:
+        return selected
+    fixed = Path(fixed_path)
+    return str(fixed) if fixed.is_file() else None
+
+
+def _create_windows_junction(link: Path, target: Path, powershell: str) -> None:
+    link.parent.mkdir(parents=True, exist_ok=True)
+    target.mkdir(parents=True, exist_ok=True)
+    environ = os.environ.copy()
+    environ["B300_TEST_LINK"] = str(link)
+    environ["B300_TEST_TARGET"] = str(target)
+    result = subprocess.run(
+        [
+            powershell, "-NoProfile", "-NonInteractive", "-Command",
+            "$ErrorActionPreference='Stop'; "
+            "New-Item -ItemType Junction -Path $env:B300_TEST_LINK "
+            "-Target $env:B300_TEST_TARGET | Out-Null",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environ,
+    )
+    if result.returncode != 0:
+        raise unittest.SkipTest("Windows junctions unavailable: %s" % result.stderr)
 
 
 def gui_builder():
@@ -303,6 +336,161 @@ class GuiPackagingTests(unittest.TestCase):
         self.assertIn("path_within", shell)
         self.assertLess(shell.index('case "${HOME-}"'), shell.index("mkdir -p"))
         self.assertLess(shell.index("path_within"), shell.index("cp -a"))
+
+    def test_native_bootstraps_validate_every_write_target_before_mutation(self) -> None:
+        powershell = (ROOT / "install.ps1").read_text(encoding="utf-8")
+        shell = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+        windows_validation = powershell[:powershell.index(
+            "New-Item -ItemType Directory -Force -Path $installRoot"
+        )]
+        self.assertIn("Assert-SafePathComponents", windows_validation)
+        for target in (
+                "$localAppData", "$installRoot", "$binRoot", "$cliLauncher",
+                "$guiLauncher", "$appData", "$startMenu", "$shortcutPath"):
+            with self.subTest(platform="windows", target=target):
+                self.assertIn(target, windows_validation)
+
+        shell_validation = shell[:shell.index('mkdir -p "$install_root"')]
+        self.assertIn("reject_path_components", shell_validation)
+        for target in (
+                "$local_root", "$share_root", "$install_root", "$bin_root",
+                "$cli_launcher", "$gui_launcher", "$applications_root",
+                "$desktop_target", "$icons_root", "$icon_target"):
+            with self.subTest(platform="linux", target=target):
+                self.assertIn(target, shell_validation)
+        self.assertNotIn('${HOME}/.local', shell)
+        self.assertNotIn('$HOME/.local', shell)
+
+    @unittest.skipUnless(os.name == "nt", "Windows reparse behavior test")
+    def test_windows_bootstrap_rejects_reparse_ancestor_and_final_before_writes(self) -> None:
+        powershell = _windows_tool(
+            "powershell.exe",
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        )
+        if powershell is None:
+            self.skipTest("Windows PowerShell is unavailable")
+        user_profile = Path(subprocess.check_output(
+            [
+                powershell, "-NoProfile", "-NonInteractive", "-Command",
+                "[Environment]::GetFolderPath('UserProfile')",
+            ],
+            text=True,
+        ).strip())
+        with tempfile.TemporaryDirectory(dir=str(user_profile)) as directory:
+            root = Path(directory)
+            for link_kind in ("ancestor", "final"):
+                with self.subTest(link_kind=link_kind):
+                    case_root = root / link_kind
+                    bundle = case_root / "bundle"
+                    bundle.mkdir(parents=True)
+                    shutil.copy2(ROOT / "install.ps1", bundle / "install.ps1")
+                    (bundle / "_internal").mkdir()
+                    (bundle / "b300-stlink.exe").write_bytes(b"cli")
+                    (bundle / "b300-stlink-gui.exe").write_bytes(b"gui")
+                    outside = case_root / "outside"
+                    if link_kind == "ancestor":
+                        (outside / "Local").mkdir(parents=True)
+                        link = case_root / "redirected"
+                        local_app_data = link / "Local"
+                        protected = outside / "Local" / "B300-STLink"
+                    else:
+                        local_app_data = case_root / "Local"
+                        local_app_data.mkdir()
+                        link = local_app_data / "B300-STLink"
+                        protected = outside / "b300-stlink.exe"
+                    _create_windows_junction(link, outside, powershell)
+                    try:
+                        environ = os.environ.copy()
+                        environ["LOCALAPPDATA"] = str(local_app_data)
+                        environ["APPDATA"] = str(Path(root.anchor) / "Windows")
+                        result = subprocess.run(
+                            [
+                                powershell, "-NoProfile", "-NonInteractive",
+                                "-ExecutionPolicy", "Bypass", "-File",
+                                str(bundle / "install.ps1"),
+                            ],
+                            check=False,
+                            capture_output=True,
+                            text=True,
+                            env=environ,
+                        )
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn(
+                            "reparse point", (result.stdout + result.stderr).lower()
+                        )
+                        self.assertFalse(protected.exists())
+                    finally:
+                        if os.path.lexists(str(link)):
+                            link.rmdir()
+
+    @unittest.skipUnless(os.name == "nt", "Git Bash junction behavior test")
+    def test_posix_bootstrap_rejects_each_write_target_junction_before_writes(self) -> None:
+        powershell = _windows_tool(
+            "powershell.exe",
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        )
+        bash = _windows_tool("bash.exe", r"C:\Program Files\Git\bin\bash.exe")
+        cygpath = _windows_tool("cygpath.exe", r"C:\Program Files\Git\usr\bin\cygpath.exe")
+        if powershell is None or bash is None or cygpath is None:
+            self.skipTest("Git Bash or Windows PowerShell is unavailable")
+        cases = (
+            ("local-ancestor", ".local"),
+            ("install-root", ".local/share/b300-stlink"),
+            ("bin-root", ".local/bin"),
+            ("cli-launcher", ".local/bin/b300-stlink"),
+            ("gui-launcher", ".local/bin/b300-stlink-gui"),
+            ("applications-root", ".local/share/applications"),
+            ("desktop-target", ".local/share/applications/b300-stlink-gui.desktop"),
+            ("icons-ancestor", ".local/share/icons"),
+            ("icons-root", ".local/share/icons/hicolor/scalable/apps"),
+            ("icon-target", ".local/share/icons/hicolor/scalable/apps/b300-stlink-gui.svg"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for label, relative_link in cases:
+                with self.subTest(target=label):
+                    case_root = root / label
+                    bundle = case_root / "bundle"
+                    home = case_root / "home"
+                    outside = case_root / "outside"
+                    bundle.mkdir(parents=True)
+                    home.mkdir()
+                    shutil.copy2(ROOT / "install.sh", bundle / "install.sh")
+                    for filename, payload in (
+                            ("b300-stlink", b"#!/bin/sh\nexit 0\n"),
+                            ("b300-stlink-gui", b"#!/bin/sh\nexit 0\n"),
+                            ("b300-stlink-gui.desktop", b"desktop"),
+                            ("b300-stlink-gui.svg", b"icon")):
+                        path = bundle / filename
+                        path.write_bytes(payload)
+                        path.chmod(0o755)
+                    link = home / Path(relative_link)
+                    _create_windows_junction(link, outside, powershell)
+                    try:
+                        posix_home = subprocess.check_output(
+                            [cygpath, "-u", str(home)], text=True,
+                        ).strip()
+                        posix_script = subprocess.check_output(
+                            [cygpath, "-u", str(bundle / "install.sh")], text=True,
+                        ).strip()
+                        environ = os.environ.copy()
+                        environ["HOME"] = posix_home
+                        result = subprocess.run(
+                            [bash, posix_script],
+                            check=False,
+                            capture_output=True,
+                            text=True,
+                            env=environ,
+                        )
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn(
+                            "unsafe symlink", (result.stdout + result.stderr).lower()
+                        )
+                        self.assertEqual(list(outside.iterdir()), [])
+                    finally:
+                        if os.path.lexists(str(link)):
+                            link.rmdir()
 
     def test_windows_cli_packaging_requires_the_complete_onedir_application_root(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

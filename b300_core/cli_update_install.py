@@ -570,6 +570,7 @@ def apply_staged_cli_install(
                 replace(str(publish), str(paths.root))
                 published = True
                 _fsync_directory(paths.root.parent)
+                _validate_launcher_path(paths.launcher, selected_home)
                 _atomic_write(
                     paths.launcher, _launcher_bytes(selected),
                     mode=0o755 if selected != "windows-x64-cli" else 0o600,

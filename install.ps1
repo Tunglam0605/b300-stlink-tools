@@ -33,6 +33,32 @@ function Assert-NoReparsePoint([string]$Path) {
     }
 }
 
+function Assert-SafePathComponents([string]$Path, [string]$Base) {
+    $candidate = Get-NormalizedPath $Path
+    $parent = Get-NormalizedPath $Base
+    if (-not (Test-PathWithin $candidate $parent)) {
+        throw "Managed install write target escapes the per-user root: $Path"
+    }
+    Assert-NoReparsePoint $parent
+    if ([StringComparer]::OrdinalIgnoreCase.Equals($candidate, $parent)) {
+        return
+    }
+    $relative = $candidate.Substring($parent.Length).TrimStart([char[]]@(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar
+    ))
+    $current = $parent
+    foreach ($component in $relative.Split(
+            [char[]]@(
+                [IO.Path]::DirectorySeparatorChar,
+                [IO.Path]::AltDirectorySeparatorChar
+            ),
+            [StringSplitOptions]::RemoveEmptyEntries)) {
+        $current = Join-Path $current $component
+        Assert-NoReparsePoint $current
+    }
+}
+
 $bundleRoot = Get-NormalizedPath (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $userProfile = [Environment]::GetFolderPath('UserProfile')
 if ([String]::IsNullOrWhiteSpace($userProfile) -or
@@ -53,16 +79,14 @@ if (-not (Test-PathWithin $localAppData $userProfile) -or
     [StringComparer]::OrdinalIgnoreCase.Equals($localAppData, $userProfile)) {
     throw 'Managed install requires LOCALAPPDATA beneath the per-user UserProfile.'
 }
-Assert-NoReparsePoint $localAppData
 $installRoot = Get-NormalizedPath (Join-Path $localAppData 'B300-STLink')
 $binRoot = Join-Path $installRoot 'bin'
+$cliLauncher = Join-Path $binRoot 'b300-stlink.cmd'
+$guiLauncher = Join-Path $binRoot 'b300-stlink-gui.cmd'
 if ((Test-PathWithin $bundleRoot $installRoot) -or
     (Test-PathWithin $installRoot $bundleRoot)) {
     throw 'Run b300-stlink self-update from a managed install; source and destination overlap.'
 }
-Assert-NoReparsePoint $installRoot
-Assert-NoReparsePoint $binRoot
-Assert-NoReparsePoint (Join-Path $binRoot 'b300-stlink.cmd')
 $cliSource = Join-Path $bundleRoot 'b300-stlink.exe'
 $guiSource = Join-Path $bundleRoot 'b300-stlink-gui.exe'
 if (-not (Test-Path -LiteralPath $cliSource -PathType Leaf) -and
@@ -72,26 +96,44 @@ if (-not (Test-Path -LiteralPath $cliSource -PathType Leaf) -and
 if (-not (Test-Path -LiteralPath (Join-Path $bundleRoot '_internal') -PathType Container)) {
     throw 'Incomplete B300 Windows onedir bundle: _internal runtime is missing.'
 }
+$appData = $null
+$startMenu = $null
+$shortcutPath = $null
+$writeTargets = @($localAppData, $installRoot, $binRoot, $cliLauncher)
+foreach ($writeTarget in $writeTargets) {
+    Assert-SafePathComponents $writeTarget $userProfile
+}
+if (Test-Path -LiteralPath $guiSource -PathType Leaf) {
+    if ([String]::IsNullOrWhiteSpace($env:APPDATA) -or
+        -not [IO.Path]::IsPathRooted($env:APPDATA)) {
+        throw 'GUI shortcut requires an absolute per-user APPDATA.'
+    }
+    $appData = Get-NormalizedPath $env:APPDATA
+    if (-not (Test-PathWithin $appData $userProfile) -or
+        [StringComparer]::OrdinalIgnoreCase.Equals($appData, $userProfile)) {
+        throw 'GUI shortcut requires APPDATA beneath the per-user UserProfile.'
+    }
+    $startMenu = Get-NormalizedPath (
+        Join-Path $appData 'Microsoft\Windows\Start Menu\Programs'
+    )
+    $shortcutPath = Join-Path $startMenu 'B300 ST-Link Provisioning.lnk'
+    $writeTargets = @($guiLauncher, $appData, $startMenu, $shortcutPath)
+    foreach ($writeTarget in $writeTargets) {
+        Assert-SafePathComponents $writeTarget $userProfile
+    }
+}
 New-Item -ItemType Directory -Force -Path $installRoot, $binRoot | Out-Null
 Get-ChildItem -LiteralPath $bundleRoot -Force | Copy-Item -Destination $installRoot -Recurse -Force
 @'
 @echo off
 "%~dp0..\b300-stlink.exe" %*
-'@ | Set-Content -LiteralPath (Join-Path $binRoot 'b300-stlink.cmd') -Encoding ASCII
-if (Test-Path -LiteralPath (Join-Path $installRoot 'b300-stlink-gui.exe')) {
-    Assert-NoReparsePoint (Join-Path $binRoot 'b300-stlink-gui.cmd')
+'@ | Set-Content -LiteralPath $cliLauncher -Encoding ASCII
+if (Test-Path -LiteralPath $guiSource -PathType Leaf) {
 @'
 @echo off
 "%~dp0..\b300-stlink-gui.exe" %*
-'@ | Set-Content -LiteralPath (Join-Path $binRoot 'b300-stlink-gui.cmd') -Encoding ASCII
-    if ([String]::IsNullOrWhiteSpace($env:APPDATA) -or
-        -not [IO.Path]::IsPathRooted($env:APPDATA) -or
-        -not (Test-PathWithin $env:APPDATA $userProfile)) {
-        throw 'GUI shortcut requires APPDATA beneath the per-user UserProfile.'
-    }
-    $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
+'@ | Set-Content -LiteralPath $guiLauncher -Encoding ASCII
     New-Item -ItemType Directory -Force -Path $startMenu | Out-Null
-    $shortcutPath = Join-Path $startMenu 'B300 ST-Link Provisioning.lnk'
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath = Join-Path $installRoot 'b300-stlink-gui.exe'

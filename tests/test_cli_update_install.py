@@ -356,6 +356,43 @@ class ManagedCliInstallTests(unittest.TestCase):
                         )
                     self.assertFalse(paths.root.exists())
 
+    def test_launcher_is_rechecked_after_parent_exit_before_atomic_write(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home = root / "home"
+            paths = cli_update_install.managed_install_paths(
+                "linux-x64-cli", environ={}, home=home,
+            )
+            staged = paths.staging_base / "cli-install-test" / "application"
+            (staged / "vendor" / "openocd" / "bin").mkdir(parents=True)
+            (staged / "b300-stlink").write_text("new", encoding="utf-8")
+            (staged / "install.sh").write_text("bootstrap", encoding="utf-8")
+            (staged / "vendor" / "openocd" / "bin" / "openocd").write_text(
+                "openocd", encoding="utf-8"
+            )
+            state = {"parent_exited": False}
+            original_is_symlink = Path.is_symlink
+
+            def wait_parent(_pid):
+                state["parent_exited"] = True
+
+            def simulated_is_symlink(candidate):
+                return (
+                    state["parent_exited"] and candidate == paths.launcher.parent
+                ) or original_is_symlink(candidate)
+
+            with mock.patch.object(
+                    Path, "is_symlink", autospec=True,
+                    side_effect=simulated_is_symlink,
+            ), self.assertRaisesRegex(ValueError, "symlink"):
+                cli_update_install.apply_staged_cli_install(
+                    staged, "linux-x64-cli", parent_pid=123,
+                    environ={}, home=home, wait_parent=wait_parent,
+                )
+
+            self.assertTrue(state["parent_exited"])
+            self.assertFalse(paths.root.exists())
+
     def test_replacement_failure_restores_previous_tree(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
