@@ -5,6 +5,20 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-08-28
+
+### Fixed
+
+- Ubuntu/Linux GUI updater không còn yêu cầu người dùng tự mở Terminal rồi chạy `sudo apt install ...`. Gói `.deb` đã xác minh giờ được bàn giao cho detached update helper và cài qua `pkexec` + `apt-get`, sử dụng hộp thoại xác thực quyền quản trị chuẩn của Ubuntu.
+- AppImage update giờ chờ GUI cũ thoát, thay AppImage theo kiểu atomic trong cùng thư mục, khôi phục executable bit và tự mở lại phiên bản mới. Nếu cần quyền ghi cao hơn, helper dùng `pkexec install` thay vì yêu cầu lệnh Terminal thủ công.
+- GUI cũ chủ động thoát Qt event loop sau khi helper đã khởi chạy, loại bỏ trạng thái cửa sổ cũ đứng im/không thao tác được trong lúc cập nhật. Nếu xác thực `.deb` bị hủy hoặc quá trình cài/thay AppImage thất bại, helper cố gắng mở lại bản đang có để người dùng không bị mất GUI.
+- Linux release CI smoke-test thêm entry `--apply-verified-update --help` trên cả x64 và ARM64 để đảm bảo update-helper thực sự được đóng gói trong executable phát hành.
+
+### Validation
+
+- Focused updater/release workflow regression: **35/35 tests PASS**; full regression: **239/239 tests PASS**.
+- Windows native GUI rebuild PASS; `--smoke-test` và packaged `--apply-verified-update --help` đều exit `0`, xác nhận thay đổi entrypoint không làm hỏng Windows runtime.
+
 ## [0.5.2] - 2026-08-28
 
 ### Fixed

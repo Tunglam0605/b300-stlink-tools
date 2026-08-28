@@ -80,6 +80,7 @@ jobs:
       - run: |
           ./release/b300-stlink --help
           ./release/b300-stlink-gui --smoke-test
+          ./release/b300-stlink-gui --apply-verified-update --help
       - name: Build AppImage and DEB
         env:
           APPIMAGE_EXTRACT_AND_RUN: "1"

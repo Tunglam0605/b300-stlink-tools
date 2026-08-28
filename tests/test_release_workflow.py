@@ -148,6 +148,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIn(name, text)
 
+    def test_linux_release_smoke_tests_detached_update_helper(self) -> None:
+        for name in ("release.yml", "release-dry-run.yml"):
+            with self.subTest(workflow=name):
+                workflow = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+                self.assertIn("--apply-verified-update --help", workflow)
+        release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        self.assertGreaterEqual(release.count("--apply-verified-update --help"), 2)
+
     def test_linux_release_uses_x11_smoke_test(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
         self.assertIn("xauth xvfb", workflow)
