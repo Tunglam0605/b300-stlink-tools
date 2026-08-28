@@ -62,7 +62,9 @@ xác nhận rõ file/board được phép nạp trong phiên hiện tại.
 `provision-bootloader` là workflow duy nhất được phép thay đổi WRP, chỉ dành cho
 main/chip mới hoặc bảo trì Bootloader được ủy quyền. Dùng artifact bundle có
 hash/provenance cố định, dry-run trước, rồi chỉ chạy lệnh thật với
-`--confirm-factory-provision` và CLI thật phải pin đúng `--probe-serial`. Nó chỉ
+`--confirm-factory-provision`. CLI thật phải chọn đúng một probe vật lý: khi chỉ có
+một probe không có serial, `ProbeRef(None)` là hợp lệ; khi có nhiều probe thì phải
+pin chính xác bằng `--probe-serial`, không được bịa serial từ USB identity. Nó chỉ
 `flash protect 0 0 2 off/on`, reset/halt để reload Option Bytes sau mỗi thay đổi
 WRP, verify trạng thái, erase/program đúng S0--S2, restore/verify WRP rồi mới
 `reset run`. Không mass erase, không thay RDP và không `stm32f2x lock/unlock`.

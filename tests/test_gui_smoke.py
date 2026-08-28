@@ -24,7 +24,7 @@ from b300_core.service import FactoryResult
 from b300_gui.workers import FunctionWorker
 from b300_core.policy import build_flash_plan
 from b300_version import __version__
-from tests.test_core_hex_policy import write_hex
+from tests.test_core_hex_policy import APPLICATION_VECTOR, write_hex
 
 
 class FakeService:
@@ -146,7 +146,7 @@ class GuiSmokeTests(unittest.TestCase):
     def test_valid_image_enables_dry_run_without_hardware_write(self) -> None:
         window = MainWindow(service=FakeService(), probe_loader=lambda: ())
         with tempfile.TemporaryDirectory() as directory:
-            image = write_hex(directory, 0x08010000, b"\x01")
+            image = write_hex(directory, 0x08010000, APPLICATION_VECTOR)
             self.assertTrue(window.load_image_path(image))
             self.assertFalse(window.flash_button.isEnabled())
             window.apply_target_info(TargetInfo(0x101F6413, 512, 3.09, "S0-S2 protected", (0, 1, 2), True))

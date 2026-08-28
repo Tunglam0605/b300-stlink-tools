@@ -10,12 +10,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from b300_core.models import BootVerification, FlashPhaseEvent, TargetInfo
+from b300_core.models import BootVerification, FlashPhaseEvent, ProbeInfo, TargetInfo
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "b300_stlink.py"
-VALID_HEX = ":020000040801F1\n:0100000000FF\n:00000001FF\n"
+VALID_HEX = ":020000040801F1\n:080000000000022001010108CB\n:00000001FF\n"
 BOOTLOADER_HEX = ":020000040800F2\n:0100000000FF\n:00000001FF\n"
 
 
@@ -130,7 +130,8 @@ class B300StlinkTests(unittest.TestCase):
                 "--probe-serial", "TEST-PROBE", "--dry-run", "--json",
             ])
         self.assertEqual(result, 0)
-        command = json.loads(output.getvalue())["command"]
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        command = next(record["command"] for record in records if record["event"] == "openocd")
         self.assertIn("bindto 0.0.0.0", command)
         self.assertIn("gdb port 4333", command)
         self.assertIn("telnet port disabled", command)
@@ -225,7 +226,11 @@ class B300StlinkTests(unittest.TestCase):
             image = Path(directory) / "application.hex"
             image.write_text(VALID_HEX, encoding="ascii")
             output = io.StringIO()
-            with mock.patch.object(module, "B300Service", FakeService), redirect_stdout(output):
+            with mock.patch.object(module, "B300Service", FakeService), \
+                    mock.patch.object(
+                        module, "list_probes",
+                        return_value=(ProbeInfo("FLASH123", "ST-Link", "test"),),
+                    ), redirect_stdout(output):
                 result = module.main(["flash", str(image), "--json"])
 
         records = [json.loads(line) for line in output.getvalue().splitlines()]
@@ -272,22 +277,6 @@ class B300StlinkTests(unittest.TestCase):
         error = next(item for item in records if item["event"] == "error")
         self.assertEqual(error["phase"], "authorization")
         self.assertIn("--confirm-factory-provision", error["reason"])
-
-
-
-    def test_confirmed_factory_real_run_requires_explicit_probe_serial(self) -> None:
-        output = io.StringIO()
-        with redirect_stdout(output):
-            result = tool().main([
-                "provision-bootloader", "--confirm-factory-provision", "--json",
-            ])
-        self.assertEqual(result, 1)
-        records = [json.loads(line) for line in output.getvalue().splitlines()]
-        error = next(item for item in records if item["event"] == "error")
-        self.assertEqual(error["phase"], "authorization")
-        self.assertIn("--probe-serial", error["reason"])
-
-
 
 if __name__ == "__main__":
     unittest.main()

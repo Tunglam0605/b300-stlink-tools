@@ -52,6 +52,8 @@ class ImageInfo:
     end_address: int
     size: int
     data_record_count: int
+    initial_msp: Optional[int] = None
+    reset_vector: Optional[int] = None
 
 
 @dataclass(frozen=True)

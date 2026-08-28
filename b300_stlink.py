@@ -21,7 +21,8 @@ from b300_cli.parser import (
 )
 from b300_cli.reporting import (
     Reporter, diagnostic_snapshot, emit_snapshot, format_memory_rows, format_metadata_text,
-    format_probes_text, memory_snapshot, metadata_snapshot, probe_record,
+    flash_result_fields, flash_start_fields, format_probes_text, memory_snapshot,
+    metadata_snapshot, probe_record,
 )
 from b300_core.diagnostics import DiagnosticsService
 from b300_core.hex_image import inspect_image
@@ -73,6 +74,13 @@ def flash_command(args: argparse.Namespace):
 
 
 def run_debug(args: argparse.Namespace, reporter: Reporter) -> int:
+    if not ipaddress.ip_address(args.bind_address).is_loopback:
+        reporter.emit(
+            "warning",
+            reason_code="REMOTE_GDB_INSECURE",
+            message="GDB Remote Protocol is unauthenticated and unencrypted on a non-loopback bind.",
+            next_action="Prefer loopback access through an SSH tunnel.",
+        )
     command = openocd_command(args)
     reporter.emit("openocd", command=command, dry_run=args.dry_run)
     if args.dry_run:
@@ -122,6 +130,24 @@ def _select_read_probe(args: argparse.Namespace, command: str) -> Optional[Probe
         return probe
     except ProbeSelectionError as error:
         _read_only_error(args, command, error.code, error.message)
+        return None
+
+
+def _select_write_probe(args: argparse.Namespace, reporter: Reporter) -> Optional[ProbeRef]:
+    """Select one discovered probe and preserve core selection reason codes."""
+    try:
+        _info, probe = select_probe(list_probes(), args.probe_serial)
+        return probe
+    except ProbeSelectionError as error:
+        reporter.emit(
+            "error",
+            phase="probe_selection",
+            reason_code=error.code,
+            reason=error.message,
+            next_action=(
+                "Connect exactly one ST-Link or select the intended probe with --probe-serial."
+            ),
+        )
         return None
 
 
@@ -361,9 +387,20 @@ def main(argv: Optional[List[str]] = None) -> int:
             return run_debug(args, reporter)
 
         if args.command == "provision-bootloader":
+            if not args.dry_run and not args.confirm_factory_provision:
+                raise ProvisioningError(
+                    "authorization",
+                    "Factory Bootloader provisioning requires --confirm-factory-provision.",
+                    "Run --dry-run first, then repeat with explicit factory confirmation for the intended board.",
+                )
             service = B300Service(executable=args.openocd)
             trusted = service.trusted_bootloader()
-            probe = ProbeRef(args.probe_serial)
+            if args.dry_run:
+                probe = ProbeRef(args.probe_serial)
+            else:
+                probe = _select_write_probe(args, reporter)
+                if probe is None:
+                    return 1
             preview = service.factory_preview(trusted.image, probe)
             reporter.emit(
                 "factory_artifact",
@@ -388,18 +425,6 @@ def main(argv: Optional[List[str]] = None) -> int:
                 )
             if args.dry_run:
                 return 0
-            if not args.confirm_factory_provision:
-                raise ProvisioningError(
-                    "authorization",
-                    "Factory Bootloader provisioning requires --confirm-factory-provision.",
-                    "Run --dry-run first, then repeat with explicit factory confirmation for the intended board.",
-                )
-            if not args.probe_serial:
-                raise ProvisioningError(
-                    "authorization",
-                    "Real Factory provisioning requires --probe-serial to pin the intended ST-Link.",
-                    "Reconnect/select the intended probe, note its serial, then repeat the confirmed factory command.",
-                )
             try:
                 target = service.inspect_target(
                     probe,
@@ -445,10 +470,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                 str(error),
                 "Select a valid B300 F407 Application HEX linked at 0x08010000.",
             ) from error
-        probe = ProbeRef(args.probe_serial)
+        target = None
         if args.dry_run:
+            probe = ProbeRef(args.probe_serial)
             plan = service.preview_plan(image, probe)
         else:
+            probe = _select_write_probe(args, reporter)
+            if probe is None:
+                return 1
             try:
                 target = service.inspect_target(
                     probe,
@@ -470,14 +499,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 voltage=target.target_voltage,
                 protection=target.protection_summary,
             )
-        reporter.emit(
-            "flash_start",
-            application=str(image.path),
-            sha256=image.sha256,
-            start="0x%08X" % image.start_address,
-            end="0x%08X" % image.end_address,
-            dry_run=args.dry_run,
-        )
+        reporter.emit("flash_start", **flash_start_fields(plan, target, dry_run=args.dry_run))
         transactions = (
             ("program_verify", service.flash_command(plan)),
             ("reset", service.reset_command(plan.probe)),
@@ -504,20 +526,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 cancellable=event.cancellable,
             ),
         )
-        fields = {
-            "status": outcome.status,
-            "failure_phase": outcome.failure_phase,
-            "reason": outcome.reason,
-            "next_action": outcome.next_action,
-        }
-        if outcome.boot_verification is not None:
-            fields.update({
-                "pc": "0x%08X" % outcome.boot_verification.pc
-                if outcome.boot_verification.pc is not None else None,
-                "bkp1r": outcome.boot_verification.bkp1r,
-                "reason": outcome.boot_verification.reason,
-            })
-        reporter.emit("flash_result", **fields)
+        assert target is not None
+        reporter.emit("flash_result", **flash_result_fields(outcome, target))
         return 0 if outcome.succeeded else 1
     except (OSError, RuntimeError, ValueError) as error:
         fields = {"message": str(error)}

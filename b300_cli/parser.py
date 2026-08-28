@@ -80,6 +80,10 @@ def build_parser() -> argparse.ArgumentParser:
     debug = commands.add_parser(
         "debug", help="Start non-mutating OpenOCD debugging.", parents=[json_parent],
     )
+    debug.add_argument(
+        "debug_mode", nargs="?", choices=("server",), default="server", metavar="server",
+        help="Optional compatibility spelling for the OpenOCD debug server.",
+    )
     debug.add_argument("--openocd")
     debug.add_argument("--probe-serial", type=parse_probe_serial,
                        help="Select one ST-Link when multiple probes are connected.")

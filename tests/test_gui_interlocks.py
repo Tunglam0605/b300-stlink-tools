@@ -13,7 +13,7 @@ from b300_core.debug_service import DebugState
 from b300_core.hardware_session import HardwareSessionManager
 from b300_core.models import TargetInfo
 from b300_gui.main_window import MainWindow
-from tests.test_core_hex_policy import write_hex
+from tests.test_core_hex_policy import APPLICATION_VECTOR, write_hex
 from tests.test_gui_smoke import FakeService
 
 
@@ -45,7 +45,7 @@ class GuiHardwareInterlockTests(unittest.TestCase):
     def prepare_flash_ready(self, window: MainWindow) -> None:
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        image = write_hex(Path(temp.name), 0x08010000, b"\x01")
+        image = write_hex(Path(temp.name), 0x08010000, APPLICATION_VECTOR)
         self.assertTrue(window.load_image_path(image))
         window.apply_target_info(TargetInfo(
             0x101F6413, 512, 3.09, "S0-S2 protected", (0, 1, 2), True, False

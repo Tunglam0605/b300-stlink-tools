@@ -70,6 +70,31 @@ class FactoryPolicyTests(unittest.TestCase):
                     TargetInfo(0x419, 2048, 3.09, "unknown"),
                 )
 
+    def test_factory_plan_rejects_incomplete_wrp_report_before_service_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            image = inspect_bootloader_image(
+                write_hex(directory, 0x08000000, bootloader_vector())
+            )
+            with self.assertRaisesRegex(ValueError, "write-protection"):
+                build_factory_plan(
+                    image,
+                    ProbeRef("FACTORY123"),
+                    TargetInfo(0x413, 512, 3.09, "unknown", (), False),
+                )
+
+    def test_factory_plan_accepts_initially_protected_or_unprotected_bootloader(self) -> None:
+        targets = (
+            TargetInfo(0x413, 512, 3.09, "S0-S2 protected", (0, 1, 2), True),
+            TargetInfo(0x413, 512, 3.09, "S0-S2 unprotected", (), True),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            image = inspect_bootloader_image(
+                write_hex(directory, 0x08000000, bootloader_vector())
+            )
+            plans = [build_factory_plan(image, ProbeRef(None), target) for target in targets]
+
+        self.assertEqual([plan.target for plan in plans], list(targets))
+
 
 if __name__ == "__main__":
     unittest.main()
