@@ -39,7 +39,7 @@ class FakeOpener:
         self.responses = responses
         self.requests = []
 
-    def __call__(self, request, timeout):
+    def __call__(self, request, *, timeout):
         self.requests.append((request.full_url, timeout, request.headers))
         response = self.responses[request.full_url]
         if isinstance(response, Exception):
@@ -47,7 +47,21 @@ class FakeOpener:
         return FakeResponse(response, len(response))
 
 
+class KeywordOnlyTimeoutOpener(FakeOpener):
+    def __call__(self, request, *, timeout):
+        return super().__call__(request, timeout=timeout)
+
+
 class UpdaterTests(unittest.TestCase):
+    def test_urlopen_timeout_is_passed_as_keyword_not_request_body(self) -> None:
+        opener = KeywordOnlyTimeoutOpener({MANIFEST_URL: MESSAGE, SIGNATURE_URL: SIGNATURE})
+        client = UpdateClient(
+            TEST_PUBLIC_KEY, "windows-x64", open_url=opener, timeout_seconds=3.25
+        )
+        result = client.check("0.3.0")
+        self.assertTrue(result.available)
+        self.assertEqual([item[1] for item in opener.requests], [3.25, 3.25])
+
     def test_check_returns_new_release_only_when_version_is_newer(self) -> None:
         opener = FakeOpener({MANIFEST_URL: MESSAGE, SIGNATURE_URL: SIGNATURE})
         client = UpdateClient(

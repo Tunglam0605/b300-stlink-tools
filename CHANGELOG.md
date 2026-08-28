@@ -5,6 +5,22 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-28
+
+### Fixed
+
+- Sửa updater khi gọi `urllib.request.urlopen`: timeout giờ được truyền bằng keyword
+  `timeout=` thay vì positional argument thứ hai (vốn bị Python hiểu là HTTP request
+  body). Lỗi này làm GUI v0.4.0 báo `message_body should be a bytes-like object ...
+  got <class 'float'>` ngay khi tải `latest.json`.
+- Bổ sung regression test với opener chỉ chấp nhận keyword-only timeout để ngăn lỗi
+  tương tự quay lại.
+
+### Validation
+
+- Live updater check đã tải và xác minh `latest.json` + `latest.json.minisig` trực tiếp
+  từ GitHub Stable endpoint thành công trước khi phát hành patch.
+
 ## [0.4.0] - 2026-08-28
 
 ### Added

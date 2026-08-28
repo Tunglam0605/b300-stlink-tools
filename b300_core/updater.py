@@ -76,7 +76,7 @@ class UpdateClient:
 
     def _request(self, url: str):
         request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        return self.open_url(request, self.timeout_seconds)
+        return self.open_url(request, timeout=self.timeout_seconds)
 
     def _fetch_limited(self, url: str, limit: int, label: str) -> bytes:
         try:
