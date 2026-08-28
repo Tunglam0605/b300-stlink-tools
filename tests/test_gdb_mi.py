@@ -120,11 +120,13 @@ class GdbMiBackendTests(unittest.TestCase):
             response_timeout_seconds=0.2,
             platform_name="windows",
         )
-        with mock.patch("b300_core.gdb_mi.resolve_gdb", return_value="bundled-gdb") as resolver:
+        with mock.patch("b300_core.gdb_mi.resolve_gdb", return_value="bundled-gdb") as resolver, \
+             mock.patch("b300_core.process_startup.subprocess.CREATE_NO_WINDOW", 0x08000000,
+                        create=True):
             self.assertIsNone(backend.executable)
             backend.start()
         resolver.assert_called_once_with(None)
-        self.assertTrue(captured["creationflags"] & subprocess.CREATE_NO_WINDOW)
+        self.assertTrue(captured["creationflags"] & 0x08000000)
         self.assertEqual(captured["stdin"], subprocess.PIPE)
         self.assertEqual(captured["stdout"], subprocess.PIPE)
         self.assertEqual(captured["stderr"], subprocess.STDOUT)

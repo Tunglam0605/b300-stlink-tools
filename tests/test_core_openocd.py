@@ -181,13 +181,15 @@ class OpenOcdCoreTests(unittest.TestCase):
             def wait(self, timeout=None):
                 return 0
 
-        result = OpenOcdRunner(
-            process_factory=lambda command, **kwargs: captured.update(kwargs) or Process(),
-            platform_name="windows",
-        ).run(["openocd"])
+        with mock.patch("b300_core.process_startup.subprocess.CREATE_NO_WINDOW", 0x08000000,
+                        create=True):
+            result = OpenOcdRunner(
+                process_factory=lambda command, **kwargs: captured.update(kwargs) or Process(),
+                platform_name="windows",
+            ).run(["openocd"])
 
         self.assertEqual(result.returncode, 0)
-        self.assertTrue(captured["creationflags"] & subprocess.CREATE_NO_WINDOW)
+        self.assertTrue(captured["creationflags"] & 0x08000000)
         self.assertEqual(captured["stdout"], subprocess.PIPE)
         self.assertEqual(captured["stderr"], subprocess.STDOUT)
         self.assertTrue(captured["text"])

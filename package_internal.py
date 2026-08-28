@@ -97,11 +97,14 @@ def main(argv=None) -> int:
         parser.error("--internal-distribution-approved is required.")
     if not re.fullmatch(r"[0-9A-Fa-f]{64}", args.openocd_sha256):
         parser.error("--openocd-sha256 must contain exactly 64 hexadecimal characters.")
-    if args.gdb_root is not None and args.flavor != "gui":
-        parser.error("GDB runtime is allowed only in GUI artifacts.")
-    if args.gdb_root is not None and (not args.gdb_archive or not args.gdb_sha256 or
-                                     not re.fullmatch(r"[0-9A-Fa-f]{64}", args.gdb_sha256)):
-        parser.error("--gdb-root requires --gdb-archive and a 64-character --gdb-sha256.")
+    gdb_arguments = (args.gdb_root, args.gdb_archive, args.gdb_sha256)
+    if args.flavor == "gui":
+        if any(argument is None for argument in gdb_arguments):
+            parser.error("GUI artifacts require --gdb-root, --gdb-archive, and --gdb-sha256.")
+        if not re.fullmatch(r"[0-9A-Fa-f]{64}", args.gdb_sha256):
+            parser.error("--gdb-sha256 must contain exactly 64 hexadecimal characters.")
+    elif any(argument is not None for argument in gdb_arguments):
+        parser.error("GDB runtime arguments are allowed only in GUI artifacts.")
     required = [args.executable, args.openocd_root, args.bootstrap, args.openocd_package]
     if args.gdb_root is not None:
         required.append(args.gdb_root)

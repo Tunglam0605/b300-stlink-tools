@@ -99,8 +99,11 @@ class GuiPackagingTests(unittest.TestCase):
             bootstrap = root / "install.ps1"
             bootstrap.write_bytes(b"bootstrap")
             openocd = root / "openocd"
+            gdb = root / "gdb"
             (openocd / "bin").mkdir(parents=True)
             (openocd / "bin" / "openocd.exe").write_bytes(b"openocd")
+            (gdb / "bin").mkdir(parents=True)
+            (gdb / "bin" / "arm-none-eabi-gdb.exe").write_bytes(b"gdb")
             xpack = root / "xpack-openocd.zip"
             xpack.write_bytes(b"trusted")
             output = root / "bundle.zip"
@@ -116,6 +119,8 @@ class GuiPackagingTests(unittest.TestCase):
                     "--executable", str(gui),
                     "--application-root", str(app_root),
                     "--openocd-root", str(openocd),
+                    "--gdb-root", str(gdb), "--gdb-archive", "xpack-gdb.zip",
+                    "--gdb-sha256", "B" * 64,
                     "--bootstrap", str(bootstrap),
                     "--output", str(output),
                     "--platform", "windows-x64",
@@ -158,10 +163,13 @@ class GuiPackagingTests(unittest.TestCase):
             gui = root / "b300-stlink-gui.exe"
             bootstrap = root / "install.ps1"
             openocd = root / "openocd"
+            gdb = root / "gdb"
             xpack = root / "xpack-openocd.zip"
             (openocd / "bin").mkdir(parents=True)
+            (gdb / "bin").mkdir(parents=True)
             for path in (cli, gui, bootstrap, openocd / "bin" / "openocd.exe"):
                 path.write_bytes(b"test")
+            (gdb / "bin" / "arm-none-eabi-gdb.exe").write_bytes(b"gdb")
             xpack.write_bytes(b"trusted archive")
             firmware = root / "resources" / "firmware"
             firmware.mkdir(parents=True)
@@ -186,6 +194,8 @@ class GuiPackagingTests(unittest.TestCase):
                     "--flavor", "gui",
                     "--executable", str(gui),
                     "--openocd-root", str(openocd),
+                    "--gdb-root", str(gdb), "--gdb-archive", "xpack-gdb.zip",
+                    "--gdb-sha256", "B" * 64,
                     "--bootstrap", str(bootstrap),
                     "--output", str(output),
                     "--platform", "windows-x64",
@@ -303,7 +313,40 @@ class GuiPackagingTests(unittest.TestCase):
                     "--openocd-sha256", "A" * 64, "--openocd-package", str(xpack),
                     "--internal-distribution-approved",
                 ])
-            self.assertIn("GDB runtime is allowed only", stderr.getvalue())
+            self.assertIn("GDB runtime arguments are allowed only", stderr.getvalue())
+
+    def test_package_requires_complete_gdb_arguments_for_gui_and_rejects_cli_orphans(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gui = root / "b300-stlink-gui.exe"
+            cli = root / "b300-stlink.exe"
+            bootstrap = root / "install.ps1"
+            openocd = root / "openocd"
+            xpack = root / "xpack-openocd.zip"
+            (openocd / "bin").mkdir(parents=True)
+            for path in (gui, cli, bootstrap, openocd / "bin" / "openocd.exe"):
+                path.write_bytes(b"runtime")
+            xpack.write_bytes(b"trusted")
+            manifest_digest = hashlib.sha256(package_internal.openocd_manifest(openocd)).hexdigest()
+            common = [
+                "--openocd-root", str(openocd), "--bootstrap", str(bootstrap),
+                "--platform", "windows-x64", "--openocd-archive", "xpack-openocd.zip",
+                "--openocd-sha256", "A" * 64, "--openocd-package", str(xpack),
+                "--internal-distribution-approved",
+            ]
+            with mock.patch.object(package_internal, "TRUSTED_TREE_MANIFESTS", {"windows-x64": manifest_digest}):
+                for flavor, executable, extra in (
+                    ("gui", gui, []),
+                    ("cli", cli, ["--gdb-archive", "orphan.tar.gz"]),
+                    ("cli", cli, ["--gdb-sha256", "B" * 64]),
+                ):
+                    with self.subTest(flavor=flavor, extra=extra), \
+                         redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                        package_internal.main([
+                            "--flavor", flavor, "--executable", str(executable),
+                            "--output", str(root / (flavor + ".zip")),
+                            *common, *extra,
+                        ])
 
     def test_release_workflows_smoke_test_the_bundled_gdb_runtime(self) -> None:
         for workflow_name in ("release.yml", "release-dry-run.yml"):

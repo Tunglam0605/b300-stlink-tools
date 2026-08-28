@@ -58,12 +58,22 @@ class GdbRuntimeTests(unittest.TestCase):
         self.assertTrue(info.available)
 
     def test_runtime_info_reports_the_resolved_gdb_version(self) -> None:
+        captured = {}
         completed = mock.Mock(stdout="GNU gdb (xPack ARM Embedded GCC) 15.2.1\n", returncode=0)
         with mock.patch("b300_core.gdb_runtime.resolve_gdb", return_value="/opt/gdb"), \
-             mock.patch("b300_core.gdb_runtime.subprocess.run", return_value=completed):
-            info = gdb_runtime_info()
+             mock.patch("b300_core.gdb_runtime.subprocess.run", \
+                        side_effect=lambda command, **kwargs: captured.update(kwargs) or completed), \
+             mock.patch("b300_core.process_startup.subprocess.CREATE_NO_WINDOW", 0x08000000,
+                        create=True):
+            info = gdb_runtime_info(platform_name="windows")
         self.assertTrue(info.available)
         self.assertEqual(info.version, "GNU gdb (xPack ARM Embedded GCC) 15.2.1")
+        self.assertEqual(info.platform, "windows")
+        self.assertTrue(captured["creationflags"] & 0x08000000)
+        self.assertTrue(captured["capture_output"])
+        self.assertTrue(captured["text"])
+        self.assertEqual(captured["timeout"], 5.0)
+        self.assertFalse(captured["shell"])
 
     def test_runtime_info_reports_unavailable_when_version_probe_cannot_start(self) -> None:
         with mock.patch("b300_core.gdb_runtime.resolve_gdb", return_value="/opt/gdb"), \

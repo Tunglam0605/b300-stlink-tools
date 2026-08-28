@@ -7,6 +7,7 @@ import hashlib
 import platform
 import shutil
 import subprocess
+import struct
 import sys
 import sysconfig
 import tarfile
@@ -42,6 +43,13 @@ TRUSTED_GDB_PACKAGES = {
         "67980c7990eba7bb7ffdf39699102effd70889f5ac427be19a8c8a6c5fab2972",
     ),
 }
+HASH_CHUNK_BYTES = 1024 * 1024
+MAX_GDB_PACKAGE_BYTES = 512 * 1024 * 1024
+MAX_GDB_EXPANDED_BYTES = 4 * 1024 * 1024 * 1024
+MAX_GDB_FILE_BYTES = 512 * 1024 * 1024
+MAX_GDB_ENTRIES = 20_000
+MAX_GDB_COMPRESSION_RATIO = 500
+MAX_GDB_CENTRAL_DIRECTORY_BYTES = 64 * 1024 * 1024
 
 
 def target_for(system: str, machine: str, python_platform: str):
@@ -132,6 +140,26 @@ def validate_trusted_gdb_package(platform_name: str, filename: str, digest: str)
         raise RuntimeError("Downloaded GDB package does not match the built-in trust anchor.")
 
 
+def hash_file(path: Path, maximum_bytes: int = None) -> str:
+    """Hash a bounded archive without holding it in memory."""
+    source = Path(path)
+    maximum_bytes = MAX_GDB_PACKAGE_BYTES if maximum_bytes is None else maximum_bytes
+    if source.stat().st_size > maximum_bytes:
+        raise ValueError("GDB archive exceeds the compressed size limit.")
+    digest = hashlib.sha256()
+    total = 0
+    with source.open("rb") as stream:
+        while True:
+            chunk = stream.read(HASH_CHUNK_BYTES)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > maximum_bytes:
+                raise ValueError("GDB archive exceeds the compressed size limit.")
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _archive_parts(name: str):
     if not name or "\x00" in name or "\\" in name or name.startswith("/") or ":" in name:
         raise ValueError("GDB archive contains an unsafe path.")
@@ -151,10 +179,97 @@ def _gdb_destination(destination: Path, parts) -> Path:
     return target
 
 
-def _copy_gdb_stream(source, target: Path) -> None:
+def _check_gdb_expanded(total: int, compressed_size: int) -> None:
+    if total > MAX_GDB_EXPANDED_BYTES:
+        raise ValueError("GDB archive exceeds the expanded size limit.")
+    if compressed_size <= 0 or total > compressed_size * MAX_GDB_COMPRESSION_RATIO:
+        raise ValueError("GDB archive exceeds the compression ratio limit.")
+
+
+def _preflight_gdb_zip(source: Path) -> None:
+    """Bound ZIP metadata before ZipFile allocates one object per member."""
+    size = source.stat().st_size
+    tail_size = min(size, 65_557)
+    with source.open("rb") as stream:
+        stream.seek(size - tail_size)
+        tail = stream.read(tail_size)
+    offset = tail.rfind(b"PK\x05\x06")
+    if offset < 0 or len(tail) - offset < 22:
+        raise ValueError("GDB ZIP has no valid end-of-central-directory record.")
+    disk, central_disk, disk_entries, entries, central_size, central_offset, comment_size = \
+        struct.unpack_from("<HHHHIIH", tail, offset + 4)
+    eocd_offset = size - tail_size + offset
+    if eocd_offset + 22 + comment_size != size or central_offset + central_size > eocd_offset:
+        raise ValueError("GDB ZIP central directory is malformed.")
+    if disk or central_disk or disk_entries != entries or entries == 0xFFFF or \
+            central_size == 0xFFFFFFFF or central_offset == 0xFFFFFFFF:
+        raise ValueError("GDB ZIP multi-disk or ZIP64 archives are not supported.")
+    if entries > MAX_GDB_ENTRIES:
+        raise ValueError("GDB archive has too many entries.")
+    if central_size > MAX_GDB_CENTRAL_DIRECTORY_BYTES:
+        raise ValueError("GDB ZIP central directory exceeds its size limit.")
+
+
+def _preflight_gdb_tar(source: Path, destination: Path, compressed_size: int) -> None:
+    """Validate TAR metadata and all materialized links before writing files."""
+    count = 0
+    expanded_total = 0
+    files = {}
+    links = []
+    with tarfile.open(source, "r:gz") as archive:
+        for member in archive:
+            count += 1
+            if count > MAX_GDB_ENTRIES:
+                raise ValueError("GDB archive has too many entries.")
+            if member.size > MAX_GDB_FILE_BYTES:
+                raise ValueError("GDB archive entry exceeds its size limit.")
+            expanded_total += member.size
+            _check_gdb_expanded(expanded_total, compressed_size)
+            parts = _archive_parts(member.name)
+            if len(parts) == 1 or member.isdir():
+                continue
+            member_destination = _gdb_destination(destination, parts)
+            if member.issym() or member.islnk():
+                links.append((
+                    member_destination,
+                    _tar_link_destination(member.name, member.linkname, destination, member.islnk()),
+                ))
+            elif member.isfile():
+                files[member_destination] = member.size
+            else:
+                raise ValueError("GDB archive contains an unsupported entry.")
+    while links:
+        unresolved = []
+        copied = False
+        for link_destination, link_target in links:
+            if link_target in files:
+                size = files[link_target]
+                expanded_total += size
+                _check_gdb_expanded(expanded_total, compressed_size)
+                files[link_destination] = size
+                copied = True
+            else:
+                unresolved.append((link_destination, link_target))
+        if not copied:
+            raise ValueError("GDB archive contains an unresolved link target.")
+        links = unresolved
+
+
+def _copy_gdb_stream(source, target: Path, expected_bytes: int) -> int:
     target.parent.mkdir(parents=True, exist_ok=True)
+    total = 0
     with target.open("wb") as output:
-        shutil.copyfileobj(source, output, length=1024 * 1024)
+        while True:
+            chunk = source.read(HASH_CHUNK_BYTES)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > expected_bytes or total > MAX_GDB_FILE_BYTES:
+                raise ValueError("GDB archive entry exceeds its size limit.")
+            output.write(chunk)
+    if total != expected_bytes:
+        raise ValueError("GDB archive entry size does not match its header.")
+    return total
 
 
 def _tar_link_destination(member_name: str, link_name: str, destination: Path,
@@ -182,33 +297,52 @@ def _tar_link_destination(member_name: str, link_name: str, destination: Path,
 def extract_trusted_gdb_package(package: Path, destination: Path, platform_name: str) -> Path:
     """Verify one pinned xPack archive and extract its portable runtime safely."""
     source = Path(package)
-    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    compressed_size = source.stat().st_size
+    digest = hash_file(source)
     validate_trusted_gdb_package(platform_name, source.name, digest)
     target = Path(destination)
     if target.exists() and any(target.iterdir()):
         raise ValueError("GDB extraction destination must be empty.")
-    target.mkdir(parents=True, exist_ok=True)
     count = 0
+    expanded_total = 0
     if source.name.endswith(".zip"):
+        _preflight_gdb_zip(source)
+        target.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(source) as archive:
+            infos = archive.infolist()
+            if len(infos) > MAX_GDB_ENTRIES:
+                raise ValueError("GDB archive has too many entries.")
             for member in archive.infolist():
                 count += 1
-                if count > 20_000 or member.file_size > 512 * 1024 * 1024:
-                    raise ValueError("GDB archive exceeds extraction limits.")
+                if member.flag_bits & 0x1:
+                    raise ValueError("Encrypted GDB archive entries are not supported.")
+                if member.file_size > MAX_GDB_FILE_BYTES:
+                    raise ValueError("GDB archive entry exceeds its size limit.")
+                if member.file_size and (not member.compress_size or
+                                         member.file_size > member.compress_size * MAX_GDB_COMPRESSION_RATIO):
+                    raise ValueError("GDB archive exceeds the compression ratio limit.")
+                expanded_total += member.file_size
+                _check_gdb_expanded(expanded_total, compressed_size)
                 parts = _archive_parts(member.filename)
                 if len(parts) == 1 or member.is_dir():
                     continue
                 if (member.external_attr >> 16) & 0o170000 == 0o120000:
                     raise ValueError("GDB archive symlinks are not supported in ZIP packages.")
                 with archive.open(member) as stream:
-                    _copy_gdb_stream(stream, _gdb_destination(target, parts))
+                    _copy_gdb_stream(stream, _gdb_destination(target, parts), member.file_size)
     else:
+        _preflight_gdb_tar(source, target, compressed_size)
+        target.mkdir(parents=True, exist_ok=True)
         with tarfile.open(source, "r:gz") as archive:
             links = []
             for member in archive:
                 count += 1
-                if count > 20_000 or member.size > 512 * 1024 * 1024:
-                    raise ValueError("GDB archive exceeds extraction limits.")
+                if count > MAX_GDB_ENTRIES:
+                    raise ValueError("GDB archive has too many entries.")
+                if member.size > MAX_GDB_FILE_BYTES:
+                    raise ValueError("GDB archive entry exceeds its size limit.")
+                expanded_total += member.size
+                _check_gdb_expanded(expanded_total, compressed_size)
                 parts = _archive_parts(member.name)
                 if len(parts) == 1 or member.isdir():
                     continue
@@ -224,12 +358,14 @@ def extract_trusted_gdb_package(package: Path, destination: Path, platform_name:
                 if stream is None:
                     raise ValueError("GDB archive contains an unreadable file.")
                 with stream:
-                    _copy_gdb_stream(stream, _gdb_destination(target, parts))
+                    _copy_gdb_stream(stream, _gdb_destination(target, parts), member.size)
             while links:
                 unresolved = []
                 copied = False
                 for link_destination, link_target in links:
                     if link_target.is_file():
+                        expanded_total += link_target.stat().st_size
+                        _check_gdb_expanded(expanded_total, compressed_size)
                         link_destination.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copy2(link_target, link_destination)
                         copied = True
@@ -263,7 +399,7 @@ def main(argv=None) -> int:
         fetch("%s/%s" % (BASE, filename), archive)
         fetch("%s/%s.sha" % (BASE, filename), checksum)
         verified_sha256 = checksum.read_text().split()[0].lower()
-        if hashlib.sha256(archive.read_bytes()).hexdigest() != verified_sha256:
+        if hash_file(archive, maximum_bytes=MAX_GDB_PACKAGE_BYTES) != verified_sha256:
             raise RuntimeError("OpenOCD checksum mismatch.")
         validate_trusted_package(platform_name, filename, verified_sha256)
         openocd_root = temp / "openocd-runtime"
@@ -275,7 +411,7 @@ def main(argv=None) -> int:
             gdb_filename, gdb_sha256 = TRUSTED_GDB_PACKAGES[platform_name]
             gdb_archive = temp / gdb_filename
             fetch("%s/%s" % (GDB_BASE, gdb_filename), gdb_archive)
-            actual_gdb_sha256 = hashlib.sha256(gdb_archive.read_bytes()).hexdigest()
+            actual_gdb_sha256 = hash_file(gdb_archive)
             validate_trusted_gdb_package(platform_name, gdb_filename, actual_gdb_sha256)
             gdb_root = temp / "gdb-runtime"
             extract_trusted_gdb_package(gdb_archive, gdb_root, platform_name)

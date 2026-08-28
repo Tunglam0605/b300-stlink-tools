@@ -6,6 +6,7 @@ import ipaddress
 import subprocess
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Optional, Protocol
@@ -101,8 +102,10 @@ class DebugService:
                     command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                     shell=False, **child_process_kwargs(self._platform_name),
                 )
-                ready, logs = self._forward_output(self._process, config.gdb_port, event_sink)
-                self._wait_for_listener_locked(ready, logs, readiness_timeout_seconds)
+                ready, logs, log_lock = self._forward_output(
+                    self._process, config.gdb_port, event_sink
+                )
+                self._wait_for_listener_locked(ready, logs, log_lock, readiness_timeout_seconds)
             except BaseException:
                 self._stop_process_locked()
                 if session_lease is not None:
@@ -158,37 +161,54 @@ class DebugService:
                         event_sink: Optional[EventSink]):
         stdout = getattr(process, "stdout", None)
         ready = threading.Event()
-        logs = []
+        logs = deque(maxlen=10)
+        log_lock = threading.Lock()
         if stdout is None:
-            return ready, logs
+            return ready, logs, log_lock
 
         def forward() -> None:
             for line in stdout:
                 text = str(line).strip()
                 if text:
-                    logs.append(text)
+                    with log_lock:
+                        logs.append(text)
                     if text == "Info : Listening on port %d for gdb connections" % gdb_port:
                         ready.set()
                     if event_sink is not None:
                         event_sink(text)
 
         threading.Thread(target=forward, name="b300-openocd-log", daemon=True).start()
-        return ready, logs
+        return ready, logs, log_lock
 
-    def _wait_for_listener_locked(self, ready: threading.Event, logs, timeout_seconds: float) -> None:
+    def _wait_for_listener_locked(self, ready: threading.Event, logs, log_lock: threading.Lock,
+                                  timeout_seconds: float) -> None:
         deadline = time.monotonic() + timeout_seconds
-        while not ready.is_set():
+        while True:
             process = self._process
-            if process is None or process.poll() is not None:
+            if ready.is_set():
+                if process is not None and process.poll() is None:
+                    return
                 code = None if process is None else process.poll()
+                with log_lock:
+                    context = " | ".join(logs) or "(none)"
                 raise RuntimeError(
                     "OpenOCD exited before GDB listener became ready (exit code %s). Last log: %s" %
-                    (code, " | ".join(logs[-10:]) or "(none)")
+                    (code, context)
+                )
+            if process is None or process.poll() is not None:
+                code = None if process is None else process.poll()
+                with log_lock:
+                    context = " | ".join(logs) or "(none)"
+                raise RuntimeError(
+                    "OpenOCD exited before GDB listener became ready (exit code %s). Last log: %s" %
+                    (code, context)
                 )
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                with log_lock:
+                    context = " | ".join(logs) or "(none)"
                 raise RuntimeError(
                     "OpenOCD GDB listener was not ready before timeout. Last log: %s" %
-                    (" | ".join(logs[-10:]) or "(none)")
+                    context
                 )
             ready.wait(min(remaining, 0.02))

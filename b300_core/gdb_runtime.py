@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
+from .process_startup import child_process_kwargs
+
 
 @dataclass(frozen=True)
 class GdbRuntimeInfo:
@@ -82,18 +84,20 @@ def resolve_gdb(explicit: Optional[str] = None) -> str:
     )
 
 
-def gdb_runtime_info(explicit: Optional[str] = None) -> GdbRuntimeInfo:
+def gdb_runtime_info(explicit: Optional[str] = None,
+                     platform_name: Optional[str] = None) -> GdbRuntimeInfo:
     try:
         resolved = resolve_gdb(explicit)
         completed = subprocess.run(
-            [resolved, "--version"], capture_output=True, text=True, timeout=5.0, check=False,
+            [resolved, "--version"], capture_output=True, text=True, timeout=5.0,
+            check=False, shell=False, **child_process_kwargs(platform_name),
         )
         version = completed.stdout.splitlines()[0].strip() if completed.stdout else None
         if completed.returncode != 0:
             return GdbRuntimeInfo.from_path(
-                None, version=version,
+                None, platform_name=platform_name, version=version,
                 reason="GDB --version exited with code %s." % completed.returncode,
             )
-        return GdbRuntimeInfo.from_path(resolved, version=version)
+        return GdbRuntimeInfo.from_path(resolved, platform_name=platform_name, version=version)
     except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as error:
-        return GdbRuntimeInfo.from_path(None, reason=str(error))
+        return GdbRuntimeInfo.from_path(None, platform_name=platform_name, reason=str(error))

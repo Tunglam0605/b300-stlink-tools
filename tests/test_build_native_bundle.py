@@ -164,6 +164,98 @@ class NativeBundleTargetTests(unittest.TestCase):
             self.assertEqual((root / "gdb" / "lib" / "libgdb.so").read_bytes(), b"library")
             self.assertEqual((root / "gdb" / "lib" / "libgdb-hard.so").read_bytes(), b"library")
 
+    def test_gdb_extraction_hashes_archive_in_streaming_chunks(self) -> None:
+        module = builder()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "runtime.zip"
+            with zipfile.ZipFile(archive, "w") as bundle:
+                bundle.writestr("xpack-arm-none-eabi-gcc-test/bin/arm-none-eabi-gdb.exe", b"gdb")
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            with mock.patch.object(module, "TRUSTED_GDB_PACKAGES", {"windows-x64": (archive.name, digest)}), \
+                 mock.patch.object(Path, "read_bytes", side_effect=AssertionError("must stream")):
+                module.extract_trusted_gdb_package(archive, root / "gdb", "windows-x64")
+
+    def test_gdb_extraction_rejects_archive_larger_than_package_bound(self) -> None:
+        module = builder()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "runtime.zip"
+            with zipfile.ZipFile(archive, "w") as bundle:
+                bundle.writestr("xpack-arm-none-eabi-gcc-test/bin/arm-none-eabi-gdb.exe", b"gdb")
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            with mock.patch.object(module, "TRUSTED_GDB_PACKAGES", {"windows-x64": (archive.name, digest)}), \
+                 mock.patch.object(module, "MAX_GDB_PACKAGE_BYTES", 1):
+                with self.assertRaisesRegex(ValueError, "compressed size limit"):
+                    module.extract_trusted_gdb_package(archive, root / "gdb", "windows-x64")
+
+    def test_gdb_extraction_rejects_cumulative_expanded_size(self) -> None:
+        module = builder()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "runtime.zip"
+            with zipfile.ZipFile(archive, "w") as bundle:
+                bundle.writestr("xpack-arm-none-eabi-gcc-test/bin/arm-none-eabi-gdb.exe", b"gdb")
+                bundle.writestr("xpack-arm-none-eabi-gcc-test/lib/libgdb.so", b"library")
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            with mock.patch.object(module, "TRUSTED_GDB_PACKAGES", {"windows-x64": (archive.name, digest)}), \
+                 mock.patch.object(module, "MAX_GDB_EXPANDED_BYTES", 5):
+                with self.assertRaisesRegex(ValueError, "expanded size limit"):
+                    module.extract_trusted_gdb_package(archive, root / "gdb", "windows-x64")
+
+    def test_tar_cumulative_limit_is_preflighted_before_copying_files(self) -> None:
+        module = builder()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "runtime.tar.gz"
+            package_root = "xpack-arm-none-eabi-gcc-test"
+            with tarfile.open(archive, "w:gz") as bundle:
+                for name in ("bin/arm-none-eabi-gdb", "lib/libgdb.so"):
+                    info = tarfile.TarInfo(package_root + "/" + name)
+                    info.size = 3
+                    bundle.addfile(info, io.BytesIO(b"gdb"))
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            with mock.patch.object(module, "TRUSTED_GDB_PACKAGES", {"linux-x64": (archive.name, digest)}), \
+                 mock.patch.object(module, "MAX_GDB_EXPANDED_BYTES", 5), \
+                 mock.patch.object(module, "_copy_gdb_stream", wraps=module._copy_gdb_stream) as copied:
+                with self.assertRaisesRegex(ValueError, "expanded size limit"):
+                    module.extract_trusted_gdb_package(archive, root / "gdb", "linux-x64")
+            self.assertEqual(copied.call_count, 0)
+
+    def test_gdb_extraction_rejects_compression_ratio_bomb(self) -> None:
+        module = builder()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "runtime.zip"
+            with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+                bundle.writestr("xpack-arm-none-eabi-gcc-test/bin/arm-none-eabi-gdb.exe", b"g" * 512)
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            with mock.patch.object(module, "TRUSTED_GDB_PACKAGES", {"windows-x64": (archive.name, digest)}), \
+                 mock.patch.object(module, "MAX_GDB_COMPRESSION_RATIO", 2):
+                with self.assertRaisesRegex(ValueError, "compression ratio"):
+                    module.extract_trusted_gdb_package(archive, root / "gdb", "windows-x64")
+
+    def test_gdb_extraction_counts_copied_tar_link_bytes_toward_expanded_limit(self) -> None:
+        module = builder()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "runtime.tar.gz"
+            package_root = "xpack-arm-none-eabi-gcc-test"
+            with tarfile.open(archive, "w:gz") as bundle:
+                for name in ("bin/arm-none-eabi-gdb", "lib/libgdb.so.1"):
+                    info = tarfile.TarInfo(package_root + "/" + name)
+                    info.size = 3
+                    bundle.addfile(info, io.BytesIO(b"gdb"))
+                link = tarfile.TarInfo(package_root + "/lib/libgdb.so")
+                link.type = tarfile.SYMTYPE
+                link.linkname = "libgdb.so.1"
+                bundle.addfile(link)
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            with mock.patch.object(module, "TRUSTED_GDB_PACKAGES", {"linux-x64": (archive.name, digest)}), \
+                 mock.patch.object(module, "MAX_GDB_EXPANDED_BYTES", 7):
+                with self.assertRaisesRegex(ValueError, "expanded size limit"):
+                    module.extract_trusted_gdb_package(archive, root / "gdb", "linux-x64")
+
 
 if __name__ == "__main__":
     unittest.main()

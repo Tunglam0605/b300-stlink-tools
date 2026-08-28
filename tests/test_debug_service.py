@@ -195,10 +195,12 @@ class DebugServiceTests(unittest.TestCase):
             process_factory=lambda command, **kwargs: calls.append(kwargs) or process,
             platform_name="windows",
         )
-        with mock.patch("socket.create_connection") as connect:
+        with mock.patch("socket.create_connection") as connect, \
+             mock.patch("b300_core.process_startup.subprocess.CREATE_NO_WINDOW", 0x08000000,
+                        create=True):
             self.assertEqual(service.start(DebugConfig(ProbeRef("DEBUG123"))), DebugState.READY)
         connect.assert_not_called()
-        self.assertTrue(calls[0]["creationflags"] & subprocess.CREATE_NO_WINDOW)
+        self.assertTrue(calls[0]["creationflags"] & 0x08000000)
         self.assertEqual(calls[0]["stdout"], subprocess.PIPE)
         self.assertEqual(calls[0]["stderr"], subprocess.STDOUT)
         self.assertTrue(calls[0]["text"])
@@ -213,6 +215,61 @@ class DebugServiceTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "exited"):
             service.start(DebugConfig(ProbeRef("DEBUG123")), readiness_timeout_seconds=0.1)
         self.assertEqual(service.state, DebugState.FAILED)
+
+    def test_listener_then_exit_never_reports_ready_or_holds_session(self) -> None:
+        class ListenerThenExitProcess(FakeProcess):
+            def __init__(self) -> None:
+                super().__init__()
+                self.emitted_listener = False
+                self.stdout = self._lines()
+
+            def _lines(self):
+                self.emitted_listener = True
+                yield "Info : Listening on port 3333 for gdb connections\n"
+
+            def poll(self):
+                return 9 if self.emitted_listener else None
+
+        process = ListenerThenExitProcess()
+        manager = HardwareSessionManager()
+        service = DebugService(
+            executable="openocd", session_manager=manager,
+            process_factory=lambda *args, **kwargs: process,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "exited"):
+            service.start(DebugConfig(ProbeRef("DEBUG123")))
+
+        self.assertEqual(service.state, DebugState.FAILED)
+        self.assertEqual(manager.snapshot().mode, HardwareMode.IDLE)
+
+    def test_timeout_keeps_only_the_last_ten_log_lines_but_forwards_every_line(self) -> None:
+        process = FakeProcess()
+        process.stdout = iter(["Info : startup-%d\n" % number for number in range(12)])
+        messages = []
+        service = DebugService(executable="openocd", process_factory=lambda *args, **kwargs: process)
+
+        with self.assertRaisesRegex(RuntimeError, "startup-11") as error:
+            service.start(
+                DebugConfig(ProbeRef("DEBUG123")), readiness_timeout_seconds=0.02,
+                event_sink=messages.append,
+            )
+
+        self.assertNotIn("startup-0", str(error.exception))
+        self.assertEqual(messages, ["Info : startup-%d" % number for number in range(12)])
+
+    def test_log_buffer_storage_is_bounded_to_the_last_ten_lines(self) -> None:
+        process = FakeProcess()
+        process.stdout = iter(["Info : retained-%d\n" % number for number in range(12)])
+        messages = []
+        ready, logs, _log_lock = DebugService._forward_output(process, 3333, messages.append)
+        deadline = time.monotonic() + 1.0
+        while len(messages) < 12 and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+        self.assertFalse(ready.is_set())
+        self.assertEqual(messages, ["Info : retained-%d" % number for number in range(12)])
+        self.assertEqual(list(logs), ["Info : retained-%d" % number for number in range(2, 12)])
 
 
 if __name__ == "__main__":
