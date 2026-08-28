@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QComboBox,
+    QDialog,
 )
 
 from b300_core.models import FlashPlan, ProbeRef
@@ -62,6 +63,9 @@ from .memory_tab import MemoryTab
 from .debug_tab import DebugTab
 from .branding import asset_path
 from .about_dialog import AboutDialog
+from .confirm_dialog import ConfirmFlashDialog
+from .toast import ToastNotification
+from .log_highlighter import format_log_html
 from .operation_state import OperationState
 from .update_dialog import UpdateDialog
 from .update_worker import UpdateCheckWorker, UpdateDownloadWorker
@@ -154,7 +158,7 @@ class MainWindow(QMainWindow):
         self.brand_logo.setCursor(Qt.CursorShape.PointingHandCursor)
         self.brand_logo.setPixmap(
             QPixmap(str(asset_path("b300-stlink-wordmark.png"))).scaledToHeight(
-                42, Qt.TransformationMode.SmoothTransformation
+                63, Qt.TransformationMode.SmoothTransformation
             )
         )
         self.brand_logo.mousePressEvent = self._brand_logo_clicked
@@ -162,28 +166,37 @@ class MainWindow(QMainWindow):
         brand_row.addStretch(1)
 
         brand_info = QVBoxLayout()
-        brand_info.setSpacing(2)
+        brand_info.setSpacing(4)
         brand_info.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        top_meta_row = QHBoxLayout()
+        top_meta_row.setSpacing(8)
+        top_meta_row.addStretch(1)
         eyebrow = QLabel("INDUSTRIAL PROVISIONING SYSTEM · STM32F407")
         eyebrow.setObjectName("eyebrowLabel")
-        eyebrow.setAlignment(Qt.AlignmentFlag.AlignRight)
-        subtitle = QLabel("Nạp Application STM32F407 an toàn · giữ nguyên Bootloader và đường OTA")
-        subtitle.setObjectName("subtitleLabel")
-        subtitle.setAlignment(Qt.AlignmentFlag.AlignRight)
+        top_meta_row.addWidget(eyebrow)
+
         channel = getattr(self.update_client, "channel", "stable")
         channel_name = getattr(channel, "value", str(channel)).capitalize()
-        self.update_channel_label = QLabel("v%s · %s · Chưa kiểm tra bản mới" % (__version__, channel_name))
+        self.update_channel_label = QLabel("v%s · %s" % (__version__, channel_name))
         self.update_channel_label.setObjectName("updateChannelLabel")
-        self.update_channel_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-        brand_info.addWidget(eyebrow)
+        self.update_channel_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.update_channel_label.setToolTip("Nhấn để kiểm tra cập nhật phiên bản mới")
+        self.update_channel_label.mousePressEvent = lambda _event: self.check_for_updates(manual=True)
+        top_meta_row.addWidget(self.update_channel_label)
+        brand_info.addLayout(top_meta_row)
+
+        subtitle = QLabel("Nạp Application STM32F407 an toàn · Giữ nguyên Bootloader và đường OTA")
+        subtitle.setObjectName("subtitleLabel")
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignRight)
         brand_info.addWidget(subtitle)
-        brand_info.addWidget(self.update_channel_label)
         brand_row.addLayout(brand_info)
         root.addLayout(brand_row)
 
         self.status_banner = QLabel("Sẵn sàng kiểm tra ST-Link")
         self.status_banner.setObjectName("statusBanner")
         self.status_banner.setAccessibleName("Trạng thái phiên nạp")
+        self.status_banner.setVisible(False)
         status_row = QHBoxLayout()
         status_row.setSpacing(8)
         status_row.addWidget(self.status_banner, 1)
@@ -203,8 +216,6 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_flash_tab(), "Nạp firmware")
-        self.factory_tab = self._build_factory_tab()
-        self.tabs.addTab(self.factory_tab, "Factory / Bootloader")
         self.memory_tab = MemoryTab(
             self.service, self._selected_probe, log_sink=self.append_log
         )
@@ -454,22 +465,17 @@ class MainWindow(QMainWindow):
             return
         if index == 0:
             if self.image_info is not None:
-                self._set_status("Firmware hợp lệ; sẵn sàng dry-run", "normal")
+                self._set_status("Firmware hợp lệ; sẵn sàng dry-run hoặc nạp", "normal")
             elif self.openocd_ready:
                 self._set_status("Sẵn sàng kiểm tra ST-Link", "normal")
             else:
                 self._set_status("OpenOCD chưa sẵn sàng; hãy thiết lập môi trường offline", "error")
         elif index == 1:
             self._set_status(
-                "CHẾ ĐỘ FACTORY · Chỉ dùng cho main mới/chip mới hoặc bảo trì Bootloader",
+                "Khảo sát bộ nhớ Flash (Read-Only) · Sector & OTA Metadata",
                 "normal",
             )
         elif index == 2:
-            self._set_status(
-                "CHỈ ĐỌC (READ-ONLY) · Khảo sát Sector Flash và OTA Metadata",
-                "normal",
-            )
-        elif index == 3:
             self._set_status(
                 "DEBUG MODE · Điều khiển OpenOCD / GDB; không ghi nạp firmware",
                 "normal",
@@ -569,15 +575,26 @@ class MainWindow(QMainWindow):
         actions.setSpacing(10)
         self.dry_run_button = QPushButton("Kiểm tra dry-run")
         self.dry_run_button.clicked.connect(self.show_dry_run)
-        self.flash_button = QPushButton("Nạp Application")
-        self.flash_button.setObjectName("flashButton")
-        self.flash_button.clicked.connect(self.confirm_flash)
         self.cancel_button = QPushButton("Hủy thao tác an toàn")
         self.cancel_button.clicked.connect(self.cancel_operation)
         self.cancel_button.setEnabled(False)
         actions.addWidget(self.dry_run_button)
         actions.addWidget(self.cancel_button)
         actions.addStretch(1)
+
+        self.factory_provision_button = QPushButton("Nạp Bootloader")
+        self.factory_provision_button.setObjectName("factoryProvisionButton")
+        self.factory_provision_button.setToolTip(
+            "One-click Factory: tự động nạp Bootloader tin cậy (Sector 0–2), "
+            "kiểm tra chip/WRP và khôi phục bảo vệ an toàn."
+        )
+        self.factory_provision_button.clicked.connect(self.start_factory_provision)
+
+        self.flash_button = QPushButton("Nạp Application")
+        self.flash_button.setObjectName("flashButton")
+        self.flash_button.clicked.connect(self.confirm_flash)
+
+        actions.addWidget(self.factory_provision_button)
         actions.addWidget(self.flash_button)
         left_layout.addLayout(actions)
 
@@ -607,64 +624,11 @@ class MainWindow(QMainWindow):
         self.progress.setFormat("Chưa chạy")
         right_layout.addWidget(self.progress)
 
-        splitter.addWidget(left)
-        splitter.addWidget(right)
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
-        page_layout.addWidget(splitter)
-        self._update_controls()
-        return page
-
-    def _build_factory_tab(self) -> QWidget:
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
-
-        warning = QLabel(
-            "CHẾ ĐỘ FACTORY · Chỉ dùng cho main mới/chip mới hoặc bảo trì Bootloader được ủy quyền.\n"
-            "Chế độ này có quyền tạm thay đổi WRP Sector 0–2; quy trình nạp Application thông thường "
-            "tuyệt đối không bao giờ can thiệp Bootloader."
-        )
-        warning.setObjectName("factoryWarning")
-        warning.setWordWrap(True)
-        warning.setStyleSheet(
-            "background:#FFF7ED;color:#9A3412;border:1px solid #FDBA74;"
-            "border-radius:8px;padding:10px 14px;font-weight:700;line-height:1.4;"
-        )
-        layout.addWidget(warning)
-
-        target_group = QGroupBox("1. Mục tiêu Factory / trạng thái WRP")
-        target_layout = QVBoxLayout(target_group)
-        factory_probe_row = QHBoxLayout()
-        self.factory_probe_combo = QComboBox()
-        self.factory_probe_combo.setObjectName("factoryProbeSelector")
-        self.factory_probe_combo.setAccessibleName("Factory ST-Link serial")
-        self.factory_probe_combo.currentIndexChanged.connect(self._factory_probe_changed)
-        self.factory_refresh_button = QPushButton("Làm mới ST-Link")
-        self.factory_refresh_button.clicked.connect(self.refresh_probes)
-        factory_probe_row.addWidget(self.factory_probe_combo, 1)
-        factory_probe_row.addWidget(self.factory_refresh_button)
-        target_layout.addLayout(factory_probe_row)
-        self.factory_target_summary = QLabel("Chưa chọn probe; hãy chọn ST-Link và kiểm tra target/WRP")
-        self.factory_target_summary.setObjectName("factoryTargetSummary")
-        self.factory_target_summary.setWordWrap(True)
-        target_layout.addWidget(self.factory_target_summary)
-        layout.addWidget(target_group)
-
-        artifact_group = QGroupBox("2. Bootloader tin cậy (Bundled Bootloader)")
-        artifact_layout = QVBoxLayout(artifact_group)
-        self.factory_artifact_label = QLabel()
-        self.factory_artifact_label.setObjectName("factoryArtifactLabel")
-        self.factory_artifact_label.setWordWrap(True)
+        # Factory Aliases for unified single-tab workflow
         try:
             self.factory_trusted = load_trusted_bootloader()
             image = self.factory_trusted.image
-            self.factory_artifact_label.setText(
+            self.factory_artifact_label = QLabel(
                 "Phiên bản: FW %s · Mục tiêu: B300_F407ZE · Toàn vẹn: ĐÃ XÁC THỰC ✓\n"
                 "Vùng nhớ: 0x%08X..0x%08X (Sector 0–2)\n"
                 "SHA-256: %s\n"
@@ -675,54 +639,19 @@ class MainWindow(QMainWindow):
             )
         except Exception as error:
             self.factory_trusted = None
-            self.factory_artifact_label.setText("Bootloader tin cậy không khả dụng: %s" % error)
-            self.factory_artifact_label.setStyleSheet("color:#DC2626;font-weight:700;")
-        artifact_layout.addWidget(self.factory_artifact_label)
-        layout.addWidget(artifact_group)
+            self.factory_artifact_label = QLabel("Bootloader tin cậy không khả dụng: %s" % error)
 
-        plan_group = QGroupBox("3. Quy trình an toàn Factory (Safety Transaction)")
-        plan_layout = QVBoxLayout(plan_group)
-        plan_text = QLabel(
-            "Xác minh F407/512 KiB + WRP → WRP S0–S2 TẮT (nếu cần) → Reset/Reload OB → "
-            "Xác minh WRP ĐÃ TẮT → Xóa S0–S2 → Nạp & Xác minh Bootloader → "
-            "BẬT LẠI WRP S0–S2 ON → Reset/Reload OB → Xác minh WRP ĐÃ BẬT → Reset run"
-        )
-        plan_text.setWordWrap(True)
-        plan_layout.addWidget(plan_text)
-        layout.addWidget(plan_group)
+        self.factory_probe_combo = self.probe_combo
+        self.factory_log_view = self.log_view
+        self.factory_progress = self.progress
 
-
-        actions = QHBoxLayout()
-        actions.addStretch(1)
-        self.factory_provision_button = QPushButton("NẠP BOOTLOADER")
-        self.factory_provision_button.setObjectName("factoryProvisionButton")
-        self.factory_provision_button.setToolTip(
-            "One-click Factory: tự kiểm tra target/WRP, nạp Bootloader tin cậy, "
-            "khôi phục WRP Sector 0-2 và hậu kiểm."
-        )
-        self.factory_provision_button.clicked.connect(self.start_factory_provision)
-        actions.addWidget(self.factory_provision_button)
-        layout.addLayout(actions)
-
-        self.factory_progress = QProgressBar()
-        self.factory_progress.setRange(0, 1)
-        self.factory_progress.setValue(0)
-        self.factory_progress.setFormat("Chưa chạy Factory")
-        layout.addWidget(self.factory_progress)
-
-        factory_log_group = QGroupBox("Nhật ký Factory / dry-run")
-        factory_log_layout = QVBoxLayout(factory_log_group)
-        self.factory_log_view = QPlainTextEdit()
-        self.factory_log_view.setObjectName("factoryLogView")
-        self.factory_log_view.setReadOnly(True)
-        self.factory_log_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        self.factory_log_view.setMinimumHeight(140)
-        factory_log_layout.addWidget(self.factory_log_view)
-        layout.addWidget(factory_log_group, 1)
-
-        scroll.setWidget(page)
+        splitter.addWidget(left)
+        splitter.addWidget(right)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        page_layout.addWidget(splitter)
         self._update_controls()
-        return scroll
+        return page
 
     def show_factory_dry_run(self) -> None:
         if self.factory_trusted is None or self.busy:
@@ -1221,14 +1150,8 @@ class MainWindow(QMainWindow):
     def confirm_flash(self) -> None:
         if self.flash_plan is None or self.busy:
             return
-        answer = QMessageBox.question(
-            self,
-            "Xác nhận nạp Application",
-            confirmation_text(self.flash_plan),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
-        )
-        if answer == QMessageBox.StandardButton.Yes:
+        dialog = ConfirmFlashDialog(self.flash_plan, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             self._start_flash()
 
     def _start_flash(self) -> None:
@@ -1383,17 +1306,11 @@ class MainWindow(QMainWindow):
         event.accept()
 
     def append_factory_log(self, line: str) -> None:
-        self.factory_log_view.appendPlainText(str(line))
-        cursor = self.factory_log_view.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.StartOfLine)
-        self.factory_log_view.setTextCursor(cursor)
-        self.factory_log_view.verticalScrollBar().setValue(
-            self.factory_log_view.verticalScrollBar().maximum()
-        )
-        self.factory_log_view.horizontalScrollBar().setValue(0)
+        self.append_log(line)
 
     def append_log(self, line: str) -> None:
-        self.log_view.appendPlainText(str(line))
+        html_line = format_log_html(str(line))
+        self.log_view.appendHtml(html_line)
         cursor = self.log_view.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.StartOfLine)
         self.log_view.setTextCursor(cursor)
@@ -1416,3 +1333,24 @@ class MainWindow(QMainWindow):
         self.status_banner.setProperty("state", state)
         self.status_banner.style().unpolish(self.status_banner)
         self.status_banner.style().polish(self.status_banner)
+        self._show_toast(text, state)
+
+    def _show_toast(self, text: str, state: str) -> None:
+        if not text or not self.isVisible():
+            return
+        if hasattr(self, "_current_toast") and self._current_toast is not None:
+            try:
+                self._current_toast.dismiss()
+            except Exception:
+                pass
+        self._current_toast = ToastNotification(text, state, self)
+        self._current_toast.show_toast(self)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if (
+            hasattr(self, "_current_toast") and
+            self._current_toast is not None and
+            self._current_toast.isVisible()
+        ):
+            self._current_toast._reposition(self)

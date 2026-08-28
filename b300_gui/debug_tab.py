@@ -16,6 +16,7 @@ from b300_core.gdb_mi import GdbMiBackend
 from b300_core.models import ProbeRef
 
 from .workers import FunctionWorker, WorkerFailure
+from .log_highlighter import format_log_html
 
 
 class DebugTab(QWidget):
@@ -157,7 +158,8 @@ class DebugTab(QWidget):
         self._refresh_controls()
 
     def _append_log(self, line: str) -> None:
-        self.log_view.appendPlainText(str(line))
+        html_line = format_log_html(str(line))
+        self.log_view.appendHtml(html_line)
         self.log_view.verticalScrollBar().setValue(
             self.log_view.verticalScrollBar().maximum()
         )

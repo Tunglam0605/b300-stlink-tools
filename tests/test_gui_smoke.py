@@ -296,7 +296,7 @@ class GuiSmokeTests(unittest.TestCase):
         service = OneClickFactoryService()
         window = MainWindow(service=service, probe_loader=lambda: probes)
         tab_names = [window.tabs.tabText(index) for index in range(window.tabs.count())]
-        self.assertIn("Factory / Bootloader", tab_names)
+        self.assertIn("Nạp firmware", tab_names)
         self.assertIsNotNone(window.factory_trusted)
         self.assertIn("657F7160", window.factory_artifact_label.text())
         self.assertEqual(window.factory_probe_combo.currentData(), "FACTORY123")

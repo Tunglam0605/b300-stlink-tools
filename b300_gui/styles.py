@@ -54,8 +54,8 @@ QToolTip {
 QLabel#brandLogo {
     background-color: #FFFFFF;
     border: 1px solid #E2E8F0;
-    border-radius: 8px;
-    padding: 3px 8px;
+    border-radius: 10px;
+    padding: 4px 10px;
 }
 
 QLabel#brandLogo:hover {
@@ -67,8 +67,19 @@ QLabel#eyebrowLabel {
     color: #0284C7;
     font-size: 11px;
     font-weight: 700;
-    letter-spacing: 1px;
+    letter-spacing: 0.8px;
     text-transform: uppercase;
+}
+
+QLabel#updateChannelLabel {
+    color: #0369A1;
+    background-color: #F0F9FF;
+    border: 1px solid #BAE6FD;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: "Cascadia Code", "Consolas", monospace;
 }
 
 QLabel#subtitleLabel {
@@ -346,6 +357,36 @@ QPushButton#factoryProvisionButton:disabled {
     border: 1px solid #CBD5E1;
 }
 
+/* Primary Action Update Button (Cockpit style) */
+QPushButton#updateActionButton {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0284C7, stop:1 #06B6D4);
+    color: #FFFFFF;
+    border: 1px solid #0284C7;
+    font-size: 13px;
+    font-weight: 700;
+    min-height: 36px;
+    padding: 6px 22px;
+    border-radius: 6px;
+}
+
+QPushButton#updateActionButton:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0369A1, stop:1 #0891B2);
+    border-color: #0369A1;
+    color: #FFFFFF;
+}
+
+QPushButton#updateActionButton:pressed {
+    background-color: #0369A1;
+    border-color: #075985;
+    color: #FFFFFF;
+}
+
+QPushButton#updateActionButton:disabled {
+    color: #94A3B8;
+    background: #E2E8F0;
+    border: 1px solid #CBD5E1;
+}
+
 /* Offline Setup Environment Button */
 QPushButton#setupButton {
     background-color: #F0F9FF;
@@ -360,38 +401,44 @@ QPushButton#setupButton:hover {
     color: #0369A1;
 }
 
-/* Status Banner with Glowing States */
+/* Status Banner with Industrial Telemetry Stripe */
 QLabel#statusBanner {
-    border-radius: 8px;
-    padding: 10px 14px;
-    background-color: #F1F5F9;
-    color: #475569;
+    border-radius: 6px;
+    padding: 6px 12px;
+    background-color: #F0F9FF;
+    color: #0369A1;
     font-weight: 600;
-    border: 1px solid #E2E8F0;
+    font-size: 12px;
+    border: 1px solid #BAE6FD;
+    border-left: 4px solid #0284C7;
 }
 
 QLabel#statusBanner[state="normal"] {
     background-color: #F0F9FF;
     color: #0369A1;
     border: 1px solid #BAE6FD;
+    border-left: 4px solid #0284C7;
 }
 
 QLabel#statusBanner[state="success"] {
     background-color: #ECFDF5;
     color: #065F46;
-    border: 1px solid #6EE7B7;
+    border: 1px solid #A7F3D0;
+    border-left: 4px solid #059669;
 }
 
 QLabel#statusBanner[state="error"] {
     background-color: #FEF2F2;
     color: #991B1B;
     border: 1px solid #FECACA;
+    border-left: 4px solid #DC2626;
 }
 
 QLabel#statusBanner[state="busy"] {
     background-color: #FFFBEB;
     color: #92400E;
     border: 1px solid #FDE68A;
+    border-left: 4px solid #D97706;
 }
 
 /* Progress Bar with Soft Tech Gradient */
@@ -410,7 +457,7 @@ QProgressBar::chunk {
     border-radius: 5px;
 }
 
-/* Plan Table */
+/* Plan Table & Memory Grid */
 QTableWidget {
     background-color: #FFFFFF;
     color: #0F172A;
@@ -420,9 +467,29 @@ QTableWidget {
     border-radius: 6px;
 }
 
+QTableWidget#memoryTable {
+    background-color: #FFFFFF;
+    color: #0F172A;
+    alternate-background-color: #F8FAFC;
+    gridline-color: #E2E8F0;
+    border: 1px solid #CBD5E1;
+    border-radius: 6px;
+    font-family: "Cascadia Code", "Consolas", "Courier New", monospace;
+    font-size: 12px;
+}
+
 QTableWidget::item {
     padding: 0px 6px;
     color: #0F172A;
+}
+
+QTableWidget#memoryTable::item {
+    padding: 2px 4px;
+}
+
+QTableWidget#memoryTable::item:selected {
+    background-color: #E0F2FE;
+    color: #0369A1;
 }
 
 QHeaderView::section {
@@ -435,28 +502,32 @@ QHeaderView::section {
     font-weight: 700;
 }
 
-/* Real-time Terminal Log Consoles */
+/* Real-time Log Consoles */
 QPlainTextEdit#logView, QPlainTextEdit#debugLogView, QPlainTextEdit#factoryLogView {
-    background-color: #0F172A;
-    color: #34D399;
+    background-color: #F8FAFC;
+    color: #1E293B;
     font-family: "Cascadia Code", "Consolas", "Courier New", monospace;
     font-size: 12px;
-    border: 1px solid #334155;
+    border: 1px solid #CBD5E1;
     border-radius: 6px;
     padding: 8px;
     line-height: 1.4;
+    selection-background-color: #BAE6FD;
+    selection-color: #0369A1;
 }
 
 /* Read-Only Hex Preview */
 QPlainTextEdit#hexView {
-    background-color: #0F172A;
-    color: #38BDF8;
+    background-color: #F8FAFC;
+    color: #0369A1;
     font-family: "Cascadia Code", "Consolas", "Courier New", monospace;
     font-size: 12px;
-    border: 1px solid #334155;
+    border: 1px solid #CBD5E1;
     border-radius: 6px;
     padding: 8px;
     line-height: 1.4;
+    selection-background-color: #BAE6FD;
+    selection-color: #0369A1;
 }
 
 /* Read-Only Warning Banner */
@@ -575,5 +646,36 @@ QMenu::item {
 QMenu::item:selected {
     background-color: #E0F2FE;
     color: #0284C7;
+}
+
+/* Dialogs & Message Boxes */
+QDialog {
+    background-color: #FFFFFF;
+    color: #0F172A;
+}
+
+QMessageBox {
+    background-color: #FFFFFF;
+    color: #0F172A;
+}
+
+QMessageBox QLabel {
+    color: #0F172A;
+    font-size: 13px;
+}
+
+QMessageBox QPushButton {
+    min-width: 80px;
+    padding: 6px 16px;
+    border-radius: 6px;
+    font-weight: 600;
+    background-color: #F1F5F9;
+    border: 1px solid #CBD5E1;
+    color: #334155;
+}
+
+QMessageBox QPushButton:hover {
+    background-color: #E2E8F0;
+    color: #0F172A;
 }
 """

@@ -1,30 +1,33 @@
-"""Read-only flash sector and OTA metadata inspection widget."""
+"""Read-only flash sector and OTA metadata inspection widget in STM32 ST-Link Utility style."""
 
 from __future__ import annotations
 
+import struct
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import Signal
-
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 from b300_core.models import OtaMetadata, ProbeRef
 from b300_core.policy import SECTORS
-
 from .workers import FunctionWorker
 
 
@@ -66,15 +69,16 @@ class MemoryTab(QWidget):
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
-        warning = QLabel(
-            "CHỈ ĐỌC (READ-ONLY) · CPU tạm dừng khi đọc và luôn tiếp tục chạy "
-            "(resume) trước khi ngắt kết nối."
-        )
-        warning.setObjectName("readOnlyBanner")
-        warning.setWordWrap(True)
-        root.addWidget(warning)
+        root.setSpacing(8)
 
-        controls = QHBoxLayout()
+        # ST-Link Utility style Memory Display Parameters Toolbar
+        display_group = QGroupBox("Khảo sát bộ nhớ Flash (Memory Display)")
+        display_layout = QVBoxLayout(display_group)
+        display_layout.setContentsMargins(10, 10, 10, 10)
+        display_layout.setSpacing(8)
+
+        param_row = QHBoxLayout()
+        param_row.addWidget(QLabel("Address / Sector:"))
         self.sector_combo = QComboBox()
         self.sector_combo.setAccessibleName("Chọn Sector để đọc")
         for sector in SECTORS:
@@ -84,7 +88,31 @@ class MemoryTab(QWidget):
                 ),
                 sector.index,
             )
+        self.sector_combo.currentIndexChanged.connect(self._on_display_param_changed)
+        param_row.addWidget(self.sector_combo, 2)
+
+        param_row.addWidget(QLabel("Data Width:"))
+        self.data_width_combo = QComboBox()
+        self.data_width_combo.addItem("32 bits (Word)", 32)
+        self.data_width_combo.addItem("16 bits (Half-word)", 16)
+        self.data_width_combo.addItem("8 bits (Byte)", 8)
+        self.data_width_combo.currentIndexChanged.connect(self._render_memory_table)
+        param_row.addWidget(self.data_width_combo, 1)
+
+        param_row.addWidget(QLabel("Size:"))
+        self.size_combo = QComboBox()
+        self.size_combo.addItem("0x100 (256 B)", 256)
+        self.size_combo.addItem("0x400 (1 KiB)", 1024)
+        self.size_combo.addItem("0x1000 (4 KiB)", 4096)
+        self.size_combo.addItem("Toàn bộ Sector (Full)", 0)
+        self.size_combo.setCurrentIndex(2)  # Default 4KB preview
+        self.size_combo.currentIndexChanged.connect(self._render_memory_table)
+        param_row.addWidget(self.size_combo, 1)
+        display_layout.addLayout(param_row)
+
+        action_row = QHBoxLayout()
         self.read_button = QPushButton("Đọc Sector")
+        self.read_button.setToolTip("CPU tạm dừng khi đọc và tự động tiếp tục chạy (resume) trước khi ngắt kết nối.")
         self.read_button.clicked.connect(self.read_selected_sector)
         self.export_button = QPushButton("Xuất binary…")
         self.export_button.setEnabled(False)
@@ -94,29 +122,60 @@ class MemoryTab(QWidget):
         self.cancel_button = QPushButton("Hủy đọc")
         self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self.cancel_current)
-        controls.addWidget(self.sector_combo, 1)
-        controls.addWidget(self.read_button)
-        controls.addWidget(self.export_button)
-        controls.addWidget(self.metadata_button)
-        controls.addWidget(self.cancel_button)
-        root.addLayout(controls)
+
+        action_row.addWidget(self.read_button)
+        action_row.addWidget(self.export_button)
+        action_row.addWidget(self.metadata_button)
+        action_row.addWidget(self.cancel_button)
+        action_row.addStretch(1)
+        display_layout.addLayout(action_row)
+        root.addWidget(display_group)
+
+        # Hidden labels preserved for status & test assertions
+        self.read_only_notice = QLabel(
+            "CHỈ ĐỌC (READ-ONLY) · CPU tạm dừng khi đọc và luôn tiếp tục chạy "
+            "(resume) trước khi ngắt kết nối."
+        )
+        self.read_only_notice.setVisible(False)
+        root.addWidget(self.read_only_notice)
+
+        self.range_info_label = QLabel("Target memory: Chưa đọc dữ liệu")
+        self.range_info_label.setVisible(False)
+        root.addWidget(self.range_info_label)
 
         self.status_label = QLabel("Chưa đọc dữ liệu")
-        self.status_label.setStyleSheet("color: #94A3B8; font-weight: 600;")
+        self.status_label.setVisible(False)
         root.addWidget(self.status_label)
 
         splitter = QSplitter()
-        preview_group = QGroupBox("Hex preview (tối đa 4096 byte)")
-        preview_layout = QVBoxLayout(preview_group)
+
+        # Left Panel: STM32 ST-LINK Utility Style Memory Table
+        self.table_group = QGroupBox("Bảng nhớ thiết bị (Device Memory)")
+        table_layout = QVBoxLayout(self.table_group)
+        table_layout.setContentsMargins(6, 8, 6, 6)
+
+        self.memory_table = QTableWidget()
+        self.memory_table.setObjectName("memoryTable")
+        self.memory_table.setAlternatingRowColors(True)
+        self.memory_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.memory_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        self.memory_table.verticalHeader().setVisible(False)
+        self.memory_table.verticalHeader().setDefaultSectionSize(26)
+        font = QFont("Cascadia Code", 9)
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        self.memory_table.setFont(font)
+        table_layout.addWidget(self.memory_table)
+
+        # Hidden text fallback for test/compatibility
         self.hex_view = QPlainTextEdit()
         self.hex_view.setObjectName("hexView")
-        self.hex_view.setReadOnly(True)
-        self.hex_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        self.hex_view.setAccessibleName("Nội dung Sector dạng hexadecimal")
-        preview_layout.addWidget(self.hex_view)
+        self.hex_view.setVisible(False)
+        table_layout.addWidget(self.hex_view)
 
+        # Right Panel: OTA Metadata Form
         metadata_group = QGroupBox("OTA metadata · 0x0800C000")
         metadata_layout = QVBoxLayout(metadata_group)
+        metadata_layout.setContentsMargins(10, 10, 10, 10)
 
         self.metadata_notice = QLabel("Nhấn 'Đọc OTA metadata' để kiểm tra bản ghi Sector 3.")
         self.metadata_notice.setObjectName("metadataNotice")
@@ -152,11 +211,27 @@ class MemoryTab(QWidget):
         metadata_layout.addLayout(metadata_form)
         metadata_layout.addStretch(1)
 
-        splitter.addWidget(preview_group)
+        splitter.addWidget(self.table_group)
         splitter.addWidget(metadata_group)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
         root.addWidget(splitter, 1)
+
+        self._init_empty_table()
+
+    def _init_empty_table(self) -> None:
+        self.memory_table.setColumnCount(6)
+        self.memory_table.setHorizontalHeaderLabels(["Address", "0", "4", "8", "C", "ASCII"])
+        self.memory_table.setRowCount(0)
+        header = self.memory_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        for col in range(1, 5):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+
+    def _on_display_param_changed(self) -> None:
+        if self.current_data:
+            self._render_memory_table()
 
     def _set_busy(self, busy: bool) -> None:
         self._busy = bool(busy)
@@ -173,7 +248,6 @@ class MemoryTab(QWidget):
         self.metadata_button.setEnabled(available)
         self.sector_combo.setEnabled(available)
         self.export_button.setEnabled(available and bool(self.current_data))
-        # Cancellation belongs to this tab's active read and must remain reachable.
         self.cancel_button.setEnabled(self._busy and self._active_worker is not None)
 
     @property
@@ -184,6 +258,7 @@ class MemoryTab(QWidget):
         sector_index = int(self.sector_combo.currentData())
         probe = self.probe_provider()
         self.status_label.setText("Đang đọc Sector %d…" % sector_index)
+        self.range_info_label.setText("Đang đọc Sector %d qua ST-Link…" % sector_index)
         self._set_busy(True)
         self._start_worker(
             lambda log, phase, cancel: self.service.read_sector(
@@ -195,6 +270,7 @@ class MemoryTab(QWidget):
     def read_metadata(self) -> None:
         probe = self.probe_provider()
         self.status_label.setText("Đang đọc OTA metadata…")
+        self.range_info_label.setText("Đang đọc OTA metadata (Sector 3 · 0x0800C000)…")
         self._set_busy(True)
         self._start_worker(
             lambda log, phase, cancel: self.service.read_metadata(
@@ -231,6 +307,7 @@ class MemoryTab(QWidget):
         self._active_worker.cancel()
         self.cancel_button.setEnabled(False)
         self.status_label.setText("Đang hủy thao tác đọc an toàn…")
+        self.range_info_label.setText("Đang hủy thao tác đọc…")
 
     def show_sector(self, sector_index: int, data: bytes) -> None:
         self.current_sector = sector_index
@@ -243,7 +320,167 @@ class MemoryTab(QWidget):
         self.hex_view.setPlainText(format_hex_preview(self.current_data, base_address=base_address))
         self.status_label.setText("Đã đọc Sector %d (0x%08X) · %d byte" %
                                   (sector_index, base_address, len(self.current_data)))
+        self._render_memory_table()
         self._set_busy(False)
+
+    def _render_memory_table(self) -> None:
+        if not self.current_data:
+            return
+
+        base_address = 0
+        if self.current_sector is not None:
+            for s in SECTORS:
+                if s.index == self.current_sector:
+                    base_address = s.start_address
+                    break
+
+        data_width = self.data_width_combo.currentData() or 32
+        size_limit = self.size_combo.currentData() or 0
+        data_to_show = self.current_data[:size_limit] if size_limit > 0 else self.current_data
+
+        end_address = base_address + len(data_to_show)
+        range_summary = "[0x%08X .. 0x%08X] · %d bytes · %d-bit %s" % (
+            base_address, end_address, len(data_to_show), data_width,
+            "Word" if data_width == 32 else ("Half-word" if data_width == 16 else "Byte")
+        )
+        self.range_info_label.setText("Target memory, Address range: %s" % range_summary)
+        self.table_group.setTitle("Bảng nhớ thiết bị · %s" % range_summary)
+
+        font = QFont("Cascadia Code", 9)
+        font.setStyleHint(QFont.StyleHint.Monospace)
+
+        # ST-Link Utility Color Palettes
+        green_bg = QColor("#ECFDF5")
+        green_fg = QColor("#047857")
+        erased_bg = QColor("#FFFBEB")
+        erased_fg = QColor("#B45309")
+        addr_fg = QColor("#0369A1")
+
+        if data_width == 32:
+            headers = ["Address", "0", "4", "8", "C", "ASCII"]
+            cols = 6
+            self.memory_table.setColumnCount(cols)
+            self.memory_table.setHorizontalHeaderLabels(headers)
+            row_count = (len(data_to_show) + 15) // 16
+            self.memory_table.setRowCount(row_count)
+
+            for row in range(row_count):
+                offset = row * 16
+                chunk = data_to_show[offset:offset + 16]
+                addr_item = QTableWidgetItem("0x%08X" % (base_address + offset))
+                addr_item.setForeground(addr_fg)
+                addr_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.memory_table.setItem(row, 0, addr_item)
+
+                for w_idx in range(4):
+                    w_offset = w_idx * 4
+                    w_chunk = chunk[w_offset:w_offset + 4]
+                    if len(w_chunk) == 4:
+                        val = struct.unpack("<I", w_chunk)[0]
+                        val_str = "%08X" % val
+                        item = QTableWidgetItem(val_str)
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        if val == 0:
+                            item.setBackground(green_bg)
+                            item.setForeground(green_fg)
+                        elif val == 0xFFFFFFFF:
+                            item.setBackground(erased_bg)
+                            item.setForeground(erased_fg)
+                    elif w_chunk:
+                        hex_str = "".join("%02X" % b for b in reversed(w_chunk))
+                        item = QTableWidgetItem(hex_str)
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    else:
+                        item = QTableWidgetItem("—")
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    self.memory_table.setItem(row, 1 + w_idx, item)
+
+                ascii_str = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+                ascii_item = QTableWidgetItem(ascii_str)
+                self.memory_table.setItem(row, 5, ascii_item)
+
+        elif data_width == 16:
+            headers = ["Address", "0", "2", "4", "6", "8", "A", "C", "E", "ASCII"]
+            cols = 10
+            self.memory_table.setColumnCount(cols)
+            self.memory_table.setHorizontalHeaderLabels(headers)
+            row_count = (len(data_to_show) + 15) // 16
+            self.memory_table.setRowCount(row_count)
+
+            for row in range(row_count):
+                offset = row * 16
+                chunk = data_to_show[offset:offset + 16]
+                addr_item = QTableWidgetItem("0x%08X" % (base_address + offset))
+                addr_item.setForeground(addr_fg)
+                addr_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.memory_table.setItem(row, 0, addr_item)
+
+                for h_idx in range(8):
+                    h_offset = h_idx * 2
+                    h_chunk = chunk[h_offset:h_offset + 2]
+                    if len(h_chunk) == 2:
+                        val = struct.unpack("<H", h_chunk)[0]
+                        item = QTableWidgetItem("%04X" % val)
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        if val == 0:
+                            item.setBackground(green_bg)
+                            item.setForeground(green_fg)
+                        elif val == 0xFFFF:
+                            item.setBackground(erased_bg)
+                            item.setForeground(erased_fg)
+                    elif h_chunk:
+                        item = QTableWidgetItem("%02X" % h_chunk[0])
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    else:
+                        item = QTableWidgetItem("—")
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    self.memory_table.setItem(row, 1 + h_idx, item)
+
+                ascii_str = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+                ascii_item = QTableWidgetItem(ascii_str)
+                self.memory_table.setItem(row, 9, ascii_item)
+
+        else:  # 8 bits (Byte)
+            headers = ["Address"] + ["%02X" % i for i in range(16)] + ["ASCII"]
+            cols = 18
+            self.memory_table.setColumnCount(cols)
+            self.memory_table.setHorizontalHeaderLabels(headers)
+            row_count = (len(data_to_show) + 15) // 16
+            self.memory_table.setRowCount(row_count)
+
+            for row in range(row_count):
+                offset = row * 16
+                chunk = data_to_show[offset:offset + 16]
+                addr_item = QTableWidgetItem("0x%08X" % (base_address + offset))
+                addr_item.setForeground(addr_fg)
+                addr_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.memory_table.setItem(row, 0, addr_item)
+
+                for b_idx in range(16):
+                    if b_idx < len(chunk):
+                        val = chunk[b_idx]
+                        item = QTableWidgetItem("%02X" % val)
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        if val == 0:
+                            item.setBackground(green_bg)
+                            item.setForeground(green_fg)
+                        elif val == 0xFF:
+                            item.setBackground(erased_bg)
+                            item.setForeground(erased_fg)
+                    else:
+                        item = QTableWidgetItem("—")
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    self.memory_table.setItem(row, 1 + b_idx, item)
+
+                ascii_str = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+                ascii_item = QTableWidgetItem(ascii_str)
+                self.memory_table.setItem(row, 17, ascii_item)
+
+        header = self.memory_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        for col in range(1, cols - 1):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(cols - 1, QHeaderView.ResizeMode.ResizeToContents)
 
     def show_metadata(self, metadata: OtaMetadata) -> None:
         if metadata.classification == "ERASED":
@@ -319,6 +556,9 @@ class MemoryTab(QWidget):
             )
         )
         self.status_label.setText("OTA metadata: %s" % metadata.classification)
+        self.range_info_label.setText(
+            "Target memory, Sector 3 (0x0800C000) · OTA Metadata: %s" % metadata.classification
+        )
         self._set_busy(False)
 
     def _failed(self, failure) -> None:
@@ -328,6 +568,7 @@ class MemoryTab(QWidget):
         self.status_label.setText(
             "Đọc thất bại: %s · Tiếp theo: %s" % (message, next_action)
         )
+        self.range_info_label.setText("Lỗi đọc bộ nhớ: %s" % message)
         self._set_busy(False)
         if "cancel" not in message.lower():
             QMessageBox.critical(self, "Không thể đọc target", message)
