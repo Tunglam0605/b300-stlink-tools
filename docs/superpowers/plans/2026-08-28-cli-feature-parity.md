@@ -311,6 +311,8 @@ git commit -m "feat(cli): expose read-only memory and metadata"
 **Files:**
 - Create: `tests/test_cli_factory_probe_policy.py`
 - Create: `tests/test_cli_flash_debug_ux.py`
+- Modify: `tests/test_core_hex_policy.py`
+- Modify: `tests/test_b300_stlink.py`
 - Modify: `b300_core/hex_image.py`
 - Modify: `b300_core/models.py`
 - Modify: `b300_core/probe_selection.py`
