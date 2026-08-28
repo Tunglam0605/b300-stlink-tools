@@ -53,6 +53,18 @@ class ProbeMemoryMetadataTests(unittest.TestCase):
             probes = parse_linux_sysfs(Path(directory))
         self.assertEqual([item.serial for item in probes], ["LINUX123"])
 
+    def test_linux_probe_parser_tolerates_non_ascii_clone_serial(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            device = Path(directory) / "1-2"
+            device.mkdir()
+            (device / "idVendor").write_bytes(b"0483\n")
+            (device / "idProduct").write_bytes(b"3748\n")
+            (device / "serial").write_bytes(b"ST\xc3\xa9LINK\xff\n")
+            probes = parse_linux_sysfs(Path(directory))
+        # An unsafe/non-ASCII serial is not passed to `adapter serial`; the GUI
+        # falls back to OpenOCD single-probe auto-selection instead of crashing.
+        self.assertEqual(probes, ())
+
     def test_metadata_decoder_reports_confirmed(self) -> None:
         metadata = decode_ota_metadata(make_metadata(state=3))
         self.assertEqual(metadata.state_name, "CONFIRMED")

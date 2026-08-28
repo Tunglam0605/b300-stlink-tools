@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import platform
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -47,6 +48,15 @@ def parse_windows_pnp_output(text: str) -> Tuple[ProbeInfo, ...]:
     return _unique(probes)
 
 
+_SAFE_OPENOCD_SERIAL = re.compile(r"[A-Za-z0-9_.:-]+")
+
+
+def _read_sysfs_text(path: Path) -> str:
+    # USB sysfs attributes are normally ASCII, but clone/debug probes can expose
+    # non-ASCII or malformed serial bytes. Discovery must never crash the GUI.
+    return path.read_bytes().decode("utf-8", errors="replace").strip()
+
+
 def parse_linux_sysfs(root: Path = Path("/sys/bus/usb/devices")) -> Tuple[ProbeInfo, ...]:
     probes = []
     try:
@@ -55,12 +65,17 @@ def parse_linux_sysfs(root: Path = Path("/sys/bus/usb/devices")) -> Tuple[ProbeI
         return ()
     for device in devices:
         try:
-            vendor = (device / "idVendor").read_text(encoding="ascii").strip().lower()
-            product = (device / "idProduct").read_text(encoding="ascii").strip().lower()
-            serial = (device / "serial").read_text(encoding="ascii").strip()
+            vendor = _read_sysfs_text(device / "idVendor").lower()
+            product = _read_sysfs_text(device / "idProduct").lower()
+            serial = _read_sysfs_text(device / "serial")
         except OSError:
             continue
-        if vendor == "0483" and product.startswith("374") and serial:
+        if vendor != "0483" or not product.startswith("374"):
+            continue
+        # Only expose a serial when it is safe for OpenOCD's `adapter serial`
+        # command. If a clone has no usable serial, return no explicit probe and
+        # let the higher layer use OpenOCD single-probe auto-selection.
+        if serial and _SAFE_OPENOCD_SERIAL.fullmatch(serial):
             probes.append(ProbeInfo(serial, "ST-Link %s" % product.upper(), "linux-sysfs"))
     return _unique(probes)
 

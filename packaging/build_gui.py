@@ -55,6 +55,16 @@ def validate_bundle(bundle: Path) -> None:
         raise ValueError("Native Linux bundle is incomplete: %s" % ", ".join(missing))
 
 
+def ensure_runtime_executables(tool_root: Path) -> None:
+    for relative in (
+            Path("b300-stlink-gui"),
+            Path("vendor") / "openocd" / "bin" / "openocd"):
+        path = Path(tool_root) / relative
+        if not path.is_file():
+            raise ValueError("Linux runtime executable is missing: %s" % path)
+        path.chmod(path.stat().st_mode | 0o111)
+
+
 def stage_linux_appdir(bundle: Path, output: Path, architecture: str) -> Path:
     bundle = Path(bundle).resolve()
     validate_bundle(bundle)
@@ -63,16 +73,19 @@ def stage_linux_appdir(bundle: Path, output: Path, architecture: str) -> Path:
         shutil.rmtree(appdir)
     tool_root = appdir / "usr" / "lib" / "b300-stlink"
     shutil.copytree(bundle, tool_root)
+    ensure_runtime_executables(tool_root)
 
     write_executable(appdir / "AppRun", """#!/bin/sh
 set -eu
 appdir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec "$appdir/usr/lib/b300-stlink/b300-stlink-gui" "$@"
+export B300_APP_ROOT="$appdir/usr/lib/b300-stlink"
+exec "$B300_APP_ROOT/b300-stlink-gui" "$@"
 """)
     write_executable(appdir / "usr" / "bin" / "b300-stlink-gui", """#!/bin/sh
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../lib/b300-stlink" && pwd)
-exec "$root/b300-stlink-gui" "$@"
+export B300_APP_ROOT="$root"
+exec "$B300_APP_ROOT/b300-stlink-gui" "$@"
 """)
     shutil.copy2(DESKTOP_SOURCE, appdir / "b300-stlink-gui.desktop")
     shutil.copy2(ICON_SOURCE, appdir / "b300-stlink-gui.png")
@@ -97,6 +110,7 @@ def stage_deb_root(bundle: Path, output: Path, architecture: str, version: str) 
         shutil.rmtree(debroot)
     tool_root = debroot / "opt" / "b300-stlink"
     shutil.copytree(bundle, tool_root)
+    ensure_runtime_executables(tool_root)
     control = debroot / "DEBIAN" / "control"
     control.parent.mkdir(parents=True)
     write_text_lf(
@@ -107,6 +121,9 @@ def stage_deb_root(bundle: Path, output: Path, architecture: str, version: str) 
         "Maintainer: TungLamAutomation\n"
         "Section: devel\n"
         "Priority: optional\n"
+        "Depends: libdbus-1-3, libegl1, libgl1, libglib2.0-0, libx11-xcb1, "
+        "libxcb1, libxcb-cursor0, libxcb-icccm4, libxcb-image0, libxcb-keysyms1, "
+        "libxcb-render-util0, libxcb-shape0, libxcb-xkb1, libxkbcommon-x11-0\n"
         "Description: Safe B300 STM32F407 ST-Link provisioning GUI\n" %
         (version, architecture),
     )
@@ -127,7 +144,8 @@ exit 0
     )
     write_executable(debroot / "usr" / "local" / "bin" / "b300-stlink-gui", """#!/bin/sh
 set -eu
-exec /opt/b300-stlink/b300-stlink-gui "$@"
+export B300_APP_ROOT=/opt/b300-stlink
+exec "$B300_APP_ROOT/b300-stlink-gui" "$@"
 """)
     desktop_dir = debroot / "usr" / "share" / "applications"
     icon_dir = debroot / "usr" / "share" / "icons" / "hicolor" / "512x512" / "apps"

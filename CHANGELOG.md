@@ -5,6 +5,20 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-28
+
+### Fixed
+
+- Ubuntu/Linux probe discovery không còn đọc cứng sysfs USB serial bằng ASCII. ST-Link clone có serial chứa byte UTF-8/không hợp lệ sẽ không làm GUI crash; serial không an toàn không được truyền vào `adapter serial`, và single-probe OpenOCD auto-select vẫn được dùng.
+- Packaged OpenOCD được resolve từ application root đã xác minh (`B300_APP_ROOT`), executable-adjacent runtime, AppImage `APPDIR` và `/opt/b300-stlink`; mọi runtime vẫn bắt buộc vượt qua trusted `OPENOCD-MANIFEST.sha256`.
+- Linux AppImage/DEB staging ép lại executable bit cho cả GUI và bundled OpenOCD, tránh trường hợp runtime tồn tại nhưng không chạy được sau extract/copy.
+- Ubuntu DEB khai báo đầy đủ các Qt/XCB runtime dependency trực tiếp, gồm `libxcb-icccm4`, `libxcb-keysyms1`, `libxcb-shape0` và `libxcb-cursor0`; Linux release CI cài cùng dependency trước X11 smoke test.
+
+### Validation
+
+- Focused Ubuntu runtime/probe/packaging regression: **31/31 tests PASS**; full B300 ST-Link Tools regression: **225/225 tests PASS**.
+- `v0.5.0` được giữ là Windows-only Pre-release; `v0.5.1` chỉ được publish Stable nếu Windows, Linux x64, Linux ARM64, signed metadata và X11 smoke tests đều PASS.
+
 ## [0.5.0] - 2026-08-28
 
 ### Added

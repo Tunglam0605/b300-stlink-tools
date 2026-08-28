@@ -20,19 +20,58 @@ from .policy import APPLICATION_ADDRESS, FLASH_END_ADDRESS
 EventSink = Callable[[str], None]
 
 
+def _packaged_openocd_candidates() -> List[Path]:
+    name = "openocd.exe" if os.name == "nt" else "openocd"
+    roots = []
+
+    configured_root = os.environ.get("B300_APP_ROOT")
+    if configured_root:
+        roots.append(Path(configured_root))
+
+    # PyInstaller one-file executables report the launched executable through
+    # sys.executable. The portable archive and DEB both place vendor/ beside it.
+    roots.append(Path(sys.executable).resolve().parent)
+
+    # AppImage exposes its extracted root through APPDIR.
+    appdir = os.environ.get("APPDIR")
+    if appdir:
+        roots.append(Path(appdir) / "usr" / "lib" / "b300-stlink")
+
+    # Canonical DEB install root. This also makes recovery deterministic if the
+    # desktop launcher environment is stripped by the session manager.
+    if os.name != "nt":
+        roots.append(Path("/opt/b300-stlink"))
+
+    candidates = []
+    seen = set()
+    for root in roots:
+        candidate = root / "vendor" / "openocd" / "bin" / name
+        key = str(candidate)
+        if key not in seen:
+            seen.add(key)
+            candidates.append(candidate)
+    return candidates
+
+
+def _usable_verified_openocd(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    if os.name != "nt" and not os.access(path, os.X_OK):
+        return False
+    return verify_openocd_tree(path.parent.parent)
+
+
 def resolve_openocd(explicit: Optional[str] = None) -> str:
     if explicit:
         return explicit
     configured = os.environ.get("B300_OPENOCD")
     if configured and (Path(configured).is_file() or shutil.which(configured)):
         return configured
-    if getattr(sys, "frozen", False):
-        name = "openocd.exe" if os.name == "nt" else "openocd"
-        bundled = Path(sys.executable).resolve().parent / "vendor" / "openocd" / "bin" / name
-        if bundled.is_file() and verify_openocd_tree(bundled.parent.parent):
+    for bundled in _packaged_openocd_candidates():
+        if _usable_verified_openocd(bundled):
             return str(bundled)
     installed = installed_openocd_path()
-    if installed.is_file() and verify_openocd_tree(installed.parent.parent):
+    if _usable_verified_openocd(installed):
         return str(installed)
     return shutil.which("openocd") or "openocd"
 

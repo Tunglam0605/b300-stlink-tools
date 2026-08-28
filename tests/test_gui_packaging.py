@@ -221,6 +221,16 @@ class GuiPackagingTests(unittest.TestCase):
             self.assertFalse((appdir / "usr" / "bin" / "b300-stlink").exists())
             self.assertTrue((debroot / "DEBIAN" / "control").is_file())
             self.assertTrue((debroot / "DEBIAN" / "postinst").is_file())
+            control_text = (debroot / "DEBIAN" / "control").read_text(encoding="utf-8")
+            for dependency in (
+                    "libxcb-cursor0", "libxcb-icccm4", "libxcb-keysyms1",
+                    "libxcb-shape0", "libxkbcommon-x11-0"):
+                self.assertIn(dependency, control_text)
+            deb_launcher = (debroot / "usr" / "local" / "bin" /
+                            "b300-stlink-gui").read_text(encoding="utf-8")
+            self.assertIn("B300_APP_ROOT=/opt/b300-stlink", deb_launcher)
+            app_run = (appdir / "AppRun").read_text(encoding="utf-8")
+            self.assertIn("B300_APP_ROOT", app_run)
             udev_rule = (debroot / "usr" / "lib" / "udev" / "rules.d" /
                          "49-b300-stlink.rules")
             self.assertTrue(udev_rule.is_file())

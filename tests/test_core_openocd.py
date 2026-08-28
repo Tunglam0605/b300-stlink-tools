@@ -58,6 +58,42 @@ class OpenOcdCoreTests(unittest.TestCase):
                     ), mock.patch("b300_core.openocd.shutil.which", return_value=None):
                 self.assertEqual(resolve_openocd(), str(installed))
 
+    def test_application_root_resolves_verified_packaged_openocd_without_frozen_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            name = "openocd.exe" if os.name == "nt" else "openocd"
+            bundled = root / "vendor" / "openocd" / "bin" / name
+            bundled.parent.mkdir(parents=True)
+            bundled.write_bytes(b"runtime")
+            if os.name != "nt":
+                bundled.chmod(0o755)
+            with mock.patch.dict(os.environ, {"B300_APP_ROOT": str(root)}, clear=False), \
+                    mock.patch(
+                        "b300_core.openocd.verify_openocd_tree", return_value=True
+                    ), mock.patch(
+                        "b300_core.openocd.installed_openocd_path",
+                        return_value=root / "missing" / name,
+                    ), mock.patch("b300_core.openocd.shutil.which", return_value=None):
+                self.assertEqual(resolve_openocd(), str(bundled))
+
+    def test_application_root_rejects_unverified_packaged_openocd(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            name = "openocd.exe" if os.name == "nt" else "openocd"
+            bundled = root / "vendor" / "openocd" / "bin" / name
+            bundled.parent.mkdir(parents=True)
+            bundled.write_bytes(b"tampered")
+            if os.name != "nt":
+                bundled.chmod(0o755)
+            with mock.patch.dict(os.environ, {"B300_APP_ROOT": str(root)}, clear=False), \
+                    mock.patch(
+                        "b300_core.openocd.verify_openocd_tree", return_value=False
+                    ), mock.patch(
+                        "b300_core.openocd.installed_openocd_path",
+                        return_value=root / "missing" / name,
+                    ), mock.patch("b300_core.openocd.shutil.which", return_value=None):
+                self.assertEqual(resolve_openocd(), "openocd")
+
     def make_plan(self, directory: str):
         image = inspect_image(write_hex(directory, 0x08010000, b"\xAA"))
         return build_flash_plan(
