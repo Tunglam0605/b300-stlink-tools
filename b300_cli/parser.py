@@ -35,6 +35,13 @@ def parse_probe_serial(value: str) -> str:
     return value
 
 
+def parse_integer(value: str) -> int:
+    try:
+        return int(value, 0)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("value must be a decimal or 0x-prefixed integer") from error
+
+
 def _json_option_parent() -> argparse.ArgumentParser:
     parent = argparse.ArgumentParser(add_help=False)
     parent.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
@@ -104,6 +111,44 @@ def build_parser() -> argparse.ArgumentParser:
         "probes", help="List discovered ST-Link probes.", parents=[json_parent],
     )
     probes.add_argument("probes_action", nargs="?", choices=("list",), default="list")
+
+    metadata = commands.add_parser(
+        "metadata", help="Read-only OTA metadata inspection.", parents=[json_parent],
+    )
+    metadata_commands = metadata.add_subparsers(dest="metadata_command")
+    metadata_show = metadata_commands.add_parser(
+        "show", help="Read and decode OTA metadata without modifying the target.",
+        parents=[json_parent],
+    )
+    metadata_show.add_argument("--openocd")
+    metadata_show.add_argument("--probe-serial", type=parse_probe_serial,
+                               help="Select one ST-Link when multiple probes are connected.")
+
+    memory = commands.add_parser(
+        "memory", help="Read-only bounded STM32F407 flash snapshots.", parents=[json_parent],
+    )
+    memory_commands = memory.add_subparsers(dest="memory_command")
+    for action, help_text in (
+            ("read", "Read a bounded flash range."),
+            ("dump", "Atomically save a bounded flash range to a host file."),
+    ):
+        command = memory_commands.add_parser(action, help=help_text, parents=[json_parent])
+        command.add_argument("address", type=parse_integer)
+        command.add_argument("length", type=parse_integer)
+        if action == "dump":
+            command.add_argument("output", type=Path)
+            command.add_argument("--force", action="store_true",
+                                 help="Replace an existing regular output file.")
+        command.add_argument("--openocd")
+        command.add_argument("--probe-serial", type=parse_probe_serial,
+                             help="Select one ST-Link when multiple probes are connected.")
+    read_sector = memory_commands.add_parser(
+        "read-sector", help="Read one whole bounded flash sector.", parents=[json_parent],
+    )
+    read_sector.add_argument("sector", type=parse_integer)
+    read_sector.add_argument("--openocd")
+    read_sector.add_argument("--probe-serial", type=parse_probe_serial,
+                             help="Select one ST-Link when multiple probes are connected.")
     return parser
 
 

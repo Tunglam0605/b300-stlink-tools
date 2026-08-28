@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Iterable, Mapping
 
-from b300_core.models import DiagnosticReport, ProbeInfo
+from b300_core.models import DiagnosticReport, OtaMetadata, ProbeInfo
 
 
 class Reporter:
@@ -58,6 +58,76 @@ def format_probes_text(probes: Iterable[ProbeInfo]) -> str:
             )
         )
     return "\n".join(lines)
+
+
+def memory_snapshot(command: str, address: int, data: bytes) -> dict:
+    """Render a read-only memory snapshot with absolute, inclusive bounds."""
+    return {
+        "schema_version": 1,
+        "command": command,
+        "status": "ok",
+        "address": "0x%08X" % address,
+        "end_address": "0x%08X" % (address + len(data) - 1),
+        "size": len(data),
+        "data": data.hex(),
+    }
+
+
+def format_memory_rows(address: int, data: bytes) -> str:
+    """Format a compact 16-byte hex dump without implying target write access."""
+    return "\n".join(
+        "%08X  %s" % (address + offset, " ".join("%02X" % value for value in data[offset:offset + 16]))
+        for offset in range(0, len(data), 16)
+    )
+
+
+def metadata_record(metadata: OtaMetadata) -> dict:
+    """Normalize decoded metadata for presentation without parsing it again."""
+    record = {
+        "classification": metadata.classification,
+        "valid": metadata.valid,
+        "magic": "0x%08X" % metadata.magic,
+    }
+    if metadata.classification == "ERASED":
+        record.update({
+            "format_version": None,
+            "state": None,
+            "state_name": None,
+            "image_size": None,
+            "image_crc32": None,
+            "board_token": None,
+            "sequence": None,
+            "meta_crc32": None,
+            "calculated_meta_crc32": None,
+        })
+        return record
+    record.update({
+        "format_version": metadata.format_version,
+        "state": metadata.state,
+        "state_name": metadata.state_name,
+        "image_size": metadata.image_size,
+        "image_crc32": "0x%08X" % metadata.image_crc32,
+        "board_token": metadata.board_token,
+        "sequence": metadata.sequence,
+        "meta_crc32": "0x%08X" % metadata.meta_crc32,
+        "calculated_meta_crc32": "0x%08X" % metadata.calculated_meta_crc32,
+    })
+    return record
+
+
+def metadata_snapshot(metadata: OtaMetadata) -> dict:
+    return {
+        "schema_version": 1,
+        "command": "metadata show",
+        "status": "ok",
+        "metadata": metadata_record(metadata),
+    }
+
+
+def format_metadata_text(metadata: OtaMetadata) -> str:
+    record = metadata_record(metadata)
+    return "\n".join("%s=%s" % (key, "-" if value is None else value)
+                     for key, value in record.items())
 
 
 def diagnostic_snapshot(command: str, report: DiagnosticReport) -> dict:

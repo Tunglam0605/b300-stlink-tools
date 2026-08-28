@@ -82,13 +82,16 @@ def validate_bootloader_write_protection(target: TargetInfo) -> None:
 
 
 def sector_by_index(index: int) -> SectorInfo:
-    try:
-        return SECTORS[index]
-    except (IndexError, TypeError) as error:
-        raise ValueError("Sector index must be in range 0..7.") from error
+    if (not isinstance(index, int) or isinstance(index, bool) or
+            not 0 <= index < len(SECTORS)):
+        raise ValueError("Sector index must be in range 0..7.")
+    return SECTORS[index]
 
 
 def validate_read_range(address: int, length: int) -> None:
+    if (not isinstance(address, int) or isinstance(address, bool) or
+            not isinstance(length, int) or isinstance(length, bool)):
+        raise ValueError("Read address and length must be integers.")
     if length <= 0:
         raise ValueError("Read length must be positive.")
     if address < FLASH_START_ADDRESS or address + length > FLASH_END_ADDRESS:

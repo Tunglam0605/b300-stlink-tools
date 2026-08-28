@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
+import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import List, Optional
@@ -17,7 +20,8 @@ from b300_cli.parser import (
     parse_tcp_port,
 )
 from b300_cli.reporting import (
-    Reporter, diagnostic_snapshot, emit_snapshot, format_probes_text, probe_record,
+    Reporter, diagnostic_snapshot, emit_snapshot, format_memory_rows, format_metadata_text,
+    format_probes_text, memory_snapshot, metadata_snapshot, probe_record,
 )
 from b300_core.diagnostics import DiagnosticsService
 from b300_core.hex_image import inspect_image
@@ -30,6 +34,8 @@ from b300_core.policy import (
     FLASH_END_ADDRESS,
     build_flash_plan,
     build_flash_preview,
+    sector_by_index,
+    validate_read_range,
 )
 from b300_core.service import B300Service, ProvisioningError
 from b300_core.probe import list_probes
@@ -95,6 +101,68 @@ def run_openocd(command, dry_run: bool, reporter: Reporter) -> int:
     if dry_run:
         return 0
     raise RuntimeError("Use run_debug() so the B300 hardware session is retained.")
+
+
+def _read_only_error(args: argparse.Namespace, command: str, reason_code: str,
+                     message: str) -> int:
+    record = {
+        "schema_version": 1,
+        "command": command,
+        "status": "error",
+        "reason_code": reason_code,
+        "message": message,
+    }
+    emit_snapshot(record, args.json, "%s: %s" % (reason_code, message))
+    return 1
+
+
+def _select_read_probe(args: argparse.Namespace, command: str) -> Optional[ProbeRef]:
+    try:
+        _info, probe = select_probe(list_probes(), args.probe_serial)
+        return probe
+    except ProbeSelectionError as error:
+        _read_only_error(args, command, error.code, error.message)
+        return None
+
+
+def _validated_output_path(path: Path, force: bool) -> Path:
+    output = path.expanduser().resolve()
+    if not output.parent.is_dir() or output.is_dir():
+        raise ValueError("Output path must name a file in an existing directory.")
+    if output.exists() and not force:
+        raise FileExistsError("Output file already exists; use --force to replace it.")
+    return output
+
+
+def _atomic_write_snapshot(output: Path, data: bytes, force: bool) -> None:
+    """Atomically replace a host snapshot only after its complete read succeeded."""
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+                mode="wb", prefix=".%s." % output.name, suffix=".tmp",
+                dir=str(output.parent), delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if output.exists() and not force:
+            raise FileExistsError("Output file already exists; use --force to replace it.")
+        os.replace(str(temporary), str(output))
+        temporary = None
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def _memory_dump_record(command: str, address: int, data: bytes, output: Path) -> dict:
+    record = memory_snapshot(command, address, data)
+    del record["data"]
+    record["output"] = str(output)
+    record["sha256"] = hashlib.sha256(data).hexdigest()
+    return record
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -194,6 +262,81 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "%s (%s)" % (report.conclusion, report.reason_code),
             )
             return 0 if report.conclusion == "READY_FOR_APPLICATION_FLASH" else 1
+
+        if args.command == "metadata" and args.metadata_command == "show":
+            probe = _select_read_probe(args, "metadata show")
+            if probe is None:
+                return 1
+            try:
+                metadata = B300Service(executable=args.openocd).read_metadata(probe)
+            except (OSError, RuntimeError, ValueError) as error:
+                return _read_only_error(args, "metadata show", "MEMORY_READ_FAILED", str(error))
+            record = metadata_snapshot(metadata)
+            emit_snapshot(record, args.json, format_metadata_text(metadata))
+            return 0
+
+        if args.command == "memory" and args.memory_command in ("read", "dump"):
+            command = "memory %s" % args.memory_command
+            try:
+                validate_read_range(args.address, args.length)
+                output = (_validated_output_path(args.output, args.force)
+                          if args.memory_command == "dump" else None)
+            except FileExistsError as error:
+                return _read_only_error(args, command, "OUTPUT_EXISTS", str(error))
+            except ValueError as error:
+                reason = ("INVALID_OUTPUT_PATH" if args.memory_command == "dump" and
+                          "Output path" in str(error) else "INVALID_MEMORY_RANGE")
+                return _read_only_error(args, command, reason, str(error))
+            probe = _select_read_probe(args, command)
+            if probe is None:
+                return 1
+            try:
+                data = B300Service(executable=args.openocd).read_memory(
+                    probe, args.address, args.length,
+                )
+                if len(data) != args.length:
+                    raise RuntimeError("Memory read length mismatch.")
+            except (OSError, RuntimeError, ValueError) as error:
+                return _read_only_error(args, command, "MEMORY_READ_FAILED", str(error))
+            if args.memory_command == "read":
+                emit_snapshot(
+                    memory_snapshot(command, args.address, data), args.json,
+                    format_memory_rows(args.address, data),
+                )
+                return 0
+            assert output is not None
+            try:
+                _atomic_write_snapshot(output, data, args.force)
+            except FileExistsError as error:
+                return _read_only_error(args, command, "OUTPUT_EXISTS", str(error))
+            except OSError as error:
+                return _read_only_error(args, command, "INVALID_OUTPUT_PATH", str(error))
+            record = _memory_dump_record(command, args.address, data, output)
+            text = "address=%s end_address=%s size=%d output=%s sha256=%s" % (
+                record["address"], record["end_address"], record["size"], record["output"],
+                record["sha256"].upper(),
+            )
+            emit_snapshot(record, args.json, text)
+            return 0
+
+        if args.command == "memory" and args.memory_command == "read-sector":
+            command = "memory read-sector"
+            try:
+                sector = sector_by_index(args.sector)
+            except ValueError as error:
+                return _read_only_error(args, command, "INVALID_SECTOR", str(error))
+            probe = _select_read_probe(args, command)
+            if probe is None:
+                return 1
+            try:
+                data = B300Service(executable=args.openocd).read_sector(probe, args.sector)
+            except (OSError, RuntimeError, ValueError) as error:
+                return _read_only_error(args, command, "MEMORY_READ_FAILED", str(error))
+            emit_snapshot(
+                memory_snapshot(command, sector.start_address, data), args.json,
+                format_memory_rows(sector.start_address, data),
+            )
+            return 0
 
         if args.command == "debug":
             validate_debug_args(args)
