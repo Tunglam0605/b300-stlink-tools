@@ -5,6 +5,17 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-08-28
+
+### Fixed
+
+- Windows GUI packaging chuyển từ PyInstaller one-file sang onedir. Python/Qt/VC runtime nằm cố định cạnh ứng dụng thay vì giải nén vào `%TEMP%\_MEIxxxxx`, loại bỏ failure `Failed to load Python DLL ... python39.dll` đã quan sát khi nâng từ v0.4.1 lên v0.5.1 trên Windows.
+- Windows portable ZIP và Inno Setup installer giờ mang toàn bộ onedir runtime; updater vẫn tải cùng asset `B300-STLink-GUI-Windows-x64.exe` và không thay đổi signed update contract. Windows CI đồng thời chuyển riêng sang Python 3.11, nên release mới không còn phụ thuộc `python39.dll`.
+
+### Validation
+
+- Windows release CI kiểm tra `_internal/python*.dll` và `_internal/VCRUNTIME140*.dll`, chạy smoke-test từ build onedir, từ portable ZIP sau extract, và từ ứng dụng đã cài silent bằng chính installer release trước khi upload asset.
+
 ## [0.5.1] - 2026-08-28
 
 ### Fixed

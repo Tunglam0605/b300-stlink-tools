@@ -70,6 +70,64 @@ class GuiPackagingTests(unittest.TestCase):
         self.assertNotIn('ROOT / "build"', native_builder)
         self.assertIn("SetupIconFile={#SourceRoot}\\b300-stlink-icon.ico", installer)
 
+    def test_windows_gui_release_uses_onedir_runtime(self) -> None:
+        windows_spec = (ROOT / "b300_gui_windows.spec").read_text(encoding="utf-8")
+        native_builder = (ROOT / "build_native_bundle.py").read_text(encoding="utf-8")
+        workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        self.assertIn("exclude_binaries=True", windows_spec)
+        self.assertIn("COLLECT(", windows_spec)
+        self.assertIn('ROOT / "b300_gui_windows.spec"', native_builder)
+        self.assertIn('"--application-root"', native_builder)
+        self.assertIn("Verify packaged Windows onedir runtime", workflow)
+        self.assertIn("Smoke-test installed Windows GUI", workflow)
+        self.assertIn("VCRUNTIME140*.dll", workflow)
+
+    def test_application_root_packaging_preserves_windows_onedir_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app_root = root / "app"
+            internal = app_root / "_internal"
+            internal.mkdir(parents=True)
+            gui = app_root / "b300-stlink-gui.exe"
+            python_dll = internal / "python39.dll"
+            runtime_dll = internal / "VCRUNTIME140.dll"
+            gui.write_bytes(b"gui")
+            python_dll.write_bytes(b"python")
+            runtime_dll.write_bytes(b"runtime")
+            bootstrap = root / "install.ps1"
+            bootstrap.write_bytes(b"bootstrap")
+            openocd = root / "openocd"
+            (openocd / "bin").mkdir(parents=True)
+            (openocd / "bin" / "openocd.exe").write_bytes(b"openocd")
+            xpack = root / "xpack-openocd.zip"
+            xpack.write_bytes(b"trusted")
+            output = root / "bundle.zip"
+            manifest_digest = hashlib.sha256(
+                package_internal.openocd_manifest(openocd)
+            ).hexdigest()
+            with mock.patch.object(
+                package_internal, "TRUSTED_TREE_MANIFESTS",
+                {"windows-x64": manifest_digest},
+            ):
+                package_internal.main([
+                    "--flavor", "gui",
+                    "--executable", str(gui),
+                    "--application-root", str(app_root),
+                    "--openocd-root", str(openocd),
+                    "--bootstrap", str(bootstrap),
+                    "--output", str(output),
+                    "--platform", "windows-x64",
+                    "--openocd-archive", "xpack-openocd-0.12.0-7-win32-x64.zip",
+                    "--openocd-sha256", "A" * 64,
+                    "--openocd-package", str(xpack),
+                    "--internal-distribution-approved",
+                ])
+            with zipfile.ZipFile(output) as archive:
+                names = set(archive.namelist())
+        self.assertIn("b300-stlink-gui.exe", names)
+        self.assertIn("_internal/python39.dll", names)
+        self.assertIn("_internal/VCRUNTIME140.dll", names)
+
     def test_linux_staging_uses_python_39_compatible_text_writes(self) -> None:
         original_write_text = Path.write_text
 

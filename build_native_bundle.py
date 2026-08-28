@@ -143,16 +143,22 @@ def main(argv=None) -> int:
             command.append(str(ROOT / "b300_stlink.py"))
             subprocess.check_call(command)
         gui_executable = "b300-stlink-gui.exe" if platform_name == "windows-x64" else "b300-stlink-gui"
+        gui_application_root = None
         if args.flavor in {"all", "gui"}:
+            gui_spec = (ROOT / "b300_gui_windows.spec"
+                        if platform_name == "windows-x64" else ROOT / "b300_gui.spec")
             subprocess.check_call([
                 sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
                 "--distpath", str(args.output_dir),
                 "--workpath", str(temp / "pyinstaller-gui"),
-                str(ROOT / "b300_gui.spec"),
+                str(gui_spec),
             ])
+            if platform_name == "windows-x64":
+                gui_application_root = args.output_dir / "b300-stlink-gui"
+                gui_executable = str(Path("b300-stlink-gui") / "b300-stlink-gui.exe")
         gui_name, cli_name = release_names(platform_name)
 
-        def package(flavor_name, selected_executable, output_name, resources):
+        def package(flavor_name, selected_executable, output_name, resources, application_root=None):
             command = [
                 sys.executable, str(ROOT / "package_internal.py"),
                 "--flavor", flavor_name,
@@ -166,6 +172,8 @@ def main(argv=None) -> int:
                 "--openocd-sha256", verified_sha256,
                 "--openocd-package", str(archive),
             ]
+            if application_root is not None:
+                command.extend(["--application-root", str(application_root)])
             for resource in resources:
                 command.extend(["--resource", str(resource)])
             subprocess.check_call(command)
@@ -174,8 +182,11 @@ def main(argv=None) -> int:
             package("cli", executable, cli_name,
                     [ROOT / "LICENSE"] + runtime_resources(platform_name))
         if args.flavor in {"all", "gui"}:
-            package("gui", gui_executable, gui_name,
-                    gui_resources(platform_name) + runtime_resources(platform_name))
+            package(
+                "gui", gui_executable, gui_name,
+                gui_resources(platform_name) + runtime_resources(platform_name),
+                application_root=gui_application_root,
+            )
     return 0
 
 

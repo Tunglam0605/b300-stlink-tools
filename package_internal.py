@@ -25,6 +25,19 @@ def add_tree_zip(archive: zipfile.ZipFile, root: Path) -> None:
             archive.write(source, "vendor/openocd/" + source.relative_to(root).as_posix())
 
 
+
+
+def add_application_tree_zip(archive: zipfile.ZipFile, root: Path) -> None:
+    for source in sorted(root.rglob("*")):
+        if source.is_file():
+            archive.write(source, source.relative_to(root).as_posix())
+
+
+def add_application_tree_tar(archive: tarfile.TarFile, root: Path) -> None:
+    for source in sorted(root.rglob("*")):
+        if source.is_file():
+            archive.add(source, source.relative_to(root).as_posix())
+
 def resource_archive_name(resource: Path) -> str:
     """Preserve the runtime lookup path for trusted firmware resources."""
     if resource.parent.name == "firmware" and resource.parent.parent.name == "resources":
@@ -53,6 +66,7 @@ def main(argv=None) -> int:
     parser.add_argument("--flavor", required=True, choices=("gui", "cli"))
     parser.add_argument("--executable", required=True, type=Path)
     parser.add_argument("--resource", action="append", default=[], type=Path)
+    parser.add_argument("--application-root", type=Path)
     parser.add_argument("--openocd-root", required=True, type=Path)
     parser.add_argument("--bootstrap", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
@@ -68,6 +82,12 @@ def main(argv=None) -> int:
     if not re.fullmatch(r"[0-9A-Fa-f]{64}", args.openocd_sha256):
         parser.error("--openocd-sha256 must contain exactly 64 hexadecimal characters.")
     required = [args.executable, args.openocd_root, args.bootstrap, args.openocd_package]
+    if args.application_root is not None:
+        required.append(args.application_root)
+        try:
+            args.executable.resolve().relative_to(args.application_root.resolve())
+        except ValueError as error:
+            parser.error("--executable must be inside --application-root")
     required.extend(args.resource)
     if not all(item.exists() for item in required):
         parser.error("A required bundle input is missing.")
@@ -90,7 +110,10 @@ def main(argv=None) -> int:
         )
     if args.output.name.endswith(".tar.gz"):
         with tarfile.open(args.output, "w:gz") as archive:
-            archive.add(args.executable, arcname=args.executable.name, filter=executable)
+            if args.application_root is not None:
+                add_application_tree_tar(archive, args.application_root)
+            else:
+                archive.add(args.executable, arcname=args.executable.name, filter=executable)
             for resource in args.resource:
                 archive.add(resource, arcname=resource_archive_name(resource))
             archive.add(args.bootstrap, arcname=args.bootstrap.name, filter=executable)
@@ -107,7 +130,10 @@ def main(argv=None) -> int:
             )
     elif args.output.suffix == ".zip":
         with zipfile.ZipFile(args.output, "w", zipfile.ZIP_DEFLATED) as archive:
-            archive.write(args.executable, args.executable.name)
+            if args.application_root is not None:
+                add_application_tree_zip(archive, args.application_root)
+            else:
+                archive.write(args.executable, args.executable.name)
             for resource in args.resource:
                 archive.write(resource, resource_archive_name(resource))
             archive.write(args.bootstrap, args.bootstrap.name)

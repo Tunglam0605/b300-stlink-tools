@@ -46,7 +46,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: "3.11"
       - name: Build independent native GUI and CLI bundles
         shell: pwsh
         run: python build_native_bundle.py --internal-distribution-approved
@@ -54,7 +54,7 @@ jobs:
         shell: pwsh
         run: |
           .\release\b300-stlink.exe --help
-          $process = Start-Process -FilePath .\release\b300-stlink-gui.exe `
+          $process = Start-Process -FilePath .\release\b300-stlink-gui\b300-stlink-gui.exe `
             -ArgumentList --smoke-test -Wait -PassThru -WindowStyle Hidden
           exit $process.ExitCode
       - name: Stage Windows installer source
@@ -63,6 +63,18 @@ jobs:
           Expand-Archive
           release\B300-STLink-GUI-Windows-x64.zip
           release\windows-gui-bundle -Force
+      - name: Verify packaged Windows onedir runtime
+        shell: pwsh
+        run: |
+          $root = Resolve-Path release\windows-gui-bundle
+          if (-not (Test-Path "$root\b300-stlink-gui.exe")) { throw "Packaged GUI executable missing" }
+          $pythonDll = Get-ChildItem "$root\_internal" -Filter "python*.dll" | Select-Object -First 1
+          $vcRuntime = Get-ChildItem "$root\_internal" -Filter "VCRUNTIME140*.dll" | Select-Object -First 1
+          if ($null -eq $pythonDll) { throw "Packaged Python DLL missing from onedir runtime" }
+          if ($null -eq $vcRuntime) { throw "Packaged VC runtime missing from onedir runtime" }
+          $process = Start-Process -FilePath "$root\b300-stlink-gui.exe" `
+            -ArgumentList --smoke-test -Wait -PassThru -WindowStyle Hidden
+          exit $process.ExitCode
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --no-progress -y
@@ -74,6 +86,19 @@ jobs:
             "/DOutputDir=$((Resolve-Path release).Path)" `
             "/DAppVersion=${{ needs.prepare-release.outputs.version }}" `
             packaging\windows\b300-stlink-gui.iss
+      - name: Smoke-test installed Windows GUI
+        shell: pwsh
+        run: |
+          $installer = (Resolve-Path release\B300-STLink-GUI-Windows-x64.exe).Path
+          $setup = Start-Process -FilePath $installer `
+            -ArgumentList /VERYSILENT,/SUPPRESSMSGBOXES,/NORESTART,/CURRENTUSER `
+            -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { exit $setup.ExitCode }
+          $installed = Join-Path $env:LOCALAPPDATA "B300-STLink\b300-stlink-gui.exe"
+          if (-not (Test-Path $installed)) { throw "Installed GUI executable missing" }
+          $process = Start-Process -FilePath $installed `
+            -ArgumentList --smoke-test -Wait -PassThru -WindowStyle Hidden
+          exit $process.ExitCode
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-windows-x64
