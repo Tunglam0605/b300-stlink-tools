@@ -15,6 +15,28 @@ class ReleaseDocumentationTests(unittest.TestCase):
             with self.subTest(filename=filename):
                 self.assertIn(LATEST + filename, readme)
 
+
+    def test_download_guide_is_deterministic_for_users_and_agents(self) -> None:
+        guide = (ROOT / "DOWNLOAD.md").read_text(encoding="utf-8")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+
+        for filename in EXPECTED_PACKAGE_ASSETS:
+            with self.subTest(filename=filename):
+                self.assertIn(LATEST + filename, guide)
+
+        self.assertIn("default: stable", guide)
+        self.assertIn("default: gui", guide)
+        self.assertIn("windows_x64:", guide)
+        self.assertIn("linux_x86_64:", guide)
+        self.assertIn("linux_arm64:", guide)
+        self.assertIn("uname -m", guide)
+        self.assertIn("latest.json", guide)
+        self.assertIn("Source code (zip)", guide)
+        self.assertIn("Source code (tar.gz)", guide)
+        self.assertIn("[DOWNLOAD.md](DOWNLOAD.md)", readme)
+        self.assertIn("[DOWNLOAD.md](DOWNLOAD.md)", agents)
+
     def test_release_process_documents_version_tag_and_latest_validation(self) -> None:
         guide = (ROOT / "docs" / "09_RELEASE_PROCESS.md").read_text(encoding="utf-8")
         self.assertIn("bump_version", guide)

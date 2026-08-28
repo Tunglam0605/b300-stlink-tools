@@ -4,6 +4,16 @@
 có gắn ST-Link. Mục tiêu là nạp **Application B300 F407** an toàn, giữ nguyên
 Bootloader và không làm bootloader hiểu lần nạp ST-Link là OTA lỗi.
 
+## 0. Chọn bản tải / artifact
+
+Khi AI agent được yêu cầu **tìm, tải hoặc cài B300 ST-Link Tools**, phải đọc
+[DOWNLOAD.md](DOWNLOAD.md) trước. Quy tắc mặc định: Stable/Latest + GUI + artifact
+đúng OS/CPU; CLI chỉ khi user yêu cầu terminal/headless/automation. Với Linux phải
+xác định `uname -m`: `x86_64` -> x64/amd64, `aarch64`/`arm64` -> arm64.
+Không bao giờ chọn `Source code (zip)` hoặc `Source code (tar.gz)` làm installer.
+Automation nên đọc signed `latest.json` thay vì scrape HTML Release. Exact version
+phải pin tag `vX.Y.Z` và không tự đổi sang Latest.
+
 ## 1. Phạm vi và các điều cấm
 
 | Vùng flash | Ý nghĩa | Quy tắc |

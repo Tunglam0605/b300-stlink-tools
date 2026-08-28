@@ -6,18 +6,50 @@
 
 [![CI](https://github.com/Tunglam0605/b300-stlink-tools/actions/workflows/ci.yml/badge.svg)](https://github.com/Tunglam0605/b300-stlink-tools/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Latest Release](https://img.shields.io/github/v/release/Tunglam0605/b300-stlink-tools?label=Latest&logo=github)](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest)
 [![Target: STM32F407](https://img.shields.io/badge/Target-STM32F407-03234B.svg)](#phạm-vi-phần-cứng)
 
-## Tải bản mới nhất
+## Tải về — chọn đúng file trong 10 giây
 
-Không cần clone repository nếu chỉ cần sử dụng tool. Chọn đúng một gói cho hệ
-điều hành/mục đích sử dụng; các link dưới luôn trỏ đến GitHub Release `Latest`.
+> [!TIP]
+> **Nếu bạn dùng Windows 10/11 64-bit như đa số laptop/PC:** tải **[B300-STLink-GUI-Windows-x64.exe](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-GUI-Windows-x64.exe)**. Đây là bản **khuyến nghị**: có giao diện và trình cài đặt, không cần clone source code.
 
-| Hệ điều hành | GUI | CLI |
+### Tôi nên tải file nào?
+
+| Máy bạn đang dùng | File nên tải | Dùng khi nào |
 |---|---|---|
-| Windows x64 | [Installer EXE](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-GUI-Windows-x64.exe) · [Portable ZIP](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-GUI-Windows-x64.zip) | [CLI ZIP](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-CLI-Windows-x64.zip) |
-| Ubuntu x64 | [AppImage](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-GUI-Ubuntu-x64.AppImage) · [DEB](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/b300-stlink-gui_amd64.deb) | [CLI tar.gz](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-CLI-Linux-x64.tar.gz) |
-| Ubuntu ARM64 | [AppImage](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-GUI-Ubuntu-arm64.AppImage) · [DEB](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/b300-stlink-gui_arm64.deb) | [CLI tar.gz](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-CLI-Linux-arm64.tar.gz) |
+| 🪟 **Windows 10/11 64-bit** | **[GUI Installer `.exe` — KHUYẾN NGHỊ](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-GUI-Windows-x64.exe)** | Hầu hết người dùng Windows. Cài đặt rồi mở B300 ST-Link Tools như ứng dụng bình thường. |
+| 🪟 Windows 10/11 nhưng **không muốn cài** | [GUI Portable `.zip`](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-GUI-Windows-x64.zip) | Giải nén và chạy trực tiếp. |
+| 🐧 **Ubuntu PC/IPC Intel hoặc AMD 64-bit** | **[GUI `.deb` amd64 — KHUYẾN NGHỊ](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/b300-stlink-gui_amd64.deb)** | Máy tính/IPC Ubuntu thông thường dùng CPU Intel/AMD. |
+| 🐧 Ubuntu Intel/AMD nhưng **không muốn cài** | [GUI `.AppImage` x64](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-GUI-Ubuntu-x64.AppImage) | Chạy portable trên Linux x64. |
+| 🤖 **Ubuntu ARM64** — Jetson, Raspberry Pi 64-bit, ARM IPC | **[GUI `.deb` arm64 — KHUYẾN NGHỊ](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/b300-stlink-gui_arm64.deb)** | Thiết bị dùng CPU ARM 64-bit. |
+| 🤖 Ubuntu ARM64 nhưng **không muốn cài** | [GUI `.AppImage` ARM64](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-GUI-Ubuntu-arm64.AppImage) | Chạy portable trên ARM64. |
+
+**Không biết máy Linux là x64 hay ARM64?** Chạy:
+
+```bash
+uname -m
+```
+
+- `x86_64` → chọn **x64 / amd64**.
+- `aarch64` hoặc `arm64` → chọn **ARM64 / arm64**.
+
+### Chỉ tải CLI nếu bạn thực sự cần terminal/automation
+
+CLI `/ˌsiː el ˈaɪ/ – giao diện dòng lệnh` dành cho script, automation hoặc máy không chạy GUI:
+
+| Hệ điều hành | CLI |
+|---|---|
+| Windows x64 | [B300-STLink-CLI-Windows-x64.zip](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-CLI-Windows-x64.zip) |
+| Linux x64 | [B300-STLink-CLI-Linux-x64.tar.gz](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-CLI-Linux-x64.tar.gz) |
+| Linux ARM64 | [B300-STLink-CLI-Linux-arm64.tar.gz](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-CLI-Linux-arm64.tar.gz) |
+
+> [!IMPORTANT]
+> Nếu bạn chỉ muốn **cài và sử dụng tool**, **không tải** hai mục GitHub tự tạo có tên **Source code (zip)** hoặc **Source code (tar.gz)**. Đó là mã nguồn dành cho lập trình viên, không phải bộ cài B300 ST-Link Tools.
+
+Các link trên luôn trỏ tới **Latest Release `/ˈleɪtɪst rɪˈliːs/ – bản phát hành mới nhất ổn định`**. Nếu muốn xem toàn bộ file, changelog và checksum, mở **[trang Releases](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest)**.
+
+📘 **Hướng dẫn đầy đủ cho người dùng và AI agent:** [DOWNLOAD.md](DOWNLOAD.md) — cách chọn Stable/exact version, xác định x64/ARM64, GUI/CLI, cài đặt và quy tắc chọn artifact deterministic.
 
 Kiểm tra chữ ký/hash của Release bằng [SHA256SUMS.txt](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/SHA256SUMS.txt), [release-manifest.json](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/release-manifest.json) và [latest.json](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/latest.json). GUI chỉ nhận cập nhật khi manifest có chữ ký hợp lệ.
 
@@ -92,7 +124,9 @@ Factory không bao giờ là một phần của normal Application flash.
 - Firmware đầu vào: Intel HEX của Application link tại `0x08010000`.
 - Symbol debug: AXF/ELF đúng bản firmware đang chạy trên board.
 
-## Bắt đầu nhanh
+## Chạy từ source — dành cho developer
+
+> Người dùng chỉ muốn cài và sử dụng tool **không cần làm phần này**. Hãy tải gói GUI phù hợp ở mục [Tải về](#tải-về--chọn-đúng-file-trong-10-giây) phía trên.
 
 ### 1. Clone repository
 
@@ -130,6 +164,7 @@ file HEX, probe trước khi chạy.
 
 | Tài liệu | Dùng khi |
 |---|---|
+| [Download & Install](DOWNLOAD.md) | **Người dùng/AI agent chọn đúng version và đúng file cài theo OS/CPU.** |
 | [Bắt đầu từ Git clone](docs/00_START_HERE.md) | Tiếp nhận repo trên máy mới. |
 | [Setup Windows](docs/01_SETUP_WINDOWS.md) | Cài tool trên Windows x64. |
 | [Setup Ubuntu IPC](docs/02_SETUP_UBUNTU_IPC.md) | Cài tool và quyền USB trên IPC. |
