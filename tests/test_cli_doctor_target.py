@@ -37,6 +37,25 @@ def ready_report(probe: ProbeInfo) -> DiagnosticReport:
                             "No action is required.", target, vector, metadata, probe)
 
 
+def repairable_application_report(probe: ProbeInfo) -> DiagnosticReport:
+    target = TargetInfo(0x101F6413, 512, 3.09, "S0-S2 protected", (0, 1, 2), True)
+    vector = ApplicationVector(0, 0x08010101, False, "Initial MSP is outside STM32F407 SRAM.")
+    metadata = decode_ota_metadata(b"\xff" * 44)
+    checks = (
+        DiagnosticCheck("runtime", "PASS", "GDB_AVAILABLE", "ok", "none"),
+        DiagnosticCheck("openocd", "PASS", "OPENOCD_READY", "ok", "none"),
+        DiagnosticCheck("probes", "PASS", "PROBE_SELECTED", "ok", "none"),
+        DiagnosticCheck("target", "PASS", "TARGET_IDENTIFIED", "ok", "none"),
+        DiagnosticCheck("protection", "PASS", "BOOTLOADER_WRP_PROTECTED", "ok", "none"),
+        DiagnosticCheck("application_vector", "LIMITED", "APPLICATION_VECTOR_INVALID",
+                        vector.reason, "Flash a validated Application image."),
+        DiagnosticCheck("ota_metadata", "LIMITED", "OTA_METADATA_ERASED",
+                        "OTA metadata is erased.", "Flash a validated Application image."),
+    )
+    return DiagnosticReport(checks, "READY_FOR_APPLICATION_FLASH", "READY_FOR_APPLICATION_FLASH",
+                            "No action is required.", target, vector, metadata, probe)
+
+
 def run_snapshot(argv, probes):
     module = tool()
     output = io.StringIO()
@@ -92,6 +111,55 @@ class CliDoctorTargetTests(unittest.TestCase):
         value = json.loads(output.getvalue())
         self.assertNotEqual(code, 0)
         self.assertEqual(value["reason_code"], "MULTIPLE_PROBES")
+
+    def test_target_without_subcommand_returns_stable_json_error(self) -> None:
+        module = tool()
+        output = io.StringIO()
+        with redirect_stdout(output):
+            code = module.main(["target", "--json"])
+        value = json.loads(output.getvalue())
+        self.assertNotEqual(code, 0)
+        self.assertEqual(value["reason_code"], "TARGET_SUBCOMMAND_REQUIRED")
+        self.assertNotIn("Traceback", output.getvalue())
+
+    def test_target_without_subcommand_returns_stable_text_error(self) -> None:
+        module = tool()
+        output = io.StringIO()
+        with redirect_stdout(output):
+            code = module.main(["target"])
+        self.assertNotEqual(code, 0)
+        self.assertIn("TARGET_SUBCOMMAND_REQUIRED", output.getvalue())
+        self.assertNotIn("Traceback", output.getvalue())
+
+    def test_repairable_vector_and_metadata_keep_target_inspect_successful(self) -> None:
+        module = tool()
+        output = io.StringIO()
+        probe = self.probe
+
+        class FakeDiagnostics:
+            def __init__(self, service=None, probe_discovery=None):
+                pass
+
+            def run(self, probe_serial=None):
+                if probe_serial != "SAFE123":
+                    raise AssertionError("target inspect must pin the selected probe")
+                return repairable_application_report(probe)
+
+        class FakeB300Service:
+            def __init__(self, executable=None):
+                pass
+
+        with mock.patch.object(module, "list_probes", return_value=(self.probe,)), \
+                mock.patch.object(module, "DiagnosticsService", FakeDiagnostics), \
+                mock.patch.object(module, "B300Service", FakeB300Service), \
+                redirect_stdout(output):
+            code = module.main(["target", "inspect", "--json"])
+        value = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(value["status"], "ok")
+        self.assertEqual(value["conclusion"], "READY_FOR_APPLICATION_FLASH")
+        self.assertFalse(value["application_vector"]["valid"])
+        self.assertEqual(value["ota_metadata"]["classification"], "ERASED")
 
     def test_doctor_snapshot_contains_all_ordered_checks_and_conclusion(self) -> None:
         code, value, selected = run_snapshot(["doctor", "--json"], (self.probe,))

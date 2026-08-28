@@ -23,6 +23,19 @@ class ApplicationVectorTests(unittest.TestCase):
         data = struct.pack("<II", 0x20020000, 0x08000101)
         self.assertFalse(inspect_application_vector(data).valid)
 
+    def test_main_sram_top_is_allowed_but_the_gap_above_it_is_rejected(self) -> None:
+        self.assertTrue(inspect_application_vector(
+            struct.pack("<II", 0x20020000, 0x08010101)
+        ).valid)
+        self.assertFalse(inspect_application_vector(
+            struct.pack("<II", 0x20020004, 0x08010101)
+        ).valid)
+
+    def test_msp_in_the_unimplemented_sram_gap_is_invalid(self) -> None:
+        vector = inspect_application_vector(struct.pack("<II", 0x20028000, 0x08010101))
+        self.assertFalse(vector.valid)
+        self.assertIn("SRAM", vector.reason)
+
 
 class ReadMemoryServiceTests(unittest.TestCase):
     def test_read_memory_uses_one_reading_session_and_the_bounded_reader(self) -> None:
@@ -44,6 +57,30 @@ class ReadMemoryServiceTests(unittest.TestCase):
         self.assertEqual(data, b"\x01\x02")
         self.assertEqual(manager.modes, [(HardwareMode.READING, probe)])
         reader.assert_called_once()
+
+    def test_sector_and_metadata_reads_each_acquire_one_non_nested_reading_session(self) -> None:
+        class CountingManager(HardwareSessionManager):
+            def __init__(self) -> None:
+                super().__init__()
+                self.modes = []
+
+            def acquire(self, mode, probe):
+                self.modes.append((mode, probe))
+                return super().acquire(mode, probe)
+
+        probe = ProbeRef("SAFE123")
+        for operation, data in (("sector", b"\xff" * 0x4000),
+                                ("metadata", b"\xff" * 44)):
+            with self.subTest(operation=operation):
+                manager = CountingManager()
+                service = B300Service(executable="openocd", session_manager=manager)
+                with mock.patch("b300_core.service.read_memory", return_value=data) as reader:
+                    if operation == "sector":
+                        self.assertEqual(service.read_sector(probe, 0), data)
+                    else:
+                        self.assertEqual(service.read_metadata(probe).classification, "ERASED")
+                self.assertEqual(manager.modes, [(HardwareMode.READING, probe)])
+                reader.assert_called_once()
 
 
 def make_metadata() -> bytes:
@@ -78,8 +115,12 @@ class FakeDiagnosticService:
     def read_memory(self, probe, address, length):
         self.calls.append(("read_memory", probe, address, length))
         if address == APPLICATION_ADDRESS:
+            if isinstance(self.vector, BaseException):
+                raise self.vector
             return self.vector
         if address == METADATA_ADDRESS:
+            if isinstance(self.metadata, BaseException):
+                raise self.metadata
             return self.metadata
         raise AssertionError("unexpected diagnostic read")
 
@@ -141,6 +182,18 @@ class DiagnosticsServiceTests(unittest.TestCase):
         self.assertEqual(report.reason_code, "USB_ACCESS_DENIED")
         self.assertIn("udev", report.next_action.lower())
 
+    def test_malformed_target_output_is_a_blocked_ordered_diagnostic(self) -> None:
+        report = self.run_diagnostics(FakeDiagnosticService(
+            target=ValueError("OpenOCD target inspection did not identify voltage/device/flash size.")
+        ))
+        self.assertEqual(report.conclusion, "BLOCKED")
+        self.assertEqual(report.reason_code, "TARGET_INSPECTION_FAILED")
+        self.assertEqual([check.name for check in report.checks], [
+            "runtime", "openocd", "probes", "target", "protection",
+            "application_vector", "ota_metadata",
+        ])
+        self.assertIn("cable", report.next_action.lower())
+
     def test_target_identity_rdp_and_write_protection_failures_are_classified(self) -> None:
         cases = (
             (TargetInfo(0x419, 512, 3.1, "", (0, 1, 2), True), "UNSUPPORTED_DEVICE"),
@@ -149,17 +202,28 @@ class DiagnosticsServiceTests(unittest.TestCase):
             (TargetInfo(0x413, 512, 3.1, "", (), False), "WRP_NOT_REPORTED"),
             (TargetInfo(0x413, 512, 3.1, "", (0, 1), True), "BOOTLOADER_WRP_MISSING"),
         )
+        expected_conclusions = {
+            "UNSUPPORTED_DEVICE": "BLOCKED",
+            "UNSUPPORTED_FLASH_SIZE": "BLOCKED",
+            "RDP_ENABLED": "BLOCKED",
+            "WRP_NOT_REPORTED": "LIMITED_READ_ONLY",
+            "BOOTLOADER_WRP_MISSING": "LIMITED_READ_ONLY",
+        }
         for target, code in cases:
             with self.subTest(code=code):
                 report = self.run_diagnostics(FakeDiagnosticService(target=target))
                 self.assertEqual(report.reason_code, code)
-                self.assertIn(report.conclusion, ("BLOCKED", "LIMITED_READ_ONLY"))
+                self.assertEqual(report.conclusion, expected_conclusions[code])
 
     def test_invalid_vector_and_each_metadata_classification_are_reported(self) -> None:
         invalid_vector = struct.pack("<II", 0x00000000, 0x08010101)
         vector_report = self.run_diagnostics(FakeDiagnosticService(vector=invalid_vector))
         self.assertFalse(vector_report.application_vector.valid)
-        self.assertEqual(vector_report.reason_code, "APPLICATION_VECTOR_INVALID")
+        self.assertEqual(vector_report.conclusion, "READY_FOR_APPLICATION_FLASH")
+        vector_check = next(check for check in vector_report.checks
+                            if check.name == "application_vector")
+        self.assertEqual(vector_check.code, "APPLICATION_VECTOR_INVALID")
+        self.assertIn("Flash", vector_check.next_action)
 
         for metadata, classification in ((b"\xFF" * 44, "ERASED"),
                                          (make_metadata(), "VALID"),
@@ -167,6 +231,59 @@ class DiagnosticsServiceTests(unittest.TestCase):
             with self.subTest(classification=classification):
                 report = self.run_diagnostics(FakeDiagnosticService(metadata=metadata))
                 self.assertEqual(report.metadata.classification, classification)
+                self.assertEqual(report.conclusion, "READY_FOR_APPLICATION_FLASH")
+                check = next(item for item in report.checks if item.name == "ota_metadata")
+                self.assertEqual(check.code, "OTA_METADATA_%s" % classification)
+                if classification != "VALID":
+                    self.assertIn("Flash", check.next_action)
+
+    def test_memory_read_failures_limit_diagnostics_without_enabling_writes(self) -> None:
+        for address_name, service in (
+            ("vector", FakeDiagnosticService(vector=RuntimeError("read vector failed"))),
+            ("metadata", FakeDiagnosticService(metadata=RuntimeError("read metadata failed"))),
+        ):
+            with self.subTest(address_name=address_name):
+                report = self.run_diagnostics(service)
+                self.assertEqual(report.conclusion, "LIMITED_READ_ONLY")
+                self.assertEqual(report.reason_code, "%s_READ_FAILED" % (
+                    "APPLICATION_VECTOR" if address_name == "vector" else "OTA_METADATA"
+                ))
+                self.assertEqual([call[0] for call in service.calls], [
+                    "inspect_target", "read_memory", "read_memory",
+                ])
+
+    def test_missing_gdb_does_not_block_application_flash(self) -> None:
+        unavailable_runtime = GdbRuntimeInfo.from_path(
+            None, platform_name="linux", reason="GDB was not found."
+        )
+        report = DiagnosticsService(
+            service=FakeDiagnosticService(),
+            probe_discovery=lambda: (self.probe,),
+            gdb_info=lambda: unavailable_runtime,
+            openocd_tree_verifier=lambda _path: True,
+        ).run()
+        self.assertEqual(report.conclusion, "READY_FOR_APPLICATION_FLASH")
+        runtime = report.checks[0]
+        self.assertEqual(runtime.code, "GDB_UNAVAILABLE")
+        self.assertEqual(runtime.status, "LIMITED")
+
+    def test_diagnostics_never_invokes_a_write_capability(self) -> None:
+        class WriteRejectingService(FakeDiagnosticService):
+            def flash(self, *args, **kwargs):
+                self.fail("diagnostics must not flash")
+
+            def factory_flash_command(self, *args, **kwargs):
+                self.fail("diagnostics must not create factory commands")
+
+            def reset_command(self, *args, **kwargs):
+                self.fail("diagnostics must not reset")
+
+            @staticmethod
+            def fail(message):
+                raise AssertionError(message)
+
+        report = self.run_diagnostics(WriteRejectingService())
+        self.assertEqual(report.conclusion, "READY_FOR_APPLICATION_FLASH")
 
 
 if __name__ == "__main__":

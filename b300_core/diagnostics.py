@@ -100,7 +100,7 @@ class DiagnosticsService:
 
         try:
             target = self._service.inspect_target(probe)
-        except RuntimeError as error:
+        except (RuntimeError, ValueError) as error:
             message = str(error)
             if "libusb_error_access" in message.lower() or "access denied" in message.lower():
                 code = "USB_ACCESS_DENIED"
@@ -139,8 +139,6 @@ class DiagnosticsService:
                 else "No action is required.",
             )
             checks.append(vector_check)
-            if not vector.valid:
-                limited.append(vector_check)
         except (RuntimeError, ValueError) as error:
             vector_check = DiagnosticCheck(
                 "application_vector", "LIMITED", "APPLICATION_VECTOR_READ_FAILED", str(error),
@@ -161,8 +159,6 @@ class DiagnosticsService:
                 else "Flash a validated Application image to recreate OTA metadata.",
             )
             checks.append(metadata_check)
-            if metadata_check.status == "LIMITED":
-                limited.append(metadata_check)
         except (RuntimeError, ValueError) as error:
             metadata_check = DiagnosticCheck(
                 "ota_metadata", "LIMITED", "OTA_METADATA_READ_FAILED", str(error),

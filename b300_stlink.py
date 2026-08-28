@@ -159,6 +159,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
             return 0 if report.conclusion == "READY_FOR_APPLICATION_FLASH" else 1
 
+        if args.command == "target" and args.target_command is None:
+            record = {
+                "schema_version": 1,
+                "command": "target",
+                "status": "error",
+                "reason_code": "TARGET_SUBCOMMAND_REQUIRED",
+                "message": "The target command requires the inspect subcommand.",
+                "next_action": "Run target inspect to perform read-only target diagnostics.",
+            }
+            emit_snapshot(record, args.json, "%s: %s" % (record["reason_code"], record["message"]))
+            return 1
+
         if args.command == "target" and args.target_command == "inspect":
             probes = list_probes()
             try:
