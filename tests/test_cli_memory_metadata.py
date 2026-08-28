@@ -118,6 +118,18 @@ class ParserAndRangeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "0..7"):
             sector_by_index(-1)
 
+    def test_metadata_without_subcommand_returns_stable_snapshot_error(self) -> None:
+        code, value, _ = run_cli(["metadata", "--json"])
+        self.assertNotEqual(code, 0)
+        self.assertEqual(value["reason_code"], "METADATA_SUBCOMMAND_REQUIRED")
+        self.assertNotIn("Traceback", json.dumps(value))
+
+    def test_memory_without_subcommand_returns_stable_snapshot_error(self) -> None:
+        code, value, _ = run_cli(["memory", "--json"])
+        self.assertNotEqual(code, 0)
+        self.assertEqual(value["reason_code"], "MEMORY_SUBCOMMAND_REQUIRED")
+        self.assertNotIn("Traceback", json.dumps(value))
+
 
 class MemoryReadTests(unittest.TestCase):
     def test_memory_read_json_reports_absolute_range_and_lowercase_hex(self) -> None:
@@ -229,6 +241,32 @@ class MemoryDumpTests(unittest.TestCase):
             self.assertEqual(json.loads(output.getvalue())["reason_code"], "INVALID_OUTPUT_PATH")
             self.assertFalse(interrupted.exists())
             self.assertEqual(list(path.glob(".interrupted.bin.*")), [])
+
+    def test_dump_expanduser_os_error_is_a_stable_invalid_output_path(self) -> None:
+        module = tool()
+        output = io.StringIO()
+        with mock.patch.object(module.Path, "expanduser", side_effect=OSError("denied")), \
+                redirect_stdout(output):
+            code = module.main([
+                "memory", "dump", "0x08010000", "4", "snapshot.bin", "--json",
+            ])
+        value = json.loads(output.getvalue())
+        self.assertNotEqual(code, 0)
+        self.assertEqual(value["reason_code"], "INVALID_OUTPUT_PATH")
+        self.assertNotIn("Traceback", output.getvalue())
+
+    def test_dump_resolve_runtime_error_is_a_stable_invalid_output_path(self) -> None:
+        module = tool()
+        output = io.StringIO()
+        with mock.patch.object(module.Path, "resolve", side_effect=RuntimeError("unavailable")), \
+                redirect_stdout(output):
+            code = module.main([
+                "memory", "dump", "0x08010000", "4", "snapshot.bin", "--json",
+            ])
+        value = json.loads(output.getvalue())
+        self.assertNotEqual(code, 0)
+        self.assertEqual(value["reason_code"], "INVALID_OUTPUT_PATH")
+        self.assertNotIn("Traceback", output.getvalue())
 
 
 class MetadataPresentationTests(unittest.TestCase):

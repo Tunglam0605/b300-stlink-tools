@@ -239,6 +239,22 @@ def main(argv: Optional[List[str]] = None) -> int:
             emit_snapshot(record, args.json, "%s: %s" % (record["reason_code"], record["message"]))
             return 1
 
+        if args.command == "metadata" and args.metadata_command is None:
+            return _read_only_error(
+                args,
+                "metadata",
+                "METADATA_SUBCOMMAND_REQUIRED",
+                "The metadata command requires the show subcommand.",
+            )
+
+        if args.command == "memory" and args.memory_command is None:
+            return _read_only_error(
+                args,
+                "memory",
+                "MEMORY_SUBCOMMAND_REQUIRED",
+                "The memory command requires read, read-sector, or dump.",
+            )
+
         if args.command == "target" and args.target_command == "inspect":
             probes = list_probes()
             try:
@@ -279,14 +295,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             command = "memory %s" % args.memory_command
             try:
                 validate_read_range(args.address, args.length)
-                output = (_validated_output_path(args.output, args.force)
-                          if args.memory_command == "dump" else None)
-            except FileExistsError as error:
-                return _read_only_error(args, command, "OUTPUT_EXISTS", str(error))
             except ValueError as error:
-                reason = ("INVALID_OUTPUT_PATH" if args.memory_command == "dump" and
-                          "Output path" in str(error) else "INVALID_MEMORY_RANGE")
-                return _read_only_error(args, command, reason, str(error))
+                return _read_only_error(args, command, "INVALID_MEMORY_RANGE", str(error))
+            output = None
+            if args.memory_command == "dump":
+                try:
+                    output = _validated_output_path(args.output, args.force)
+                except FileExistsError as error:
+                    return _read_only_error(args, command, "OUTPUT_EXISTS", str(error))
+                except (OSError, RuntimeError, ValueError) as error:
+                    return _read_only_error(args, command, "INVALID_OUTPUT_PATH", str(error))
             probe = _select_read_probe(args, command)
             if probe is None:
                 return 1
