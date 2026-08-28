@@ -61,9 +61,41 @@ class ProbeMemoryMetadataTests(unittest.TestCase):
             (device / "idProduct").write_bytes(b"3748\n")
             (device / "serial").write_bytes(b"ST\xc3\xa9LINK\xff\n")
             probes = parse_linux_sysfs(Path(directory))
-        # An unsafe/non-ASCII serial is not passed to `adapter serial`; the GUI
-        # falls back to OpenOCD single-probe auto-selection instead of crashing.
-        self.assertEqual(probes, ())
+        # An unsafe/non-ASCII serial is not passed to `adapter serial`; the
+        # physical clone is still discoverable for safe auto-selection.
+        self.assertEqual(len(probes), 1)
+        self.assertIsNone(probes[0].serial)
+
+    def test_linux_serialless_clone_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            device = Path(directory) / "1-3"
+            device.mkdir()
+            (device / "idVendor").write_text("0483\n", encoding="ascii")
+            (device / "idProduct").write_text("3748\n", encoding="ascii")
+            probe = parse_linux_sysfs(Path(directory))[0]
+        self.assertIsNone(probe.serial)
+        self.assertFalse(probe.serial_available)
+        self.assertIn("0483:374", probe.usb_identity)
+
+    def test_windows_composite_instance_is_reported_without_fake_serial(self) -> None:
+        raw = json.dumps([{
+            "FriendlyName": "ST-Link Composite",
+            "InstanceId": r"USB\VID_0483&PID_3748&MI_00\7&ABCD&0&0000",
+        }])
+        probe = parse_windows_pnp_output(raw)[0]
+        self.assertIsNone(probe.serial)
+        self.assertNotEqual(probe.usb_identity, "")
+
+    def test_windows_serialless_clones_are_deduplicated_and_sorted_by_identity(self) -> None:
+        first = r"USB\VID_0483&PID_3748&MI_00\7&BBBB&0&0000"
+        second = r"USB\VID_0483&PID_3748&MI_00\7&AAAA&0&0000"
+        raw = json.dumps([
+            {"FriendlyName": "ST-Link Clone", "InstanceId": first},
+            {"FriendlyName": "ST-Link Clone", "InstanceId": second},
+            {"FriendlyName": "ST-Link Clone", "InstanceId": first},
+        ])
+        probes = parse_windows_pnp_output(raw)
+        self.assertEqual([probe.usb_identity for probe in probes], [second, first])
 
     def test_metadata_decoder_reports_confirmed(self) -> None:
         metadata = decode_ota_metadata(make_metadata(state=3))

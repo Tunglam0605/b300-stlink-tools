@@ -3,19 +3,25 @@
 
 from __future__ import annotations
 
-import argparse
 import ipaddress
-import json
-import re
 import sys
 import time
 from pathlib import Path
 from typing import List, Optional
 
+from b300_cli.parser import (
+    build_parser,
+    parse_args,
+    parse_bind_address,
+    parse_probe_serial,
+    parse_tcp_port,
+)
+from b300_cli.reporting import Reporter, emit_snapshot, format_probes_text, probe_record
 from b300_core.hex_image import inspect_image
 from b300_core.models import ProbeRef
 from b300_core.openocd import build_debug_command, resolve_openocd, validate_openocd_value
 from b300_core.debug_service import DebugConfig, DebugService, DebugState
+from b300_core.offline_setup import OPENOCD_VERSION, current_platform_name
 from b300_core.policy import (
     APPLICATION_ADDRESS,
     FLASH_END_ADDRESS,
@@ -23,29 +29,8 @@ from b300_core.policy import (
     build_flash_preview,
 )
 from b300_core.service import B300Service, ProvisioningError
-
-
-def parse_bind_address(value: str) -> str:
-    try:
-        return str(ipaddress.ip_address(value))
-    except ValueError as error:
-        raise argparse.ArgumentTypeError("bind address must be a valid IP address") from error
-
-
-def parse_tcp_port(value: str) -> int:
-    try:
-        port = int(value)
-    except ValueError as error:
-        raise argparse.ArgumentTypeError("port must be an integer") from error
-    if not 1 <= port <= 65535:
-        raise argparse.ArgumentTypeError("port must be in range 1..65535")
-    return port
-
-
-def parse_probe_serial(value: str) -> str:
-    if not re.fullmatch(r"[A-Za-z0-9_.:-]+", value):
-        raise argparse.ArgumentTypeError("probe serial contains unsupported characters")
-    return value
+from b300_core.probe import list_probes
+from b300_version import __version__
 
 
 def validate_openocd_path(path: Path) -> None:
@@ -55,57 +40,6 @@ def validate_openocd_path(path: Path) -> None:
 def validate_debug_args(args: argparse.Namespace) -> None:
     if args.telnet_port is not None and not ipaddress.ip_address(args.bind_address).is_loopback:
         raise ValueError("Telnet is allowed only when OpenOCD binds to a loopback address.")
-
-
-class Reporter:
-    def __init__(self, as_json: bool) -> None:
-        self.as_json = as_json
-
-    def emit(self, event: str, **fields: object) -> None:
-        record = {"event": event, **fields}
-        if self.as_json:
-            print(json.dumps(record, sort_keys=True), flush=True)
-        else:
-            print("[%s] %s" % (event, " ".join(
-                "%s=%s" % (key, value) for key, value in fields.items())), flush=True)
-
-
-def parse_args(argv: List[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    commands = parser.add_subparsers(dest="command", required=True)
-    flash = commands.add_parser("flash", help="Provision an Application HEX safely.")
-    flash.add_argument("application", type=Path)
-    flash.add_argument("--openocd")
-    flash.add_argument("--probe-serial", type=parse_probe_serial,
-                       help="Select one ST-Link when multiple probes are connected.")
-    flash.add_argument("--dry-run", action="store_true")
-    flash.add_argument("--json", action="store_true")
-    factory = commands.add_parser(
-        "provision-bootloader",
-        help="Factory-provision the trusted bundled B300 Bootloader and restore S0-S2 WRP.",
-    )
-    factory.add_argument("--openocd")
-    factory.add_argument("--probe-serial", type=parse_probe_serial,
-                         help="Select one ST-Link when multiple probes are connected.")
-    factory.add_argument("--dry-run", action="store_true")
-    factory.add_argument("--confirm-factory-provision", action="store_true",
-                         help="Required for real S0-S2 Bootloader/WRP modification.")
-    factory.add_argument("--json", action="store_true")
-    debug = commands.add_parser("debug", help="Start non-mutating OpenOCD debugging.")
-    debug.add_argument("--openocd")
-    debug.add_argument("--probe-serial", type=parse_probe_serial,
-                       help="Select one ST-Link when multiple probes are connected.")
-    debug.add_argument("--bind-address", type=parse_bind_address, default="127.0.0.1",
-                       help="OpenOCD listen address (default: 127.0.0.1).")
-    debug.add_argument("--gdb-port", type=parse_tcp_port, default=3333,
-                       help="GDB server TCP port (default: 3333).")
-    debug.add_argument("--telnet-port", type=parse_tcp_port,
-                       help="Optional OpenOCD telnet port; loopback only (default: disabled).")
-    debug.add_argument("--dry-run", action="store_true")
-    debug.add_argument("--json", action="store_true")
-    doctor = commands.add_parser("doctor", help="Inspect local tool availability.")
-    doctor.add_argument("--json", action="store_true")
-    return parser.parse_args(argv)
 
 
 def validate_application_hex(application: Path) -> None:
@@ -161,8 +95,55 @@ def run_openocd(command, dry_run: bool, reporter: Reporter) -> int:
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
+    if args.version:
+        version_record = {
+            "schema_version": 1,
+            "command": "version",
+            "status": "ok",
+            "version": __version__,
+            "cli_version": __version__,
+            "core_version": __version__,
+            "openocd_version": OPENOCD_VERSION,
+            "platform": current_platform_name(),
+        }
+        emit_snapshot(
+            version_record,
+            args.json,
+            "CLI/Core: %s\nOpenOCD: %s\nPlatform: %s" % (
+                __version__, OPENOCD_VERSION, version_record["platform"],
+            ),
+        )
+        return 0
+    if args.command is None:
+        build_parser().error("the following arguments are required: command")
     reporter = Reporter(args.json)
     try:
+        if args.command == "probes":
+            probes = list_probes()
+            if not probes:
+                record = {
+                    "schema_version": 1,
+                    "command": "probes",
+                    "status": "error",
+                    "reason_code": "NO_PROBE",
+                    "message": "No ST-Link probe was found.",
+                    "probes": [],
+                }
+                emit_snapshot(record, args.json, "reason_code=NO_PROBE No ST-Link probe was found.")
+                return 1
+            records = [probe_record(index, probe) for index, probe in enumerate(probes, start=1)]
+            emit_snapshot(
+                {
+                    "schema_version": 1,
+                    "command": "probes",
+                    "status": "ok",
+                    "probes": records,
+                },
+                args.json,
+                format_probes_text(probes),
+            )
+            return 0
+
         if args.command == "doctor":
             available, executable = B300Service().doctor()
             reporter.emit("dependency", name="OpenOCD", available=available, path=executable)

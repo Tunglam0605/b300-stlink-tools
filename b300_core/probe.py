@@ -17,8 +17,20 @@ def _unique(probes: Iterable[ProbeInfo]) -> Tuple[ProbeInfo, ...]:
     result = {}
     for probe in probes:
         if probe.serial:
-            result.setdefault(probe.serial, probe)
-    return tuple(sorted(result.values(), key=lambda item: item.serial))
+            key = ("serial", probe.serial)
+        else:
+            key = ("identity", probe.source, probe.usb_identity)
+        result.setdefault(key, probe)
+    return tuple(sorted(
+        result.values(),
+        key=lambda item: (
+            item.serial is None,
+            item.serial or "",
+            item.source,
+            item.usb_identity or "",
+            item.name,
+        ),
+    ))
 
 
 def parse_windows_pnp_output(text: str) -> Tuple[ProbeInfo, ...]:
@@ -38,12 +50,13 @@ def parse_windows_pnp_output(text: str) -> Tuple[ProbeInfo, ...]:
         if "VID_0483&PID_374" not in upper or "\\" not in instance_id:
             continue
         serial = instance_id.rsplit("\\", 1)[-1].strip()
-        if not serial or "&" in serial:
-            continue
+        if not serial or "&" in serial or not _SAFE_OPENOCD_SERIAL.fullmatch(serial):
+            serial = None
         probes.append(ProbeInfo(
             serial=serial,
             name=str(record.get("FriendlyName") or "ST-Link"),
             source="windows-pnp",
+            usb_identity=instance_id,
         ))
     return _unique(probes)
 
@@ -67,16 +80,23 @@ def parse_linux_sysfs(root: Path = Path("/sys/bus/usb/devices")) -> Tuple[ProbeI
         try:
             vendor = _read_sysfs_text(device / "idVendor").lower()
             product = _read_sysfs_text(device / "idProduct").lower()
-            serial = _read_sysfs_text(device / "serial")
         except OSError:
             continue
         if vendor != "0483" or not product.startswith("374"):
             continue
+        try:
+            serial = _read_sysfs_text(device / "serial")
+        except OSError:
+            serial = ""
         # Only expose a serial when it is safe for OpenOCD's `adapter serial`
-        # command. If a clone has no usable serial, return no explicit probe and
-        # let the higher layer use OpenOCD single-probe auto-selection.
-        if serial and _SAFE_OPENOCD_SERIAL.fullmatch(serial):
-            probes.append(ProbeInfo(serial, "ST-Link %s" % product.upper(), "linux-sysfs"))
+        # command. A clone without one remains discoverable for safe
+        # single-probe auto-selection.
+        probes.append(ProbeInfo(
+            serial if serial and _SAFE_OPENOCD_SERIAL.fullmatch(serial) else None,
+            "ST-Link %s" % product.upper(),
+            "linux-sysfs",
+            "%s:%s:%s" % (vendor, product, device.name),
+        ))
     return _unique(probes)
 
 
@@ -103,4 +123,3 @@ def list_probes() -> Tuple[ProbeInfo, ...]:
     if platform.system().lower() == "linux":
         return parse_linux_sysfs()
     return ()
-

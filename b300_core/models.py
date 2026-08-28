@@ -16,9 +16,16 @@ class ProbeRef:
 
 @dataclass(frozen=True)
 class ProbeInfo:
-    serial: str
+    serial: Optional[str]
     name: str
     source: str
+    usb_identity: Optional[str] = None
+    status: str = "available"
+
+    @property
+    def serial_available(self) -> bool:
+        """Whether this physical probe can be explicitly pinned in OpenOCD."""
+        return self.serial is not None
 
 
 @dataclass(frozen=True)
