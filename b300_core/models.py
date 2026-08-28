@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
+
+if TYPE_CHECKING:
+    from .application_vector import ApplicationVector
 
 
 @dataclass(frozen=True)
@@ -131,3 +134,32 @@ class FlashPhaseEvent:
     progress: int
     message: str
     cancellable: bool = False
+
+
+@dataclass(frozen=True)
+class DiagnosticCheck:
+    """One ordered, operator-facing result from a read-only diagnostic run."""
+
+    name: str
+    status: str
+    code: str
+    message: str
+    next_action: str
+
+    @property
+    def ok(self) -> bool:
+        return self.status == "PASS"
+
+
+@dataclass(frozen=True)
+class DiagnosticReport:
+    """Immutable diagnostic snapshot shared by command-line and GUI callers."""
+
+    checks: Tuple[DiagnosticCheck, ...]
+    conclusion: str
+    reason_code: str
+    next_action: str
+    target: Optional[TargetInfo] = None
+    application_vector: Optional["ApplicationVector"] = None
+    metadata: Optional[OtaMetadata] = None
+    probe: Optional[ProbeInfo] = None

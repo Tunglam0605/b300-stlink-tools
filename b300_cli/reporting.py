@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Iterable, Mapping
 
-from b300_core.models import ProbeInfo
+from b300_core.models import DiagnosticReport, ProbeInfo
 
 
 class Reporter:
@@ -58,3 +58,52 @@ def format_probes_text(probes: Iterable[ProbeInfo]) -> str:
             )
         )
     return "\n".join(lines)
+
+
+def diagnostic_snapshot(command: str, report: DiagnosticReport) -> dict:
+    """Render a core diagnostic report without reimplementing its decisions."""
+    record = {
+        "schema_version": 1,
+        "command": command,
+        "status": "ok" if report.conclusion == "READY_FOR_APPLICATION_FLASH" else "error",
+        "checks": [{
+            "name": check.name,
+            "status": check.status,
+            "code": check.code,
+            "message": check.message,
+            "next_action": check.next_action,
+        } for check in report.checks],
+        "conclusion": report.conclusion,
+        "classification": report.conclusion,
+        "reason_code": report.reason_code,
+        "next_action": report.next_action,
+    }
+    if report.probe is not None:
+        record["probe"] = probe_record(1, report.probe)
+    if report.target is not None:
+        target = report.target
+        record["target"] = {
+            "device_id": "0x%08X" % (target.device_id & 0xFFF),
+            "mcu_family": "STM32F407" if (target.device_id & 0xFFF) == 0x413 else None,
+            "flash_kib": target.flash_kib,
+            "voltage": target.target_voltage,
+            "rdp_enabled": target.readout_protected,
+            "wrp_reported": target.protection_reported,
+            "protected_sectors": list(target.protected_sectors),
+            "protection": target.protection_summary,
+        }
+    if report.application_vector is not None:
+        vector = report.application_vector
+        record["application_vector"] = {
+            "initial_msp": "0x%08X" % vector.initial_msp if vector.initial_msp is not None else None,
+            "reset_vector": "0x%08X" % vector.reset_vector if vector.reset_vector is not None else None,
+            "valid": vector.valid,
+            "reason": vector.reason,
+        }
+    if report.metadata is not None:
+        record["ota_metadata"] = {
+            "classification": report.metadata.classification,
+            "valid": report.metadata.valid,
+            "state": report.metadata.state_name,
+        }
+    return record

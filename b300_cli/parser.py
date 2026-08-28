@@ -89,6 +89,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     del doctor
 
+    target = commands.add_parser(
+        "target", help="Read-only STM32F407 target diagnostics.", parents=[json_parent],
+    )
+    target_commands = target.add_subparsers(dest="target_command")
+    inspect_target = target_commands.add_parser(
+        "inspect", help="Inspect one target without modifying it.", parents=[json_parent],
+    )
+    inspect_target.add_argument("--openocd")
+    inspect_target.add_argument("--probe-serial", type=parse_probe_serial,
+                                help="Select one ST-Link when multiple probes are connected.")
+
     probes = commands.add_parser(
         "probes", help="List discovered ST-Link probes.", parents=[json_parent],
     )

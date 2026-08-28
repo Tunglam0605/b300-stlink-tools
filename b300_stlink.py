@@ -16,7 +16,10 @@ from b300_cli.parser import (
     parse_probe_serial,
     parse_tcp_port,
 )
-from b300_cli.reporting import Reporter, emit_snapshot, format_probes_text, probe_record
+from b300_cli.reporting import (
+    Reporter, diagnostic_snapshot, emit_snapshot, format_probes_text, probe_record,
+)
+from b300_core.diagnostics import DiagnosticsService
 from b300_core.hex_image import inspect_image
 from b300_core.models import ProbeRef
 from b300_core.openocd import build_debug_command, resolve_openocd, validate_openocd_value
@@ -30,6 +33,7 @@ from b300_core.policy import (
 )
 from b300_core.service import B300Service, ProvisioningError
 from b300_core.probe import list_probes
+from b300_core.probe_selection import ProbeSelectionError, select_probe
 from b300_version import __version__
 
 
@@ -145,9 +149,39 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
         if args.command == "doctor":
-            available, executable = B300Service().doctor()
-            reporter.emit("dependency", name="OpenOCD", available=available, path=executable)
-            return 0 if available else 1
+            probes = list_probes()
+            report = DiagnosticsService(
+                service=B300Service(), probe_discovery=lambda: probes,
+            ).run()
+            emit_snapshot(
+                diagnostic_snapshot("doctor", report), args.json,
+                "%s (%s)" % (report.conclusion, report.reason_code),
+            )
+            return 0 if report.conclusion == "READY_FOR_APPLICATION_FLASH" else 1
+
+        if args.command == "target" and args.target_command == "inspect":
+            probes = list_probes()
+            try:
+                _info, probe = select_probe(probes, args.probe_serial)
+            except ProbeSelectionError as error:
+                record = {
+                    "schema_version": 1,
+                    "command": "target inspect",
+                    "status": "error",
+                    "reason_code": error.code,
+                    "message": error.message,
+                    "next_action": "Connect exactly one ST-Link or select one with --probe-serial.",
+                }
+                emit_snapshot(record, args.json, "%s: %s" % (error.code, error.message))
+                return 1
+            report = DiagnosticsService(
+                service=B300Service(executable=args.openocd), probe_discovery=lambda: probes,
+            ).run(probe.serial)
+            emit_snapshot(
+                diagnostic_snapshot("target inspect", report), args.json,
+                "%s (%s)" % (report.conclusion, report.reason_code),
+            )
+            return 0 if report.conclusion == "READY_FOR_APPLICATION_FLASH" else 1
 
         if args.command == "debug":
             validate_debug_args(args)
