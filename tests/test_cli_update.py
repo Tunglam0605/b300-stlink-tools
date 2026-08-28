@@ -15,6 +15,7 @@ from unittest import mock
 
 from b300_cli.parser import parse_args
 from b300_core.updater import DEFAULT_MANIFEST_URL, DEFAULT_SIGNATURE_URL
+from b300_version import __version__
 from tests.test_release_manifest import TEST_PUBLIC_KEY, sign_message
 
 
@@ -23,6 +24,14 @@ WINDOWS_KEY = "windows-x64-cli"
 WINDOWS_FILE = "B300-STLink-CLI-Windows-x64.zip"
 LINUX_X64_KEY = "linux-x64-cli"
 LINUX_X64_FILE = "B300-STLink-CLI-Linux-x64.tar.gz"
+
+
+def _next_patch(version: str) -> str:
+    major, minor, patch = (int(part) for part in version.split("."))
+    return "%d.%d.%d" % (major, minor, patch + 1)
+
+
+MAIN_NEXT_VERSION = _next_patch(__version__)
 
 
 class FakeResponse(io.BytesIO):
@@ -193,7 +202,7 @@ class CliUpdateTests(unittest.TestCase):
         )
 
     def test_check_reports_signed_current_latest_and_cli_asset_without_html(self) -> None:
-        manifest, signature, asset_url = signed_manifest()
+        manifest, signature, asset_url = signed_manifest(version=MAIN_NEXT_VERSION)
         runtime, opener = self._runtime(manifest, signature, asset_url)
 
         code, value = self._run_main(["update", "check", "--json"], runtime)
@@ -202,8 +211,8 @@ class CliUpdateTests(unittest.TestCase):
         self.assertEqual(value["schema_version"], 1)
         self.assertEqual(value["command"], "update check")
         self.assertEqual(value["status"], "ok")
-        self.assertEqual(value["current_version"], "0.5.3")
-        self.assertEqual(value["latest_version"], "0.5.4")
+        self.assertEqual(value["current_version"], __version__)
+        self.assertEqual(value["latest_version"], MAIN_NEXT_VERSION)
         self.assertTrue(value["update_available"])
         self.assertEqual(value["platform"], WINDOWS_KEY)
         self.assertEqual(value["asset"]["filename"], WINDOWS_FILE)
@@ -226,7 +235,7 @@ class CliUpdateTests(unittest.TestCase):
                 self.assertIsNone(value["asset"])
 
     def test_download_treats_dest_as_directory_and_preserves_signed_filename(self) -> None:
-        manifest, signature, asset_url = signed_manifest()
+        manifest, signature, asset_url = signed_manifest(version=MAIN_NEXT_VERSION)
         runtime, opener = self._runtime(manifest, signature, asset_url)
         with tempfile.TemporaryDirectory() as temp:
             destination = Path(temp) / "chosen-directory"
@@ -238,7 +247,7 @@ class CliUpdateTests(unittest.TestCase):
             final_path = destination / WINDOWS_FILE
             self.assertEqual(code, 0)
             self.assertEqual(final_path.read_bytes(), PAYLOAD)
-            self.assertEqual(value["latest_version"], "0.5.4")
+            self.assertEqual(value["latest_version"], MAIN_NEXT_VERSION)
             self.assertEqual(value["asset"]["filename"], WINDOWS_FILE)
             self.assertEqual(value["asset"]["size"], len(PAYLOAD))
             self.assertEqual(value["asset"]["sha256"], hashlib.sha256(PAYLOAD).hexdigest())

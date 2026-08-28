@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 from b300_core.models import ProbeInfo
+from b300_version import __version__
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,7 +40,7 @@ class CliVersionAndProbesTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]["schema_version"], 1)
-        self.assertEqual(records[0]["version"], "0.5.3")
+        self.assertEqual(records[0]["version"], __version__)
         self.assertEqual(records[0]["openocd_version"], "0.12.0-7")
 
     def test_version_text_reports_cli_core_openocd_and_platform(self) -> None:
@@ -48,7 +49,7 @@ class CliVersionAndProbesTests(unittest.TestCase):
         with redirect_stdout(output):
             code = module.main(["--version"])
         self.assertEqual(code, 0)
-        self.assertIn("CLI/Core: 0.5.3", output.getvalue())
+        self.assertIn("CLI/Core: %s" % __version__, output.getvalue())
         self.assertIn("OpenOCD: 0.12.0-7", output.getvalue())
         self.assertIn("Platform:", output.getvalue())
 

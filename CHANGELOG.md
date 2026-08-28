@@ -5,6 +5,30 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-28
+
+### Added
+
+- CLI feature parity: bổ sung version/probe discovery, diagnostics `doctor`/`target inspect`, đọc memory/metadata read-only, managed CLI update/self-update và Linux USB setup có xác nhận rõ ràng.
+- OpenOCD debug local hỗ trợ TCL listener tùy chọn bằng `--tcl-port 6666` song song GDB server `3333`; CLI chỉ chuyển sang `READY` sau khi tất cả listener được yêu cầu thực sự mở.
+- Plan vận hành riêng cho luồng debug `3333/6666`, giữ `HardwareSessionManager` làm owner duy nhất của ST-Link debug lifecycle.
+
+### Changed
+
+- CLI được tách parser/reporting/update command theo module thay vì dồn toàn bộ logic vào entrypoint, giữ backward compatibility cho các lệnh cũ.
+- Debug runtime/process startup được harden cho Windows/Linux; GDB có thể resolve từ `B300_GDB`, bundled runtime hoặc toolchain ngoài tùy artifact.
+
+### Security
+
+- TCL và Telnet chỉ được phép trên loopback; remote bind chỉ cho GDB. Các OpenOCD debug port đang bật phải khác nhau.
+- Debug flow tiếp tục không chứa erase/program/mass-erase, Option Bytes hay WRP operations.
+
+### Validation
+
+- Full regression trên `main` sau merge: **425 tests PASS, 2 skipped**.
+- Hardware test trên ST-Link V2 + STM32F407: OpenOCD nhận target, `127.0.0.1:3333` và `127.0.0.1:6666` cùng LISTEN, CLI báo `READY`; TCL RPC `version` trả response hợp lệ và cả hai port đóng sau khi dừng session.
+- GDB từ STM32CubeIDE 2.2.0 được resolve qua `B300_GDB`; `doctor` báo `GDB_AVAILABLE`.
+
 ## [0.5.3] - 2026-08-28
 
 ### Fixed
