@@ -49,8 +49,10 @@ class OpenOcdCoreTests(unittest.TestCase):
 
     def test_missing_environment_override_falls_back_to_verified_offline_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            installed = Path(directory) / "openocd.exe"
+            installed = Path(directory) / ("openocd.exe" if os.name == "nt" else "openocd")
             installed.write_bytes(b"runtime")
+            if os.name != "nt":
+                installed.chmod(0o755)
             with mock.patch.dict(os.environ, {"B300_OPENOCD": "missing-openocd"}), \
                     mock.patch(
                         "b300_core.openocd.installed_openocd_path",
@@ -234,6 +236,8 @@ class OpenOcdCoreTests(unittest.TestCase):
             bundled = root / "vendor" / "openocd" / "bin" / openocd_name
             bundled.parent.mkdir(parents=True)
             bundled.write_bytes(b"")
+            if os.name != "nt":
+                bundled.chmod(0o755)
             with mock.patch.object(sys, "frozen", True, create=True), \
                  mock.patch.object(sys, "executable", str(executable)), \
                  mock.patch(
