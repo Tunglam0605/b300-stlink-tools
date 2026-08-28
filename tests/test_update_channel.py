@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from b300_core.update_channel import UpdateChannel, channel_endpoints
+from b300_core.update_channel import UpdateChannel, channel_endpoints, cli_channel_endpoints
 from b300_core.updater import UpdateClient
 
 
@@ -11,6 +11,11 @@ class UpdateChannelTests(unittest.TestCase):
         client = UpdateClient("public-key", "windows-x64")
         self.assertEqual(client.channel, UpdateChannel.STABLE)
         self.assertTrue(client.manifest_url.endswith("/latest.json"))
+
+    def test_cli_stable_uses_separate_signed_manifest_endpoint(self) -> None:
+        manifest, signature = cli_channel_endpoints(UpdateChannel.STABLE)
+        self.assertTrue(manifest.endswith("/latest-cli.json"))
+        self.assertEqual(signature, manifest + ".minisig")
 
     def test_beta_uses_its_own_signed_manifest_endpoint(self) -> None:
         manifest, signature = channel_endpoints(UpdateChannel.BETA)

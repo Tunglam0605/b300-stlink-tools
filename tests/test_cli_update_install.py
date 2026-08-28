@@ -14,8 +14,9 @@ from unittest import mock
 from b300_cli.parser import parse_args
 from b300_core import cli_update_install
 from b300_core.release_manifest import ReleaseAsset
-from b300_core.updater import DEFAULT_MANIFEST_URL, DEFAULT_SIGNATURE_URL
-from tests.test_cli_update import FakeOpener, signed_manifest
+from tests.test_cli_update import (
+    CLI_MANIFEST_URL, CLI_SIGNATURE_URL, FakeOpener, signed_manifest,
+)
 from tests.test_release_manifest import TEST_PUBLIC_KEY
 
 
@@ -566,8 +567,8 @@ class CliInstallCommandTests(unittest.TestCase):
         from b300_core.cli_update import build_cli_update_runtime
 
         opener = FakeOpener({
-            DEFAULT_MANIFEST_URL: manifest,
-            DEFAULT_SIGNATURE_URL: signature,
+            CLI_MANIFEST_URL: manifest,
+            CLI_SIGNATURE_URL: signature,
             asset_url: payload,
         })
         return build_cli_update_runtime(
@@ -628,7 +629,7 @@ class CliInstallCommandTests(unittest.TestCase):
             self.assertEqual(platform, "windows-x64-cli")
             self.assertEqual(
                 opener.requests,
-                [DEFAULT_MANIFEST_URL, DEFAULT_SIGNATURE_URL, asset_url],
+                [CLI_MANIFEST_URL, CLI_SIGNATURE_URL, asset_url],
             )
 
     def test_verified_package_is_accepted_only_against_the_fresh_signed_asset(self) -> None:
@@ -652,7 +653,7 @@ class CliInstallCommandTests(unittest.TestCase):
             installer.assert_called_once()
             self.assertEqual(Path(installer.call_args.args[0]), package.resolve())
             self.assertEqual(
-                opener.requests, [DEFAULT_MANIFEST_URL, DEFAULT_SIGNATURE_URL],
+                opener.requests, [CLI_MANIFEST_URL, CLI_SIGNATURE_URL],
             )
 
     def test_invalid_verified_package_falls_back_to_fresh_signed_download(self) -> None:
@@ -705,7 +706,7 @@ class CliInstallCommandTests(unittest.TestCase):
                     self.assertNotEqual(installed, supplied.resolve())
                     self.assertEqual(
                         opener.requests,
-                        [DEFAULT_MANIFEST_URL, DEFAULT_SIGNATURE_URL, asset_url],
+                        [CLI_MANIFEST_URL, CLI_SIGNATURE_URL, asset_url],
                     )
 
     def test_invalid_signature_sha_and_platform_never_reach_installer(self) -> None:

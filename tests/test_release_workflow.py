@@ -121,6 +121,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
             signing["run"],
         )
         self.assertNotIn("apt-get install -y minisign", signing["run"])
+        self.assertIn("latest-cli.json", signing["run"])
+        self.assertIn("latest-cli.json.minisig", signing["run"])
 
     def test_release_verifies_public_signed_updater_after_publish(self) -> None:
         workflow = load_workflow("release.yml")
@@ -133,6 +135,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("scripts.release.verify_published", command)
         self.assertIn("releases/latest/download/latest.json", command)
         self.assertIn("latest.json.minisig", command)
+        self.assertIn("releases/latest/download/latest-cli.json", command)
+        self.assertIn("latest-cli.json.minisig", command)
+        self.assertIn("--audience gui", command)
+        self.assertIn("--audience cli", command)
         self.assertIn("MINISIGN_PUBLIC_KEY", verify.get("env", {}))
         publish_index = next(
             index for index, step in enumerate(finalize_steps)

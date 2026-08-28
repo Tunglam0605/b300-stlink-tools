@@ -14,6 +14,7 @@ from typing import Optional
 from unittest import mock
 
 from b300_cli.parser import parse_args
+from b300_core.update_channel import UpdateChannel, cli_channel_endpoints
 from b300_core.updater import DEFAULT_MANIFEST_URL, DEFAULT_SIGNATURE_URL
 from b300_version import __version__
 from tests.test_release_manifest import TEST_PUBLIC_KEY, sign_message
@@ -24,6 +25,8 @@ WINDOWS_KEY = "windows-x64-cli"
 WINDOWS_FILE = "B300-STLink-CLI-Windows-x64.zip"
 LINUX_X64_KEY = "linux-x64-cli"
 LINUX_X64_FILE = "B300-STLink-CLI-Linux-x64.tar.gz"
+
+CLI_MANIFEST_URL, CLI_SIGNATURE_URL = cli_channel_endpoints(UpdateChannel.STABLE)
 
 
 def _next_patch(version: str) -> str:
@@ -131,8 +134,8 @@ class CliUpdateTests(unittest.TestCase):
                  machine: str = "AMD64"):
         core = self._module("b300_core.cli_update")
         opener = FakeOpener({
-            DEFAULT_MANIFEST_URL: manifest,
-            DEFAULT_SIGNATURE_URL: signature,
+            CLI_MANIFEST_URL: manifest,
+            CLI_SIGNATURE_URL: signature,
             asset_url: payload,
         })
         runtime = core.build_cli_update_runtime(
@@ -175,8 +178,10 @@ class CliUpdateTests(unittest.TestCase):
         self.assertEqual(runtime.platform.value, WINDOWS_KEY)
         self.assertEqual(runtime.client.platform_name, WINDOWS_KEY)
         self.assertEqual(runtime.client.public_key, MINISIGN_PUBLIC_KEY)
-        self.assertEqual(runtime.client.manifest_url, DEFAULT_MANIFEST_URL)
-        self.assertEqual(runtime.client.signature_url, DEFAULT_SIGNATURE_URL)
+        self.assertEqual(runtime.client.manifest_url, CLI_MANIFEST_URL)
+        self.assertEqual(runtime.client.signature_url, CLI_SIGNATURE_URL)
+        self.assertNotEqual(runtime.client.manifest_url, DEFAULT_MANIFEST_URL)
+        self.assertNotEqual(runtime.client.signature_url, DEFAULT_SIGNATURE_URL)
 
     def test_default_cache_paths_are_platform_specific(self) -> None:
         core = self._module("b300_core.cli_update")
@@ -218,7 +223,7 @@ class CliUpdateTests(unittest.TestCase):
         self.assertEqual(value["asset"]["filename"], WINDOWS_FILE)
         self.assertEqual(value["asset"]["size"], len(PAYLOAD))
         self.assertEqual(value["asset"]["sha256"], hashlib.sha256(PAYLOAD).hexdigest())
-        self.assertEqual(opener.requests, [DEFAULT_MANIFEST_URL, DEFAULT_SIGNATURE_URL])
+        self.assertEqual(opener.requests, [CLI_MANIFEST_URL, CLI_SIGNATURE_URL])
 
     def test_check_returns_zero_for_current_and_newer_local_versions(self) -> None:
         for signed_version in ("0.5.3", "0.5.2"):
@@ -254,7 +259,7 @@ class CliUpdateTests(unittest.TestCase):
             self.assertEqual(value["path"], str(final_path.resolve()))
             self.assertEqual(
                 opener.requests,
-                [DEFAULT_MANIFEST_URL, DEFAULT_SIGNATURE_URL, asset_url],
+                [CLI_MANIFEST_URL, CLI_SIGNATURE_URL, asset_url],
             )
 
     def test_download_defaults_to_standard_user_cache(self) -> None:
@@ -287,7 +292,7 @@ class CliUpdateTests(unittest.TestCase):
             self.assertEqual(list(destination.iterdir()), [])
             self.assertEqual(
                 opener.requests,
-                [DEFAULT_MANIFEST_URL, DEFAULT_SIGNATURE_URL, asset_url],
+                [CLI_MANIFEST_URL, CLI_SIGNATURE_URL, asset_url],
             )
 
     def test_signed_unsafe_filename_is_rejected_before_asset_download(self) -> None:
@@ -298,7 +303,7 @@ class CliUpdateTests(unittest.TestCase):
 
         self.assertNotEqual(code, 0)
         self.assertEqual(value["reason_code"], "UPDATE_SECURITY_FAILURE")
-        self.assertEqual(opener.requests, [DEFAULT_MANIFEST_URL, DEFAULT_SIGNATURE_URL])
+        self.assertEqual(opener.requests, [CLI_MANIFEST_URL, CLI_SIGNATURE_URL])
 
     def test_signed_manifest_without_detected_platform_is_rejected(self) -> None:
         manifest, signature, asset_url = signed_manifest(
@@ -310,7 +315,7 @@ class CliUpdateTests(unittest.TestCase):
 
         self.assertNotEqual(code, 0)
         self.assertEqual(value["reason_code"], "UPDATE_SECURITY_FAILURE")
-        self.assertEqual(opener.requests, [DEFAULT_MANIFEST_URL, DEFAULT_SIGNATURE_URL])
+        self.assertEqual(opener.requests, [CLI_MANIFEST_URL, CLI_SIGNATURE_URL])
 
     def test_invalid_signature_is_rejected_before_manifest_fields_are_trusted(self) -> None:
         manifest, signature, asset_url = signed_manifest()
@@ -321,7 +326,7 @@ class CliUpdateTests(unittest.TestCase):
 
         self.assertNotEqual(code, 0)
         self.assertEqual(value["reason_code"], "UPDATE_SECURITY_FAILURE")
-        self.assertEqual(opener.requests, [DEFAULT_MANIFEST_URL, DEFAULT_SIGNATURE_URL])
+        self.assertEqual(opener.requests, [CLI_MANIFEST_URL, CLI_SIGNATURE_URL])
 
     def test_sha_mismatch_fails_closed_and_removes_partial(self) -> None:
         manifest, signature, asset_url = signed_manifest(sha256="0" * 64)

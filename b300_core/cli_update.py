@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Optional
 
+from .update_channel import UpdateChannel, cli_channel_endpoints
 from .update_platform import CliUpdatePlatform, detect_cli_update_platform
 from .update_public_key import MINISIGN_PUBLIC_KEY
 from .updater import UpdateClient
@@ -24,7 +25,11 @@ def build_cli_update_runtime(
         open_url: Optional[Callable] = None) -> CliUpdateRuntime:
     """Build the existing verified updater with the CLI trust/platform identity."""
     selected = detect_cli_update_platform(system, machine)
-    kwargs = {}
+    manifest_url, signature_url = cli_channel_endpoints(UpdateChannel.STABLE)
+    kwargs = {
+        "manifest_url": manifest_url,
+        "signature_url": signature_url,
+    }
     if open_url is not None:
         kwargs["open_url"] = open_url
     client = UpdateClient(public_key, selected.value, **kwargs)
