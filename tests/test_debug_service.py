@@ -3,6 +3,9 @@ from __future__ import annotations
 import unittest
 import time
 import threading
+import subprocess
+import socket
+from unittest import mock
 
 from b300_core.debug_service import DebugConfig, DebugService, DebugState
 from b300_core.hardware_session import HardwareMode, HardwareSessionManager
@@ -14,7 +17,7 @@ class FakeProcess:
         self.terminated = False
         self.killed = False
         self.returncode = None
-        self.stdout = None
+        self.stdout = iter(["Info : Listening on port 3333 for gdb connections\n"])
 
     def poll(self):
         return self.returncode
@@ -40,7 +43,6 @@ class DebugServiceTests(unittest.TestCase):
             executable="openocd",
             session_manager=manager,
             process_factory=lambda command, **kwargs: commands.append(command) or process,
-            port_waiter=lambda host, port, timeout: True,
         )
 
         state = service.start(DebugConfig(ProbeRef("DEBUG123")))
@@ -73,18 +75,21 @@ class DebugServiceTests(unittest.TestCase):
         self.assertEqual(launched, [])
         self.assertEqual(service.state, DebugState.STOPPED)
 
-    def test_port_readiness_failure_releases_session(self) -> None:
+    def test_unrelated_or_wrong_port_logs_do_not_mark_debug_ready(self) -> None:
         process = FakeProcess()
+        process.stdout = iter([
+            "Info : Listening on port 4444 for gdb connections\n",
+            "Info : unrelated startup message\n",
+        ])
         manager = HardwareSessionManager()
         service = DebugService(
             executable="openocd",
             session_manager=manager,
             process_factory=lambda command, **kwargs: process,
-            port_waiter=lambda host, port, timeout: False,
         )
 
-        with self.assertRaisesRegex(RuntimeError, "not ready"):
-            service.start(DebugConfig(ProbeRef("DEBUG123")))
+        with self.assertRaisesRegex(RuntimeError, "Last log"):
+            service.start(DebugConfig(ProbeRef("DEBUG123")), readiness_timeout_seconds=0.02)
 
         self.assertTrue(process.terminated)
         self.assertEqual(service.state, DebugState.FAILED)
@@ -94,13 +99,15 @@ class DebugServiceTests(unittest.TestCase):
         class OutputProcess(FakeProcess):
             def __init__(self) -> None:
                 super().__init__()
-                self.stdout = iter(["Info : init\n", "Info : gdb server started\n"])
+                self.stdout = iter([
+                    "Info : init\n",
+                    "Info : Listening on port 3333 for gdb connections\n",
+                ])
 
         messages = []
         service = DebugService(
             executable="openocd",
             process_factory=lambda command, **kwargs: OutputProcess(),
-            port_waiter=lambda host, port, timeout: True,
         )
 
         service.start(DebugConfig(ProbeRef("DEBUG123")), event_sink=messages.append)
@@ -109,7 +116,9 @@ class DebugServiceTests(unittest.TestCase):
             time.sleep(0.01)
         service.stop()
 
-        self.assertEqual(messages, ["Info : init", "Info : gdb server started"])
+        self.assertEqual(messages, [
+            "Info : init", "Info : Listening on port 3333 for gdb connections",
+        ])
 
     def test_busy_session_rejects_debug_without_releasing_current_owner(self) -> None:
         manager = HardwareSessionManager()
@@ -145,7 +154,6 @@ class DebugServiceTests(unittest.TestCase):
         service = DebugService(
             executable="openocd", session_manager=manager,
             process_factory=lambda command, **kwargs: process,
-            port_waiter=lambda host, port, timeout: True,
         )
         service.start(DebugConfig(ProbeRef("DEBUG123")))
         process.returncode = 9
@@ -159,7 +167,6 @@ class DebugServiceTests(unittest.TestCase):
         service = DebugService(
             executable="openocd", session_manager=manager,
             process_factory=lambda command, **kwargs: process,
-            port_waiter=lambda host, port, timeout: True,
         )
         errors = []
 
@@ -179,6 +186,33 @@ class DebugServiceTests(unittest.TestCase):
 
         self.assertEqual(manager.snapshot().mode, HardwareMode.IDLE)
         self.assertEqual(service.state, DebugState.STOPPED)
+
+    def test_matching_listener_line_marks_ready_without_opening_a_tcp_connection(self) -> None:
+        process = FakeProcess()
+        calls = []
+        service = DebugService(
+            executable="openocd",
+            process_factory=lambda command, **kwargs: calls.append(kwargs) or process,
+            platform_name="windows",
+        )
+        with mock.patch("socket.create_connection") as connect:
+            self.assertEqual(service.start(DebugConfig(ProbeRef("DEBUG123"))), DebugState.READY)
+        connect.assert_not_called()
+        self.assertTrue(calls[0]["creationflags"] & subprocess.CREATE_NO_WINDOW)
+        self.assertEqual(calls[0]["stdout"], subprocess.PIPE)
+        self.assertEqual(calls[0]["stderr"], subprocess.STDOUT)
+        self.assertTrue(calls[0]["text"])
+        self.assertFalse(calls[0]["shell"])
+        service.stop()
+
+    def test_process_exit_before_listener_line_reports_failure(self) -> None:
+        process = FakeProcess()
+        process.returncode = 9
+        process.stdout = iter(["Error: adapter failed\n"])
+        service = DebugService(executable="openocd", process_factory=lambda *args, **kwargs: process)
+        with self.assertRaisesRegex(RuntimeError, "exited"):
+            service.start(DebugConfig(ProbeRef("DEBUG123")), readiness_timeout_seconds=0.1)
+        self.assertEqual(service.state, DebugState.FAILED)
 
 
 if __name__ == "__main__":

@@ -11,6 +11,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Protocol, Sequence, Tuple
 
+from .gdb_runtime import resolve_gdb
+from .process_startup import child_process_kwargs
+
 
 class GdbProcess(Protocol):
     stdin: object
@@ -83,13 +86,16 @@ def parse_mi_record(raw: str) -> Optional[MiRecord]:
 class GdbMiBackend:
     """A minimal allow-list of GDB commands that succeed only on verified MI results."""
 
-    def __init__(self, executable: str = "arm-none-eabi-gdb",
+    def __init__(self, executable: Optional[str] = None,
                  process_factory: Optional[ProcessFactory] = None,
-                 response_timeout_seconds: float = 5.0) -> None:
+                 response_timeout_seconds: float = 5.0,
+                 platform_name: Optional[str] = None) -> None:
         if response_timeout_seconds <= 0:
             raise ValueError("GDB/MI response timeout must be positive.")
-        self.executable = executable
+        self.executable: Optional[str] = None
+        self._configured_executable = executable
         self._process_factory = process_factory or subprocess.Popen
+        self._platform_name = platform_name
         self.response_timeout_seconds = response_timeout_seconds
         self._process: Optional[GdbProcess] = None
         self._next_token = 1
@@ -116,9 +122,12 @@ class GdbMiBackend:
     def start(self) -> None:
         if self.running:
             raise GdbMiProcessError("GDB is already running.")
+        self.executable = resolve_gdb(self._configured_executable)
         process = self._process_factory(
             [self.executable, "--interpreter=mi2"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            shell=False,
+            **child_process_kwargs(self._platform_name),
         )
         if getattr(process, "stdin", None) is None or getattr(process, "stdout", None) is None:
             try:

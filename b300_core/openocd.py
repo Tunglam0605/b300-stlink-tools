@@ -15,6 +15,7 @@ from typing import Callable, List, Optional, Sequence
 from .models import BootVerification, CommandResult, FactoryPlan, FlashPlan, ProbeRef, TargetInfo
 from .offline_setup import installed_openocd_path, verify_openocd_tree
 from .policy import APPLICATION_ADDRESS, FLASH_END_ADDRESS
+from .process_startup import child_process_kwargs
 
 
 EventSink = Callable[[str], None]
@@ -274,12 +275,17 @@ def parse_boot_verification(output: str) -> BootVerification:
 class OpenOcdRunner:
     """Execute one command without a shell and stream normalized log lines."""
 
+    def __init__(self, process_factory: Optional[Callable[..., subprocess.Popen]] = None,
+                 platform_name: Optional[str] = None) -> None:
+        self._process_factory = process_factory or subprocess.Popen
+        self._platform_name = platform_name
+
     def run(self, command: Sequence[str], event_sink: Optional[EventSink] = None,
             timeout_seconds: Optional[float] = 60.0,
             cancel_event: Optional[threading.Event] = None) -> CommandResult:
         normalized = tuple(str(item) for item in command)
         try:
-            process = subprocess.Popen(
+            process = self._process_factory(
                 normalized,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -288,6 +294,7 @@ class OpenOcdRunner:
                 errors="replace",
                 bufsize=1,
                 shell=False,
+                **child_process_kwargs(self._platform_name),
             )
         except OSError as error:
             return CommandResult(normalized, 127, "OpenOCD not found: %s" % error)

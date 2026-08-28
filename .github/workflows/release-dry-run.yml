@@ -29,6 +29,8 @@ jobs:
         shell: pwsh
         run: |
           Expand-Archive release\B300-STLink-GUI-Windows-x64.zip release\windows-gui-bundle -Force
+          & ".\release\windows-gui-bundle\vendor\gdb\bin\arm-none-eabi-gdb.exe" --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           choco install innosetup --no-progress -y
           $version = python -c "from b300_version import __version__; print(__version__)"
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
@@ -87,6 +89,7 @@ jobs:
         run: |
           mkdir -p release/linux-gui-bundle release/gui
           tar -xzf "release/${{ matrix.gui }}" -C release/linux-gui-bundle
+          ./release/linux-gui-bundle/vendor/gdb/bin/arm-none-eabi-gdb --version
           curl -fL --retry 3 -o "release/${{ matrix.appimagetool }}" \
             "https://github.com/AppImage/appimagetool/releases/download/continuous/${{ matrix.appimagetool }}"
           echo "${{ matrix.appimagetool_sha256 }}  release/${{ matrix.appimagetool }}" | sha256sum -c -

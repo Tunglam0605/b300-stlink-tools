@@ -25,6 +25,12 @@ def add_tree_zip(archive: zipfile.ZipFile, root: Path) -> None:
             archive.write(source, "vendor/openocd/" + source.relative_to(root).as_posix())
 
 
+def add_gdb_tree_zip(archive: zipfile.ZipFile, root: Path) -> None:
+    for source in root.rglob("*"):
+        if source.is_file():
+            archive.write(source, "vendor/gdb/" + source.relative_to(root).as_posix())
+
+
 
 
 def add_application_tree_zip(archive: zipfile.ZipFile, root: Path) -> None:
@@ -57,6 +63,13 @@ def add_tree_tar(archive: tarfile.TarFile, root: Path) -> None:
                         filter=executable if source.name == "openocd" else None)
 
 
+def add_gdb_tree_tar(archive: tarfile.TarFile, root: Path) -> None:
+    for source in root.rglob("*"):
+        if source.is_file():
+            archive.add(source, "vendor/gdb/" + source.relative_to(root).as_posix(),
+                        filter=executable if source.name == "arm-none-eabi-gdb" else None)
+
+
 def openocd_manifest(root: Path) -> bytes:
     return build_tree_manifest(root)
 
@@ -75,13 +88,23 @@ def main(argv=None) -> int:
     parser.add_argument("--openocd-archive", required=True)
     parser.add_argument("--openocd-sha256", required=True)
     parser.add_argument("--openocd-package", required=True, type=Path)
+    parser.add_argument("--gdb-root", type=Path)
+    parser.add_argument("--gdb-archive")
+    parser.add_argument("--gdb-sha256")
     parser.add_argument("--internal-distribution-approved", action="store_true")
     args = parser.parse_args(argv)
     if not args.internal_distribution_approved:
         parser.error("--internal-distribution-approved is required.")
     if not re.fullmatch(r"[0-9A-Fa-f]{64}", args.openocd_sha256):
         parser.error("--openocd-sha256 must contain exactly 64 hexadecimal characters.")
+    if args.gdb_root is not None and args.flavor != "gui":
+        parser.error("GDB runtime is allowed only in GUI artifacts.")
+    if args.gdb_root is not None and (not args.gdb_archive or not args.gdb_sha256 or
+                                     not re.fullmatch(r"[0-9A-Fa-f]{64}", args.gdb_sha256)):
+        parser.error("--gdb-root requires --gdb-archive and a 64-character --gdb-sha256.")
     required = [args.executable, args.openocd_root, args.bootstrap, args.openocd_package]
+    if args.gdb_root is not None:
+        required.append(args.gdb_root)
     if args.application_root is not None:
         required.append(args.application_root)
         try:
@@ -102,6 +125,10 @@ def main(argv=None) -> int:
             args.openocd_sha256.upper(),
         )
     ).encode("ascii")
+    if args.gdb_root is not None:
+        metadata += ("gdb=%s\ngdb_archive=%s\ngdb_sha256=%s\n" % (
+            "15.2.1-1.1", args.gdb_archive, args.gdb_sha256.upper(),
+        )).encode("ascii")
     manifest = openocd_manifest(args.openocd_root)
     manifest_digest = hashlib.sha256(manifest).hexdigest()
     if manifest_digest != TRUSTED_TREE_MANIFESTS.get(args.platform):
@@ -118,6 +145,8 @@ def main(argv=None) -> int:
                 archive.add(resource, arcname=resource_archive_name(resource))
             archive.add(args.bootstrap, arcname=args.bootstrap.name, filter=executable)
             add_tree_tar(archive, args.openocd_root)
+            if args.gdb_root is not None:
+                add_gdb_tree_tar(archive, args.gdb_root)
             info = tarfile.TarInfo("BUNDLE-METADATA.txt")
             info.size = len(metadata)
             archive.addfile(info, io.BytesIO(metadata))
@@ -138,6 +167,8 @@ def main(argv=None) -> int:
                 archive.write(resource, resource_archive_name(resource))
             archive.write(args.bootstrap, args.bootstrap.name)
             add_tree_zip(archive, args.openocd_root)
+            if args.gdb_root is not None:
+                add_gdb_tree_zip(archive, args.gdb_root)
             archive.writestr("BUNDLE-METADATA.txt", metadata)
             archive.writestr("vendor/openocd/%s" % TREE_MANIFEST_NAME, manifest)
             archive.write(

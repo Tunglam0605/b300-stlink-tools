@@ -9,9 +9,12 @@ import shutil
 import subprocess
 import sys
 import sysconfig
+import tarfile
 import tempfile
 import urllib.request
+import zipfile
 from pathlib import Path
+from pathlib import PurePosixPath
 
 from b300_version import __version__ as TOOL_VERSION
 from b300_core.offline_setup import (
@@ -23,6 +26,22 @@ from b300_core.offline_setup import (
 ROOT = Path(__file__).resolve().parent
 VERSION = "0.12.0-7"
 BASE = "https://github.com/xpack-dev-tools/openocd-xpack/releases/download/v%s" % VERSION
+GDB_VERSION = "15.2.1-1.1"
+GDB_BASE = "https://github.com/xpack-dev-tools/arm-none-eabi-gcc-xpack/releases/download/v%s" % GDB_VERSION
+TRUSTED_GDB_PACKAGES = {
+    "windows-x64": (
+        "xpack-arm-none-eabi-gcc-15.2.1-1.1-win32-x64.zip",
+        "bae6a3d1667697ce750c3b13d6d26d80973ecedc2cc87bf04869e83447fd93ea",
+    ),
+    "linux-x64": (
+        "xpack-arm-none-eabi-gcc-15.2.1-1.1-linux-x64.tar.gz",
+        "da6a49ad4003944b823c6c93702a8787c922ab34bd7e918ec0eaf6933a9b1ff6",
+    ),
+    "linux-arm64": (
+        "xpack-arm-none-eabi-gcc-15.2.1-1.1-linux-arm64.tar.gz",
+        "67980c7990eba7bb7ffdf39699102effd70889f5ac427be19a8c8a6c5fab2972",
+    ),
+}
 
 
 def target_for(system: str, machine: str, python_platform: str):
@@ -107,6 +126,126 @@ def validate_trusted_package(platform_name: str, filename: str, digest: str) -> 
         )
 
 
+def validate_trusted_gdb_package(platform_name: str, filename: str, digest: str) -> None:
+    trusted_name, trusted_digest = TRUSTED_GDB_PACKAGES[platform_name]
+    if filename != trusted_name or digest.lower() != trusted_digest.lower():
+        raise RuntimeError("Downloaded GDB package does not match the built-in trust anchor.")
+
+
+def _archive_parts(name: str):
+    if not name or "\x00" in name or "\\" in name or name.startswith("/") or ":" in name:
+        raise ValueError("GDB archive contains an unsafe path.")
+    parts = PurePosixPath(name.rstrip("/")).parts
+    if not parts or any(part in ("", ".", "..") for part in parts):
+        raise ValueError("GDB archive contains an unsafe path.")
+    if not parts[0].startswith("xpack-arm-none-eabi-gcc-"):
+        raise ValueError("GDB archive has an unexpected root directory.")
+    return parts
+
+
+def _gdb_destination(destination: Path, parts) -> Path:
+    target = destination.joinpath(*parts[1:]).resolve()
+    root = destination.resolve()
+    if target == root or root not in target.parents:
+        raise ValueError("GDB archive contains an unsafe path.")
+    return target
+
+
+def _copy_gdb_stream(source, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("wb") as output:
+        shutil.copyfileobj(source, output, length=1024 * 1024)
+
+
+def _tar_link_destination(member_name: str, link_name: str, destination: Path,
+                          hard_link: bool = False) -> Path:
+    member_parts = _archive_parts(member_name)
+    if not link_name or "\x00" in link_name or "\\" in link_name or ":" in link_name or \
+            link_name.startswith("/"):
+        raise ValueError("GDB archive contains an unsafe link target.")
+    if hard_link:
+        parts = list(_archive_parts(link_name))
+        return _gdb_destination(destination, parts)
+    parts = list(member_parts[:-1])
+    for part in link_name.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if len(parts) <= 1:
+                raise ValueError("GDB archive contains an unsafe link target.")
+            parts.pop()
+        else:
+            parts.append(part)
+    return _gdb_destination(destination, _archive_parts("/".join(parts)))
+
+
+def extract_trusted_gdb_package(package: Path, destination: Path, platform_name: str) -> Path:
+    """Verify one pinned xPack archive and extract its portable runtime safely."""
+    source = Path(package)
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    validate_trusted_gdb_package(platform_name, source.name, digest)
+    target = Path(destination)
+    if target.exists() and any(target.iterdir()):
+        raise ValueError("GDB extraction destination must be empty.")
+    target.mkdir(parents=True, exist_ok=True)
+    count = 0
+    if source.name.endswith(".zip"):
+        with zipfile.ZipFile(source) as archive:
+            for member in archive.infolist():
+                count += 1
+                if count > 20_000 or member.file_size > 512 * 1024 * 1024:
+                    raise ValueError("GDB archive exceeds extraction limits.")
+                parts = _archive_parts(member.filename)
+                if len(parts) == 1 or member.is_dir():
+                    continue
+                if (member.external_attr >> 16) & 0o170000 == 0o120000:
+                    raise ValueError("GDB archive symlinks are not supported in ZIP packages.")
+                with archive.open(member) as stream:
+                    _copy_gdb_stream(stream, _gdb_destination(target, parts))
+    else:
+        with tarfile.open(source, "r:gz") as archive:
+            links = []
+            for member in archive:
+                count += 1
+                if count > 20_000 or member.size > 512 * 1024 * 1024:
+                    raise ValueError("GDB archive exceeds extraction limits.")
+                parts = _archive_parts(member.name)
+                if len(parts) == 1 or member.isdir():
+                    continue
+                if member.issym() or member.islnk():
+                    links.append((
+                        _gdb_destination(target, parts),
+                        _tar_link_destination(member.name, member.linkname, target, member.islnk()),
+                    ))
+                    continue
+                if not member.isfile():
+                    raise ValueError("GDB archive contains an unsupported entry.")
+                stream = archive.extractfile(member)
+                if stream is None:
+                    raise ValueError("GDB archive contains an unreadable file.")
+                with stream:
+                    _copy_gdb_stream(stream, _gdb_destination(target, parts))
+            while links:
+                unresolved = []
+                copied = False
+                for link_destination, link_target in links:
+                    if link_target.is_file():
+                        link_destination.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(link_target, link_destination)
+                        copied = True
+                    else:
+                        unresolved.append((link_destination, link_target))
+                if not copied:
+                    raise ValueError("GDB archive contains an unresolved link target.")
+                links = unresolved
+    executable = target / "bin" / ("arm-none-eabi-gdb.exe" if platform_name == "windows-x64" else "arm-none-eabi-gdb")
+    if not executable.is_file():
+        raise ValueError("Trusted GDB package does not contain arm-none-eabi-gdb.")
+    if platform_name != "windows-x64":
+        executable.chmod(executable.stat().st_mode | 0o111)
+    return executable
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=ROOT / "release")
@@ -129,6 +268,17 @@ def main(argv=None) -> int:
         validate_trusted_package(platform_name, filename, verified_sha256)
         openocd_root = temp / "openocd-runtime"
         extract_trusted_openocd_package(archive, openocd_root, platform_name)
+        gdb_archive = None
+        gdb_sha256 = None
+        gdb_root = None
+        if args.flavor in {"all", "gui"}:
+            gdb_filename, gdb_sha256 = TRUSTED_GDB_PACKAGES[platform_name]
+            gdb_archive = temp / gdb_filename
+            fetch("%s/%s" % (GDB_BASE, gdb_filename), gdb_archive)
+            actual_gdb_sha256 = hashlib.sha256(gdb_archive.read_bytes()).hexdigest()
+            validate_trusted_gdb_package(platform_name, gdb_filename, actual_gdb_sha256)
+            gdb_root = temp / "gdb-runtime"
+            extract_trusted_gdb_package(gdb_archive, gdb_root, platform_name)
         subprocess.check_call([sys.executable, "-m", "pip", "install", "--user",
                                "-r", str(ROOT / "requirements-build.txt")])
         if args.flavor in {"all", "cli"}:
@@ -174,6 +324,12 @@ def main(argv=None) -> int:
             ]
             if application_root is not None:
                 command.extend(["--application-root", str(application_root)])
+            if flavor_name == "gui":
+                assert gdb_root is not None and gdb_archive is not None and gdb_sha256 is not None
+                command.extend([
+                    "--gdb-root", str(gdb_root), "--gdb-archive", gdb_archive.name,
+                    "--gdb-sha256", gdb_sha256,
+                ])
             for resource in resources:
                 command.extend(["--resource", str(resource)])
             subprocess.check_call(command)

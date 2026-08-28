@@ -72,6 +72,8 @@ jobs:
           $vcRuntime = Get-ChildItem "$root\_internal" -Filter "VCRUNTIME140*.dll" | Select-Object -First 1
           if ($null -eq $pythonDll) { throw "Packaged Python DLL missing from onedir runtime" }
           if ($null -eq $vcRuntime) { throw "Packaged VC runtime missing from onedir runtime" }
+          & "$root\vendor\gdb\bin\arm-none-eabi-gdb.exe" --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $process = Start-Process -FilePath "$root\b300-stlink-gui.exe" `
             -ArgumentList --smoke-test -Wait -PassThru -WindowStyle Hidden
           exit $process.ExitCode
@@ -132,6 +134,7 @@ jobs:
         run: |
           mkdir -p release/linux-gui-bundle
           tar -xzf release/B300-STLink-GUI-Linux-x64.tar.gz -C release/linux-gui-bundle
+          ./release/linux-gui-bundle/vendor/gdb/bin/arm-none-eabi-gdb --version
       - name: Smoke-test Linux GUI on X11
         run: |
           env -u QT_QPA_PLATFORM xvfb-run -a ./release/linux-gui-bundle/b300-stlink-gui --smoke-test
@@ -185,6 +188,7 @@ jobs:
         run: |
           mkdir -p release/linux-gui-bundle
           tar -xzf release/B300-STLink-GUI-Linux-arm64.tar.gz -C release/linux-gui-bundle
+          ./release/linux-gui-bundle/vendor/gdb/bin/arm-none-eabi-gdb --version
       - name: Smoke-test Linux GUI on X11
         run: |
           env -u QT_QPA_PLATFORM xvfb-run -a ./release/linux-gui-bundle/b300-stlink-gui --smoke-test

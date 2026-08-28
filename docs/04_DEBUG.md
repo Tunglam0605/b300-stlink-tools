@@ -11,12 +11,12 @@ thể bị halt/reset nên chỉ dùng khi board và cơ cấu đang ở trạng
 - File `.axf` hoặc `.elf` có symbol, được build từ đúng source đang chạy trên
   board. File HEX chỉ dùng để nạp, không thay thế file symbol khi debug.
 - Một GDB client tương thích ARM:
-  - Windows: `arm-none-eabi-gdb` từ GNU Arm Embedded Toolchain.
-  - Ubuntu: `arm-none-eabi-gdb` hoặc `gdb-multiarch`.
+  - GUI release bundle mang theo `arm-none-eabi-gdb` trong `vendor/gdb/bin`.
+  - Khi chạy từ source/CLI, tool tìm `B300_GDB`, GDB trong bundle, sau đó
+    `arm-none-eabi-gdb` trên `PATH`; Ubuntu cuối cùng có thể dùng `gdb-multiarch`.
 
-Bundle của repo mang theo OpenOCD server nhưng không mang cả GNU toolchain để
-giữ gói nhẹ. Kiểm tra GDB client bằng `arm-none-eabi-gdb --version` hoặc
-`gdb-multiarch --version`.
+Nếu GDB không có, chỉ Debug tích hợp bị chặn; Application Flash vẫn hoạt động.
+Đặt `B300_GDB` tới executable GDB hợp lệ hoặc cài `arm-none-eabi-gdb`.
 
 ## Cách A — Debug trên cùng một máy
 

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import importlib.util
 import hashlib
+import io
 import tempfile
 import unittest
 import zipfile
+from contextlib import redirect_stderr
 from pathlib import Path
 from unittest import mock
 
@@ -257,6 +259,57 @@ class GuiPackagingTests(unittest.TestCase):
         self.assertIn("b300-stlink.exe", names)
         self.assertNotIn("b300-stlink-gui.exe", names)
         self.assertIn("flavor=cli", metadata)
+
+    def test_gui_package_includes_gdb_but_cli_package_rejects_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gui = root / "b300-stlink-gui.exe"
+            cli = root / "b300-stlink.exe"
+            bootstrap = root / "install.ps1"
+            openocd = root / "openocd"
+            gdb = root / "gdb"
+            xpack = root / "xpack-openocd.zip"
+            (openocd / "bin").mkdir(parents=True)
+            (gdb / "bin").mkdir(parents=True)
+            for path in (gui, cli, bootstrap, openocd / "bin" / "openocd.exe",
+                         gdb / "bin" / "arm-none-eabi-gdb.exe"):
+                path.write_bytes(b"runtime")
+            (gdb / "LICENSE").write_text("upstream license", encoding="utf-8")
+            xpack.write_bytes(b"trusted")
+            output = root / "gui.zip"
+            manifest_digest = hashlib.sha256(package_internal.openocd_manifest(openocd)).hexdigest()
+            with mock.patch.object(package_internal, "TRUSTED_TREE_MANIFESTS", {"windows-x64": manifest_digest}):
+                package_internal.main([
+                    "--flavor", "gui", "--executable", str(gui),
+                    "--openocd-root", str(openocd), "--gdb-root", str(gdb),
+                    "--gdb-archive", "xpack-arm-none-eabi-gcc.zip", "--gdb-sha256", "B" * 64,
+                    "--bootstrap", str(bootstrap), "--output", str(output),
+                    "--platform", "windows-x64", "--openocd-archive", "xpack-openocd.zip",
+                    "--openocd-sha256", "A" * 64, "--openocd-package", str(xpack),
+                    "--internal-distribution-approved",
+                ])
+            with zipfile.ZipFile(output) as archive:
+                names = set(archive.namelist())
+            self.assertIn("vendor/gdb/bin/arm-none-eabi-gdb.exe", names)
+            self.assertIn("vendor/gdb/LICENSE", names)
+            stderr = io.StringIO()
+            with redirect_stderr(stderr), self.assertRaises(SystemExit):
+                package_internal.main([
+                    "--flavor", "cli", "--executable", str(cli),
+                    "--openocd-root", str(openocd), "--gdb-root", str(gdb),
+                    "--gdb-archive", "xpack-arm-none-eabi-gcc.zip", "--gdb-sha256", "B" * 64,
+                    "--bootstrap", str(bootstrap), "--output", str(root / "cli.zip"),
+                    "--platform", "windows-x64", "--openocd-archive", "xpack-openocd.zip",
+                    "--openocd-sha256", "A" * 64, "--openocd-package", str(xpack),
+                    "--internal-distribution-approved",
+                ])
+            self.assertIn("GDB runtime is allowed only", stderr.getvalue())
+
+    def test_release_workflows_smoke_test_the_bundled_gdb_runtime(self) -> None:
+        for workflow_name in ("release.yml", "release-dry-run.yml"):
+            workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
+            self.assertIn("arm-none-eabi-gdb", workflow)
+            self.assertIn("--version", workflow)
 
     def test_linux_staging_contains_launchers_desktop_icon_and_control(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

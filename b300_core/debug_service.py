@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import ipaddress
-import socket
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Optional, Protocol
@@ -17,6 +17,7 @@ from .hardware_session import (
 )
 from .models import ProbeRef
 from .openocd import build_debug_command, resolve_openocd
+from .process_startup import child_process_kwargs
 
 
 class DebugState(str, Enum):
@@ -51,17 +52,7 @@ class DebugProcess(Protocol):
 
 
 ProcessFactory = Callable[..., DebugProcess]
-PortWaiter = Callable[[str, int, float], bool]
 EventSink = Callable[[str], None]
-
-
-def wait_for_local_port(host: str, port: int, timeout_seconds: float) -> bool:
-    """One bounded readiness probe; never exposes a non-loopback telnet server."""
-    try:
-        with socket.create_connection((host, port), timeout=timeout_seconds):
-            return True
-    except OSError:
-        return False
 
 
 class DebugService:
@@ -70,11 +61,11 @@ class DebugService:
     def __init__(self, executable: Optional[str] = None,
                  session_manager: Optional[HardwareSessionManager] = None,
                  process_factory: Optional[ProcessFactory] = None,
-                 port_waiter: Optional[PortWaiter] = None) -> None:
+                 platform_name: Optional[str] = None) -> None:
         self.executable = resolve_openocd(executable)
         self.session_manager = session_manager or DEFAULT_HARDWARE_SESSION_MANAGER
         self._process_factory = process_factory or subprocess.Popen
-        self._port_waiter = port_waiter or wait_for_local_port
+        self._platform_name = platform_name
         self._state = DebugState.STOPPED
         self._process: Optional[DebugProcess] = None
         self._session_lease = None
@@ -108,10 +99,10 @@ class DebugService:
                 )
                 self._process = self._process_factory(
                     command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                    shell=False, **child_process_kwargs(self._platform_name),
                 )
-                self._forward_output(self._process, event_sink)
-                if not self._port_waiter(config.bind_address, config.gdb_port, readiness_timeout_seconds):
-                    raise RuntimeError("OpenOCD GDB port is not ready.")
+                ready, logs = self._forward_output(self._process, config.gdb_port, event_sink)
+                self._wait_for_listener_locked(ready, logs, readiness_timeout_seconds)
             except BaseException:
                 self._stop_process_locked()
                 if session_lease is not None:
@@ -163,15 +154,41 @@ class DebugService:
             self._session_lease = None
 
     @staticmethod
-    def _forward_output(process: DebugProcess, event_sink: Optional[EventSink]) -> None:
+    def _forward_output(process: DebugProcess, gdb_port: int,
+                        event_sink: Optional[EventSink]):
         stdout = getattr(process, "stdout", None)
-        if event_sink is None or stdout is None:
-            return
+        ready = threading.Event()
+        logs = []
+        if stdout is None:
+            return ready, logs
 
         def forward() -> None:
             for line in stdout:
                 text = str(line).strip()
                 if text:
-                    event_sink(text)
+                    logs.append(text)
+                    if text == "Info : Listening on port %d for gdb connections" % gdb_port:
+                        ready.set()
+                    if event_sink is not None:
+                        event_sink(text)
 
         threading.Thread(target=forward, name="b300-openocd-log", daemon=True).start()
+        return ready, logs
+
+    def _wait_for_listener_locked(self, ready: threading.Event, logs, timeout_seconds: float) -> None:
+        deadline = time.monotonic() + timeout_seconds
+        while not ready.is_set():
+            process = self._process
+            if process is None or process.poll() is not None:
+                code = None if process is None else process.poll()
+                raise RuntimeError(
+                    "OpenOCD exited before GDB listener became ready (exit code %s). Last log: %s" %
+                    (code, " | ".join(logs[-10:]) or "(none)")
+                )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(
+                    "OpenOCD GDB listener was not ready before timeout. Last log: %s" %
+                    (" | ".join(logs[-10:]) or "(none)")
+                )
+            ready.wait(min(remaining, 0.02))

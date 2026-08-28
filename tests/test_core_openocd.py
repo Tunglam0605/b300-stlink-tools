@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import io
+import subprocess
 import sys
 import tempfile
 import threading
@@ -166,6 +168,30 @@ class OpenOcdCoreTests(unittest.TestCase):
         result = OpenOcdRunner().run(["definitely-missing-b300-openocd"])
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("not found", result.output.lower())
+
+    def test_runner_passes_hidden_process_policy_without_losing_log_pipes(self) -> None:
+        captured = {}
+
+        class Process:
+            stdout = io.StringIO("")
+
+            def poll(self):
+                return 0
+
+            def wait(self, timeout=None):
+                return 0
+
+        result = OpenOcdRunner(
+            process_factory=lambda command, **kwargs: captured.update(kwargs) or Process(),
+            platform_name="windows",
+        ).run(["openocd"])
+
+        self.assertEqual(result.returncode, 0)
+        self.assertTrue(captured["creationflags"] & subprocess.CREATE_NO_WINDOW)
+        self.assertEqual(captured["stdout"], subprocess.PIPE)
+        self.assertEqual(captured["stderr"], subprocess.STDOUT)
+        self.assertTrue(captured["text"])
+        self.assertFalse(captured["shell"])
 
     def test_runner_timeout_terminates_process_and_preserves_output(self) -> None:
         started = time.monotonic()
