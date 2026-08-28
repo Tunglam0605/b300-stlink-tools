@@ -187,7 +187,10 @@ def build_parser() -> argparse.ArgumentParser:
     self_update.set_defaults(update_command="install")
     self_update.add_argument(
         "--verified-package", type=Path,
-        help="Reuse a package that matches the freshly checked signed asset.",
+        help=(
+            "Reuse this package only when it matches the freshly checked signed asset; "
+            "otherwise the signed asset is downloaded again."
+        ),
     )
 
     setup = commands.add_parser(

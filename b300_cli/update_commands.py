@@ -112,12 +112,20 @@ def run_update_command(
         if result.asset is None:
             raise ManifestError("Available update is missing its signed CLI asset.")
         verified_package = getattr(args, "verified_package", None)
+        reused_verified_package = False
         if action == "install" and verified_package is not None:
-            final_path = verify_cli_package(
-                Path(verified_package).expanduser().resolve(),
-                result.asset,
-                selected_runtime.platform,
-            )
+            try:
+                final_path = verify_cli_package(
+                    Path(verified_package).expanduser().resolve(),
+                    result.asset,
+                    selected_runtime.platform,
+                )
+                reused_verified_package = True
+            except (OSError, ValueError):
+                # A stale/corrupt local package is only an optimization miss.
+                # The freshly checked signed asset is downloaded and verified below.
+                pass
+        if reused_verified_package:
             record["downloaded"] = False
         else:
             explicit_destination = getattr(args, "dest", None)

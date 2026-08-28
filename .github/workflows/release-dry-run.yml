@@ -21,7 +21,7 @@ jobs:
       - name: Smoke-test native executables
         shell: pwsh
         run: |
-          $process = Start-Process -FilePath .\release\b300-stlink-gui.exe `
+          $process = Start-Process -FilePath .\release\b300-stlink-gui\b300-stlink-gui.exe `
             -ArgumentList --smoke-test -Wait -PassThru -WindowStyle Hidden
           exit $process.ExitCode
       - name: Smoke-test packaged Windows CLI without probes

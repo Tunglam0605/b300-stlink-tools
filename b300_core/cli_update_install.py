@@ -269,12 +269,14 @@ def hash_staged_tree(root: Path) -> str:
         item_stat = item.lstat()
         if stat.S_ISLNK(item_stat.st_mode):
             raise ValueError("Staged CLI application contains a symlink.")
+        mode = stat.S_IMODE(item_stat.st_mode)
         if item.is_dir():
-            digest.update(b"D\0" + relative + b"\0")
+            digest.update(b"D\0" + relative + b"\0" + oct(mode).encode("ascii") + b"\0")
             continue
         if not stat.S_ISREG(item_stat.st_mode):
             raise ValueError("Staged CLI application contains a special file.")
         digest.update(b"F\0" + relative + b"\0")
+        digest.update(oct(mode).encode("ascii") + b"\0")
         digest.update(str(item_stat.st_size).encode("ascii") + b"\0")
         with item.open("rb") as stream:
             while True:
@@ -306,31 +308,74 @@ def extract_verified_cli_bundle(
 
 
 def validate_managed_root(target: Path, user_home: Path) -> Path:
-    """Reject roots that resolve to broad or conventional system locations."""
-    raw = Path(target).as_posix().casefold()
+    """Accept only an absolute managed root contained beneath the canonical user home."""
+    candidate = Path(target)
+    if not candidate.is_absolute():
+        raise ValueError("Managed CLI installation requires an absolute per-user root.")
+    raw = candidate.as_posix().casefold()
     if any(raw == prefix or raw.startswith(prefix + "/") for prefix in (
             "/", "/bin", "/boot", "/dev", "/etc", "/lib", "/opt", "/proc",
             "/root", "/run", "/sbin", "/sys", "/usr", "/var")):
         raise ValueError("Managed CLI installation refuses a system directory.")
-    resolved = Path(target).resolve()
-    home = Path(user_home).resolve()
+    resolved = candidate.resolve()
+    home = _validated_user_home(user_home)
     if home == Path(home.anchor) or resolved == Path(resolved.anchor):
         raise ValueError("Managed CLI installation refuses a system root.")
     lowered = str(resolved).replace("\\", "/").casefold()
     if any(marker in lowered for marker in (
             "/windows/", "/program files/", "/program files (x86)/", "/usr/", "/opt/")):
         raise ValueError("Managed CLI installation refuses a system directory.")
+    try:
+        relative = resolved.relative_to(home)
+    except ValueError as error:
+        raise ValueError("Managed CLI installation root must remain beneath the user home.") from error
+    if not relative.parts:
+        raise ValueError("Managed CLI installation refuses the entire user home.")
     return resolved
 
 
-def _managed_environment_base(value: str, variable_name: str) -> Path:
+def _validated_user_home(user_home: Path) -> Path:
+    home = Path(user_home)
+    if not home.is_absolute():
+        raise ValueError("Managed CLI user home must be absolute.")
+    resolved = home.resolve()
+    if resolved == Path(resolved.anchor):
+        raise ValueError("Managed CLI installation refuses a system root as user home.")
+    return resolved
+
+
+def _managed_environment_base(value: str, variable_name: str, user_home: Path) -> Path:
     base = Path(value)
     if not base.is_absolute():
         raise ValueError("%s must name an absolute user directory." % variable_name)
     resolved = base.resolve()
     if resolved == Path(resolved.anchor):
         raise ValueError("Managed CLI installation refuses a system root.")
+    try:
+        resolved.relative_to(user_home)
+    except ValueError as error:
+        raise ValueError("%s must remain beneath the user home." % variable_name) from error
     return resolved
+
+
+def _validate_launcher_path(launcher: Path, user_home: Path) -> Path:
+    """Keep launcher writes lexical and reject existing symlinks in every component."""
+    selected = Path(launcher)
+    home = _validated_user_home(user_home)
+    if not selected.is_absolute():
+        raise ValueError("Managed CLI launcher path must be absolute.")
+    try:
+        relative = selected.relative_to(home)
+    except ValueError as error:
+        raise ValueError("Managed CLI launcher must remain beneath the user home.") from error
+    if not relative.parts:
+        raise ValueError("Managed CLI launcher cannot replace the user home.")
+    current = home
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError("Managed CLI launcher path contains an unsafe symlink.")
+    return selected
 
 
 def managed_install_paths(
@@ -338,11 +383,11 @@ def managed_install_paths(
         home: Optional[Path] = None) -> ManagedInstallPaths:
     selected = _platform_value(platform_name)
     selected_environ = os.environ if environ is None else environ
-    selected_home = Path.home() if home is None else Path(home)
+    selected_home = _validated_user_home(Path.home() if home is None else Path(home))
     if selected == "windows-x64-cli":
         local_app_data = selected_environ.get("LOCALAPPDATA")
         user_data = (
-            _managed_environment_base(local_app_data, "LOCALAPPDATA")
+            _managed_environment_base(local_app_data, "LOCALAPPDATA", selected_home)
             if local_app_data else selected_home / "AppData" / "Local"
         )
         root = validate_managed_root(user_data / "B300-STLink", selected_home)
@@ -355,12 +400,13 @@ def managed_install_paths(
         )
         cache_home = selected_environ.get("XDG_CACHE_HOME")
         cache = (
-            _managed_environment_base(cache_home, "XDG_CACHE_HOME")
+            _managed_environment_base(cache_home, "XDG_CACHE_HOME", selected_home)
             if cache_home else selected_home / ".cache"
         )
         staging_base = validate_managed_root(cache / "b300-stlink" / "updates", selected_home)
-        launcher = (selected_home / ".local" / "bin" / "b300-stlink").resolve()
+        launcher = selected_home / ".local" / "bin" / "b300-stlink"
         executable = root / "b300-stlink"
+    _validate_launcher_path(launcher, selected_home)
     return ManagedInstallPaths(
         root=root,
         launcher=launcher,
@@ -496,7 +542,9 @@ def apply_staged_cli_install(
         replace: Callable[[str, str], None] = os.replace) -> int:
     """Detached-helper body: wait, copy, atomically publish, and recreate launcher."""
     selected = _platform_value(platform_name)
+    selected_home = _validated_user_home(Path.home() if home is None else Path(home))
     paths = managed_install_paths(selected, environ=environ, home=home)
+    _validate_launcher_path(paths.launcher, selected_home)
     staged = _validate_stage_location(staged_root, paths.staging_base)
     _required_bundle_paths(staged, selected)
     actual_tree = hash_staged_tree(staged)

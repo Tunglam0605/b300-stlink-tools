@@ -1,14 +1,50 @@
 #!/bin/sh
 set -eu
-bundle_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-install_root="${HOME}/.local/share/b300-stlink"
-bin_root="${HOME}/.local/bin"
-if [ ! -x "$bundle_root/b300-stlink" ] && [ ! -x "$bundle_root/b300-stlink-gui" ]; then
-  printf '%s\n' 'Incomplete B300 native bundle: executable is missing.' >&2
+bundle_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+
+case "${HOME-}" in
+  /*) ;;
+  *)
+    printf '%s\n' 'Managed install requires an absolute per-user HOME.' >&2
+    exit 1
+    ;;
+esac
+home_root=$(CDPATH= cd -- "$HOME" && pwd -P)
+case "$home_root" in
+  /|/bin|/bin/*|/boot|/boot/*|/dev|/dev/*|/etc|/etc/*|/lib|/lib/*|/opt|/opt/*|/proc|/proc/*|/root|/root/*|/run|/run/*|/sbin|/sbin/*|/sys|/sys/*|/usr|/usr/*|/var|/var/*)
+    printf '%s\n' 'Managed install refuses a system destination as HOME.' >&2
+    exit 1
+    ;;
+esac
+
+path_within() {
+  case "$1/" in
+    "$2/"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+reject_symlink() {
+  if [ -L "$1" ]; then
+    printf '%s\n' "Managed install path contains an unsafe symlink: $1" >&2
+    exit 1
+  fi
+}
+
+install_root="${home_root}/.local/share/b300-stlink"
+bin_root="${home_root}/.local/bin"
+if path_within "$bundle_root" "$install_root" || path_within "$install_root" "$bundle_root"; then
+  printf '%s\n' 'Run b300-stlink self-update from a managed install; source and destination overlap.' >&2
   exit 1
 fi
-if [ "$bundle_root" = "$install_root" ]; then
-  printf '%s\n' 'Run b300-stlink self-update from a managed install; do not copy it over itself.' >&2
+for managed_path in \
+  "$home_root/.local" "$home_root/.local/share" "$install_root" \
+  "$bin_root" "$bin_root/b300-stlink" "$bin_root/b300-stlink-gui"
+do
+  reject_symlink "$managed_path"
+done
+if [ ! -x "$bundle_root/b300-stlink" ] && [ ! -x "$bundle_root/b300-stlink-gui" ]; then
+  printf '%s\n' 'Incomplete B300 native bundle: executable is missing.' >&2
   exit 1
 fi
 mkdir -p "$install_root" "$bin_root"

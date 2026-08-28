@@ -12,12 +12,88 @@ from b300_core import linux_usb
 
 
 class LinuxUsbSetupTests(unittest.TestCase):
+    def test_confirmed_setup_never_consults_a_path_resolver(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            calls = []
+
+            class Result:
+                returncode = 0
+
+            trusted = {
+                "pkexec": "/usr/bin/pkexec",
+                "install": "/usr/bin/install",
+                "udevadm": "/usr/bin/udevadm",
+            }
+            with mock.patch.object(
+                    linux_usb, "resolve_trusted_system_executable",
+                    side_effect=lambda name: trusted.get(name), create=True,
+            ) as resolver:
+                linux_usb.perform_linux_usb_setup(
+                    system="Linux", rule_path=root / "rule",
+                    install_requested=True, confirmed=True,
+                    runner=lambda command, **kwargs: calls.append((command, kwargs)) or Result(),
+                    staging_parent=root / "staging",
+                )
+
+            self.assertEqual(len(calls), 3)
+            self.assertTrue(all(command[0].startswith("/usr/bin/") for command, _ in calls))
+            self.assertEqual(
+                [call.args[0] for call in resolver.call_args_list],
+                ["pkexec", "install", "udevadm"],
+            )
+
+    def test_trusted_system_resolver_rejects_untrusted_or_writable_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            trusted = root / "trusted"
+            outside = root / "outside"
+            trusted.mkdir()
+            outside.mkdir()
+            for path in (root, trusted, outside):
+                path.chmod(0o755)
+            trusted_binary = trusted / "install"
+            trusted_binary.write_bytes(b"tool")
+            trusted_binary.chmod(0o755)
+            outside_binary = outside / "install"
+            outside_binary.write_bytes(b"tool")
+            outside_binary.chmod(0o755)
+            owner_uid = trusted_binary.stat().st_uid
+
+            resolver_kwargs = {
+                "trusted_directories": (trusted,),
+                "trust_anchor": root,
+                "expected_owner_uid": owner_uid,
+            }
+            cases = (
+                ("relative", Path("install"), "absolute"),
+                ("outside", outside_binary, "trusted system directory"),
+            )
+            for label, candidate, message in cases:
+                with self.subTest(label=label), self.assertRaisesRegex(ValueError, message):
+                    linux_usb.resolve_trusted_system_executable(
+                        "install", candidates={"install": (candidate,)}, **resolver_kwargs,
+                    )
+
+            trusted_binary.chmod(0o777)
+            with self.assertRaisesRegex(ValueError, "writable"):
+                linux_usb.resolve_trusted_system_executable(
+                    "install", candidates={"install": (trusted_binary,)}, **resolver_kwargs,
+                )
+            trusted_binary.chmod(0o755)
+            with self.assertRaisesRegex(ValueError, "owner"):
+                linux_usb.resolve_trusted_system_executable(
+                    "install", candidates={"install": (trusted_binary,)},
+                    trusted_directories=(trusted,), trust_anchor=root,
+                    expected_owner_uid=owner_uid + 1,
+                )
+
     def test_non_linux_is_unsupported_without_filesystem_or_runner_access(self) -> None:
         calls = []
         report = linux_usb.perform_linux_usb_setup(
             system="Windows", rule_path=Path("/must/not/be/read"),
             runner=lambda *_args, **_kwargs: calls.append("runner"),
-            which=lambda _name: self.fail("tool lookup must not run"),
+            trusted_resolver=lambda _name: self.fail("tool lookup must not run"),
         )
         self.assertFalse(report.supported)
         self.assertEqual(report.reason_code, "LINUX_SETUP_UNSUPPORTED")
@@ -46,7 +122,7 @@ class LinuxUsbSetupTests(unittest.TestCase):
                 system="Linux", rule_path=root / "etc" / "49-b300-stlink.rules",
                 install_requested=False, confirmed=False,
                 runner=lambda *_args, **_kwargs: calls.append("runner"),
-                which=lambda name: "/usr/bin/" + name,
+                trusted_resolver=lambda _name: self.fail("tool lookup must not run"),
                 staging_parent=root / "staging",
             )
             self.assertTrue(report.dry_run)
@@ -67,7 +143,7 @@ class LinuxUsbSetupTests(unittest.TestCase):
                             system="Linux", rule_path=root / "49-b300-stlink.rules",
                             install_requested=requested, confirmed=confirmed,
                             runner=lambda *args, **kwargs: calls.append((args, kwargs)),
-                            which=lambda name: "/usr/bin/" + name,
+                            trusted_resolver=lambda _name: self.fail("tool lookup must not run"),
                             staging_parent=root / "staging",
                         )
                     self.assertEqual(
@@ -92,7 +168,7 @@ class LinuxUsbSetupTests(unittest.TestCase):
                 system="Linux", rule_path=root / "etc" / "49-b300-stlink.rules",
                 install_requested=True, confirmed=True,
                 runner=runner,
-                which=lambda name: "/usr/bin/" + name,
+                trusted_resolver=lambda name: "/usr/bin/" + name,
                 staging_parent=root / "staging",
                 announce=lambda plan: events.append(("announce", plan.commands)),
             )
@@ -137,7 +213,9 @@ class LinuxUsbSetupTests(unittest.TestCase):
                 system="Linux", rule_path=root / "rule",
                 install_requested=True, confirmed=True,
                 runner=lambda command, **kwargs: calls.append((command, kwargs)) or Result(),
-                which=lambda name: None if name == "pkexec" else "/usr/bin/" + name,
+                trusted_resolver=(
+                    lambda name: None if name == "pkexec" else "/usr/bin/" + name
+                ),
                 staging_parent=root / "staging",
             )
             self.assertEqual(len(calls), 3)

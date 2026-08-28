@@ -284,6 +284,26 @@ class GuiPackagingTests(unittest.TestCase):
             self.assertNotIn("cubeide", text)
             self.assertIn("b300-stlink", text)
 
+    def test_native_bootstraps_validate_user_roots_and_overlap_before_copy(self) -> None:
+        powershell = (ROOT / "install.ps1").read_text(encoding="utf-8")
+        shell = (ROOT / "install.sh").read_text(encoding="utf-8")
+
+        self.assertIn("IsPathRooted", powershell)
+        self.assertIn("GetPathRoot", powershell)
+        self.assertIn("UserProfile", powershell)
+        self.assertIn("Test-PathWithin", powershell)
+        self.assertLess(powershell.index("IsPathRooted"), powershell.index("Copy-Item"))
+        self.assertLess(powershell.index("Test-PathWithin"), powershell.index("Copy-Item"))
+
+        self.assertIn('case "${HOME-}"', shell)
+        self.assertIn(
+            'bundle_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)', shell,
+        )
+        self.assertIn("pwd -P", shell)
+        self.assertIn("path_within", shell)
+        self.assertLess(shell.index('case "${HOME-}"'), shell.index("mkdir -p"))
+        self.assertLess(shell.index("path_within"), shell.index("cp -a"))
+
     def test_windows_cli_packaging_requires_the_complete_onedir_application_root(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

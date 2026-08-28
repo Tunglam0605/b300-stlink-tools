@@ -194,14 +194,31 @@ class SafeCliArchiveTests(unittest.TestCase):
 
 
 class ManagedCliInstallTests(unittest.TestCase):
+    def test_staged_tree_hash_includes_permission_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "b300-stlink"
+            executable.write_bytes(b"same bytes")
+            writable_mode = stat.S_IREAD | stat.S_IWRITE
+            readonly_mode = stat.S_IREAD
+            try:
+                executable.chmod(writable_mode)
+                writable_hash = cli_update_install.hash_staged_tree(root)
+                executable.chmod(readonly_mode)
+                readonly_hash = cli_update_install.hash_staged_tree(root)
+            finally:
+                executable.chmod(writable_mode)
+            self.assertNotEqual(writable_hash, readonly_hash)
+
     def test_managed_paths_are_fixed_and_system_roots_are_refused(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            local = root / "home" / "AppData" / "Local"
             windows = cli_update_install.managed_install_paths(
-                "windows-x64-cli", environ={"LOCALAPPDATA": str(root / "Local")},
+                "windows-x64-cli", environ={"LOCALAPPDATA": str(local)},
                 home=root / "home",
             )
-            self.assertEqual(windows.root, (root / "Local" / "B300-STLink").resolve())
+            self.assertEqual(windows.root, (local / "B300-STLink").resolve())
             self.assertEqual(windows.launcher, windows.root / "bin" / "b300-stlink.cmd")
 
             linux = cli_update_install.managed_install_paths(
@@ -214,7 +231,8 @@ class ManagedCliInstallTests(unittest.TestCase):
                 linux.launcher, (root / "home" / ".local" / "bin" / "b300-stlink").resolve()
             )
             for target in (Path("/usr/local/b300-stlink"), Path("/opt/b300-stlink")):
-                with self.subTest(target=target), self.assertRaisesRegex(ValueError, "system"):
+                with self.subTest(target=target), self.assertRaisesRegex(
+                        ValueError, "absolute|per-user|system"):
                     cli_update_install.validate_managed_root(target, root / "home")
             with self.assertRaisesRegex(ValueError, "absolute|system"):
                 cli_update_install.managed_install_paths(
@@ -245,6 +263,98 @@ class ManagedCliInstallTests(unittest.TestCase):
                     cli_update_install.managed_install_paths(
                         platform_name, environ=environ, home=root / "home",
                     )
+
+    def test_managed_roots_and_cache_are_proven_beneath_the_user_home(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home = root / "home"
+            home.mkdir()
+            cases = (
+                (
+                    "windows-x64-cli",
+                    {"LOCALAPPDATA": str(root / "ProgramData")},
+                ),
+                (
+                    "linux-x64-cli",
+                    {"XDG_CACHE_HOME": str(root / "system-cache")},
+                ),
+            )
+            for platform_name, environ in cases:
+                with self.subTest(platform=platform_name), self.assertRaisesRegex(
+                        ValueError, "per-user|user home"):
+                    cli_update_install.managed_install_paths(
+                        platform_name, environ=environ, home=home,
+                    )
+            with self.assertRaisesRegex(ValueError, "absolute"):
+                cli_update_install.managed_install_paths(
+                    "linux-x64-cli", environ={}, home=Path("relative-home"),
+                )
+            with self.assertRaisesRegex(ValueError, "per-user|user home"):
+                cli_update_install.validate_managed_root(root / "system" / "b300", home)
+
+    def test_linux_launcher_is_lexical_and_rejects_symlink_parent_or_target(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for link_kind in ("parent", "target"):
+                with self.subTest(link_kind=link_kind):
+                    home = root / link_kind / "home"
+                    outside = root / link_kind / "outside"
+                    outside.mkdir(parents=True)
+                    local = home / ".local"
+                    local.mkdir(parents=True)
+                    expected_launcher = local / "bin" / "b300-stlink"
+                    try:
+                        if link_kind == "parent":
+                            (local / "bin").symlink_to(outside, target_is_directory=True)
+                            protected = outside / "b300-stlink"
+                        else:
+                            (local / "bin").mkdir()
+                            protected = outside / "protected"
+                            protected.write_text("sentinel", encoding="utf-8")
+                            expected_launcher.symlink_to(protected)
+                    except OSError as error:
+                        self.skipTest("symlinks unavailable: %s" % error)
+
+                    with self.assertRaisesRegex(ValueError, "symlink"):
+                        cli_update_install.managed_install_paths(
+                            "linux-x64-cli", environ={}, home=home,
+                        )
+                    if link_kind == "parent":
+                        self.assertFalse(protected.exists())
+                    else:
+                        self.assertEqual(protected.read_text(encoding="utf-8"), "sentinel")
+
+    def test_linux_launcher_rejects_simulated_symlink_components_before_publish(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for unsafe_part in ("parent", "target"):
+                with self.subTest(unsafe_part=unsafe_part):
+                    home = root / unsafe_part / "home"
+                    paths = cli_update_install.managed_install_paths(
+                        "linux-x64-cli", environ={}, home=home,
+                    )
+                    staged = paths.staging_base / "cli-install-test" / "application"
+                    (staged / "vendor" / "openocd" / "bin").mkdir(parents=True)
+                    (staged / "b300-stlink").write_text("new", encoding="utf-8")
+                    (staged / "install.sh").write_text("bootstrap", encoding="utf-8")
+                    (staged / "vendor" / "openocd" / "bin" / "openocd").write_text(
+                        "openocd", encoding="utf-8"
+                    )
+                    unsafe = paths.launcher.parent if unsafe_part == "parent" else paths.launcher
+                    original_is_symlink = Path.is_symlink
+
+                    def simulated_is_symlink(candidate):
+                        return candidate == unsafe or original_is_symlink(candidate)
+
+                    with mock.patch.object(
+                            Path, "is_symlink", autospec=True,
+                            side_effect=simulated_is_symlink,
+                    ), self.assertRaisesRegex(ValueError, "symlink"):
+                        cli_update_install.apply_staged_cli_install(
+                            staged, "linux-x64-cli", parent_pid=123,
+                            environ={}, home=home, wait_parent=lambda _pid: None,
+                        )
+                    self.assertFalse(paths.root.exists())
 
     def test_replacement_failure_restores_previous_tree(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -347,7 +457,7 @@ class ManagedCliInstallTests(unittest.TestCase):
     def test_windows_managed_launcher_targets_executable_beside_onedir_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            local = root / "Local"
+            local = root / "home" / "AppData" / "Local"
             paths = cli_update_install.managed_install_paths(
                 "windows-x64-cli", environ={"LOCALAPPDATA": str(local)}, home=root / "home",
             )
@@ -373,7 +483,7 @@ class ManagedCliInstallTests(unittest.TestCase):
     def test_production_handoff_uses_staged_helper_argv_without_shell(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            local = root / "Local"
+            local = root / "home" / "AppData" / "Local"
             paths = cli_update_install.managed_install_paths(
                 "windows-x64-cli", environ={"LOCALAPPDATA": str(local)}, home=root / "home",
             )
@@ -465,7 +575,9 @@ class CliInstallCommandTests(unittest.TestCase):
                     )):
                 code, value = self._run(
                     ["update", "install", "--json"], runtime,
-                    environ={"LOCALAPPDATA": str(root / "Local")}, home=root / "home",
+                    environ={
+                        "LOCALAPPDATA": str(root / "home" / "AppData" / "Local")
+                    }, home=root / "home",
                 )
 
             self.assertEqual(code, 0)
@@ -506,6 +618,59 @@ class CliInstallCommandTests(unittest.TestCase):
                 opener.requests, [DEFAULT_MANIFEST_URL, DEFAULT_SIGNATURE_URL],
             )
 
+    def test_invalid_verified_package_falls_back_to_fresh_signed_download(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture = root / "fixture.zip"
+            _write_zip(fixture)
+            payload = fixture.read_bytes()
+            altered = bytearray(payload)
+            altered[-1] ^= 0x01
+            cases = (
+                ("missing", "B300-STLink-CLI-Windows-x64.zip", None),
+                ("wrong-platform", "B300-STLink-CLI-Linux-x64.tar.gz", payload),
+                ("wrong-size", "B300-STLink-CLI-Windows-x64.zip", b"stale"),
+                ("wrong-sha", "B300-STLink-CLI-Windows-x64.zip", bytes(altered)),
+            )
+            for case, filename, supplied_payload in cases:
+                with self.subTest(case=case):
+                    case_root = root / case
+                    case_root.mkdir()
+                    supplied = case_root / filename
+                    if supplied_payload is not None:
+                        supplied.write_bytes(supplied_payload)
+                    manifest, signature, asset_url = signed_manifest(payload=payload)
+                    runtime, opener = self._runtime(
+                        manifest, signature, asset_url, payload,
+                    )
+                    with mock.patch(
+                            "b300_cli.update_commands.launch_managed_cli_install",
+                            return_value=mock.Mock(
+                                result_log=case_root / "result.json"
+                            ),
+                    ) as installer:
+                        code, value = self._run([
+                            "update", "install", "--verified-package", str(supplied),
+                            "--json",
+                        ], runtime, environ={
+                            "LOCALAPPDATA": str(
+                                case_root / "home" / "AppData" / "Local"
+                            ),
+                        }, home=case_root / "home")
+
+                    self.assertEqual(code, 0)
+                    self.assertTrue(value["downloaded"])
+                    installer.assert_called_once()
+                    installed = Path(installer.call_args.args[0])
+                    self.assertEqual(
+                        installed.name, "B300-STLink-CLI-Windows-x64.zip"
+                    )
+                    self.assertNotEqual(installed, supplied.resolve())
+                    self.assertEqual(
+                        opener.requests,
+                        [DEFAULT_MANIFEST_URL, DEFAULT_SIGNATURE_URL, asset_url],
+                    )
+
     def test_invalid_signature_sha_and_platform_never_reach_installer(self) -> None:
         cases = []
         manifest, signature, asset_url = signed_manifest()
@@ -526,7 +691,9 @@ class CliInstallCommandTests(unittest.TestCase):
                         "b300_cli.update_commands.launch_managed_cli_install") as installer:
                     code, _value = self._run(
                         ["update", "install", "--json"], runtime,
-                        environ={"LOCALAPPDATA": str(root / case)}, home=root / "home",
+                        environ={
+                            "LOCALAPPDATA": str(root / "home" / "AppData" / case)
+                        }, home=root / "home",
                     )
                     self.assertNotEqual(code, 0)
                     installer.assert_not_called()
@@ -542,7 +709,9 @@ class CliInstallCommandTests(unittest.TestCase):
 
             code, value = self._run(
                 ["update", "install", "--json"], runtime,
-                environ={"LOCALAPPDATA": str(root / "Local")}, home=root / "home",
+                environ={
+                    "LOCALAPPDATA": str(root / "home" / "AppData" / "Local")
+                }, home=root / "home",
             )
 
             self.assertNotEqual(code, 0)

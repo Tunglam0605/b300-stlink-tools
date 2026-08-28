@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import platform
-import shutil
+import stat
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -17,6 +17,18 @@ DEFAULT_UDEV_RULE_PATH = Path("/etc/udev/rules.d") / UDEV_RULE_FILENAME
 B300_UDEV_RULE = (
     'SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="374?", '
     'MODE="0660", GROUP="plugdev", TAG+="uaccess"\n'
+)
+TRUSTED_SYSTEM_EXECUTABLES = {
+    "pkexec": (Path("/usr/bin/pkexec"),),
+    "sudo": (Path("/usr/bin/sudo"),),
+    "install": (Path("/usr/bin/install"), Path("/bin/install")),
+    "udevadm": (
+        Path("/usr/bin/udevadm"), Path("/usr/sbin/udevadm"),
+        Path("/bin/udevadm"), Path("/sbin/udevadm"),
+    ),
+}
+TRUSTED_SYSTEM_DIRECTORIES = (
+    Path("/usr/bin"), Path("/usr/sbin"), Path("/bin"), Path("/sbin"),
 )
 
 
@@ -60,8 +72,66 @@ def _dry_run_report(rule_path: Path) -> LinuxUsbSetupReport:
     )
 
 
-def _find_required(which: Callable[[str], Optional[str]], name: str) -> str:
-    selected = which(name)
+def _validate_trusted_owner_and_mode(path: Path, expected_owner_uid: int) -> None:
+    path_stat = path.stat()
+    if path_stat.st_uid != expected_owner_uid:
+        raise ValueError("Trusted system executable path has an untrusted owner.")
+    if path_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise ValueError("Trusted system executable path is group/world writable.")
+
+
+def resolve_trusted_system_executable(
+        name: str, *, candidates=None, trusted_directories=None,
+        trust_anchor: Path = Path("/"), expected_owner_uid: int = 0) -> Optional[str]:
+    """Resolve a fixed, root-controlled system executable without consulting PATH."""
+    selected_candidates = TRUSTED_SYSTEM_EXECUTABLES if candidates is None else candidates
+    selected_directories = (
+        TRUSTED_SYSTEM_DIRECTORIES if trusted_directories is None else trusted_directories
+    )
+    allowed_directories = []
+    for directory in selected_directories:
+        directory_path = Path(directory)
+        if not directory_path.is_absolute():
+            raise ValueError("Trusted system directory must be absolute.")
+        try:
+            allowed_directories.append(directory_path.resolve(strict=True))
+        except FileNotFoundError:
+            continue
+    anchor = Path(trust_anchor)
+    if not anchor.is_absolute():
+        raise ValueError("Trusted system anchor must be absolute.")
+    anchor = anchor.resolve(strict=True)
+    for candidate in selected_candidates.get(name, ()):
+        candidate_path = Path(candidate)
+        if not candidate_path.is_absolute():
+            raise ValueError("Trusted system executable path must be absolute.")
+        try:
+            resolved = candidate_path.resolve(strict=True)
+        except FileNotFoundError:
+            continue
+        if resolved.parent not in allowed_directories:
+            raise ValueError("Trusted executable is outside a trusted system directory.")
+        try:
+            resolved.relative_to(anchor)
+        except ValueError as error:
+            raise ValueError("Trusted executable is outside its system anchor.") from error
+        current = resolved.parent
+        while True:
+            _validate_trusted_owner_and_mode(current, expected_owner_uid)
+            if current == anchor:
+                break
+            if current == current.parent:
+                raise ValueError("Trusted executable path does not reach its system anchor.")
+            current = current.parent
+        _validate_trusted_owner_and_mode(resolved, expected_owner_uid)
+        if not stat.S_ISREG(resolved.stat().st_mode) or not os.access(str(resolved), os.X_OK):
+            raise ValueError("Trusted system executable must be an executable regular file.")
+        return str(resolved)
+    return None
+
+
+def _find_required(resolver: Callable[[str], Optional[str]], name: str) -> str:
+    selected = resolver(name)
     if not selected:
         raise FileNotFoundError("Linux setup requires %s." % name)
     return str(selected)
@@ -69,14 +139,14 @@ def _find_required(which: Callable[[str], Optional[str]], name: str) -> str:
 
 def _install_commands(
         staged_rule: Path, rule_path: Path,
-        which: Callable[[str], Optional[str]]) -> Tuple[Tuple[str, ...], ...]:
-    elevator = which("pkexec")
+        resolver: Callable[[str], Optional[str]]) -> Tuple[Tuple[str, ...], ...]:
+    elevator = resolver("pkexec")
     if not elevator:
-        elevator = which("sudo")
+        elevator = resolver("sudo")
     if not elevator:
         raise FileNotFoundError("Linux setup requires pkexec or sudo for the confirmed change.")
-    install = _find_required(which, "install")
-    udevadm = _find_required(which, "udevadm")
+    install = _find_required(resolver, "install")
+    udevadm = _find_required(resolver, "udevadm")
     prefix = str(elevator)
     return (
         (
@@ -97,7 +167,7 @@ def perform_linux_usb_setup(
         install_requested: bool = False,
         confirmed: bool = False,
         runner: Callable = subprocess.run,
-        which: Callable[[str], Optional[str]] = shutil.which,
+        trusted_resolver: Optional[Callable[[str], Optional[str]]] = None,
         staging_parent: Optional[Path] = None,
         announce: Optional[Callable[[LinuxUsbSetupReport], None]] = None,
         ) -> LinuxUsbSetupReport:
@@ -146,7 +216,8 @@ def perform_linux_usb_setup(
             os.fsync(output.fileno())
         if os.name != "nt":
             staged_rule.chmod(0o600)
-        commands = _install_commands(staged_rule, destination, which)
+        resolver = trusted_resolver or resolve_trusted_system_executable
+        commands = _install_commands(staged_rule, destination, resolver)
         plan = LinuxUsbSetupReport(
             supported=True,
             rule_installed=False,

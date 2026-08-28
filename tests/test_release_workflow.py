@@ -20,6 +20,17 @@ def load_workflow(name: str):
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
+    def test_windows_dry_run_smokes_the_gui_onedir_executable(self) -> None:
+        text = (
+            ROOT / ".github" / "workflows" / "release-dry-run.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            r"-FilePath .\release\b300-stlink-gui\b300-stlink-gui.exe", text,
+        )
+        self.assertNotIn(
+            r"-FilePath .\release\b300-stlink-gui.exe", text,
+        )
+
     def test_official_release_is_tag_only_and_publish_is_least_privileged(self) -> None:
         workflow = load_workflow("release.yml")
         self.assertEqual(workflow["on"], {"push": {"tags": ["v*"]}})
