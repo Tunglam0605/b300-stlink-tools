@@ -41,31 +41,36 @@ class DebugTab(QWidget):
         self._watchdog.timeout.connect(self._poll_debug_service)
 
         layout = QVBoxLayout(self)
-        title = QLabel("OpenOCD / GDB Debug")
-        title.setObjectName("debugTitle")
-        layout.addWidget(title)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+
+        # Target & State Banner
+        header_card = QGroupBox("Target & Debug State")
+        header_layout = QHBoxLayout(header_card)
+
+        probe_info_layout = QVBoxLayout()
+        self.probe_display = QLabel("ST-Link Probe: Auto-select / Active Probe")
+        self.probe_display.setStyleSheet("font-weight: 700; color: #0F172A;")
         safety = QLabel(
-            "Debug chỉ điều khiển target qua OpenOCD/GDB. Không xóa flash, không nạp firmware "
-            "và không thay đổi Option Bytes."
+            "Debug chỉ điều khiển target qua OpenOCD/GDB · Không xóa flash, không nạp firmware "
+            "và không sửa Option Bytes."
         )
+        safety.setStyleSheet("color: #64748B; font-size: 12px;")
         safety.setWordWrap(True)
-        layout.addWidget(safety)
+        probe_info_layout.addWidget(self.probe_display)
+        probe_info_layout.addWidget(safety)
+        header_layout.addLayout(probe_info_layout, 1)
 
-        connection_box = QGroupBox("Kết nối")
-        form = QFormLayout(connection_box)
-        self.bind_address = QLineEdit("127.0.0.1")
-        self.bind_address.setObjectName("debugBindAddress")
-        self.gdb_port = QLineEdit("3333")
-        self.gdb_port.setObjectName("debugGdbPort")
-        self.telnet_port = QLineEdit()
-        self.telnet_port.setObjectName("debugTelnetPort")
-        self.telnet_port.setPlaceholderText("Tắt (mặc định)")
-        form.addRow("Địa chỉ bind", self.bind_address)
-        form.addRow("Cổng GDB", self.gdb_port)
-        form.addRow("Cổng Telnet", self.telnet_port)
-        layout.addWidget(connection_box)
+        self.status_label = QLabel("ĐÃ DỪNG")
+        self.status_label.setObjectName("debugStateBadge")
+        self.status_label.setProperty("state", "stopped")
+        header_layout.addWidget(self.status_label)
+        layout.addWidget(header_card)
 
-        symbols_box = QGroupBox("Debug symbols")
+        # Symbols & Connections Grid
+        config_grid = QHBoxLayout()
+
+        symbols_box = QGroupBox("Debug symbols (.elf / .axf)")
         symbols_layout = QHBoxLayout(symbols_box)
         self.symbol_path = QLineEdit()
         self.symbol_path.setObjectName("debugSymbolPath")
@@ -75,14 +80,38 @@ class DebugTab(QWidget):
         self.symbol_browse_button.clicked.connect(self.choose_symbol_file)
         symbols_layout.addWidget(self.symbol_path, 1)
         symbols_layout.addWidget(self.symbol_browse_button)
-        layout.addWidget(symbols_box)
+        config_grid.addWidget(symbols_box, 3)
 
-        self.status_label = QLabel("Đã dừng")
-        self.status_label.setObjectName("debugStatus")
-        layout.addWidget(self.status_label)
+        connection_box = QGroupBox("Cấu hình cổng kết nối")
+        form = QHBoxLayout(connection_box)
 
-        server_controls = QHBoxLayout()
-        self.start_button = QPushButton("Khởi động Debug Server")
+        self.bind_address = QLineEdit("127.0.0.1")
+        self.bind_address.setObjectName("debugBindAddress")
+        self.bind_address.setToolTip("Địa chỉ bind mạng")
+
+        self.gdb_port = QLineEdit("3333")
+        self.gdb_port.setObjectName("debugGdbPort")
+        self.gdb_port.setToolTip("Cổng TCP cho GDB")
+
+        self.telnet_port = QLineEdit()
+        self.telnet_port.setObjectName("debugTelnetPort")
+        self.telnet_port.setPlaceholderText("Telnet tắt")
+        self.telnet_port.setToolTip("Cổng Telnet (để trống để tắt)")
+
+        form.addWidget(QLabel("Host:"))
+        form.addWidget(self.bind_address)
+        form.addWidget(QLabel("GDB:"))
+        form.addWidget(self.gdb_port)
+        form.addWidget(QLabel("Telnet:"))
+        form.addWidget(self.telnet_port)
+        config_grid.addWidget(connection_box, 2)
+        layout.addLayout(config_grid)
+
+        # Actions Toolbar
+        actions_box = QGroupBox("Điều khiển phiên Debug")
+        actions_layout = QHBoxLayout(actions_box)
+
+        self.start_button = QPushButton("Khởi động Server")
         self.start_button.setObjectName("debugStartButton")
         self.connect_button = QPushButton("Kết nối GDB")
         self.connect_button.setObjectName("debugConnectButton")
@@ -91,14 +120,14 @@ class DebugTab(QWidget):
         self.start_button.clicked.connect(self.start_debug)
         self.connect_button.clicked.connect(self.connect_gdb)
         self.stop_button.clicked.connect(self.stop_debug)
-        server_controls.addWidget(self.start_button)
-        server_controls.addWidget(self.connect_button)
-        server_controls.addWidget(self.stop_button)
-        server_controls.addStretch(1)
-        layout.addLayout(server_controls)
 
-        target_controls = QHBoxLayout()
-        self.halt_button = QPushButton("Halt")
+        actions_layout.addWidget(self.start_button)
+        actions_layout.addWidget(self.connect_button)
+        actions_layout.addWidget(self.stop_button)
+
+        actions_layout.addSpacing(16)
+
+        self.halt_button = QPushButton("Halt CPU")
         self.halt_button.setObjectName("debugHaltButton")
         self.continue_button = QPushButton("Continue")
         self.continue_button.setObjectName("debugContinueButton")
@@ -107,12 +136,14 @@ class DebugTab(QWidget):
         self.halt_button.clicked.connect(self.halt_target)
         self.continue_button.clicked.connect(self.continue_target)
         self.reset_button.clicked.connect(self.reset_halt_target)
-        target_controls.addWidget(self.halt_button)
-        target_controls.addWidget(self.continue_button)
-        target_controls.addWidget(self.reset_button)
-        target_controls.addStretch(1)
-        layout.addLayout(target_controls)
 
+        actions_layout.addWidget(self.halt_button)
+        actions_layout.addWidget(self.continue_button)
+        actions_layout.addWidget(self.reset_button)
+        actions_layout.addStretch(1)
+        layout.addWidget(actions_box)
+
+        # Log Console
         log_box = QGroupBox("OpenOCD / GDB log")
         log_layout = QVBoxLayout(log_box)
         self.log_view = QPlainTextEdit()
@@ -165,7 +196,16 @@ class DebugTab(QWidget):
         if path:
             self.symbol_path.setText(str(Path(path)))
 
+    def _update_probe_display(self) -> None:
+        try:
+            probe = self.selected_probe()
+            serial = getattr(probe, "serial", str(probe)) if probe else "Chưa chọn probe"
+            self.probe_display.setText("ST-Link Probe: %s" % (serial or "Tự động chọn"))
+        except Exception:
+            self.probe_display.setText("ST-Link Probe: Tự động chọn")
+
     def _refresh_controls(self) -> None:
+        self._update_probe_display()
         state = self.service.state
         worker_busy = self._worker is not None
         server_active = state in (DebugState.STARTING, DebugState.READY, DebugState.CONNECTED)
@@ -184,6 +224,20 @@ class DebugTab(QWidget):
         self.telnet_port.setEnabled(not worker_busy and not server_active)
         self.symbol_path.setEnabled(not worker_busy and not connected)
         self.symbol_browse_button.setEnabled(not worker_busy and not connected)
+
+        badge_state = "stopped"
+        if state == DebugState.READY:
+            badge_state = "ready"
+        elif state == DebugState.CONNECTED:
+            badge_state = "connected"
+        elif state == DebugState.FAILED:
+            badge_state = "failed"
+        elif worker_busy:
+            badge_state = "running"
+        self.status_label.setProperty("state", badge_state)
+        if self.status_label.style() is not None:
+            self.status_label.style().unpolish(self.status_label)
+            self.status_label.style().polish(self.status_label)
 
     def _begin_worker(self, operation, completed, status_text: str,
                       failed=None) -> None:

@@ -13,11 +13,11 @@ from .models import ImageInfo
 
 
 TRUSTED_BOOTLOADER_SHA256 = (
-    "C0FC6083EEBA39ED5F2AF40D97ECA90FEAE15E4B1D32B150C1504869D18D9398"
+    "657F71605E00795BEA3C5601AAF569104E74D9DEE8D5B6E602514C4D72264F05"
 )
-TRUSTED_SOURCE_COMMIT = "19b42d8ec30e700a9c6bb7772e444fa538adca03"
+TRUSTED_SOURCE_COMMIT = "92e70f8e1cc94c17be39034fcc9a20e385325a2f"
 TRUSTED_SOURCE_PATH = "firmware/bootloader/BOOTLOAER/bootloader_std.hex"
-TRUSTED_ARTIFACT_NAME = "b300_bootloader_f407ze_com3_v00050000.hex"
+TRUSTED_ARTIFACT_NAME = "b300_bootloader_f407ze_com3_v00050001.hex"
 MANIFEST_NAME = "b300_bootloader_manifest.json"
 
 
@@ -61,12 +61,12 @@ def load_trusted_bootloader(
         str(manifest.get("sha256", "")).upper() == TRUSTED_BOOTLOADER_SHA256 and
         source.get("path") == TRUSTED_SOURCE_PATH and
         source.get("commit") == TRUSTED_SOURCE_COMMIT and
-        profile.get("firmware_version") == "0x00050000" and
+        profile.get("firmware_version") == "0x00050001" and
         profile.get("protocol_version") == "0x00030000" and
         profile.get("board_token") == "B300_F407ZE" and
         profile.get("transport") == "COM3" and
         observed.get("start") == "0x08000000" and
-        observed.get("end") == "0x08004B1B"
+        observed.get("end") == "0x08004B4F"
     )
     if not provenance_valid:
         raise ValueError("Trusted Bootloader manifest provenance does not match the pinned release.")
@@ -74,7 +74,7 @@ def load_trusted_bootloader(
     image = inspect_bootloader_image(root / TRUSTED_ARTIFACT_NAME)
     if image.sha256 != TRUSTED_BOOTLOADER_SHA256:
         raise ValueError("Trusted Bootloader SHA-256 does not match the pinned artifact.")
-    if image.start_address != 0x08000000 or image.end_address != 0x08004B1B:
+    if image.start_address != 0x08000000 or image.end_address != 0x08004B4F:
         raise ValueError("Trusted Bootloader observed address range does not match the manifest.")
     return TrustedBootloader(
         image=image,

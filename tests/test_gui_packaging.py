@@ -105,7 +105,7 @@ class GuiPackagingTests(unittest.TestCase):
             xpack.write_bytes(b"trusted archive")
             firmware = root / "resources" / "firmware"
             firmware.mkdir(parents=True)
-            bootloader = firmware / "b300_bootloader_f407ze_com3_v00050000.hex"
+            bootloader = firmware / "b300_bootloader_f407ze_com3_v00050001.hex"
             manifest_resource = firmware / "b300_bootloader_manifest.json"
             bootloader.write_bytes(b":00000001FF\n")
             manifest_resource.write_text("{}", encoding="utf-8")
@@ -158,7 +158,7 @@ class GuiPackagingTests(unittest.TestCase):
         )
         self.assertIn("openocd_sha256=%s" % openocd_sha256, metadata)
         self.assertIn("flavor=gui", metadata)
-        self.assertIn("resources/firmware/b300_bootloader_f407ze_com3_v00050000.hex", names)
+        self.assertIn("resources/firmware/b300_bootloader_f407ze_com3_v00050001.hex", names)
         self.assertIn("resources/firmware/b300_bootloader_manifest.json", names)
 
     def test_internal_cli_zip_excludes_gui(self) -> None:
@@ -216,8 +216,16 @@ class GuiPackagingTests(unittest.TestCase):
             self.assertTrue((appdir / "b300-stlink-gui.desktop").is_file())
             self.assertTrue((appdir / "b300-stlink-gui.png").is_file())
             self.assertTrue((appdir / "usr" / "bin" / "b300-stlink-gui").is_file())
+            self.assertTrue((appdir / "usr" / "share" / "b300-stlink" / "udev" /
+                             "49-b300-stlink.rules").is_file())
             self.assertFalse((appdir / "usr" / "bin" / "b300-stlink").exists())
             self.assertTrue((debroot / "DEBIAN" / "control").is_file())
+            self.assertTrue((debroot / "DEBIAN" / "postinst").is_file())
+            udev_rule = (debroot / "usr" / "lib" / "udev" / "rules.d" /
+                         "49-b300-stlink.rules")
+            self.assertTrue(udev_rule.is_file())
+            self.assertIn('ATTR{idVendor}=="0483"', udev_rule.read_text(encoding="utf-8"))
+            self.assertIn('ATTR{idProduct}=="374?"', udev_rule.read_text(encoding="utf-8"))
             self.assertTrue((debroot / "usr" / "share" / "icons" / "hicolor" /
                              "512x512" / "apps" / "b300-stlink-gui.png").is_file())
             self.assertTrue((debroot / "usr" / "local" / "bin" /

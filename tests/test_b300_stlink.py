@@ -247,7 +247,7 @@ class B300StlinkTests(unittest.TestCase):
         artifact = next(item for item in records if item["event"] == "factory_artifact")
         self.assertEqual(
             artifact["sha256"],
-            "C0FC6083EEBA39ED5F2AF40D97ECA90FEAE15E4B1D32B150C1504869D18D9398",
+            "657F71605E00795BEA3C5601AAF569104E74D9DEE8D5B6E602514C4D72264F05",
         )
         transactions = [item for item in records if item["event"] == "openocd"]
         self.assertEqual([item["phase"] for item in transactions], [

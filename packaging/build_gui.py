@@ -20,6 +20,11 @@ from b300_version import __version__ as TOOL_VERSION
 DESKTOP_SOURCE = ROOT / "packaging" / "linux" / "b300-stlink-gui.desktop"
 ICON_SOURCE = ROOT / "branding" / "b300-stlink-icon.png"
 
+B300_UDEV_RULE = (
+    'SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="374?", '
+    'MODE="0660", GROUP="plugdev", TAG+="uaccess"\n'
+)
+
 
 def gui_output_names(architecture: str):
     if architecture == "x86_64":
@@ -77,6 +82,10 @@ exec "$root/b300-stlink-gui" "$@"
     icon_dir.mkdir(parents=True)
     shutil.copy2(DESKTOP_SOURCE, desktop_dir / DESKTOP_SOURCE.name)
     shutil.copy2(ICON_SOURCE, icon_dir / "b300-stlink-gui.png")
+    write_text_lf(
+        appdir / "usr" / "share" / "b300-stlink" / "udev" / "49-b300-stlink.rules",
+        B300_UDEV_RULE,
+    )
     return appdir
 
 
@@ -100,6 +109,21 @@ def stage_deb_root(bundle: Path, output: Path, architecture: str, version: str) 
         "Priority: optional\n"
         "Description: Safe B300 STM32F407 ST-Link provisioning GUI\n" %
         (version, architecture),
+    )
+    write_text_lf(
+        debroot / "usr" / "lib" / "udev" / "rules.d" / "49-b300-stlink.rules",
+        B300_UDEV_RULE,
+    )
+    write_executable(
+        debroot / "DEBIAN" / "postinst",
+        """#!/bin/sh
+set -e
+if command -v udevadm >/dev/null 2>&1; then
+    udevadm control --reload-rules || true
+    udevadm trigger --subsystem-match=usb --attr-match=idVendor=0483 || true
+fi
+exit 0
+""",
     )
     write_executable(debroot / "usr" / "local" / "bin" / "b300-stlink-gui", """#!/bin/sh
 set -eu

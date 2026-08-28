@@ -20,7 +20,7 @@ a = Analysis(
         (str(project_root / "branding" / "b300-stlink-wordmark.png"), "branding"),
         (str(project_root / "CHANGELOG.md"), "."),
         (str(build_commit_file), "."),
-        (str(project_root / "resources" / "firmware" / "b300_bootloader_f407ze_com3_v00050000.hex"), "resources/firmware"),
+        (str(project_root / "resources" / "firmware" / "b300_bootloader_f407ze_com3_v00050001.hex"), "resources/firmware"),
         (str(project_root / "resources" / "firmware" / "b300_bootloader_manifest.json"), "resources/firmware"),
     ],
     hiddenimports=[],

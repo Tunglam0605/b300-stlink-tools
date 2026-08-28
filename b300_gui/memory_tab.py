@@ -28,14 +28,18 @@ from b300_core.policy import SECTORS
 from .workers import FunctionWorker
 
 
-def format_hex_preview(data: bytes, limit: int = 4096) -> str:
+def format_hex_preview(data: bytes, limit: int = 4096, base_address: int = 0) -> str:
     shown = data[:max(0, limit)]
-    lines = []
+    lines = [
+        "Địa chỉ   00 01 02 03 04 05 06 07  08 09 0A 0B 0C 0D 0E 0F  |ASCII           |",
+        "--------  -----------------------------------------------  ----------------",
+    ]
     for offset in range(0, len(shown), 16):
         chunk = shown[offset:offset + 16]
         hexadecimal = " ".join("%02X" % value for value in chunk)
         ascii_text = "".join(chr(value) if 32 <= value < 127 else "." for value in chunk)
-        lines.append("%08X  %-47s  |%s|" % (offset, hexadecimal, ascii_text))
+        address = base_address + offset
+        lines.append("%08X  %-47s  |%-16s|" % (address, hexadecimal, ascii_text))
     if len(data) > len(shown):
         lines.append("… %d bytes omitted from preview; Export keeps the full sector." %
                      (len(data) - len(shown)))
@@ -112,7 +116,14 @@ class MemoryTab(QWidget):
         preview_layout.addWidget(self.hex_view)
 
         metadata_group = QGroupBox("OTA metadata · 0x0800C000")
-        metadata_form = QFormLayout(metadata_group)
+        metadata_layout = QVBoxLayout(metadata_group)
+
+        self.metadata_notice = QLabel("Nhấn 'Đọc OTA metadata' để kiểm tra bản ghi Sector 3.")
+        self.metadata_notice.setObjectName("metadataNotice")
+        self.metadata_notice.setWordWrap(True)
+        metadata_layout.addWidget(self.metadata_notice)
+
+        metadata_form = QFormLayout()
         self.metadata_values = {}
         fields = (
             ("Classification", "Phân loại (Classification)"),
@@ -137,6 +148,9 @@ class MemoryTab(QWidget):
                                           value.textInteractionFlags().TextSelectableByMouse)
             self.metadata_values[field] = value
             metadata_form.addRow(display_label + ":", value)
+
+        metadata_layout.addLayout(metadata_form)
+        metadata_layout.addStretch(1)
 
         splitter.addWidget(preview_group)
         splitter.addWidget(metadata_group)
@@ -221,24 +235,75 @@ class MemoryTab(QWidget):
     def show_sector(self, sector_index: int, data: bytes) -> None:
         self.current_sector = sector_index
         self.current_data = bytes(data)
-        self.hex_view.setPlainText(format_hex_preview(self.current_data))
-        self.status_label.setText("Đã đọc Sector %d · %d byte" %
-                                  (sector_index, len(self.current_data)))
+        base_address = 0
+        for s in SECTORS:
+            if s.index == sector_index:
+                base_address = s.start_address
+                break
+        self.hex_view.setPlainText(format_hex_preview(self.current_data, base_address=base_address))
+        self.status_label.setText("Đã đọc Sector %d (0x%08X) · %d byte" %
+                                  (sector_index, base_address, len(self.current_data)))
         self._set_busy(False)
 
     def show_metadata(self, metadata: OtaMetadata) -> None:
-        values = {
-            "Classification": metadata.classification,
-            "Magic": "0x%08X" % metadata.magic,
-            "Format": str(metadata.format_version),
-            "State": "%s (%d)" % (metadata.state_name, metadata.state),
-            "Image size": str(metadata.image_size),
-            "Image CRC32": "0x%08X" % metadata.image_crc32,
-            "Board token": metadata.board_token or "—",
-            "Sequence": str(metadata.sequence),
-            "Metadata CRC32": "0x%08X" % metadata.meta_crc32,
-            "Calculated CRC32": "0x%08X" % metadata.calculated_meta_crc32,
-        }
+        if metadata.classification == "ERASED":
+            values = {
+                "Classification": "ERASED",
+                "Magic": "0xFFFFFFFF (Erased)",
+                "Format": "—",
+                "State": "—",
+                "Image size": "—",
+                "Image CRC32": "—",
+                "Board token": "—",
+                "Sequence": "—",
+                "Metadata CRC32": "—",
+                "Calculated CRC32": "— (Flash trống)",
+            }
+            self.metadata_notice.setText(
+                "✓ Vùng OTA metadata đang ở trạng thái Erased (trống).\n"
+                "Đây là trạng thái hợp lệ khi nạp qua ST-Link. Bootloader sẽ kích hoạt "
+                "chế độ fallback an toàn nếu vector Application hợp lệ."
+            )
+            self.metadata_notice.setStyleSheet(
+                "background-color: #F0FDF4; color: #166534; border: 1px solid #BBF7D0; "
+                "border-radius: 6px; padding: 8px 12px; font-size: 12px; font-weight: 500;"
+            )
+        elif metadata.valid:
+            values = {
+                "Classification": metadata.classification,
+                "Magic": "0x%08X" % metadata.magic,
+                "Format": str(metadata.format_version),
+                "State": "%s (%d)" % (metadata.state_name, metadata.state),
+                "Image size": str(metadata.image_size),
+                "Image CRC32": "0x%08X" % metadata.image_crc32,
+                "Board token": metadata.board_token or "—",
+                "Sequence": str(metadata.sequence),
+                "Metadata CRC32": "0x%08X" % metadata.meta_crc32,
+                "Calculated CRC32": "0x%08X" % metadata.calculated_meta_crc32,
+            }
+            self.metadata_notice.setText("✓ OTA metadata hợp lệ và đã qua xác thực CRC32.")
+            self.metadata_notice.setStyleSheet(
+                "background-color: #F0FDF4; color: #166534; border: 1px solid #BBF7D0; "
+                "border-radius: 6px; padding: 8px 12px; font-size: 12px; font-weight: 500;"
+            )
+        else:
+            values = {
+                "Classification": metadata.classification,
+                "Magic": "0x%08X" % metadata.magic,
+                "Format": str(metadata.format_version),
+                "State": "%s (%d)" % (metadata.state_name, metadata.state),
+                "Image size": str(metadata.image_size),
+                "Image CRC32": "0x%08X" % metadata.image_crc32,
+                "Board token": metadata.board_token or "—",
+                "Sequence": str(metadata.sequence),
+                "Metadata CRC32": "0x%08X" % metadata.meta_crc32,
+                "Calculated CRC32": "0x%08X" % metadata.calculated_meta_crc32,
+            }
+            self.metadata_notice.setText("⚠ OTA metadata không hợp lệ hoặc sai lệch kiểm tra CRC32.")
+            self.metadata_notice.setStyleSheet(
+                "background-color: #FEF2F2; color: #991B1B; border: 1px solid #FECACA; "
+                "border-radius: 6px; padding: 8px 12px; font-size: 12px; font-weight: 500;"
+            )
         for field, value in values.items():
             self.metadata_values[field].setText(value)
         color = "#059669" if metadata.valid else ("#64748B" if

@@ -1,7 +1,6 @@
-# GUI nạp Application B300 trên Windows và Ubuntu
+# GUI B300 trên Windows và Ubuntu
 
-GUI chỉ nạp Application STM32F407 qua ST-Link/SWD. Không có COM port, UART OTA,
-mass erase, ghi Bootloader, sửa Option Bytes hoặc WRP.
+GUI dùng ST-Link/SWD cho hai workflow tách biệt: nạp Application an toàn và Factory Bootloader được ủy quyền. Normal Application không bao giờ mass erase, ghi Bootloader hoặc sửa WRP/RDP; chỉ tab Factory mới có quyền tạm thay đổi WRP Sector 0-2 theo transaction cố định.
 
 ## Bước 1 — Cài ứng dụng
 
@@ -34,8 +33,7 @@ sudo apt install ./b300-stlink-gui_amd64.deb
 b300-stlink-gui
 ```
 
-Quyền USB/udev vẫn phải được setup theo [Setup Ubuntu IPC](02_SETUP_UBUNTU_IPC.md).
-Không chạy GUI bằng `sudo`.
+Gói DEB từ `v0.5.0` cài sẵn udev rule B300 cho ST-Link VID `0483` / PID `374x` và reload rule khi cài. Nếu dùng AppImage hoặc hệ thống đã cài bản cũ, setup quyền USB theo [Setup Ubuntu IPC](02_SETUP_UBUNTU_IPC.md). Không chạy GUI bằng `sudo`.
 
 ### Setup offline khi GUI báo thiếu OpenOCD
 
@@ -117,14 +115,9 @@ nguyên nhân và hành động tiếp theo.
 
 ## Factory / Bootloader
 
-Tab **Factory / Bootloader** tách hoàn toàn khỏi tab Application. Nó chỉ dùng
-Bootloader bundle đã được kiểm SHA-256/provenance và chỉ mở action sau khi target
-đã inspect, WRP được report, dry-run đã hiển thị, và người vận hành nhập đúng
-`PROVISION BOOTLOADER`. Factory flow có progress/log riêng, hiển thị target/WRP/RDP,
-và có thể tạm thay đổi WRP S0–S2; mỗi thay đổi WRP đều reset/halt để reload Option
-Bytes trước khi verify. RDP/security đang bật sẽ khóa action. Normal Application
-flow không có quyền thay đổi WRP/RDP. Không dùng Factory tab để thay thế flash
-Application thông thường.
+Tab **Factory / Bootloader** tách hoàn toàn khỏi tab Application. GUI chỉ còn một thao tác chính: **NẠP BOOTLOADER**. Khi bấm nút, tool tự chạy preflight read-only để xác minh đúng STM32F407 512 KiB, RDP, trạng thái WRP và trusted bundled Bootloader; chỉ khi preflight đạt mới tạo Factory plan và chuyển sang provisioning.
+
+Factory service vẫn tự inspect target lần nữa ngay trước thao tác destructive, chỉ erase/program Sector 0-2, verify Bootloader, bật lại WRP S0-S2, reload Option Bytes và xác minh WRP đã ON trước `reset run`. Nếu có nhiều ST-Link, người dùng vẫn phải chọn đúng serial; nếu chỉ có một probe thì GUI tự chọn. RDP/security đang bật hoặc OpenOCD không report WRP sẽ chặn trước erase. Normal Application flow không có quyền thay đổi WRP/RDP.
 
 ## Bước 6 — Đọc Sector hoặc metadata
 

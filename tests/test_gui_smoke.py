@@ -20,6 +20,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QWidget
 from b300_gui.main_window import MainWindow
 from b300_core.hex_image import inspect_image
 from b300_core.models import FlashPhaseEvent, ProbeInfo, TargetInfo
+from b300_core.service import FactoryResult
 from b300_gui.workers import FunctionWorker
 from b300_core.policy import build_flash_plan
 from b300_version import __version__
@@ -46,6 +47,33 @@ class FakeService:
         if event_sink:
             event_sink("read-only target inspection")
         return TargetInfo(0x101F6413, 512, 3.09, "S0-S2 protected", (0, 1, 2), True)
+
+
+class OneClickFactoryService(FakeService):
+    def __init__(self, target=None) -> None:
+        self.calls = []
+        self.target = target or TargetInfo(
+            0x101F6413, 512, 3.09, "S0-S2 protected", (0, 1, 2), True, False
+        )
+
+    def inspect_target(self, probe, event_sink=None, cancel_event=None):
+        self.calls.append(("inspect", probe.serial))
+        if event_sink:
+            event_sink("one-click factory preflight")
+        return self.target
+
+    def factory_plan(self, image, probe, target):
+        self.calls.append(("plan", probe.serial))
+        if target.readout_protected:
+            raise ValueError("RDP/security is enabled")
+        return SimpleNamespace(image=image, probe=probe, target=target)
+
+    def provision_bootloader(self, plan, event_sink=None, phase_sink=None):
+        self.calls.append(("provision", plan.probe.serial))
+        if phase_sink:
+            phase_sink(FlashPhaseEvent("programming", 50, "Programming trusted Bootloader"))
+            phase_sink(FlashPhaseEvent("succeeded", 100, "Factory complete"))
+        return FactoryResult("succeeded", final_target=plan.target)
 
 
 class MissingOpenOcdService(FakeService):
@@ -88,6 +116,8 @@ class GuiSmokeTests(unittest.TestCase):
         window.show()
         self.app.processEvents()
         self.assertFalse(window.windowIcon().isNull())
+        self.assertLessEqual(window.minimumHeight(), 460)
+        self.assertLessEqual(window.minimumWidth(), 760)
         brand_logo = window.findChild(QLabel, "brandLogo")
         self.assertIsNotNone(brand_logo)
         self.assertFalse(brand_logo.pixmap().isNull())
@@ -261,45 +291,66 @@ class GuiSmokeTests(unittest.TestCase):
         window.close()
 
 
-    def test_factory_tab_is_separate_and_requires_wrpprofile_and_typed_ack(self) -> None:
+    def test_factory_tab_is_one_click_and_runs_preflight_before_provision(self) -> None:
         probes = (ProbeInfo("FACTORY123", "ST-Link Factory", "test"),)
-        window = MainWindow(service=FakeService(), probe_loader=lambda: probes)
+        service = OneClickFactoryService()
+        window = MainWindow(service=service, probe_loader=lambda: probes)
         tab_names = [window.tabs.tabText(index) for index in range(window.tabs.count())]
         self.assertIn("Factory / Bootloader", tab_names)
         self.assertIsNotNone(window.factory_trusted)
-        self.assertIn("C0FC6083", window.factory_artifact_label.text())
-        self.assertIsNone(window.factory_probe_combo.currentData())
-        self.assertFalse(window.factory_provision_button.isEnabled())
-
-        window.factory_probe_combo.setCurrentIndex(1)
+        self.assertIn("657F7160", window.factory_artifact_label.text())
         self.assertEqual(window.factory_probe_combo.currentData(), "FACTORY123")
-
-        # A valid F407 with S0-S2 currently unprotected must block normal flash but
-        # is a legitimate Factory target after WRP has been reported.
-        window.apply_target_info(TargetInfo(
-            0x101F6413, 512, 3.09, "Sector 0-7 not protected", (), True, False
-        ))
-        self.assertFalse(window.flash_button.isEnabled())
-        self.assertFalse(window.factory_provision_button.isEnabled())
-        window.factory_ack.setText("PROVISION BOOTLOADER")
         self.assertTrue(window.factory_provision_button.isEnabled())
-        self.assertIn("WRP:", window.factory_target_summary.text())
+        self.assertFalse(hasattr(window, "factory_ack"))
+        self.assertFalse(hasattr(window, "factory_inspect_button"))
+        self.assertFalse(hasattr(window, "factory_dry_run_button"))
+
+        window.factory_provision_button.click()
+        deadline = time.monotonic() + 2.0
+        while (window.busy or window._threads) and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.01)
+
+        self.assertEqual([name for name, _serial in service.calls], ["inspect", "plan", "provision"])
+        self.assertTrue(all(serial == "FACTORY123" for _name, serial in service.calls))
+        self.assertEqual(window.factory_progress.format(), "Factory OK")
+        self.assertIn("PRE-FLIGHT OK", window.factory_log_view.toPlainText())
         window.close()
 
-    def test_factory_button_stays_disabled_for_unknown_wrp_or_rdp(self) -> None:
+    def test_factory_one_click_blocks_when_wrp_is_not_reported(self) -> None:
         probes = (ProbeInfo("FACTORY123", "ST-Link Factory", "test"),)
-        window = MainWindow(service=FakeService(), probe_loader=lambda: probes)
-        window.factory_probe_combo.setCurrentIndex(1)
-        window.factory_ack.setText("PROVISION BOOTLOADER")
-        window.apply_target_info(TargetInfo(
+        service = OneClickFactoryService(TargetInfo(
             0x101F6413, 512, 3.09, "Protection status not reported", (), False, False
         ))
-        self.assertFalse(window.factory_provision_button.isEnabled())
-        window.apply_target_info(TargetInfo(
+        window = MainWindow(service=service, probe_loader=lambda: probes)
+        self.assertTrue(window.factory_provision_button.isEnabled())
+
+        window.factory_provision_button.click()
+        deadline = time.monotonic() + 2.0
+        while (window.busy or window._threads) and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.01)
+
+        self.assertEqual([name for name, _serial in service.calls], ["inspect"])
+        self.assertIn("preflight", window.status_banner.text().lower())
+        self.assertIn("write-protection", window.factory_log_view.toPlainText())
+        window.close()
+
+    def test_factory_one_click_blocks_rdp_before_provisioning(self) -> None:
+        probes = (ProbeInfo("FACTORY123", "ST-Link Factory", "test"),)
+        service = OneClickFactoryService(TargetInfo(
             0x101F6413, 512, 3.09, "Sector 0-2 protected", (0, 1, 2), True, True
         ))
-        self.assertFalse(window.factory_provision_button.isEnabled())
-        self.assertIn("RDP/Security: ENABLED", window.factory_target_summary.text())
+        window = MainWindow(service=service, probe_loader=lambda: probes)
+        window.factory_provision_button.click()
+        deadline = time.monotonic() + 2.0
+        while (window.busy or window._threads) and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.01)
+
+        self.assertEqual([name for name, _serial in service.calls], ["inspect", "plan"])
+        self.assertNotIn("provision", [name for name, _serial in service.calls])
+        self.assertIn("RDP", window.status_banner.text())
         window.close()
 
 

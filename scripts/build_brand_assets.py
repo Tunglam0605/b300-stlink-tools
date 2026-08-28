@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFilter
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,21 +42,62 @@ def build_icon(source: Path, png_output: Path, ico_output: Path,
         round(width * 0.415),
         round(height * 0.670),
     )
-    emblem = make_white_transparent(
-        logo.crop(crop_box).resize((512, 512), Image.Resampling.LANCZOS)
+
+    size = 512
+    margin = 20
+    radius = 104
+
+    icon = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+
+    # Ambient drop shadow for elevation
+    shadow = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    shadow_draw = ImageDraw.Draw(shadow)
+    shadow_draw.rounded_rectangle(
+        (margin + 4, margin + 12, size - margin - 4, size - margin + 12),
+        radius=radius,
+        fill=(0, 0, 0, 80),
+    )
+    shadow = shadow.filter(ImageFilter.GaussianBlur(10))
+    icon.alpha_composite(shadow)
+
+    card_rect = (margin, margin, size - margin, size - margin)
+
+    # Render emblem on solid white surface (keeps chip body, pins, and interior solid bright white)
+    emblem_raw = logo.crop(crop_box)
+    emblem_pixels = emblem_raw.load()
+    # Clean the bottom-right cable continuation
+    for y in range(round(emblem_raw.height * 0.68), emblem_raw.height):
+        for x in range(round(emblem_raw.width * 0.85), emblem_raw.width):
+            emblem_pixels[x, y] = (255, 255, 255, 255)
+
+    emblem_size = size - margin * 2 - 24
+    emblem_resized = emblem_raw.resize((emblem_size, emblem_size), Image.Resampling.LANCZOS)
+
+    # Pure solid white squircle card surface
+    card = Image.new("RGBA", (size, size), (255, 255, 255, 255))
+    pos_x = (size - emblem_resized.width) // 2
+    pos_y = (size - emblem_resized.height) // 2
+    card.paste(emblem_resized, (pos_x, pos_y))
+
+    # Slate border on the card
+    border_draw = ImageDraw.Draw(card)
+    border_draw.rounded_rectangle(
+        card_rect,
+        radius=radius,
+        outline=(203, 213, 225, 255),
+        width=4,
     )
 
-    # Retain the two round SWD contact points but omit the cable continuation;
-    # otherwise it exits the square crop and looks accidentally clipped.
-    emblem_pixels = emblem.load()
-    for y in range(340, emblem.height):
-        for x in range(425, emblem.width):
-            red, green, blue, _alpha = emblem_pixels[x, y]
-            emblem_pixels[x, y] = (red, green, blue, 0)
+    # Mask to keep only the rounded card area
+    mask = Image.new("L", (size, size), 0)
+    mask_draw = ImageDraw.Draw(mask)
+    mask_draw.rounded_rectangle(card_rect, radius=radius, fill=255)
+
+    icon.paste(card, (0, 0), mask)
 
     png_output.parent.mkdir(parents=True, exist_ok=True)
-    emblem.save(png_output, format="PNG", optimize=True)
-    emblem.save(ico_output, format="ICO", sizes=[(size, size) for size in ICON_SIZES])
+    icon.save(png_output, format="PNG", optimize=True)
+    icon.save(ico_output, format="ICO", sizes=[(s, s) for s in ICON_SIZES])
 
     wordmark_box = (
         round(width * 0.040),

@@ -84,7 +84,7 @@ def runtime_resources(platform_name: str):
     """Immutable resources required by both frozen entry points."""
     del platform_name
     return [
-        ROOT / "resources" / "firmware" / "b300_bootloader_f407ze_com3_v00050000.hex",
+        ROOT / "resources" / "firmware" / "b300_bootloader_f407ze_com3_v00050001.hex",
         ROOT / "resources" / "firmware" / "b300_bootloader_manifest.json",
     ]
 

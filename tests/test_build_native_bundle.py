@@ -94,7 +94,7 @@ class NativeBundleTargetTests(unittest.TestCase):
         for platform_name in ("windows-x64", "linux-x64", "linux-arm64"):
             with self.subTest(platform=platform_name):
                 names = {path.name for path in module.runtime_resources(platform_name)}
-                self.assertIn("b300_bootloader_f407ze_com3_v00050000.hex", names)
+                self.assertIn("b300_bootloader_f407ze_com3_v00050001.hex", names)
                 self.assertIn("b300_bootloader_manifest.json", names)
 
 

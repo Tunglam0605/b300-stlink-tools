@@ -166,6 +166,20 @@ class FlashServiceTests(unittest.TestCase):
         self.assertNotIn("erase_sector", " ".join(runner.commands[0]))
         self.assertEqual(captured.exception.phase, "target_check")
 
+    def test_target_usb_permission_error_has_ubuntu_udev_guidance(self) -> None:
+        runner = ScriptedRunner([
+            CommandResult(("openocd",), 1,
+                          "Error: libusb_open() failed with LIBUSB_ERROR_ACCESS")
+        ])
+        with self.assertRaisesRegex(RuntimeError, "udev rule") as captured:
+            B300Service(runner=runner, executable="openocd").inspect_target(
+                ProbeRef(None)
+            )
+        message = str(captured.exception)
+        self.assertIn("0483", message)
+        self.assertIn("374x", message)
+        self.assertIn("do not use sudo", message)
+
     def test_target_timeout_is_reported_explicitly(self) -> None:
         runner = ScriptedRunner([
             CommandResult(("openocd",), -1, "partial log", timed_out=True)

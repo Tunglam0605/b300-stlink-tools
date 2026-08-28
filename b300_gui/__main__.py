@@ -8,7 +8,16 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 
-from .main_window import MainWindow
+if __name__ == "__main__" and not __package__:
+    root = Path(__file__).resolve().parent.parent
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+
+try:
+    from .main_window import MainWindow
+except ImportError:
+    from b300_gui.main_window import MainWindow
+
 from b300_core.update_platform import detect_update_platform
 from b300_core.update_public_key import MINISIGN_PUBLIC_KEY
 from b300_core.updater import UpdateClient

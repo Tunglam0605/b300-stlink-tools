@@ -148,6 +148,13 @@ class ReleaseWorkflowTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIn(name, text)
 
+    def test_linux_release_uses_x11_smoke_test(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        self.assertIn("xauth xvfb", workflow)
+        self.assertGreaterEqual(workflow.count("Smoke-test Linux GUI on X11"), 2)
+        self.assertGreaterEqual(workflow.count("env -u QT_QPA_PLATFORM xvfb-run -a"), 2)
+
+
 
 if __name__ == "__main__":
     unittest.main()

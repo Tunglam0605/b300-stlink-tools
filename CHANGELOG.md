@@ -5,6 +5,31 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-28
+
+### Added
+
+- Factory GUI one-click: một nút **NẠP BOOTLOADER** tự chạy preflight read-only, xác minh target/WRP/RDP, tạo Factory plan rồi mới thực hiện trusted Bootloader provisioning. Backend vẫn kiểm tra lại target ngay trước khi thay đổi WRP/erase và bắt buộc khôi phục/xác minh WRP Sector 0-2.
+- Ubuntu DEB cài sẵn udev rule cho ST-Link VID `0483` / PID `374x` và reload rule sau cài đặt; AppImage mang kèm rule tham chiếu.
+- Linux release CI có Xvfb/X11 smoke test cho GUI native trên cả x64 và ARM64, ngoài offscreen unit tests.
+
+### Changed
+
+- Làm mới frontend: Factory dùng scroll area, trạng thái theo từng tab, Debug layout/state rõ hơn, Memory hex preview dùng địa chỉ Flash tuyệt đối, metadata `ERASED` không còn hiển thị các giá trị `0xFFFFFFFF` như số hợp lệ, và release notes render Markdown.
+- Main window tự co theo `availableGeometry()` và minimum giảm còn `760x460`, tránh vỡ layout trên laptop 1366x768 khi Windows scaling 125-150%; màn hình lớn vẫn mở ở kích thước tối đa 1120x780.
+- Một ST-Link được tự chọn cho Factory; nhiều ST-Link vẫn bắt buộc chọn đúng probe để tránh nạp nhầm board.
+
+### Fixed
+
+- Bootloader tin cậy được nâng lên `0x00050001` từ firmware commit `92e70f8e1cc94c17be39034fcc9a20e385325a2f`: khi metadata S3 hoàn toàn `ERASED` và Application vector hợp lệ, Bootloader coi đây là ST-Link provisioning mới và chỉ clear stale recovery marker `BKP1R`. Các case `IN_PROGRESS`, metadata corrupt, CRC/vector lỗi vẫn fail-closed; `BKP0R`/`BKP2R`/`BKP3R` giữ nguyên contract request từ Application.
+- Ubuntu target inspection nhận diện `LIBUSB_ERROR_ACCESS`/permission failure và trả hướng dẫn udev cụ thể thay vì chỉ báo generic `Phase operation / OpenOCD target inspection failed`.
+- Dọn layout/whitespace và interlock test cho frontend mới mà không thay đổi normal Application flash safety contract.
+
+### Validation
+
+- Hardware acceptance Bootloader `0x00050001`: Factory WRP OFF/program/verify/WRP ON PASS; inject `BKP1R=0x5241544F` với S3 `ERASED` + Application hợp lệ rồi reset cho kết quả `BKP1R=0`, PC vào Application; dump S0-S2 48 KiB bit-for-bit PASS (`89D120224EDECAF4137FAD9F815A3FE810CB1C52589B7DD46E920189D595E910`).
+- Full B300 ST-Link Tools regression cuối: **222/222 tests PASS**; focused trusted-resource/packaging/GUI suite **60/60 PASS**. Firmware/Gateway OTA suite: **178 tests PASS, 3 skipped**; Bootloader source guards: **22/22 PASS**.
+
 ## [0.4.1] - 2026-08-28
 
 ### Fixed

@@ -74,7 +74,6 @@ class GuiHardwareInterlockTests(unittest.TestCase):
         self.assertFalse(window.inspect_target_button.isEnabled())
         self.assertFalse(window.probe_combo.isEnabled())
         self.assertFalse(window.factory_provision_button.isEnabled())
-        self.assertFalse(window.factory_inspect_button.isEnabled())
         self.assertFalse(window.factory_probe_combo.isEnabled())
         self.assertFalse(window.memory_tab.read_button.isEnabled())
         self.assertFalse(window.memory_tab.metadata_button.isEnabled())

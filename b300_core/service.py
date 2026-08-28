@@ -163,6 +163,19 @@ class B300Service:
                     raise RuntimeError("OpenOCD target inspection timed out.")
                 if result.cancelled:
                     raise RuntimeError("OpenOCD target inspection was cancelled.")
+                output_lower = result.output.lower()
+                if (
+                    "libusb_error_access" in output_lower or
+                    "permission denied" in output_lower or
+                    "access denied" in output_lower or
+                    ("libusb" in output_lower and "access" in output_lower)
+                ):
+                    raise RuntimeError(
+                        "OpenOCD cannot access the ST-Link USB device. On Ubuntu, install/reload "
+                        "the B300 udev rule for VID 0483 / PID 374x, reconnect ST-Link, and run "
+                        "the GUI as your normal user (do not use sudo). Raw OpenOCD log: %s" %
+                        result.output
+                    )
                 raise RuntimeError("OpenOCD target inspection failed: %s" % result.output)
             return parse_target_info(result.output)
 
