@@ -24,5 +24,8 @@ class WhatsNewDialog(QDialog):
         layout.addWidget(self.notes_view, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close_button = buttons.button(QDialogButtonBox.StandardButton.Close)
+        if close_button is not None:
+            close_button.setText("Đóng")
         buttons.rejected.connect(self.close)
         layout.addWidget(buttons)

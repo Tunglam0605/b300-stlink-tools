@@ -36,5 +36,8 @@ class AboutDialog(QDialog):
         self.check_button.clicked.connect(self.check_updates_requested.emit)
         layout.addWidget(self.check_button)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close_button = buttons.button(QDialogButtonBox.StandardButton.Close)
+        if close_button is not None:
+            close_button.setText("Đóng")
         buttons.rejected.connect(self.close)
         layout.addWidget(buttons)

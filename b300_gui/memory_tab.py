@@ -41,7 +41,7 @@ def format_hex_preview(data: bytes, limit: int = 4096, base_address: int = 0) ->
         address = base_address + offset
         lines.append("%08X  %-47s  |%-16s|" % (address, hexadecimal, ascii_text))
     if len(data) > len(shown):
-        lines.append("… %d bytes omitted from preview; Export keeps the full sector." %
+        lines.append("… Đã ẩn %d bytes (omitted); nút 'Xuất binary…' sẽ lưu đầy đủ cả Sector." %
                      (len(data) - len(shown)))
     return "\n".join(lines)
 

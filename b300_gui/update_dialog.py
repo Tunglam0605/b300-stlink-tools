@@ -6,8 +6,8 @@ from pathlib import Path
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QDialog, QFormLayout, QHBoxLayout, QLabel, QPlainTextEdit, QProgressBar,
-    QPushButton, QVBoxLayout,
+    QDialog, QFormLayout, QHBoxLayout, QLabel, QProgressBar,
+    QPushButton, QTextBrowser, QVBoxLayout,
 )
 
 from b300_core.release_manifest import LatestRelease, ReleaseAsset
@@ -26,7 +26,7 @@ class UpdateDialog(QDialog):
         self.asset = asset
         self.ready_package = None
         self.setWindowTitle("Cập nhật B300 ST-Link Tools")
-        self.setMinimumSize(520, 390)
+        self.setMinimumSize(540, 420)
         root = QVBoxLayout(self)
         title = QLabel("Có phiên bản mới")
         title.setStyleSheet("font-size: 20px; font-weight: 700; color: #0369A1;")
@@ -37,9 +37,9 @@ class UpdateDialog(QDialog):
         form.addRow("Hiện tại:", self.current_version_value)
         form.addRow("Mới:", self.new_version_value)
         root.addLayout(form)
-        self.notes_view = QPlainTextEdit()
-        self.notes_view.setReadOnly(True)
-        self.notes_view.setPlainText(release.notes)
+        self.notes_view = QTextBrowser()
+        self.notes_view.setOpenExternalLinks(True)
+        self.notes_view.setMarkdown(release.notes)
         root.addWidget(self.notes_view, 1)
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)

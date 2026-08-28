@@ -28,11 +28,26 @@ COLOR_DANGER = "#DC2626"            # Red 600
 
 APP_STYLE = """
 /* Global Window & Typography */
-QMainWindow, QWidget {
+QMainWindow, QDialog, QWidget {
     background-color: #F8FAFC;
     color: #0F172A;
     font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, "Roboto", system-ui, sans-serif;
     font-size: 13px;
+}
+
+QDialog {
+    background-color: #FFFFFF;
+}
+
+/* Tooltips */
+QToolTip {
+    background-color: #0F172A;
+    color: #F8FAFC;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 500;
 }
 
 /* Header & Brand Logo Badge */
@@ -97,7 +112,7 @@ QTabBar::tab:selected {
     font-weight: 700;
 }
 
-/* GroupBox Card Surface */
+/* GroupBox Card Surface with Interactive Glow */
 QGroupBox {
     background-color: #FFFFFF;
     border: 1px solid #E2E8F0;
@@ -106,6 +121,10 @@ QGroupBox {
     padding: 12px 10px 10px 10px;
     font-weight: 700;
     color: #0F172A;
+}
+
+QGroupBox:hover {
+    border: 1px solid #BAE6FD;
 }
 
 QGroupBox::title {
@@ -128,6 +147,10 @@ QLineEdit, QComboBox, QPlainTextEdit {
     min-height: 28px;
     selection-background-color: #E0F2FE;
     selection-color: #0369A1;
+}
+
+QLineEdit:hover, QComboBox:hover {
+    border: 1px solid #94A3B8;
 }
 
 QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus {
@@ -174,18 +197,63 @@ QScrollArea > QWidget > QWidget {
     background-color: transparent;
 }
 
+/* Modern Slim Scrollbars */
+QScrollBar:vertical {
+    background-color: #F8FAFC;
+    width: 10px;
+    margin: 0px;
+    border-radius: 5px;
+}
+
+QScrollBar::handle:vertical {
+    background-color: #CBD5E1;
+    min-height: 24px;
+    border-radius: 5px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background-color: #94A3B8;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+
+QScrollBar:horizontal {
+    background-color: #F8FAFC;
+    height: 10px;
+    margin: 0px;
+    border-radius: 5px;
+}
+
+QScrollBar::handle:horizontal {
+    background-color: #CBD5E1;
+    min-width: 24px;
+    border-radius: 5px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background-color: #94A3B8;
+}
+
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0px;
+}
+
 /* Rich Text / Markdown Changelog Browser */
 QTextBrowser {
-    background-color: #FFFFFF;
+    background-color: #F8FAFC;
     color: #0F172A;
     border: 1px solid #E2E8F0;
     border-radius: 8px;
-    padding: 10px 14px;
+    padding: 12px 16px;
     font-size: 13px;
-    line-height: 1.5;
+    line-height: 1.6;
+    selection-background-color: #E0F2FE;
+    selection-color: #0369A1;
 }
 
-/* Standard PushButtons */
+/* Standard PushButtons with Elevation & Glow */
 QPushButton {
     min-height: 32px;
     padding: 4px 16px;
@@ -197,14 +265,15 @@ QPushButton {
 }
 
 QPushButton:hover {
-    background-color: #F1F5F9;
+    background-color: #F0F9FF;
     border-color: #0284C7;
     color: #0284C7;
 }
 
 QPushButton:pressed {
-    background-color: #E2E8F0;
+    background-color: #E0F2FE;
     border-color: #0369A1;
+    color: #0369A1;
 }
 
 QPushButton:focus {
@@ -225,7 +294,8 @@ QPushButton#flashButton {
     font-size: 13px;
     font-weight: 700;
     min-height: 36px;
-    padding: 6px 20px;
+    padding: 6px 22px;
+    border-radius: 6px;
 }
 
 QPushButton#flashButton:hover {
@@ -254,7 +324,7 @@ QPushButton#factoryProvisionButton {
     font-size: 13px;
     font-weight: 700;
     min-height: 36px;
-    padding: 6px 20px;
+    padding: 6px 22px;
     border-radius: 6px;
 }
 
@@ -290,7 +360,7 @@ QPushButton#setupButton:hover {
     color: #0369A1;
 }
 
-/* Status Banner */
+/* Status Banner with Glowing States */
 QLabel#statusBanner {
     border-radius: 8px;
     padding: 10px 14px;
@@ -309,7 +379,7 @@ QLabel#statusBanner[state="normal"] {
 QLabel#statusBanner[state="success"] {
     background-color: #ECFDF5;
     color: #065F46;
-    border: 1px solid #A7F3D0;
+    border: 1px solid #6EE7B7;
 }
 
 QLabel#statusBanner[state="error"] {
@@ -365,8 +435,8 @@ QHeaderView::section {
     font-weight: 700;
 }
 
-/* Real-time Terminal Log Console */
-QPlainTextEdit#logView {
+/* Real-time Terminal Log Consoles */
+QPlainTextEdit#logView, QPlainTextEdit#debugLogView, QPlainTextEdit#factoryLogView {
     background-color: #0F172A;
     color: #34D399;
     font-family: "Cascadia Code", "Consolas", "Courier New", monospace;
@@ -413,7 +483,8 @@ QLabel#targetSummaryBox, QLabel#imageSummaryBox {
 /* Flash Plan Summary Card */
 QLabel#flashPlanSummaryCard {
     background-color: #F8FAFC;
-    border: 1px solid #E2E8F0;
+    border: 1px solid #BAE6FD;
+    border-left: 4px solid #0284C7;
     border-radius: 6px;
     padding: 8px 12px;
     font-size: 12px;
@@ -492,13 +563,17 @@ QMenu {
     background-color: #FFFFFF;
     color: #0F172A;
     border: 1px solid #E2E8F0;
-    border-radius: 6px;
-    padding: 4px;
+    border-radius: 8px;
+    padding: 6px;
+}
+
+QMenu::item {
+    padding: 6px 24px 6px 12px;
+    border-radius: 4px;
 }
 
 QMenu::item:selected {
     background-color: #E0F2FE;
     color: #0284C7;
-    border-radius: 4px;
 }
 """

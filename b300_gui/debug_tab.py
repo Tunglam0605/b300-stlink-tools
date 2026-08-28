@@ -45,11 +45,11 @@ class DebugTab(QWidget):
         layout.setSpacing(10)
 
         # Target & State Banner
-        header_card = QGroupBox("Target & Debug State")
+        header_card = QGroupBox("Mục tiêu & Trạng thái Debug")
         header_layout = QHBoxLayout(header_card)
 
         probe_info_layout = QVBoxLayout()
-        self.probe_display = QLabel("ST-Link Probe: Auto-select / Active Probe")
+        self.probe_display = QLabel("ST-Link Probe: Tự động chọn")
         self.probe_display.setStyleSheet("font-weight: 700; color: #0F172A;")
         safety = QLabel(
             "Debug chỉ điều khiển target qua OpenOCD/GDB · Không xóa flash, không nạp firmware "
@@ -127,9 +127,9 @@ class DebugTab(QWidget):
 
         actions_layout.addSpacing(16)
 
-        self.halt_button = QPushButton("Halt CPU")
+        self.halt_button = QPushButton("Tạm dừng (Halt)")
         self.halt_button.setObjectName("debugHaltButton")
-        self.continue_button = QPushButton("Continue")
+        self.continue_button = QPushButton("Tiếp tục (Run)")
         self.continue_button.setObjectName("debugContinueButton")
         self.reset_button = QPushButton("Reset + Halt")
         self.reset_button.setObjectName("debugResetButton")
@@ -144,7 +144,7 @@ class DebugTab(QWidget):
         layout.addWidget(actions_box)
 
         # Log Console
-        log_box = QGroupBox("OpenOCD / GDB log")
+        log_box = QGroupBox("Nhật ký OpenOCD / GDB")
         log_layout = QVBoxLayout(log_box)
         self.log_view = QPlainTextEdit()
         self.log_view.setObjectName("debugLogView")
