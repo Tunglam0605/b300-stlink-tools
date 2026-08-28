@@ -15,8 +15,9 @@ from b300_core.models import ProbeRef, TargetInfo
 from b300_core.openocd import (
     OpenOcdRunner,
     build_boot_verify_command,
+    build_factory_flash_command,
+    build_factory_protect_command,
     build_flash_command,
-    build_marker_command,
     build_reset_command,
     parse_boot_verification,
     build_target_inspect_command,
@@ -62,7 +63,7 @@ class OpenOcdCoreTests(unittest.TestCase):
         return build_flash_plan(
             image,
             ProbeRef(serial="SAFE123"),
-            TargetInfo(0x101F6413, 512, 3.09, "S0-S2 protected"),
+            TargetInfo(0x101F6413, 512, 3.09, "S0-S2 protected", (0, 1, 2), True),
         )
 
     def test_program_transaction_cannot_write_marker(self) -> None:
@@ -79,38 +80,37 @@ class OpenOcdCoreTests(unittest.TestCase):
         self.assertIn("tcl port disabled", command)
         self.assertNotIn("mass_erase", rendered)
 
-    def test_marker_and_reset_are_separate_transactions(self) -> None:
-        marker = build_marker_command(ProbeRef("SAFE123"), "openocd")
+    def test_reset_is_a_separate_non_flash_transaction(self) -> None:
         reset = build_reset_command(ProbeRef("SAFE123"), "openocd")
-        rendered_marker = "\n".join(marker)
         rendered_reset = "\n".join(reset)
-        self.assertIn("mww 0x40002860 0x53544C4B", rendered_marker)
-        self.assertNotIn("reset run", marker)
         self.assertIn("reset run", reset)
-        self.assertNotIn("mww 0x40002860", rendered_reset)
-        self.assertNotIn("erase_sector", rendered_marker + rendered_reset)
-        self.assertNotIn("program {", rendered_marker + rendered_reset)
+        self.assertNotIn("mww", rendered_reset)
+        self.assertNotIn("erase_sector", rendered_reset)
+        self.assertNotIn("program {", rendered_reset)
+        self.assertNotIn("flash protect", rendered_reset)
 
     def test_boot_verify_command_resumes_before_shutdown(self) -> None:
         command = build_boot_verify_command(ProbeRef(), "openocd")
         self.assertLess(command.index("resume"), command.index("shutdown"))
         self.assertIn("sleep 1000", command)
+        self.assertNotIn("reset run", command)
+        self.assertIn("mdw 0x40002854 1", command)
+        self.assertNotIn("0x40002860", " ".join(command))
 
-    def test_boot_verification_requires_application_pc_and_cleared_markers(self) -> None:
+    def test_boot_verification_requires_application_pc_and_clear_recovery_slot(self) -> None:
         output = (
             "pc (/32): 0x0802496e\n"
-            "0x40002854: 00000000 00000000 00000000 00000000\n"
+            "0x40002854: 00000000\n"
         )
         result = parse_boot_verification(output)
         self.assertTrue(result.passed)
         self.assertEqual(result.pc, 0x0802496E)
         self.assertEqual(result.bkp1r, 0)
-        self.assertEqual(result.bkp4r, 0)
 
     def test_boot_verification_rejects_bootloader_pc(self) -> None:
         output = (
             "pc (/32): 0x08002138\n"
-            "0x40002854: 00000000 00000000 00000000 00000000\n"
+            "0x40002854: 00000000\n"
         )
         result = parse_boot_verification(output)
         self.assertFalse(result.passed)
@@ -204,6 +204,21 @@ class OpenOcdCoreTests(unittest.TestCase):
             info.protection_summary,
             "Sector 0–2 protected; Sector 3–7 not protected",
         )
+
+
+    def test_target_parser_reports_readout_protection_without_changing_it(self) -> None:
+        info = parse_target_info(
+            "Info : Target voltage: 3.10\n"
+            "Info : device id = 0x101f6413\n"
+            "Info : flash size = 512 KiB\n"
+            "Info : Device Security Bit Set\n"
+            "#  0: 0x00000000 (0x4000 16kB) protected\n"
+            "#  1: 0x00004000 (0x4000 16kB) protected\n"
+            "#  2: 0x00008000 (0x4000 16kB) protected"
+        )
+        self.assertTrue(info.readout_protected)
+        self.assertEqual(info.protected_sectors, (0, 1, 2))
+
 
 
 if __name__ == "__main__":

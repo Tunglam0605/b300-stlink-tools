@@ -12,9 +12,9 @@ import time
 from pathlib import Path
 from typing import Callable, List, Optional, Sequence
 
-from .models import BootVerification, CommandResult, FlashPlan, ProbeRef, TargetInfo
+from .models import BootVerification, CommandResult, FactoryPlan, FlashPlan, ProbeRef, TargetInfo
 from .offline_setup import installed_openocd_path, verify_openocd_tree
-from .policy import APPLICATION_ADDRESS, FLASH_END_ADDRESS, STLINK_PROVISION_MAGIC
+from .policy import APPLICATION_ADDRESS, FLASH_END_ADDRESS
 
 
 EventSink = Callable[[str], None]
@@ -77,14 +77,30 @@ def build_flash_command(plan: FlashPlan, executable: str) -> List[str]:
     ]
 
 
-def build_marker_command(probe: ProbeRef, executable: str) -> List[str]:
-    """Write the provisioning marker only after a separate verified transaction."""
+def build_factory_protect_command(probe: ProbeRef, executable: str, enabled: bool) -> List[str]:
+    """Toggle write protection only for Bootloader sectors 0..2."""
+    state = "on" if enabled else "off"
     return _base_command(probe, executable) + [
         "-c", "init",
         "-c", "reset init",
-        "-c", "mww 0x40023840 0x10000000",
-        "-c", "mww 0x40007000 0x00000100",
-        "-c", "mww 0x40002860 0x%08X" % STLINK_PROVISION_MAGIC,
+        "-c", "flash protect 0 0 2 %s" % state,
+        # STM32F4 option-byte changes take effect only after a reset/reload.
+        # Halt immediately after reset so Application/Bootloader code cannot run
+        # while the factory transaction is between protection states.
+        "-c", "reset halt",
+        "-c", "shutdown",
+    ]
+
+
+def build_factory_flash_command(plan: FactoryPlan, executable: str) -> List[str]:
+    validate_openocd_value(plan.image.path, "Bootloader path")
+    if plan.erase_sectors != (0, 1, 2):
+        raise ValueError("Unsafe factory plan: erase sectors must be exactly 0..2.")
+    return _base_command(plan.probe, executable) + [
+        "-c", "init",
+        "-c", "reset init",
+        "-c", "flash erase_sector 0 0 2",
+        "-c", "program {%s} verify" % plan.image.path,
         "-c", "shutdown",
     ]
 
@@ -114,11 +130,10 @@ def program_verify_succeeded(output: str) -> bool:
 def build_boot_verify_command(probe: ProbeRef, executable: str) -> List[str]:
     return _base_command(probe, executable) + [
         "-c", "init",
-        "-c", "reset run",
         "-c", "sleep 1000",
         "-c", "halt",
         "-c", "reg pc",
-        "-c", "mdw 0x40002854 4",
+        "-c", "mdw 0x40002854 1",
         "-c", "resume",
         "-c", "shutdown",
     ]
@@ -185,37 +200,36 @@ def parse_target_info(output: str) -> TargetInfo:
             )
             for first, last, state in groups
         )
+    protected_sectors = tuple(sector for sector, state in sector_states if state)
     return TargetInfo(
         device_id=int(device_match.group(1), 16),
         flash_kib=int(flash_match.group(1)),
         target_voltage=float(voltage_match.group(1)),
         protection_summary=protection_summary,
+        protected_sectors=protected_sectors,
+        protection_reported=bool(sector_states),
+        readout_protected=("device security bit set" in output.lower()),
     )
 
 
 def parse_boot_verification(output: str) -> BootVerification:
     pc_match = re.search(r"pc\s+\(/32\):\s+0x([0-9A-Fa-f]+)", output)
-    bkp_match = re.search(
-        r"0x40002854:\s+([0-9A-Fa-f]{8})\s+([0-9A-Fa-f]{8})\s+"
-        r"([0-9A-Fa-f]{8})\s+([0-9A-Fa-f]{8})",
-        output,
-    )
+    bkp_match = re.search(r"0x40002854:\s+([0-9A-Fa-f]{8})", output)
     pc = int(pc_match.group(1), 16) if pc_match else None
     bkp1r = int(bkp_match.group(1), 16) if bkp_match else None
-    bkp4r = int(bkp_match.group(4), 16) if bkp_match else None
 
     if pc is None:
-        return BootVerification(pc, bkp1r, bkp4r, False, "OpenOCD did not report PC.")
+        return BootVerification(pc, bkp1r, False, "OpenOCD did not report PC.")
     if not APPLICATION_ADDRESS <= pc < FLASH_END_ADDRESS:
-        return BootVerification(pc, bkp1r, bkp4r, False,
+        return BootVerification(pc, bkp1r, False,
                                 "CPU remains in Bootloader or outside Application.")
-    if bkp1r is None or bkp4r is None:
-        return BootVerification(pc, bkp1r, bkp4r, False,
-                                "OpenOCD did not report backup registers.")
-    if bkp1r != 0 or bkp4r != 0:
-        return BootVerification(pc, bkp1r, bkp4r, False,
-                                "Bootloader did not clear retained provisioning state.")
-    return BootVerification(pc, bkp1r, bkp4r, True, "Application is running.")
+    if bkp1r is None:
+        return BootVerification(pc, bkp1r, False,
+                                "OpenOCD did not report BKP1R recovery state.")
+    if bkp1r != 0:
+        return BootVerification(pc, bkp1r, False,
+                                "Bootloader did not clear the BKP1R recovery state.")
+    return BootVerification(pc, bkp1r, True, "Application is running.")
 
 
 class OpenOcdRunner:

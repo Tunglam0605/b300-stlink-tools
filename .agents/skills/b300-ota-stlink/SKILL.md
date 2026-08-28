@@ -16,10 +16,10 @@ fixed: Bootloader is Sector 0--2; metadata is Sector 3; Application is Sector
 2. Run `b300-stlink doctor --json`.
 3. Run `b300-stlink flash <application.hex> --dry-run --json`.
 4. Confirm the transaction contains only `flash erase_sector 0 3 7`,
-   `program {...} verify`, `mww 0x40002860 0x53544C4B`, and `reset run`.
+   `program {...} verify`, and `reset run`.
 
-The preview must show three separate conditional transactions: program/verify;
-marker with `condition=after_verified_ok`; reset with `condition=after_marker`.
+The preview must show two separate conditional transactions: program/verify and
+reset with `condition=after_verified_ok`.
 Before erase, the core must re-check an F407/512-KiB target and stage/revalidate
 the approved HEX hash and address range.
 
@@ -32,11 +32,29 @@ file in the current session.
 
 Run `b300-stlink flash <application.hex> --json` only after authorization. Do
 not retry automatically on any phase failure. Success requires the exact
-`** Verified OK **` event, successful marker/reset, and post-verify PC/BKP state.
+`** Verified OK **` event, successful reset, and post-verify PC/BKP1R state.
 On failure, report `failure_phase`, `reason`, and `next_action` from JSON.
 
-The marker is written after verify; Bootloader consumes it on reset so a valid
-ST-Link provisioned Application is not treated as an interrupted OTA.
+Sector 3 is erased with Application so the Bootloader uses its erased-metadata
+fallback. Do not create metadata, CRC workarounds, or backup-register markers.
+
+## Factory / Bootloader
+
+`provision-bootloader` is a separate factory-maintenance command, never a
+fallback for normal Application flash. It uses only the bundled trusted
+Bootloader. When WRP must change, each `flash protect 0 0 2 off/on` is followed
+by a reset/halt so STM32F4 reloads the Option Bytes; the tool verifies the new
+state before continuing. WRP is restored and verified before the final run. Start with:
+
+```text
+b300-stlink provision-bootloader --dry-run --json
+```
+
+Real factory programming additionally requires explicit authorization from the
+user, `--confirm-factory-provision`, an explicit CLI `--probe-serial`, and the
+exact typed GUI acknowledgement `PROVISION BOOTLOADER`. Never use it for an
+ordinary Application update. It must not use mass erase, RDP operations,
+`stm32f2x lock`, or `stm32f2x unlock`.
 
 ## Debug
 

@@ -23,7 +23,7 @@ class GuiViewModelTests(unittest.TestCase):
             plan = build_flash_plan(
                 image,
                 ProbeRef("ABC123"),
-                TargetInfo(0x101F6413, 512, 3.09, "S0-S2 protected"),
+                TargetInfo(0x101F6413, 512, 3.09, "S0-S2 protected", (0, 1, 2), True),
             )
             text = confirmation_text(plan)
         self.assertIn("ABC123", text)

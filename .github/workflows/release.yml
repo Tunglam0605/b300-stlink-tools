@@ -278,6 +278,20 @@ jobs:
         run: |
           test "$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length')" -eq 14
           gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+      - name: Verify published signed updater state
+        env:
+          MINISIGN_PUBLIC_KEY: ${{ secrets.MINISIGN_PUBLIC_KEY }}
+        run: |
+          test -n "$MINISIGN_PUBLIC_KEY"
+          python -m scripts.release.verify_published \
+            --version "${{ needs.prepare-release.outputs.version }}" \
+            --manifest-url "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json" \
+            --signature-url "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json.minisig" \
+            --minisign "$RUNNER_TEMP/minisign-linux/x86_64/minisign" \
+            --public-key "$MINISIGN_PUBLIC_KEY" \
+            --attempts 8 \
+            --delay 5 \
+            --timeout 30
       - name: Verify stable direct-download links
         run: |
           for asset in \

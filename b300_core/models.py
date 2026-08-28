@@ -60,6 +60,21 @@ class FlashPreview:
 
 
 @dataclass(frozen=True)
+class FactoryPlan:
+    image: ImageInfo
+    probe: ProbeRef
+    erase_sectors: Tuple[int, ...]
+    target: TargetInfo
+
+
+@dataclass(frozen=True)
+class FactoryPreview:
+    image: ImageInfo
+    probe: ProbeRef
+    erase_sectors: Tuple[int, ...]
+
+
+@dataclass(frozen=True)
 class CommandResult:
     command: Tuple[str, ...]
     returncode: int
@@ -72,7 +87,6 @@ class CommandResult:
 class BootVerification:
     pc: Optional[int]
     bkp1r: Optional[int]
-    bkp4r: Optional[int]
     passed: bool
     reason: str
 
@@ -99,6 +113,9 @@ class TargetInfo:
     flash_kib: int
     target_voltage: float
     protection_summary: str
+    protected_sectors: Tuple[int, ...] = ()
+    protection_reported: bool = False
+    readout_protected: bool = False
 
 
 @dataclass(frozen=True)

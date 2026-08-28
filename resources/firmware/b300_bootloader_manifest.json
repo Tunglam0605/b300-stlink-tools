@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "artifact": "b300_bootloader_f407ze_com3_v00050000.hex",
+  "sha256": "C0FC6083EEBA39ED5F2AF40D97ECA90FEAE15E4B1D32B150C1504869D18D9398",
+  "source": {
+    "repository": "https://github.com/Tunglam0605/TungLamvsOTA-B300.git",
+    "audited_repository_head": "3bc7e6ba963efb6f1c8ac16e858480b329261ee6",
+    "path": "firmware/bootloader/BOOTLOAER/bootloader_std.hex",
+    "git_blob": "4bcead30c5377b2d7fb2ba9719e0d0dcd2d43483",
+    "commit": "19b42d8ec30e700a9c6bb7772e444fa538adca03",
+    "project": "firmware/bootloader/bootloader_std.uvprojx",
+    "target": "BOOTLOADER_STD",
+    "currentness_evidence": "Artifact, project, B300 profile, and Bootloader source changed in the same commit; no tracked firmware/bootloader path changed between that commit and the audited repository head."
+  },
+  "profile": {
+    "mcu": "STM32F407ZET6",
+    "flash_kib": 512,
+    "board_token": "B300_F407ZE",
+    "transport": "COM3",
+    "firmware_version": "0x00050000",
+    "protocol_version": "0x00030000"
+  },
+  "allowed_data_range": {
+    "start": "0x08000000",
+    "end": "0x0800BFFF",
+    "sectors": [0, 1, 2]
+  },
+  "observed_data_range": {
+    "start": "0x08000000",
+    "end": "0x08004B1B",
+    "data_bytes": 19228
+  }
+}

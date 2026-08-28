@@ -54,7 +54,7 @@ Monitor hoặc xử lý `OTACHECK`.
 
 Không được cung cấp chế độ nâng cao để lách các giới hạn trên. Không xây dựng
 chuỗi lệnh OpenOCD trong widget hoặc mã GUI. Mọi thao tác phải đi qua core đã
-kiểm tra policy. Provisioning marker `0x53544C4B` chỉ được ghi vào BKP4R sau
+kiểm tra policy. Legacy provisioning marker (superseded) từng được ghi vào BKP4R sau
 khi program và verify thành công.
 
 ## 4. Kiến trúc mục tiêu
@@ -127,7 +127,7 @@ khi caller là GUI.
 6. `Erasing`: chỉ `flash erase_sector 0 3 7`.
 7. `Programming`: program Application HEX.
 8. `Verifying`: OpenOCD phải báo verify thành công.
-9. `MarkingProvisioned`: ghi `STLINK_PROVISION_MAGIC`.
+9. `MarkingProvisioned`: legacy state (superseded; no longer implemented).
 10. `Resetting`: reset run.
 11. `PostVerifying`: đọc trạng thái boot.
 12. `Succeeded` hoặc `Failed`.
@@ -141,7 +141,7 @@ Từ `Erasing` trở đi, lỗi nào cũng chuyển thẳng sang `Failed`. Khôn
 
 - OpenOCD exit code bằng 0 và có `Verified OK`;
 - BKP1R tại `0x40002854` bằng 0;
-- BKP4R tại `0x40002860` đã được Bootloader tiêu thụ và bằng 0;
+- Legacy BKP4R state was consumed (superseded; no longer part of the contract);
 - PC nằm trong `0x08010000..0x0807FFFF` sau boot window;
 - target được `resume` trước khi đóng phiên đọc trạng thái.
 

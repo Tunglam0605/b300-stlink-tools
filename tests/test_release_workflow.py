@@ -111,6 +111,25 @@ class ReleaseWorkflowTests(unittest.TestCase):
         )
         self.assertNotIn("apt-get install -y minisign", signing["run"])
 
+    def test_release_verifies_public_signed_updater_after_publish(self) -> None:
+        workflow = load_workflow("release.yml")
+        finalize_steps = workflow["jobs"]["finalize-release"]["steps"]
+        verify = next(
+            step for step in finalize_steps
+            if step.get("name") == "Verify published signed updater state"
+        )
+        command = verify["run"]
+        self.assertIn("scripts.release.verify_published", command)
+        self.assertIn("releases/latest/download/latest.json", command)
+        self.assertIn("latest.json.minisig", command)
+        self.assertIn("MINISIGN_PUBLIC_KEY", verify.get("env", {}))
+        publish_index = next(
+            index for index, step in enumerate(finalize_steps)
+            if step.get("name") == "Publish as Latest after upload validation"
+        )
+        verify_index = finalize_steps.index(verify)
+        self.assertGreater(verify_index, publish_index)
+
     def test_dry_run_cannot_publish_release(self) -> None:
         workflow = load_workflow("release-dry-run.yml")
         self.assertIn("workflow_dispatch", workflow["on"])

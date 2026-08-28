@@ -5,6 +5,45 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-28
+
+### Added
+
+- Factory Bootloader provisioning riêng biệt cho STM32F407ZET6: trusted bundled
+  Bootloader, WRP Sector 0-2 có kiểm soát, Option-Byte reload, verify và mandatory
+  WRP restoration; normal Application flow vẫn chỉ erase Sector 3-7.
+- `HardwareSessionManager` dùng chung cho Flash, Factory, Memory và Debug để ngăn
+  nhiều OpenOCD/process tranh cùng một ST-Link.
+- Debug foundation bằng OpenOCD + GDB/MI có token correlation, bounded timeout,
+  verified `^result`, symbol `.elf/.axf`, Halt, Continue và Reset + Halt.
+- GUI Debug tab, hardware interlock, OpenOCD watchdog và log riêng cho debug.
+- Stable/Beta update-channel foundation và post-publish verifier cho signed
+  `latest.json`, Minisign signature và toàn bộ platform update assets.
+
+### Changed
+
+- Chuẩn hóa provisioning contract cho flash map B300: S0-S2 Bootloader được bảo
+  vệ, S3 metadata, S4-S7 Application; loại bỏ hoàn toàn ST-Link provisioning marker
+  BKP4R cũ khỏi production flow.
+- GUI phản ánh trạng thái hardware ownership ngay tại button/probe/memory controls
+  thay vì chỉ chờ backend từ chối thao tác cạnh tranh.
+
+### Security
+
+- Normal Application provisioning fail-closed nếu không đọc được WRP, nếu S0-S2
+  chưa protected hoặc RDP/security đang active; normal flow không thay WRP/RDP.
+- Factory chỉ program trusted Bootloader và luôn best-effort restore WRP nếu bất kỳ
+  bước nào sau WRP OFF thất bại; không mass erase và không dùng `stm32f2x lock/unlock`.
+- OpenOCD debug mặc định chỉ bind `127.0.0.1`, GDB port 3333; Telnet/TCL bị tắt
+  mặc định và không dùng làm debugger API chính.
+
+### Validation
+
+- Full local regression suite: 217 tests PASS trước hardware acceptance.
+- Hardware acceptance trên B300 STM32F407 512 KiB: Normal Application provisioning,
+  Factory Bootloader provisioning, WRP persistence, RDP preservation, GDB/MI debug
+  và cold power-cycle đều PASS; xem `docs/09_HARDWARE_ACCEPTANCE_2026-08-28.md`.
+
 ## [0.3.4] - 2026-08-28
 
 ### Fixed

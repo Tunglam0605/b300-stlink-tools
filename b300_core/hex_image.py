@@ -1,22 +1,29 @@
-"""Strict Intel HEX inspection for B300 Application images."""
+"""Strict Intel HEX inspection for bounded B300 firmware images."""
 
 from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional, Tuple
 
 from .models import ImageInfo
-from .policy import APPLICATION_ADDRESS, FLASH_END_ADDRESS
+from .policy import (
+    APPLICATION_ADDRESS,
+    FLASH_END_ADDRESS,
+    FLASH_START_ADDRESS,
+    METADATA_ADDRESS,
+)
 
 
-def inspect_image(path: Path) -> ImageInfo:
+def _inspect_hex(path: Path, *, label: str, allowed_start: int,
+                 allowed_end: int, required_start: int,
+                 range_message: str) -> Tuple[ImageInfo, Dict[int, int]]:
     path = Path(path).expanduser().resolve()
     try:
         raw_file = path.read_bytes()
         lines = raw_file.decode("ascii").splitlines()
     except (OSError, UnicodeDecodeError) as error:
-        raise ValueError("Cannot read application HEX: %s" % error) from error
+        raise ValueError("Cannot read %s HEX: %s" % (label.lower(), error)) from error
 
     base_address = 0
     first_address: Optional[int] = None
@@ -24,6 +31,7 @@ def inspect_image(path: Path) -> ImageInfo:
     data_record_count = 0
     data_byte_count = 0
     eof_seen = False
+    memory: Dict[int, int] = {}
 
     for line_number, raw_line in enumerate(lines, start=1):
         line = raw_line.strip()
@@ -52,14 +60,14 @@ def inspect_image(path: Path) -> ImageInfo:
                 continue
             start = base_address + offset
             end = start + length
-            if start < APPLICATION_ADDRESS or end > FLASH_END_ADDRESS:
-                raise ValueError(
-                    "HEX touches protected range 0x%08X..0x%08X." % (start, end - 1)
-                )
+            if start < allowed_start or end > allowed_end:
+                raise ValueError(range_message % (start, end - 1))
             first_address = start if first_address is None else min(first_address, start)
             last_address = end - 1 if last_address is None else max(last_address, end - 1)
             data_record_count += 1
             data_byte_count += length
+            for index, value in enumerate(payload):
+                memory[start + index] = value
         elif record_type == 0x01:
             if length != 0:
                 raise ValueError("HEX line %d has an invalid EOF record." % line_number)
@@ -80,13 +88,13 @@ def inspect_image(path: Path) -> ImageInfo:
                              (line_number, record_type))
 
     if first_address is None or last_address is None:
-        raise ValueError("Application HEX contains no application data records.")
+        raise ValueError("%s HEX contains no data records." % label)
     if not eof_seen:
-        raise ValueError("Application HEX has no EOF record.")
-    if first_address != APPLICATION_ADDRESS:
+        raise ValueError("%s HEX has no EOF record." % label)
+    if first_address != required_start:
         raise ValueError(
-            "Application image must start at 0x%08X; found 0x%08X." %
-            (APPLICATION_ADDRESS, first_address)
+            "%s image must start at 0x%08X; found 0x%08X." %
+            (label, required_start, first_address)
         )
 
     return ImageInfo(
@@ -96,4 +104,41 @@ def inspect_image(path: Path) -> ImageInfo:
         end_address=last_address,
         size=data_byte_count,
         data_record_count=data_record_count,
+    ), memory
+
+
+def inspect_image(path: Path) -> ImageInfo:
+    image, _memory = _inspect_hex(
+        path,
+        label="Application",
+        allowed_start=APPLICATION_ADDRESS,
+        allowed_end=FLASH_END_ADDRESS,
+        required_start=APPLICATION_ADDRESS,
+        range_message="HEX touches protected range 0x%08X..0x%08X.",
     )
+    return image
+
+
+def inspect_bootloader_image(path: Path) -> ImageInfo:
+    image, memory = _inspect_hex(
+        path,
+        label="Bootloader",
+        allowed_start=FLASH_START_ADDRESS,
+        allowed_end=METADATA_ADDRESS,
+        required_start=FLASH_START_ADDRESS,
+        range_message="Bootloader HEX data is outside sectors 0..2 at 0x%08X..0x%08X.",
+    )
+    try:
+        vector = bytes(memory[FLASH_START_ADDRESS + index] for index in range(8))
+    except KeyError as error:
+        raise ValueError("Bootloader HEX vector table is incomplete.") from error
+    initial_sp = int.from_bytes(vector[:4], "little")
+    reset_handler = int.from_bytes(vector[4:], "little")
+    reset_address = reset_handler & ~1
+    if not (
+        0x20000000 <= initial_sp < 0x20020000 and
+        reset_handler & 1 and
+        FLASH_START_ADDRESS <= reset_address < METADATA_ADDRESS
+    ):
+        raise ValueError("Bootloader HEX vector table is not valid for B300 F407.")
+    return image

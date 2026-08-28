@@ -7,3 +7,4 @@ dist/
 !b300_gui.spec
 vendor/
 .worktrees/
+/hardware-validation/

@@ -39,16 +39,13 @@ class FakeService:
     def flash_command(self, plan):
         return ["openocd", "-c", "flash erase_sector 0 3 7"]
 
-    def marker_command(self, probe):
-        return ["openocd", "-c", "mww 0x40002860 0x53544C4B"]
-
     def reset_command(self, probe):
         return ["openocd", "-c", "reset run"]
 
     def inspect_target(self, probe, event_sink=None, cancel_event=None):
         if event_sink:
             event_sink("read-only target inspection")
-        return TargetInfo(0x101F6413, 512, 3.09, "S0-S2 protected")
+        return TargetInfo(0x101F6413, 512, 3.09, "S0-S2 protected", (0, 1, 2), True)
 
 
 class MissingOpenOcdService(FakeService):
@@ -104,6 +101,11 @@ class GuiSmokeTests(unittest.TestCase):
         )
         self.assertEqual(window.probe_combo.count(), 1)
         self.assertIsNone(window.findChild(QWidget, "comSelector"))
+        self.assertIn(
+            "Debug", [window.tabs.tabText(index) for index in range(window.tabs.count())]
+        )
+        self.assertFalse(window.debug_tab.stop_button.isEnabled())
+        self.assertIn("Stable", window.update_channel_label.text())
         self.assertIn("Sector 3–7", window.flash_plan_label.text())
         self.assertEqual(window.plan_table.verticalScrollBar().maximum(), 0)
         self.assertEqual(window.log_view.horizontalScrollBar().value(), 0)
@@ -117,11 +119,14 @@ class GuiSmokeTests(unittest.TestCase):
             image = write_hex(directory, 0x08010000, b"\x01")
             self.assertTrue(window.load_image_path(image))
             self.assertFalse(window.flash_button.isEnabled())
-            window.apply_target_info(TargetInfo(0x101F6413, 512, 3.09, "S0-S2 protected"))
+            window.apply_target_info(TargetInfo(0x101F6413, 512, 3.09, "S0-S2 protected", (0, 1, 2), True))
             self.assertTrue(window.flash_button.isEnabled())
             window.show_dry_run()
         self.assertIn("DRY-RUN", window.log_view.toPlainText())
         self.assertIn("flash erase_sector 0 3 7", window.log_view.toPlainText())
+        self.assertIn("reset run", window.log_view.toPlainText())
+        self.assertNotIn("marker", window.log_view.toPlainText().lower())
+        self.assertNotIn("53544C4B", window.log_view.toPlainText())
         window.close()
 
     def test_missing_openocd_shows_accessible_offline_setup_action(self) -> None:
@@ -254,6 +259,49 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertIn("Unsupported target", status)
         self.assertIn("Select the F407 board", status)
         window.close()
+
+
+    def test_factory_tab_is_separate_and_requires_wrpprofile_and_typed_ack(self) -> None:
+        probes = (ProbeInfo("FACTORY123", "ST-Link Factory", "test"),)
+        window = MainWindow(service=FakeService(), probe_loader=lambda: probes)
+        tab_names = [window.tabs.tabText(index) for index in range(window.tabs.count())]
+        self.assertIn("Factory / Bootloader", tab_names)
+        self.assertIsNotNone(window.factory_trusted)
+        self.assertIn("C0FC6083", window.factory_artifact_label.text())
+        self.assertIsNone(window.factory_probe_combo.currentData())
+        self.assertFalse(window.factory_provision_button.isEnabled())
+
+        window.factory_probe_combo.setCurrentIndex(1)
+        self.assertEqual(window.factory_probe_combo.currentData(), "FACTORY123")
+
+        # A valid F407 with S0-S2 currently unprotected must block normal flash but
+        # is a legitimate Factory target after WRP has been reported.
+        window.apply_target_info(TargetInfo(
+            0x101F6413, 512, 3.09, "Sector 0-7 not protected", (), True, False
+        ))
+        self.assertFalse(window.flash_button.isEnabled())
+        self.assertFalse(window.factory_provision_button.isEnabled())
+        window.factory_ack.setText("PROVISION BOOTLOADER")
+        self.assertTrue(window.factory_provision_button.isEnabled())
+        self.assertIn("WRP:", window.factory_target_summary.text())
+        window.close()
+
+    def test_factory_button_stays_disabled_for_unknown_wrp_or_rdp(self) -> None:
+        probes = (ProbeInfo("FACTORY123", "ST-Link Factory", "test"),)
+        window = MainWindow(service=FakeService(), probe_loader=lambda: probes)
+        window.factory_probe_combo.setCurrentIndex(1)
+        window.factory_ack.setText("PROVISION BOOTLOADER")
+        window.apply_target_info(TargetInfo(
+            0x101F6413, 512, 3.09, "Protection status not reported", (), False, False
+        ))
+        self.assertFalse(window.factory_provision_button.isEnabled())
+        window.apply_target_info(TargetInfo(
+            0x101F6413, 512, 3.09, "Sector 0-2 protected", (0, 1, 2), True, True
+        ))
+        self.assertFalse(window.factory_provision_button.isEnabled())
+        self.assertIn("RDP/Security: ENABLED", window.factory_target_summary.text())
+        window.close()
+
 
 
 if __name__ == "__main__":

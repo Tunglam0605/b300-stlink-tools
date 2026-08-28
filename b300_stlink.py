@@ -8,21 +8,17 @@ import ipaddress
 import json
 import re
 import sys
+import time
 from pathlib import Path
 from typing import List, Optional
 
 from b300_core.hex_image import inspect_image
 from b300_core.models import ProbeRef
-from b300_core.openocd import (
-    OpenOcdRunner,
-    build_debug_command,
-    resolve_openocd,
-    validate_openocd_value,
-)
+from b300_core.openocd import build_debug_command, resolve_openocd, validate_openocd_value
+from b300_core.debug_service import DebugConfig, DebugService, DebugState
 from b300_core.policy import (
     APPLICATION_ADDRESS,
     FLASH_END_ADDRESS,
-    STLINK_PROVISION_MAGIC,
     build_flash_plan,
     build_flash_preview,
 )
@@ -84,6 +80,17 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
                        help="Select one ST-Link when multiple probes are connected.")
     flash.add_argument("--dry-run", action="store_true")
     flash.add_argument("--json", action="store_true")
+    factory = commands.add_parser(
+        "provision-bootloader",
+        help="Factory-provision the trusted bundled B300 Bootloader and restore S0-S2 WRP.",
+    )
+    factory.add_argument("--openocd")
+    factory.add_argument("--probe-serial", type=parse_probe_serial,
+                         help="Select one ST-Link when multiple probes are connected.")
+    factory.add_argument("--dry-run", action="store_true")
+    factory.add_argument("--confirm-factory-provision", action="store_true",
+                         help="Required for real S0-S2 Bootloader/WRP modification.")
+    factory.add_argument("--json", action="store_true")
     debug = commands.add_parser("debug", help="Start non-mutating OpenOCD debugging.")
     debug.add_argument("--openocd")
     debug.add_argument("--probe-serial", type=parse_probe_serial,
@@ -121,15 +128,35 @@ def flash_command(args: argparse.Namespace):
     return B300Service(executable=args.openocd).flash_command(plan)
 
 
+def run_debug(args: argparse.Namespace, reporter: Reporter) -> int:
+    command = openocd_command(args)
+    reporter.emit("openocd", command=command, dry_run=args.dry_run)
+    if args.dry_run:
+        return 0
+    service = DebugService(executable=args.openocd)
+    config = DebugConfig(
+        ProbeRef(args.probe_serial), args.bind_address, args.gdb_port, args.telnet_port,
+    )
+    try:
+        service.start(config, event_sink=lambda line: reporter.emit("openocd_output", line=line))
+        reporter.emit("debug_state", state=DebugState.READY.value)
+        while service.state in (DebugState.READY, DebugState.CONNECTED):
+            time.sleep(0.2)
+        reporter.emit("debug_state", state=service.state.value)
+        return 0 if service.state == DebugState.STOPPED else 1
+    except KeyboardInterrupt:
+        reporter.emit("debug_state", state="STOPPING")
+        return 0
+    finally:
+        service.stop()
+
+
 def run_openocd(command, dry_run: bool, reporter: Reporter) -> int:
+    """Compatibility helper retained for external callers; debug uses DebugService."""
     reporter.emit("openocd", command=command, dry_run=dry_run)
     if dry_run:
         return 0
-    result = OpenOcdRunner().run(
-        command,
-        event_sink=lambda line: reporter.emit("openocd_output", line=line),
-    )
-    return result.returncode
+    raise RuntimeError("Use run_debug() so the B300 hardware session is retained.")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -143,7 +170,81 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         if args.command == "debug":
             validate_debug_args(args)
-            return run_openocd(openocd_command(args), args.dry_run, reporter)
+            return run_debug(args, reporter)
+
+        if args.command == "provision-bootloader":
+            service = B300Service(executable=args.openocd)
+            trusted = service.trusted_bootloader()
+            probe = ProbeRef(args.probe_serial)
+            preview = service.factory_preview(trusted.image, probe)
+            reporter.emit(
+                "factory_artifact",
+                bootloader=str(trusted.image.path),
+                sha256=trusted.image.sha256,
+                source_commit=trusted.source_commit,
+                firmware_version=trusted.firmware_version,
+                board_token=trusted.board_token,
+                start="0x%08X" % trusted.image.start_address,
+                end="0x%08X" % trusted.image.end_address,
+            )
+            preview_transactions = (
+                ("unprotect", service.factory_protect_command(probe, False), "if_s0_s2_protected"),
+                ("program_verify", service.factory_flash_command(preview), "after_s0_s2_unprotected"),
+                ("reprotect", service.factory_protect_command(probe, True), "always_after_factory_attempt"),
+                ("reset", service.reset_command(probe), "after_verified_and_reprotected"),
+            )
+            for phase, command, condition in preview_transactions:
+                reporter.emit(
+                    "openocd", phase=phase, command=command,
+                    dry_run=args.dry_run, condition=condition,
+                )
+            if args.dry_run:
+                return 0
+            if not args.confirm_factory_provision:
+                raise ProvisioningError(
+                    "authorization",
+                    "Factory Bootloader provisioning requires --confirm-factory-provision.",
+                    "Run --dry-run first, then repeat with explicit factory confirmation for the intended board.",
+                )
+            if not args.probe_serial:
+                raise ProvisioningError(
+                    "authorization",
+                    "Real Factory provisioning requires --probe-serial to pin the intended ST-Link.",
+                    "Reconnect/select the intended probe, note its serial, then repeat the confirmed factory command.",
+                )
+            try:
+                target = service.inspect_target(
+                    probe,
+                    event_sink=lambda line: reporter.emit("openocd_output", line=line),
+                )
+                plan = service.factory_plan(trusted.image, probe, target)
+            except (RuntimeError, ValueError) as error:
+                raise ProvisioningError(
+                    "target_check", str(error),
+                    "Check ST-Link, board power, F407 identity, and reported sector WRP state.",
+                ) from error
+            reporter.emit(
+                "target",
+                device_id="0x%08X" % target.device_id,
+                flash_kib=target.flash_kib, voltage=target.target_voltage,
+                protection=target.protection_summary,
+            )
+            outcome = service.provision_bootloader(
+                plan,
+                event_sink=lambda line: reporter.emit("openocd_output", line=line),
+                phase_sink=lambda event: reporter.emit(
+                    "factory_phase", phase=event.phase, progress=event.progress,
+                    message=event.message, cancellable=event.cancellable,
+                ),
+            )
+            reporter.emit(
+                "factory_result", status=outcome.status,
+                failure_phase=outcome.failure_phase, reason=outcome.reason,
+                next_action=outcome.next_action,
+                protection=(outcome.final_target.protection_summary
+                            if outcome.final_target is not None else None),
+            )
+            return 0 if outcome.succeeded else 1
 
         args.application = args.application.expanduser().resolve()
         service = B300Service(executable=args.openocd)
@@ -191,7 +292,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         transactions = (
             ("program_verify", service.flash_command(plan)),
-            ("mark", service.marker_command(plan.probe)),
             ("reset", service.reset_command(plan.probe)),
         )
         for phase, command in transactions:
@@ -200,8 +300,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 phase=phase,
                 command=command,
                 dry_run=args.dry_run,
-                condition=("after_verified_ok" if phase == "mark" else
-                           "after_marker" if phase == "reset" else "always"),
+                condition=("after_verified_ok" if phase == "reset" else "always"),
             )
         if args.dry_run:
             return 0
@@ -228,7 +327,6 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "pc": "0x%08X" % outcome.boot_verification.pc
                 if outcome.boot_verification.pc is not None else None,
                 "bkp1r": outcome.boot_verification.bkp1r,
-                "bkp4r": outcome.boot_verification.bkp4r,
                 "reason": outcome.boot_verification.reason,
             })
         reporter.emit("flash_result", **fields)

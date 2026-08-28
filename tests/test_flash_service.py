@@ -42,7 +42,11 @@ def supported_target() -> CommandResult:
     return result(
         "Info : Target voltage: 3.09\n"
         "Info : device id = 0x101f6413\n"
-        "Info : flash size = 512 KiB"
+        "Info : flash size = 512 KiB\n"
+        "#  0: 0x00000000 (0x4000 16kB) protected\n"
+        "#  1: 0x00004000 (0x4000 16kB) protected\n"
+        "#  2: 0x00008000 (0x4000 16kB) protected\n"
+        "#  3: 0x0000c000 (0x4000 16kB) not protected"
     )
 
 
@@ -52,7 +56,7 @@ class FlashServiceTests(unittest.TestCase):
         return build_flash_plan(
             image,
             ProbeRef("SAFE123"),
-            TargetInfo(0x101F6413, 512, 3.09, "S0-S2 protected"),
+            TargetInfo(0x101F6413, 512, 3.09, "S0-S2 protected", (0, 1, 2), True),
         )
 
     def test_flash_runs_once_then_verifies_boot(self) -> None:
@@ -61,50 +65,49 @@ class FlashServiceTests(unittest.TestCase):
             supported_target(),
             result("** Programming Started **\n** Programming Finished **\n"
                    "** Verify Started **\n** Verified OK **"),
-            result("marker written"),
             result("reset complete"),
             result("pc (/32): 0x0802496e\n"
-                   "0x40002854: 00000000 00000000 00000000 00000000"),
+                   "0x40002854: 00000000"),
         ])
         with tempfile.TemporaryDirectory() as directory:
             outcome = B300Service(runner=runner, executable="openocd").flash(
                 self.make_plan(directory), phase_sink=phases.append
             )
         self.assertEqual(outcome.status, "succeeded")
-        self.assertEqual(len(runner.commands), 5)
+        self.assertEqual(len(runner.commands), 4)
         self.assertIn("flash info 0", runner.commands[0])
-        self.assertNotIn("mww 0x40002860", " ".join(runner.commands[1]))
-        self.assertIn("mww 0x40002860 0x53544C4B", " ".join(runner.commands[2]))
-        self.assertIn("reset run", runner.commands[3])
+        rendered = " ".join(item for command in runner.commands for item in command)
+        self.assertNotIn("mww 0x40002860", rendered)
+        self.assertNotIn("flash protect", rendered)
+        self.assertIn("reset run", runner.commands[2])
         self.assertEqual([event.phase for event in phases], [
             "validating", "target_check", "erasing", "programming", "verifying",
-            "marking", "resetting", "post_verifying", "succeeded",
+            "resetting", "post_verifying", "succeeded",
         ])
         self.assertEqual(
             [event.cancellable for event in phases],
-            [True, True, False, False, False, False, False, False, False],
+            [True, True, False, False, False, False, False, False],
         )
         self.assertTrue(outcome.boot_verification.passed)
         self.assertEqual(
             [item["timeout_seconds"] for item in runner.options],
-            [20.0, 180.0, 20.0, 20.0, 20.0],
+            [20.0, 180.0, 20.0, 20.0],
         )
 
     def test_verify_failure_does_not_retry_flash(self) -> None:
         runner = ScriptedRunner([
             supported_target(),
             result("** Verified OK **"),
-            result("marker written"),
             result("reset complete"),
             result("pc (/32): 0x08002138\n"
-                   "0x40002854: 00000000 00000000 00000000 00000000"),
+                   "0x40002854: 00000000"),
         ])
         with tempfile.TemporaryDirectory() as directory:
             outcome = B300Service(runner=runner, executable="openocd").flash(
                 self.make_plan(directory)
             )
         self.assertEqual(outcome.status, "programmed_boot_failed")
-        self.assertEqual(len(runner.commands), 5)
+        self.assertEqual(len(runner.commands), 4)
 
     def test_program_failure_never_writes_a_second_transaction(self) -> None:
         runner = ScriptedRunner([
@@ -133,7 +136,7 @@ class FlashServiceTests(unittest.TestCase):
         self.assertEqual(len(runner.commands), 2)
         self.assertNotIn("mww 0x40002860", " ".join(runner.commands[1]))
 
-    def test_misleading_verified_text_does_not_write_marker(self) -> None:
+    def test_misleading_verified_text_does_not_reset(self) -> None:
         runner = ScriptedRunner([
             supported_target(), result("Error: image is not Verified OK")
         ])

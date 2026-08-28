@@ -1,7 +1,7 @@
 # Bước 4 — Debug Application F407 qua OpenOCD
 
 `b300-stlink debug` mở OpenOCD GDB server qua ST-Link/SWD. Lệnh này không xóa,
-không nạp flash và không ghi provisioning marker. Khi debugger kết nối, CPU có
+không nạp flash. Khi debugger kết nối, CPU có
 thể bị halt/reset nên chỉ dùng khi board và cơ cấu đang ở trạng thái an toàn.
 
 ## Cần chuẩn bị
@@ -117,6 +117,31 @@ target extended-remote 10.1.200.208:3333
 ```
 
 Khi kết thúc, chạy `monitor reset run`, `detach`, `quit`, rồi `Ctrl+C` trên IPC.
+
+## GUI Debug
+
+Tab **Debug** trong `b300-stlink-gui` dùng cùng một `HardwareSessionManager` với
+Flash, Factory và Memory. Khi một phiên Debug đang giữ ST-Link, GUI sẽ khóa các
+thao tác nạp, Factory, đổi probe và đọc Memory thay vì chờ backend báo xung đột.
+
+Luồng vận hành:
+
+1. Giữ mặc định `127.0.0.1:3333` nếu debug tại máy local.
+2. Chọn file `.elf` hoặc `.axf` khớp đúng firmware đang chạy nếu cần source/symbol.
+3. Nhấn **Khởi động Debug Server**.
+4. Khi OpenOCD sẵn sàng, nhấn **Kết nối GDB**.
+5. Sau khi GDB/MI xác nhận kết nối, các nút **Halt**, **Continue** và
+   **Reset + Halt** mới được bật.
+6. Nhấn **Dừng Debug** để dừng GDB/OpenOCD và giải phóng ST-Link.
+
+GUI không coi thao tác GDB thành công chỉ vì đã ghi lệnh vào stdin. Backend phải
+nhận đúng result record có cùng MI token (`^done`, `^connected`, `^running`...)
+trong timeout giới hạn; `^error` hoặc timeout được hiển thị là lỗi.
+
+Nếu OpenOCD dừng bất ngờ, watchdog của tab Debug sẽ phát hiện trạng thái FAILED,
+dừng GDB còn lại, giải phóng interlock phần cứng và cho phép người vận hành bắt
+đầu một phiên mới sau khi xử lý nguyên nhân. Log OpenOCD/GDB được hiển thị ngay
+trong tab Debug và đồng thời đưa vào log chung của ứng dụng.
 
 ## Phạm vi của tool
 

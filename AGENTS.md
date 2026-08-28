@@ -12,8 +12,8 @@ Bootloader và không làm bootloader hiểu lần nạp ST-Link là OTA lỗi.
 | Sector 3, `0x0800C000..0x0800FFFF` | OTA metadata | Chỉ xóa bởi transaction flash chuẩn. |
 | Sector 4--7, `0x08010000..0x0807FFFF` | Application | Là vùng HEX được phép nạp. |
 
-AI agent không được dùng `mass_erase`, chip erase, sửa Option Bytes/WRP, nạp
-bootloader qua tool này, gọi OpenOCD thủ công để bỏ validate HEX, tự retry sau
+AI agent không được dùng `mass_erase`, chip erase, sửa Option Bytes/RDP, gọi
+OpenOCD thủ công để bỏ validate HEX, tự retry sau
 lỗi flash, hoặc dùng `sudo b300-stlink` để lách quyền USB.
 
 Không commit firmware HEX, binary OpenOCD, Keil objects/build artifacts hoặc
@@ -35,18 +35,28 @@ release archive vào Git source repository.
    ```text
    flash erase_sector 0 3 7
    program {...} verify
-   mww 0x40002860 0x53544C4B
    reset run
    ```
 
-   Đây là ba transaction nối tiếp có điều kiện. Lệnh marker không được nằm
-   trong cùng process program/verify; reset chạy sau marker.
+   Đây là hai transaction nối tiếp có điều kiện. Reset chỉ chạy sau exact
+   `** Verified OK **`; normal flow không ghi backup register hay WRP.
 
 Nếu transaction khác, HEX bị từ chối, hoặc có `mass_erase`/Sector 0--2: dừng
 và báo lỗi. Không sửa transaction để ép nạp.
 
 Dry-run là read-only. Flash thật xóa Sector 3--7, chỉ chạy khi người dùng đã
 xác nhận rõ file/board được phép nạp trong phiên hiện tại.
+
+## Factory / Bootloader provisioning
+
+`provision-bootloader` là workflow duy nhất được phép thay đổi WRP, chỉ dành cho
+main/chip mới hoặc bảo trì Bootloader được ủy quyền. Dùng artifact bundle có
+hash/provenance cố định, dry-run trước, rồi chỉ chạy lệnh thật với
+`--confirm-factory-provision` và CLI thật phải pin đúng `--probe-serial`. Nó chỉ
+`flash protect 0 0 2 off/on`, reset/halt để reload Option Bytes sau mỗi thay đổi
+WRP, verify trạng thái, erase/program đúng S0--S2, restore/verify WRP rồi mới
+`reset run`. Không mass erase, không thay RDP và không `stm32f2x lock/unlock`.
+GUI còn yêu cầu nhập đúng `PROVISION BOOTLOADER`.
 
 ## 3. Flash thật
 
@@ -57,19 +67,18 @@ xác nhận rõ file/board được phép nạp trong phiên hiện tại.
    ```
 
 2. Không chạy OpenOCD/ST-Link song song.
-3. Chỉ báo thành công khi có exact `** Verified OK **`, marker/reset thành công
+3. Chỉ báo thành công khi có exact `** Verified OK **`, reset thành công
    và post-verify xác nhận PC/BKP hợp lệ.
 4. Nếu lỗi: dừng, giữ log, báo `failure_phase`, `reason`, `next_action`; không retry mù.
 
-Marker `0x53544C4B` chỉ được ghi sau program + verify. Sau reset Bootloader tiêu
-thụ marker, xóa recovery marker cũ khi Application hợp lệ và chạy Application.
+Sector 3 được erase cùng Application nên Bootloader dùng erased-metadata
+fallback hiện có. Không tạo synthetic OTA metadata, CRC workaround hay marker.
 
 ## 4. Xác minh sau flash khi user yêu cầu
 
 Có thể dùng OpenOCD read-only, rồi `resume` trước disconnect. Điều kiện pass:
 
 - `BKP1R` (`0x40002854`) là `0x00000000`;
-- `BKP4R` (`0x40002860`) là `0x00000000`;
 - PC nằm trong Application `0x08010000..0x0807FFFF`.
 
 Không ghi register/reset board chỉ để xác minh khi chưa được phép.
@@ -101,7 +110,7 @@ udev rule và replug probe. Chỉ thay đổi udev khi user cho phép.
 | Không nhận ST-Link | Kiểm tra USB/driver/udev/probe serial; không flash. |
 | HEX protected range | Dừng; yêu cầu đúng HEX Application `0x08010000`. |
 | Verify fail | Dừng, lưu log, kiểm nguồn/cáp/probe; không retry. |
-| Recovery sau flash | Dừng; không mass erase; kiểm bootloader hỗ trợ marker. |
+| Recovery sau flash | Dừng; không mass erase/retry; kiểm PC, BKP1R, metadata và Bootloader log. |
 
 ## 7. Source/release
 

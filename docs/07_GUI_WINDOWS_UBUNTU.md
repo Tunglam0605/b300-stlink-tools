@@ -91,9 +91,8 @@ Kiểm tra target dùng `flash info` read-only; không halt, reset hoặc ghi fl
 
    ```text
    flash erase_sector 0 3 7
-   program {...} verify       # transaction program/verify, chưa có marker
-   mww 0x40002860 0x53544C4B
-   reset run                  # transaction riêng sau marker
+   program {...} verify
+   reset run                  # transaction riêng sau exact verify
    ```
 
 3. Không tiếp tục nếu thấy Sector 0–2, mass erase hoặc file/probe không đúng.
@@ -109,12 +108,23 @@ Dry-run không kết nối ghi flash.
    `erasing`, nút hủy bị khóa; đóng cửa sổ cũng bị từ chối cho tới khi worker kết thúc.
 5. Chờ GUI báo một trong ba kết quả tường minh:
 
-   - `Nạp thành công`: verify đạt, PC ở Application, BKP1R/BKP4R đã clear;
+   - `Nạp thành công`: verify đạt, PC ở Application, BKP1R đã clear;
    - `Đã program nhưng Boot verification thất bại`: không tự nạp lại;
    - `Nạp/verify thất bại`: dừng, xuất log và xử lý nguyên nhân.
 
 GUI không tự retry bất kỳ lỗi erase/program/verify nào. Mọi lỗi hiển thị phase,
 nguyên nhân và hành động tiếp theo.
+
+## Factory / Bootloader
+
+Tab **Factory / Bootloader** tách hoàn toàn khỏi tab Application. Nó chỉ dùng
+Bootloader bundle đã được kiểm SHA-256/provenance và chỉ mở action sau khi target
+đã inspect, WRP được report, dry-run đã hiển thị, và người vận hành nhập đúng
+`PROVISION BOOTLOADER`. Factory flow có progress/log riêng, hiển thị target/WRP/RDP,
+và có thể tạm thay đổi WRP S0–S2; mỗi thay đổi WRP đều reset/halt để reload Option
+Bytes trước khi verify. RDP/security đang bật sẽ khóa action. Normal Application
+flow không có quyền thay đổi WRP/RDP. Không dùng Factory tab để thay thế flash
+Application thông thường.
 
 ## Bước 6 — Đọc Sector hoặc metadata
 

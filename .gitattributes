@@ -8,3 +8,4 @@
 *.gz binary
 *.exe binary
 *.dll binary
+resources/firmware/*.hex binary

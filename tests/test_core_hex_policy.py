@@ -60,7 +60,7 @@ class HexImagePolicyTests(unittest.TestCase):
     def test_build_plan_is_fixed_to_sectors_three_through_seven(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             info = inspect_image(write_hex(directory, 0x08010000, b"\xAA"))
-            target = TargetInfo(0x101F6413, 512, 3.09, "S0-S2 protected")
+            target = TargetInfo(0x101F6413, 512, 3.09, "S0-S2 protected", (0, 1, 2), True)
             plan = build_flash_plan(info, ProbeRef(serial="ABC123"), target)
 
         self.assertEqual(plan.erase_sectors, (3, 4, 5, 6, 7))
@@ -95,6 +95,18 @@ class HexImagePolicyTests(unittest.TestCase):
         self.assertEqual(info.start_address, 0x08010000)
         self.assertEqual(info.end_address, 0x08010010)
         self.assertEqual(info.size, 2)
+
+
+    def test_plan_rejects_readout_protected_target_without_modifying_rdp(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            info = inspect_image(write_hex(directory, 0x08010000, b"\x01"))
+            target = TargetInfo(
+                0x101F6413, 512, 3.09, "S0-S2 protected",
+                (0, 1, 2), True, True,
+            )
+            with self.assertRaisesRegex(ValueError, "readout protection"):
+                build_flash_plan(info, ProbeRef(serial="ABC123"), target)
+
 
 
 if __name__ == "__main__":

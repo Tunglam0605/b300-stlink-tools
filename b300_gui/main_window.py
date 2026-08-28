@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 
 from b300_core.models import FlashPlan, ProbeRef
 from b300_core.models import TargetInfo
+from b300_core.debug_service import DebugService
 from b300_core.offline_setup import (
     current_platform_name,
     find_offline_bundle,
@@ -45,7 +46,8 @@ from b300_core.offline_setup import (
 from b300_core import __version__ as CORE_VERSION
 from b300_core.policy import SECTORS
 from b300_core.probe import list_probes
-from b300_core.service import B300Service, FlashResult
+from b300_core.factory_resource import load_trusted_bootloader
+from b300_core.service import B300Service, FactoryResult, FlashResult
 from b300_core.updater import UpdateCheckResult, should_auto_check
 from b300_core.update_install import launch_install_plan, prepare_install
 from b300_core.update_platform import detect_update_platform
@@ -56,6 +58,7 @@ from b300_core.versioning import SemVer
 from .viewmodels import FlashViewState, confirmation_text
 from .workers import FunctionWorker
 from .memory_tab import MemoryTab
+from .debug_tab import DebugTab
 from .branding import asset_path
 from .about_dialog import AboutDialog
 from .operation_state import OperationState
@@ -74,9 +77,13 @@ class MainWindow(QMainWindow):
                  setup_bundle_provider: Optional[Callable[[], Optional[Path]]] = None,
                  setup_installer: Callable[[Path], Path] = install_offline_bundle,
                  update_client=None, automatic_updates: bool = False,
-                 update_installer=None, settings=None) -> None:
+                 update_installer=None, settings=None,
+                 debug_service: Optional[DebugService] = None) -> None:
         super().__init__()
         self.service = service or B300Service()
+        self.debug_service = debug_service or DebugService(
+            session_manager=getattr(self.service, "session_manager", None)
+        )
         self.probe_loader = probe_loader
         self.setup_bundle_provider = setup_bundle_provider or self._select_offline_bundle
         self.setup_installer = setup_installer
@@ -146,8 +153,14 @@ class MainWindow(QMainWindow):
         subtitle = QLabel("Nạp Application STM32F407 an toàn · giữ nguyên Bootloader và đường OTA")
         subtitle.setObjectName("subtitleLabel")
         subtitle.setAlignment(Qt.AlignmentFlag.AlignRight)
+        channel = getattr(self.update_client, "channel", "stable")
+        channel_name = getattr(channel, "value", str(channel)).capitalize()
+        self.update_channel_label = QLabel("Update: %s · Chưa kiểm tra" % channel_name)
+        self.update_channel_label.setObjectName("updateChannelLabel")
+        self.update_channel_label.setAlignment(Qt.AlignmentFlag.AlignRight)
         brand_info.addWidget(eyebrow)
         brand_info.addWidget(subtitle)
+        brand_info.addWidget(self.update_channel_label)
         brand_row.addLayout(brand_info)
         root.addLayout(brand_row)
 
@@ -173,13 +186,19 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_flash_tab(), "Nạp firmware")
+        self.factory_tab = self._build_factory_tab()
+        self.tabs.addTab(self.factory_tab, "Factory / Bootloader")
         self.memory_tab = MemoryTab(
             self.service, self._selected_probe, log_sink=self.append_log
         )
-        self.memory_tab.operation_state_changed.connect(
-            lambda _busy: self._refresh_update_install_state()
-        )
+        self.memory_tab.operation_state_changed.connect(self._hardware_activity_changed)
         self.tabs.addTab(self.memory_tab, "Memory / Metadata")
+        self.debug_tab = DebugTab(
+            self.debug_service, self._selected_probe, self
+        )
+        self.debug_tab.log.connect(self.append_log)
+        self.debug_tab.operation_state_changed.connect(self._hardware_activity_changed)
+        self.tabs.addTab(self.debug_tab, "Debug")
         root.addWidget(self.tabs, 1)
         self.setCentralWidget(central)
 
@@ -257,12 +276,17 @@ class MainWindow(QMainWindow):
         worker.finished.connect(self._update_worker_finished)
         self._update_workers.append(worker)
         self.check_updates_action.setEnabled(False)
+        self.update_channel_label.setText("Update: đang kiểm tra…")
         worker.start()
 
     def _update_check_finished(
             self, result: UpdateCheckResult, manual: bool = False) -> None:
         self.settings.setValue("updates/last_check_utc", self._utc_now_text())
         self._update_result = result
+        channel = getattr(self.update_client, "channel", "stable")
+        channel_name = getattr(channel, "value", str(channel)).capitalize()
+        status = "Có bản mới" if result.available else "Đã mới nhất"
+        self.update_channel_label.setText("Update: %s · %s" % (channel_name, status))
         if not result.available or result.asset is None:
             if manual:
                 QMessageBox.information(
@@ -284,6 +308,7 @@ class MainWindow(QMainWindow):
     def _update_check_failed(self, error, manual: bool = False) -> None:
         self.settings.setValue("updates/last_check_utc", self._utc_now_text())
         self.append_log("Update check failed: %s" % error)
+        self.update_channel_label.setText("Update: lỗi kiểm tra")
         if manual:
             QMessageBox.warning(self, "Không thể kiểm tra cập nhật", str(error))
 
@@ -334,10 +359,21 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "Tải cập nhật thất bại", str(error))
 
     def _operation_state(self) -> OperationState:
+        memory_tab = getattr(self, "memory_tab", None)
+        debug_tab = getattr(self, "debug_tab", None)
         return OperationState(
             main_hardware_busy=self.busy or bool(self._threads),
-            memory_hardware_busy=self.memory_tab.has_active_operation,
+            memory_hardware_busy=bool(
+                memory_tab is not None and memory_tab.has_active_operation
+            ),
+            debug_hardware_busy=bool(
+                debug_tab is not None and debug_tab.has_active_operation
+            ),
         )
+
+    def _hardware_activity_changed(self, _busy: bool = False) -> None:
+        """Reflect shared ST-Link ownership immediately across every GUI surface."""
+        self._update_controls()
 
     def _refresh_update_install_state(self) -> None:
         if self.update_dialog is None or self.update_dialog.ready_package is None:
@@ -436,7 +472,7 @@ class MainWindow(QMainWindow):
         plan_layout.setContentsMargins(8, 8, 8, 8)
         plan_layout.setSpacing(6)
         self.flash_plan_label = QLabel(
-            "Erase Sector 3–7 → Program/Verify Application → Provision marker → Reset"
+            "Erase Sector 3–7 → Program/Verify Application → Reset → Post-verify"
         )
         self.flash_plan_label.setObjectName("flashPlanBadge")
         self.flash_plan_label.setStyleSheet(
@@ -513,6 +549,198 @@ class MainWindow(QMainWindow):
         self._update_controls()
         return page
 
+    def _build_factory_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        warning = QLabel(
+            "FACTORY MODE - chi dung cho main moi/chip moi hoac bao tri Bootloader. "
+            "Che do nay co the tam thay doi WRP Sector 0-2; Application Flash khong bao gio lam viec nay."
+        )
+        warning.setObjectName("factoryWarning")
+        warning.setWordWrap(True)
+        warning.setStyleSheet(
+            "background:#FFF7ED;color:#9A3412;border:1px solid #FDBA74;"
+            "border-radius:8px;padding:10px;font-weight:700;"
+        )
+        layout.addWidget(warning)
+
+        target_group = QGroupBox("Factory target / WRP state")
+        target_layout = QVBoxLayout(target_group)
+        factory_probe_row = QHBoxLayout()
+        self.factory_probe_combo = QComboBox()
+        self.factory_probe_combo.setObjectName("factoryProbeSelector")
+        self.factory_probe_combo.setAccessibleName("Factory ST-Link serial")
+        self.factory_probe_combo.currentIndexChanged.connect(self._factory_probe_changed)
+        self.factory_refresh_button = QPushButton("Refresh probes")
+        self.factory_refresh_button.clicked.connect(self.refresh_probes)
+        factory_probe_row.addWidget(self.factory_probe_combo, 1)
+        factory_probe_row.addWidget(self.factory_refresh_button)
+        target_layout.addLayout(factory_probe_row)
+        self.factory_target_summary = QLabel("Select an explicit ST-Link serial, then inspect target/WRP")
+        self.factory_target_summary.setObjectName("factoryTargetSummary")
+        self.factory_target_summary.setWordWrap(True)
+        target_layout.addWidget(self.factory_target_summary)
+        layout.addWidget(target_group)
+
+        artifact_group = QGroupBox("Trusted bundled Bootloader")
+        artifact_layout = QVBoxLayout(artifact_group)
+        self.factory_artifact_label = QLabel()
+        self.factory_artifact_label.setObjectName("factoryArtifactLabel")
+        self.factory_artifact_label.setWordWrap(True)
+        try:
+            self.factory_trusted = load_trusted_bootloader()
+            image = self.factory_trusted.image
+            self.factory_artifact_label.setText(
+                "B300_F407ZE / COM3 / FW %s\n0x%08X..0x%08X\nSHA-256: %s\nSource commit: %s" % (
+                    self.factory_trusted.firmware_version, image.start_address,
+                    image.end_address, image.sha256, self.factory_trusted.source_commit,
+                )
+            )
+        except Exception as error:
+            self.factory_trusted = None
+            self.factory_artifact_label.setText("Trusted Bootloader unavailable: %s" % error)
+            self.factory_artifact_label.setStyleSheet("color:#DC2626;font-weight:700;")
+        artifact_layout.addWidget(self.factory_artifact_label)
+        layout.addWidget(artifact_group)
+
+        plan_group = QGroupBox("Factory safety transaction")
+        plan_layout = QVBoxLayout(plan_group)
+        plan_text = QLabel(
+            "Verify F407/512 KiB + WRP -> WRP S0-S2 OFF (neu can) -> Reset/Reload OB -> "
+            "Verify WRP OFF -> Erase S0-S2 -> Program/Verify Bootloader -> "
+            "WRP S0-S2 ON -> Reset/Reload OB -> Verify WRP ON -> Reset run"
+        )
+        plan_text.setWordWrap(True)
+        plan_layout.addWidget(plan_text)
+        layout.addWidget(plan_group)
+
+        ack_group = QGroupBox("Xac nhan Factory")
+        ack_layout = QVBoxLayout(ack_group)
+        ack_help = QLabel('Nhap chinh xac: PROVISION BOOTLOADER')
+        self.factory_ack = QLineEdit()
+        self.factory_ack.setObjectName("factoryAcknowledgement")
+        self.factory_ack.setPlaceholderText("PROVISION BOOTLOADER")
+        self.factory_ack.textChanged.connect(lambda _text: self._update_controls())
+        ack_layout.addWidget(ack_help)
+        ack_layout.addWidget(self.factory_ack)
+        layout.addWidget(ack_group)
+
+        actions = QHBoxLayout()
+        self.factory_inspect_button = QPushButton("Kiem tra target / WRP")
+        self.factory_inspect_button.clicked.connect(self.inspect_factory_target)
+        self.factory_dry_run_button = QPushButton("Factory dry-run")
+        self.factory_dry_run_button.clicked.connect(self.show_factory_dry_run)
+        self.factory_provision_button = QPushButton("Provision Bootloader")
+        self.factory_provision_button.setObjectName("factoryProvisionButton")
+        self.factory_provision_button.clicked.connect(self.confirm_factory_provision)
+        actions.addWidget(self.factory_inspect_button)
+        actions.addWidget(self.factory_dry_run_button)
+        actions.addStretch(1)
+        actions.addWidget(self.factory_provision_button)
+        layout.addLayout(actions)
+
+        self.factory_progress = QProgressBar()
+        self.factory_progress.setRange(0, 1)
+        self.factory_progress.setValue(0)
+        self.factory_progress.setFormat("Chua chay Factory")
+        layout.addWidget(self.factory_progress)
+
+        factory_log_group = QGroupBox("Factory log / dry-run")
+        factory_log_layout = QVBoxLayout(factory_log_group)
+        self.factory_log_view = QPlainTextEdit()
+        self.factory_log_view.setObjectName("factoryLogView")
+        self.factory_log_view.setReadOnly(True)
+        self.factory_log_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.factory_log_view.setMinimumHeight(150)
+        factory_log_layout.addWidget(self.factory_log_view)
+        layout.addWidget(factory_log_group, 1)
+        self._update_controls()
+        return page
+
+    def show_factory_dry_run(self) -> None:
+        if self.factory_trusted is None or self.busy:
+            return
+        try:
+            probe = self._selected_factory_probe()
+            preview = self.service.factory_preview(self.factory_trusted.image, probe)
+            transactions = (
+                ("WRP OFF (conditional)", self.service.factory_protect_command(probe, False)),
+                ("Erase S0-S2 + Program/Verify", self.service.factory_flash_command(preview)),
+                ("WRP ON (mandatory restore)", self.service.factory_protect_command(probe, True)),
+                ("Reset after verify/protect", self.service.reset_command(probe)),
+            )
+        except Exception as error:
+            self.append_factory_log("Factory dry-run failed: %s" % error)
+            self._set_status("Factory dry-run khong hop le", "error")
+            return
+        self.append_factory_log("FACTORY DRY-RUN (khong ghi phan cung)")
+        for label, command in transactions:
+            self.append_factory_log("%s: %s" % (label, subprocess.list2cmdline(command)))
+        self._set_status("Factory dry-run hop le; chua co thay doi phan cung", "normal")
+
+    def confirm_factory_provision(self) -> None:
+        if (self.factory_trusted is None or self.target_info is None or self.busy or
+                self.factory_ack.text().strip() != "PROVISION BOOTLOADER"):
+            return
+        try:
+            plan = self.service.factory_plan(
+                self.factory_trusted.image, self._selected_factory_probe(), self.target_info
+            )
+        except Exception as error:
+            self._set_status("Factory plan bi chan: %s" % error, "error")
+            return
+        answer = QMessageBox.question(
+            self, "Xac nhan Factory Bootloader",
+            "Se ghi Bootloader vao Sector 0-2 va thay doi WRP tam thoi. "
+            "Khong rut ST-Link/mat nguon. Tiep tuc?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.busy = True
+        self.factory_progress.setRange(0, 100)
+        self.factory_progress.setValue(0)
+        self.factory_progress.setFormat("0% - Factory Bootloader")
+        self._set_status("Factory provisioning dang chay; khong rut ST-Link/mat nguon", "busy")
+        self._update_controls()
+        self._start_worker(
+            lambda log, phase, cancel: self.service.provision_bootloader(
+                plan, event_sink=log, phase_sink=phase
+            ),
+            self._factory_finished,
+            cancellable=False,
+            on_failed=self._factory_operation_failed,
+            phase_handler=self._factory_phase_changed,
+            log_handler=self.append_factory_log,
+        )
+
+    def _factory_finished(self, result: FactoryResult) -> None:
+        self.busy = False
+        self.factory_progress.setRange(0, 1)
+        self.factory_progress.setValue(1 if result.succeeded else 0)
+        if result.succeeded:
+            self.factory_progress.setFormat("Factory OK")
+            self.factory_ack.clear()
+            self._set_status(
+                "Bootloader verified; WRP Sector 0-2 da duoc khoi phuc va xac minh",
+                "success",
+            )
+            if result.final_target is not None:
+                self.apply_target_info(result.final_target)
+        else:
+            self.factory_progress.setFormat("Factory FAILED")
+            self._set_status(
+                "Factory phase %s - %s - Tiep theo: %s" % (
+                    result.failure_phase or "unknown", result.reason, result.next_action
+                ),
+                "error",
+            )
+        self._update_controls()
+
     def _restore_last_image(self) -> None:
         last_path = self.settings.value("lastImage", "")
         if last_path and Path(str(last_path)).is_file():
@@ -520,6 +748,11 @@ class MainWindow(QMainWindow):
 
     def refresh_probes(self) -> None:
         current = self.probe_combo.currentData() if self.probe_combo.count() else None
+        factory_current = (
+            self.factory_probe_combo.currentData()
+            if hasattr(self, "factory_probe_combo") and self.factory_probe_combo.count()
+            else None
+        )
         try:
             probes = self.probe_loader()
             available, executable = self.service.doctor()
@@ -527,27 +760,47 @@ class MainWindow(QMainWindow):
             probes = ()
             available, executable = False, ""
             self.append_log("Probe check failed: %s" % error)
+
         self.probe_combo.blockSignals(True)
         self.probe_combo.clear()
         self._probe_selection_required = len(probes) > 1
         if self._probe_selection_required:
-            self.probe_combo.addItem("Chọn ST-Link theo serial…", None)
+            self.probe_combo.addItem("Select ST-Link by serial...", None)
         else:
             self.probe_combo.addItem("Auto-select (single ST-Link)", None)
         for probe in probes:
-            self.probe_combo.addItem("%s · %s" % (probe.name, probe.serial), probe.serial)
+            self.probe_combo.addItem("%s | %s" % (probe.name, probe.serial), probe.serial)
         restore_index = self.probe_combo.findData(current)
         self.probe_combo.setCurrentIndex(max(0, restore_index))
         self.probe_combo.blockSignals(False)
+
+        if hasattr(self, "factory_probe_combo"):
+            self.factory_probe_combo.blockSignals(True)
+            self.factory_probe_combo.clear()
+            self.factory_probe_combo.addItem("Select exact ST-Link serial for Factory...", None)
+            for probe in probes:
+                self.factory_probe_combo.addItem(
+                    "%s | %s" % (probe.name, probe.serial), probe.serial
+                )
+            restore_factory = self.factory_probe_combo.findData(factory_current)
+            if restore_factory < 0 and current is not None:
+                restore_factory = self.factory_probe_combo.findData(current)
+            self.factory_probe_combo.setCurrentIndex(max(0, restore_factory))
+            self.factory_probe_combo.blockSignals(False)
+
         self.openocd_ready = available
         self.target_ready = False
         self.target_info = None
+        if hasattr(self, "factory_target_summary"):
+            self.factory_target_summary.setText(
+                "Select an explicit ST-Link serial, then inspect target/WRP"
+            )
         if available:
-            detail = "%d probe tìm thấy" % len(probes) if probes else "OpenOCD sẵn sàng"
-            self._set_status("%s · %s" % (detail, executable), "normal")
+            detail = "%d probe(s) found" % len(probes) if probes else "OpenOCD ready"
+            self._set_status("%s | %s" % (detail, executable), "normal")
         else:
             self._set_status(
-                "Không tìm thấy OpenOCD; dùng Thiết lập môi trường từ gói offline",
+                "OpenOCD not found; use offline environment setup",
                 "error",
             )
         self._rebuild_plan()
@@ -640,10 +893,57 @@ class MainWindow(QMainWindow):
         self._update_controls()
 
     def _probe_changed(self) -> None:
+        selected = self.probe_combo.currentData()
+        if hasattr(self, "factory_probe_combo"):
+            self.factory_probe_combo.blockSignals(True)
+            index = self.factory_probe_combo.findData(selected)
+            self.factory_probe_combo.setCurrentIndex(max(0, index))
+            self.factory_probe_combo.blockSignals(False)
         self.target_ready = False
         self.target_info = None
-        self.target_summary.setText("Probe đã đổi; cần kiểm tra target lại")
+        self.target_summary.setText("Probe changed; inspect target/WRP again")
+        if hasattr(self, "factory_target_summary"):
+            self.factory_target_summary.setText("Probe changed; inspect target/WRP again")
         self._rebuild_plan()
+
+    def _factory_probe_changed(self) -> None:
+        selected = self.factory_probe_combo.currentData()
+        if selected is not None:
+            self.probe_combo.blockSignals(True)
+            index = self.probe_combo.findData(selected)
+            if index >= 0:
+                self.probe_combo.setCurrentIndex(index)
+            self.probe_combo.blockSignals(False)
+        self.target_ready = False
+        self.target_info = None
+        self.target_summary.setText("Factory probe changed; inspect target/WRP again")
+        self.factory_target_summary.setText("Factory probe changed; inspect target/WRP again")
+        self._rebuild_plan()
+
+    def _selected_factory_probe(self) -> ProbeRef:
+        serial = self.factory_probe_combo.currentData()
+        if serial is None:
+            raise ValueError("Factory provisioning requires an explicit ST-Link serial.")
+        return ProbeRef(serial)
+
+    def inspect_factory_target(self) -> None:
+        if not self.openocd_ready or self.busy:
+            return
+        try:
+            probe = self._selected_factory_probe()
+        except ValueError as error:
+            self._set_status(str(error), "error")
+            return
+        self.busy = True
+        self._set_status("Reading Factory target/WRP/RDP via selected ST-Link serial", "busy")
+        self._update_controls()
+        self._start_worker(
+            lambda log, phase, cancel: self.service.inspect_target(
+                probe, event_sink=log, cancel_event=cancel
+            ),
+            self.apply_target_info,
+            cancellable=True,
+        )
 
     def _selected_probe(self) -> ProbeRef:
         if self._probe_selection_required and self.probe_combo.currentData() is None:
@@ -668,20 +968,40 @@ class MainWindow(QMainWindow):
     def apply_target_info(self, info: TargetInfo) -> None:
         self.busy = False
         is_f407 = (info.device_id & 0xFFF) == 0x413 and info.flash_kib == 512
-        self.target_ready = is_f407
+        wrp_bootloader_ok = (
+            info.protection_reported and
+            all(sector in info.protected_sectors for sector in (0, 1, 2))
+        )
+        normal_ready = is_f407 and wrp_bootloader_ok and not info.readout_protected
+        self.target_ready = normal_ready
+        # Keep valid F407 target information for the separate Factory workflow even
+        # when S0-S2 WRP is currently off. RDP/security still blocks destructive plans.
         self.target_info = info if is_f407 else None
-        self.target_summary.setText(
-            "Device ID: 0x%08X · Flash: %d KiB · Voltage: %.3f V\nWRP: %s" % (
-                info.device_id,
-                info.flash_kib,
-                info.target_voltage,
-                info.protection_summary,
+        rdp_text = "ENABLED (blocked)" if info.readout_protected else "Level 0 / not reported as secured"
+        summary = (
+            "Device ID: 0x%08X | Flash: %d KiB | Voltage: %.3f V\n"
+            "WRP: %s\nRDP/Security: %s" % (
+                info.device_id, info.flash_kib, info.target_voltage,
+                info.protection_summary, rdp_text,
             )
         )
-        if is_f407:
-            self._set_status("Đúng target B300 STM32F407ZE; có thể chọn/nạp HEX", "success")
+        self.target_summary.setText(summary)
+        if hasattr(self, "factory_target_summary"):
+            self.factory_target_summary.setText(summary)
+
+        if not is_f407:
+            self._set_status("Target is not the B300 STM32F407ZE 512 KiB configuration", "error")
+        elif info.readout_protected:
+            self._set_status("RDP/security is enabled; B300 Tools will not modify RDP", "error")
+        elif not info.protection_reported:
+            self._set_status("OpenOCD did not report WRP; destructive provisioning is blocked", "error")
+        elif wrp_bootloader_ok:
+            self._set_status("B300 target valid; Bootloader S0-S2 WRP protected", "success")
         else:
-            self._set_status("Target không phải cấu hình B300 STM32F407ZE 512 KiB", "error")
+            self._set_status(
+                "B300 target valid but Bootloader WRP is incomplete; normal Application flash blocked",
+                "error",
+            )
         self._rebuild_plan()
 
     def choose_file(self) -> None:
@@ -736,19 +1056,49 @@ class MainWindow(QMainWindow):
         self._update_controls()
 
     def _update_controls(self) -> None:
-        state = FlashViewState(self.target_ready, self.flash_plan is not None, self.busy)
-        self.flash_button.setEnabled(state.can_flash)
+        operation = self._operation_state()
+        main_locked = self.busy or operation.main_blocked_by_other
+        flash_state = FlashViewState(
+            self.target_ready, self.flash_plan is not None, main_locked
+        )
+        self.flash_button.setEnabled(flash_state.can_flash)
+        # Dry-run and image selection are offline-only and may remain usable while Debug owns ST-Link.
         self.dry_run_button.setEnabled(self.flash_plan is not None and not self.busy)
         self.choose_button.setEnabled(not self.busy)
-        self.refresh_button.setEnabled(not self.busy)
+        self.refresh_button.setEnabled(not main_locked)
         probe_selected = not self._probe_selection_required or \
             self.probe_combo.currentData() is not None
         self.inspect_target_button.setEnabled(
-            self.openocd_ready and probe_selected and not self.busy
+            self.openocd_ready and probe_selected and not main_locked
         )
-        self.probe_combo.setEnabled(not self.busy)
+        self.probe_combo.setEnabled(not main_locked)
         self.setup_button.setVisible(not self.openocd_ready)
-        self.setup_button.setEnabled(not self.busy)
+        self.setup_button.setEnabled(not operation.is_hardware_busy)
+        if hasattr(self, "factory_provision_button"):
+            factory_target_ready = (
+                self.target_info is not None and
+                self.target_info.protection_reported and
+                not self.target_info.readout_protected
+            )
+            factory_probe_selected = self.factory_probe_combo.currentData() is not None
+            factory_ready = (
+                self.factory_trusted is not None and factory_target_ready and
+                factory_probe_selected and self.openocd_ready and not main_locked and
+                self.factory_ack.text().strip() == "PROVISION BOOTLOADER"
+            )
+            self.factory_provision_button.setEnabled(factory_ready)
+            self.factory_dry_run_button.setEnabled(
+                self.factory_trusted is not None and factory_probe_selected and not main_locked
+            )
+            self.factory_inspect_button.setEnabled(
+                self.openocd_ready and factory_probe_selected and not main_locked
+            )
+            self.factory_probe_combo.setEnabled(not main_locked)
+            self.factory_refresh_button.setEnabled(not main_locked)
+        if hasattr(self, "memory_tab"):
+            self.memory_tab.set_external_blocked(operation.memory_blocked_by_other)
+        if hasattr(self, "debug_tab"):
+            self.debug_tab.set_external_blocked(operation.debug_blocked_by_other)
         self._refresh_update_install_state()
 
     def show_dry_run(self) -> None:
@@ -757,9 +1107,7 @@ class MainWindow(QMainWindow):
         self.append_log("DRY-RUN (không ghi phần cứng)")
         transactions = (
             ("Program/Verify", self.service.flash_command(self.flash_plan)),
-            ("Mark (chỉ sau verify thành công)",
-             self.service.marker_command(self.flash_plan.probe)),
-            ("Reset (chỉ sau khi ghi marker)",
+            ("Reset (chỉ sau verify thành công)",
              self.service.reset_command(self.flash_plan.probe)),
         )
         for label, command in transactions:
@@ -800,10 +1148,10 @@ class MainWindow(QMainWindow):
         )
 
     def _start_worker(self, operation, on_finished, cancellable: bool = False,
-                      on_failed=None) -> None:
+                      on_failed=None, phase_handler=None, log_handler=None) -> None:
         worker = FunctionWorker(operation, self)
-        worker.log.connect(self.append_log)
-        worker.phase.connect(self._flash_phase_changed)
+        worker.log.connect(log_handler or self.append_log)
+        worker.phase.connect(phase_handler or self._flash_phase_changed)
         worker.completed.connect(on_finished)
         worker.failed.connect(on_failed or self._operation_failed)
         worker.finished.connect(self._worker_finished)
@@ -829,6 +1177,34 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(False)
         self._set_status("Đang hủy thao tác read-only an toàn…", "busy")
 
+    def _factory_phase_changed(self, event) -> None:
+        self.factory_progress.setRange(0, 100)
+        self.factory_progress.setValue(event.progress)
+        self.factory_progress.setFormat("%d%% - %s" % (event.progress, event.message))
+        if event.phase not in {"succeeded", "failed"}:
+            self._set_status(
+                "%s - do not disconnect ST-Link or power" % event.message,
+                "busy",
+            )
+
+    def _factory_operation_failed(self, failure) -> None:
+        self.busy = False
+        self.factory_progress.setRange(0, 1)
+        self.factory_progress.setValue(0)
+        self.factory_progress.setFormat("Factory error")
+        phase = getattr(failure, "phase", "factory")
+        message = getattr(failure, "message", str(failure))
+        next_action = getattr(
+            failure, "next_action",
+            "Verify Sector 0-2 WRP before any further flash operation.",
+        )
+        self.append_factory_log(getattr(failure, "traceback", str(failure)))
+        self._set_status(
+            "Factory phase %s - %s - Next: %s" % (phase, message, next_action),
+            "error",
+        )
+        self._update_controls()
+
     def _flash_phase_changed(self, event) -> None:
         self.progress.setRange(0, 100)
         self.progress.setValue(event.progress)
@@ -847,7 +1223,7 @@ class MainWindow(QMainWindow):
             verification = result.boot_verification
             self.progress.setFormat("Hoàn tất")
             self._set_status(
-                "Nạp thành công · Application PC=%s · BKP đã clear" %
+                "Nạp thành công · Application PC=%s · BKP1R đã clear" %
                 ("0x%08X" % verification.pc if verification and verification.pc else "N/A"),
                 "success",
             )
@@ -892,7 +1268,7 @@ class MainWindow(QMainWindow):
         self._update_controls()
 
     def closeEvent(self, event) -> None:
-        if self.busy or self._threads or self.memory_tab.has_active_operation:
+        if self.busy or self._threads or self.memory_tab.has_active_operation or self.debug_tab.has_active_operation:
             event.ignore()
             self._set_status(
                 "Thao tác đang chạy; hãy chờ hoàn tất hoặc hủy khi nút Hủy được bật.",
@@ -901,6 +1277,16 @@ class MainWindow(QMainWindow):
             self.append_log("Close blocked: an ST-Link operation is still active.")
             return
         event.accept()
+
+    def append_factory_log(self, line: str) -> None:
+        self.factory_log_view.appendPlainText(str(line))
+        cursor = self.factory_log_view.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.StartOfLine)
+        self.factory_log_view.setTextCursor(cursor)
+        self.factory_log_view.verticalScrollBar().setValue(
+            self.factory_log_view.verticalScrollBar().maximum()
+        )
+        self.factory_log_view.horizontalScrollBar().setValue(0)
 
     def append_log(self, line: str) -> None:
         self.log_view.appendPlainText(str(line))

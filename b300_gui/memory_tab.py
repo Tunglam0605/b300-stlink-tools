@@ -55,6 +55,8 @@ class MemoryTab(QWidget):
         self.current_sector = None
         self._threads = []
         self._active_worker = None
+        self._busy = False
+        self._external_blocked = False
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -143,11 +145,22 @@ class MemoryTab(QWidget):
         root.addWidget(splitter, 1)
 
     def _set_busy(self, busy: bool) -> None:
-        self.read_button.setEnabled(not busy)
-        self.metadata_button.setEnabled(not busy)
-        self.sector_combo.setEnabled(not busy)
-        self.export_button.setEnabled(not busy and bool(self.current_data))
-        self.cancel_button.setEnabled(busy and self._active_worker is not None)
+        self._busy = bool(busy)
+        self._refresh_controls()
+
+    def set_external_blocked(self, blocked: bool) -> None:
+        """Disable new ST-Link reads while another GUI hardware mode owns the target."""
+        self._external_blocked = bool(blocked)
+        self._refresh_controls()
+
+    def _refresh_controls(self) -> None:
+        available = not self._busy and not self._external_blocked
+        self.read_button.setEnabled(available)
+        self.metadata_button.setEnabled(available)
+        self.sector_combo.setEnabled(available)
+        self.export_button.setEnabled(available and bool(self.current_data))
+        # Cancellation belongs to this tab's active read and must remain reachable.
+        self.cancel_button.setEnabled(self._busy and self._active_worker is not None)
 
     @property
     def has_active_operation(self) -> bool:

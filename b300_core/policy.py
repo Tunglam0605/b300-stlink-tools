@@ -11,7 +11,6 @@ FLASH_START_ADDRESS = 0x08000000
 METADATA_ADDRESS = 0x0800C000
 APPLICATION_ADDRESS = 0x08010000
 FLASH_END_ADDRESS = 0x08080000
-STLINK_PROVISION_MAGIC = 0x53544C4B
 SUPPORTED_DEVICE_ID = 0x413
 SUPPORTED_FLASH_KIB = 512
 
@@ -43,6 +42,7 @@ def build_flash_plan(image: ImageInfo, probe: ProbeRef,
                      target: TargetInfo) -> FlashPlan:
     _validate_image_policy(image)
     validate_target_for_provisioning(target)
+    validate_bootloader_write_protection(target)
     return FlashPlan(
         image=image,
         probe=probe,
@@ -59,6 +59,25 @@ def validate_target_for_provisioning(target: TargetInfo) -> None:
             "Unsupported target: expected STM32F407 device 0x413 with 512 KiB flash; "
             "found device 0x%03X with %d KiB." %
             (target.device_id & 0xFFF, target.flash_kib)
+        )
+    if target.readout_protected:
+        raise ValueError(
+            "Target readout protection/security is enabled; B300 Tools will not modify RDP. "
+            "Use the approved production/OTA recovery process instead."
+        )
+
+
+def validate_bootloader_write_protection(target: TargetInfo) -> None:
+    """Require read-only evidence that Bootloader sectors 0..2 are WRP protected."""
+    if not target.protection_reported:
+        raise ValueError(
+            "OpenOCD did not report sector write-protection; refusing normal Application flash."
+        )
+    missing = tuple(sector for sector in (0, 1, 2) if sector not in target.protected_sectors)
+    if missing:
+        raise ValueError(
+            "Bootloader WRP is not enabled for Sector %s; use the separate factory provisioning flow." %
+            ",".join(str(item) for item in missing)
         )
 
 

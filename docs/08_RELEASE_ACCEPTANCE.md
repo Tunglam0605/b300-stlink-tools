@@ -1,5 +1,21 @@
 # Biên bản nghiệm thu và phát hành B300 ST-Link Tools
 
+## Bản 0.4.0 - Engineering diagnostics + hardware acceptance
+
+- Ngày nghiệm thu phần cứng: `2026-08-28`.
+- Target thật: STM32F407, 512 KiB, ST-Link V2J35S7.
+- Full local regression trước release: `217 tests` PASS.
+- Normal Application provisioning: PASS trên hardware, chỉ erase S3-S7.
+- Factory trusted Bootloader provisioning: PASS trên hardware, chỉ erase/program S0-S2.
+- WRP S0-S2: restore + persistence qua cold power-cycle PASS.
+- RDP: giữ Level 0, không bị tool thay đổi.
+- Trusted Bootloader: dump 48 KiB sau Factory và sau power-cycle đều bit-for-bit match.
+- OpenOCD + GDB/MI thật: connect/halt/continue/disconnect PASS.
+- Chi tiết bằng chứng: [Hardware Acceptance 2026-08-28](09_HARDWARE_ACCEPTANCE_2026-08-28.md).
+
+Release 0.4.0 chỉ được publish sau khi source version, changelog, full tests,
+`compileall`, `git diff --check` và release workflow đều PASS.
+
 ## Bản 0.2.0
 
 - Nhánh phát hành: `main`
@@ -60,9 +76,9 @@ phiên hiện tại. Không tự retry nếu một ca thất bại.
 - [ ] Application nạp raw khi còn metadata `CONFIRMED` cũ bị Bootloader từ chối.
 - [ ] Cùng Application đó được nạp bằng B300 ST-Link Tools và Bootloader chấp nhận.
 - [ ] HEX chạm Sector 0–2 bị từ chối trước mọi truy cập phần cứng.
-- [ ] Verify fail không ghi provisioning marker và không retry.
+- [ ] Verify fail không reset và không retry.
 - [ ] Mất kết nối probe giữa phiên hiển thị phase, nguyên nhân, hành động tiếp theo và giữ log.
-- [ ] Sau ca thành công: PC thuộc `0x08010000..0x0807FFFF`, BKP1R = 0 và BKP4R = 0.
+- [ ] Sau ca thành công: PC thuộc `0x08010000..0x0807FFFF` và BKP1R = 0.
 
 ## Cách lấy và sử dụng artifact
 
@@ -75,3 +91,21 @@ Mở workflow Release ở trên, tải artifact đúng hệ điều hành:
 Windows có thể dùng ngay bằng cách giải nén ZIP và chạy
 `b300-stlink-gui.exe`, hoặc chạy installer per-user. Ubuntu không chạy GUI bằng
 `sudo`; cài udev rule theo [Setup Ubuntu IPC](02_SETUP_UBUNTU_IPC.md).
+## Cổng kiểm tra sau khi publish
+
+Release workflow không dừng ở bước upload asset. Sau khi draft được publish thành
+`Latest`, CI chạy `python -m scripts.release.verify_published` để kiểm tra lại trạng
+thái công khai trên GitHub:
+
+- tải lại `latest.json` từ `releases/latest/download`;
+- tải lại `latest.json.minisig`;
+- verify chữ ký bằng Minisign public key của release environment;
+- yêu cầu version/product/schema/platform set đúng contract;
+- yêu cầu mọi URL asset trỏ tới tag bất biến `releases/download/v<version>/...`;
+- probe từng package update cho Windows x64, Linux x64 AppImage/DEB và Linux ARM64
+  AppImage/DEB;
+- retry có giới hạn để xử lý độ trễ CDN/GitHub sau publish.
+
+Nếu chữ ký, manifest hoặc bất kỳ asset update nào không kiểm tra được thì release
+pipeline bị đánh dấu lỗi. Gate này chỉ kiểm tra artifact công khai; nó không kết
+nối ST-Link và không thực hiện thao tác phần cứng.

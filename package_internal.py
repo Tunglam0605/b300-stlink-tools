@@ -25,6 +25,13 @@ def add_tree_zip(archive: zipfile.ZipFile, root: Path) -> None:
             archive.write(source, "vendor/openocd/" + source.relative_to(root).as_posix())
 
 
+def resource_archive_name(resource: Path) -> str:
+    """Preserve the runtime lookup path for trusted firmware resources."""
+    if resource.parent.name == "firmware" and resource.parent.parent.name == "resources":
+        return "resources/firmware/" + resource.name
+    return resource.name
+
+
 def executable(info: tarfile.TarInfo) -> tarfile.TarInfo:
     info.mode |= 0o755
     return info
@@ -85,7 +92,7 @@ def main(argv=None) -> int:
         with tarfile.open(args.output, "w:gz") as archive:
             archive.add(args.executable, arcname=args.executable.name, filter=executable)
             for resource in args.resource:
-                archive.add(resource, arcname=resource.name)
+                archive.add(resource, arcname=resource_archive_name(resource))
             archive.add(args.bootstrap, arcname=args.bootstrap.name, filter=executable)
             add_tree_tar(archive, args.openocd_root)
             info = tarfile.TarInfo("BUNDLE-METADATA.txt")
@@ -102,7 +109,7 @@ def main(argv=None) -> int:
         with zipfile.ZipFile(args.output, "w", zipfile.ZIP_DEFLATED) as archive:
             archive.write(args.executable, args.executable.name)
             for resource in args.resource:
-                archive.write(resource, resource.name)
+                archive.write(resource, resource_archive_name(resource))
             archive.write(args.bootstrap, args.bootstrap.name)
             add_tree_zip(archive, args.openocd_root)
             archive.writestr("BUNDLE-METADATA.txt", metadata)

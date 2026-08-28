@@ -103,6 +103,12 @@ class GuiPackagingTests(unittest.TestCase):
             for path in (cli, gui, bootstrap, openocd / "bin" / "openocd.exe"):
                 path.write_bytes(b"test")
             xpack.write_bytes(b"trusted archive")
+            firmware = root / "resources" / "firmware"
+            firmware.mkdir(parents=True)
+            bootloader = firmware / "b300_bootloader_f407ze_com3_v00050000.hex"
+            manifest_resource = firmware / "b300_bootloader_manifest.json"
+            bootloader.write_bytes(b":00000001FF\n")
+            manifest_resource.write_text("{}", encoding="utf-8")
             unicode_resource = openocd / "share" / "tài-liệu.txt"
             unicode_resource.parent.mkdir(parents=True)
             unicode_resource.write_bytes(b"offline docs")
@@ -127,6 +133,8 @@ class GuiPackagingTests(unittest.TestCase):
                     "--openocd-sha256", openocd_sha256,
                     "--openocd-package", str(xpack),
                     "--internal-distribution-approved",
+                    "--resource", str(bootloader),
+                    "--resource", str(manifest_resource),
                 ])
             with zipfile.ZipFile(output) as archive:
                 names = set(archive.namelist())
@@ -150,6 +158,8 @@ class GuiPackagingTests(unittest.TestCase):
         )
         self.assertIn("openocd_sha256=%s" % openocd_sha256, metadata)
         self.assertIn("flavor=gui", metadata)
+        self.assertIn("resources/firmware/b300_bootloader_f407ze_com3_v00050000.hex", names)
+        self.assertIn("resources/firmware/b300_bootloader_manifest.json", names)
 
     def test_internal_cli_zip_excludes_gui(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

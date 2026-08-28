@@ -31,26 +31,58 @@ Windows và Ubuntu.
 | Chức năng | Mô tả |
 |---|---|
 | `doctor` | Kiểm tra OpenOCD đã sẵn sàng trong môi trường cài đặt. |
-| `flash` | Validate Intel HEX, chỉ xóa Sector 3–7, program, verify và ghi provisioning marker. |
+| `flash` | Validate Intel HEX, read WRP, chỉ xóa Sector 3–7, program, verify, reset và post-verify. |
+| `provision-bootloader` | Factory-only: nạp Bootloader đã được trust vào Sector 0–2, sau đó restore/verify WRP. |
 | `debug` | Mở GDB server local hoặc remote qua IPC; không tự ghi flash. |
 | GUI PySide6 | Chọn probe/HEX, inspect target, dry-run, flash, post-verify và đọc memory/metadata. |
 | Setup offline | Cài OpenOCD từ archive xPack gốc có SHA-256 tin cậy cố định; runtime portable/user-local cũng được kiểm toàn bộ cây file. |
 | Agent Skill | Cung cấp skill `b300-ota-stlink` và playbook cho AI agent. |
 | Native bundle | Đóng gói CLI và OpenOCD cho đúng hệ điều hành/kiến trúc đích. |
 
+## Engineering diagnostics foundation
+
+The GUI Debug tab now provides a bounded engineering-debug workflow: start the
+OpenOCD server, optionally select the matching `.elf`/`.axf` symbol file, connect
+through verified GDB/MI, then use **Halt**, **Continue**, **Reset + Halt**, and
+**Stop Debug**. A GDB command is not treated as successful until the matching MI
+token receives a valid result record. If OpenOCD exits unexpectedly, the GUI
+watchdog releases the hardware interlock and reports the failed debug session.
+
+Flash, Factory provisioning, Memory, and Debug share one exclusive hardware
+session. While Debug owns the ST-Link, destructive provisioning, probe changes,
+and target-memory reads are disabled in the GUI instead of merely failing after
+the operator presses a button. Debug contains no flash programming, arbitrary
+memory write, or Option-Byte controls.
+
+Update checks use the Stable channel by default. A separately signed Beta
+manifest endpoint is supported for configured prerelease users; manifest
+signature and package SHA-256 validation are unchanged for both channels. The
+release workflow also re-downloads the published `latest.json` + Minisign
+signature and probes every signed platform asset after publication before the
+release pipeline is considered healthy.
+
 ## Ranh giới an toàn
 
 | Vùng flash | Địa chỉ | Quy tắc |
 |---|---|---|
-| Bootloader, Sector 0–2 | `0x08000000..0x0800BFFF` | Tuyệt đối không erase/program. |
+| Bootloader, Sector 0–2 | `0x08000000..0x0800BFFF` | Normal `flash`: tuyệt đối không erase/program. Chỉ Factory được ủy quyền mới ghi trusted Bootloader tại đây. |
 | OTA metadata, Sector 3 | `0x0800C000..0x0800FFFF` | Chỉ xóa trong transaction provisioning chuẩn. |
-| Application, Sector 4–7 | `0x08010000..0x0807FFFF` | Vùng duy nhất được phép chứa dữ liệu HEX. |
+| Application, Sector 4–7 | `0x08010000..0x0807FFFF` | Vùng dữ liệu của normal Application HEX. |
 
-`flash` từ chối HEX chạm vùng được bảo vệ, không dùng mass erase và chỉ ghi
-`STLINK_PROVISION_MAGIC = 0x53544C4B` sau khi verify thành công. Bootloader B300
-phải hỗ trợ marker này. Trước khi erase, core đọc lại đúng target F407 512 KiB,
-chép HEX đã duyệt vào staging riêng và kiểm tra lại SHA-256/range. Vì vậy file bị
-đổi sau xác nhận hoặc plan giả mạo đều bị chặn trước lệnh ghi.
+Normal `flash` từ chối HEX chạm vùng được bảo vệ, không dùng mass erase, không
+ghi Option Bytes/WRP và chỉ chạy khi OpenOCD đọc được WRP Sector 0–2 đang bật.
+Luồng luôn là `erase S3–S7 → program/verify → reset → post-verify BKP1R + PC`.
+Sector 3 được xóa sạch nên Bootloader dùng erased-metadata fallback hiện có;
+không có provisioning marker. Trước khi erase, core đọc lại đúng target F407
+512 KiB, chép HEX đã duyệt vào staging riêng và kiểm tra lại SHA-256/range.
+
+`provision-bootloader` là workflow Factory tách biệt. Nó chỉ dùng artifact
+Bootloader B300 đã bundle và kiểm hash/provenance; khi cần mới tạm tắt WRP S0–S2,
+reset/halt để reload Option Bytes rồi xác minh WRP đã OFF trước khi erase/program
+đúng S0–S2. Sau program/verify, tool bật lại WRP S0–S2, reset/halt để reload
+Option Bytes, xác minh WRP đã ON, rồi mới `reset run`. Lệnh thật yêu cầu cả
+`--confirm-factory-provision` và `--probe-serial`; RDP không bao giờ bị thay đổi.
+Factory không bao giờ là một phần của normal Application flash.
 
 ## Phạm vi phần cứng
 
@@ -85,6 +117,7 @@ b300-stlink doctor
 ```text
 b300-stlink flash <application.hex> --dry-run --json
 b300-stlink flash <application.hex>
+b300-stlink provision-bootloader --dry-run --json
 b300-stlink-gui
 b300-stlink debug --gdb-port 3333
 b300-stlink debug --bind-address 0.0.0.0 --gdb-port 3333
@@ -106,6 +139,7 @@ file HEX, probe trước khi chạy.
 | [Hướng dẫn AI agent](docs/06_AI_AGENT_MANUAL.md) | Dùng thủ công, playbook hoặc Agent Skill. |
 | [GUI Windows/Ubuntu](docs/07_GUI_WINDOWS_UBUNTU.md) | Vận hành giao diện theo 7 bước. |
 | [Biên bản release/acceptance](docs/08_RELEASE_ACCEPTANCE.md) | Artifact đã build và checklist nghiệm thu phần cứng F407. |
+| [Hardware acceptance 2026-08-28](docs/09_HARDWARE_ACCEPTANCE_2026-08-28.md) | Bằng chứng Application/Factory/Debug đã PASS trên STM32F407 thật. |
 | [Handoff GUI cho Antigravity](docs/superpowers/specs/2026-08-27-b300-stlink-gui-design.md) | Thiết kế GUI nạp code Windows/Ubuntu dùng chung lõi CLI. |
 | [AGENTS.md](AGENTS.md) | Quy tắc bắt buộc cho AI/automation. |
 

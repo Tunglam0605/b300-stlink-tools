@@ -80,6 +80,20 @@ def gui_resources(platform_name: str):
     return resources
 
 
+def runtime_resources(platform_name: str):
+    """Immutable resources required by both frozen entry points."""
+    del platform_name
+    return [
+        ROOT / "resources" / "firmware" / "b300_bootloader_f407ze_com3_v00050000.hex",
+        ROOT / "resources" / "firmware" / "b300_bootloader_manifest.json",
+    ]
+
+
+def pyinstaller_data_argument(source: Path) -> str:
+    separator = ";" if platform.system().lower() == "windows" else ":"
+    return "%s%sresources/firmware" % (source, separator)
+
+
 def fetch(url: str, output: Path) -> None:
     with urllib.request.urlopen(url) as source, output.open("wb") as destination:
         shutil.copyfileobj(source, destination)
@@ -118,12 +132,16 @@ def main(argv=None) -> int:
         subprocess.check_call([sys.executable, "-m", "pip", "install", "--user",
                                "-r", str(ROOT / "requirements-build.txt")])
         if args.flavor in {"all", "cli"}:
-            subprocess.check_call([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
-                                   "--onefile",
-                                   "--name", "b300-stlink", "--distpath", str(args.output_dir),
-                                   "--workpath", str(temp / "pyinstaller-cli"),
-                                   "--icon", str(ROOT / "branding" / "b300-stlink-icon.ico"),
-                                   str(ROOT / "b300_stlink.py")])
+            command = [
+                sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
+                "--onefile", "--name", "b300-stlink", "--distpath", str(args.output_dir),
+                "--workpath", str(temp / "pyinstaller-cli"),
+                "--icon", str(ROOT / "branding" / "b300-stlink-icon.ico"),
+            ]
+            for resource in runtime_resources(platform_name):
+                command.extend(["--add-data", pyinstaller_data_argument(resource)])
+            command.append(str(ROOT / "b300_stlink.py"))
+            subprocess.check_call(command)
         gui_executable = "b300-stlink-gui.exe" if platform_name == "windows-x64" else "b300-stlink-gui"
         if args.flavor in {"all", "gui"}:
             subprocess.check_call([
@@ -153,9 +171,11 @@ def main(argv=None) -> int:
             subprocess.check_call(command)
 
         if args.flavor in {"all", "cli"}:
-            package("cli", executable, cli_name, [ROOT / "LICENSE"])
+            package("cli", executable, cli_name,
+                    [ROOT / "LICENSE"] + runtime_resources(platform_name))
         if args.flavor in {"all", "gui"}:
-            package("gui", gui_executable, gui_name, gui_resources(platform_name))
+            package("gui", gui_executable, gui_name,
+                    gui_resources(platform_name) + runtime_resources(platform_name))
     return 0
 
 

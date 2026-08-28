@@ -15,12 +15,13 @@ Output phải có:
 ```text
 flash erase_sector 0 3 7
 program {...} verify
-mww 0x40002860 0x53544C4B
 reset run
 ```
 
-Ba phần được hiển thị như transaction riêng: program/verify; marker chỉ với
-`condition=after_verified_ok`; reset chỉ với `condition=after_marker`.
+Hai transaction được hiển thị riêng: program/verify và reset với
+`condition=after_verified_ok`. Trước erase, normal flow phải đọc target F407
+512 KiB và xác nhận OpenOCD report rõ WRP cho S0–S2; thiếu WRP hoặc S0–S2 chưa
+protected thì fail closed, chuyển sang Factory/Bootloader workflow.
 
 Không tiếp tục nếu thấy `mass_erase`, Sector 0--2, hoặc lỗi HEX protected range.
 
@@ -50,8 +51,8 @@ b300-stlink flash <duong-dan-file.hex> --probe-serial <ST-LINK-SN>
 
 ## Bước 3: Xác nhận kết quả
 
-Nạp thành công khi OpenOCD báo đúng event `** Verified OK **`, marker/reset đều
-thành công và post-verify xác nhận PC ở Application cùng BKP1R/BKP4R đã clear.
+Nạp thành công khi OpenOCD báo đúng event `** Verified OK **`, reset thành công
+và post-verify xác nhận PC ở Application cùng BKP1R đã clear.
 Tool chỉ xóa Sector 3--7 và giữ Sector 0--2 Bootloader.
 
 Không tự retry nếu bất kỳ phase nào lỗi. Lưu `failure_phase`, `reason`,
@@ -64,17 +65,11 @@ CRC32 của Application đã được xác nhận. Nếu chỉ erase/program Sec
 ST-Link, metadata cũ vẫn còn. Bootloader sẽ thấy vector Application mới hợp lệ
 nhưng CRC/size không khớp metadata và giữ board ở recovery.
 
-`b300-stlink flash` xử lý đúng trường hợp này bằng một transaction nguyên tử ở
-mức vận hành: xóa metadata và Application, program/verify image mới, rồi mới ghi
-provisioning marker để Bootloader biết đây là lần nạp ST-Link có chủ đích. OTA
-sau đó vẫn hoạt động bình thường.
-
-Đã kiểm chứng trên STM32F407 với chuỗi:
-
-```text
-OTA A CONFIRMED -> raw ST-Link B -> Bootloader từ chối B
-OTA A CONFIRMED -> b300-stlink flash B -> Bootloader chấp nhận B
-```
+`b300-stlink flash` xử lý đúng bằng cách xóa metadata và Application trong cùng
+flash domain S3–S7, rồi program/verify image mới. Bootloader thấy Sector 3 erased
+và dùng erased-metadata fallback hiện có. Không có synthetic metadata, CRC
+workaround hay provisioning marker trong production normal flow; OTA sau đó vẫn
+tiếp tục theo Bootloader contract.
 
 Không dùng lệnh OpenOCD thủ công để thay thế transaction của tool trong vận
 hành thông thường.
@@ -99,3 +94,19 @@ b300-stlink flash /opt/firmware/Main_V2_F407.hex --json
 
 Với nhiều probe, thêm `--probe-serial <ST-LINK-SN>` vào cả dry-run và flash
 thật. Chỉ tiếp tục khi hai lệnh cùng trỏ tới đúng probe và đúng file.
+
+## Factory / Bootloader (không phải normal flash)
+
+Chỉ dùng khi main/chip mới hoặc khi được phép bảo trì Bootloader. Không dùng HEX
+tự chọn: tool dùng Bootloader đã bundle, kiểm SHA-256/provenance, và transaction
+riêng cho S0--S2/WRP.
+
+```text
+b300-stlink provision-bootloader --dry-run --json
+b300-stlink provision-bootloader --probe-serial <STLINK_SERIAL> --confirm-factory-provision --json
+```
+
+Factory có thể tạm tắt rồi bắt buộc khôi phục WRP S0--S2. Sau mỗi thay đổi WRP,
+tool reset/halt để STM32F4 reload Option Bytes rồi mới xác minh trạng thái và đi
+tiếp. Nếu verify/reload/restore WRP lỗi, dừng và không chuyển qua normal
+Application flash. RDP không được thay đổi.

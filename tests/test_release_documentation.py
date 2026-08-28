@@ -23,5 +23,37 @@ class ReleaseDocumentationTests(unittest.TestCase):
         self.assertIn("không tạo lại cùng một tag", guide.lower())
 
 
+    def test_operator_docs_and_agent_skill_do_not_describe_the_removed_marker(self) -> None:
+        paths = (
+            ROOT / "README.md",
+            ROOT / "AGENTS.md",
+            ROOT / "docs" / "03_FLASH_FIRMWARE.md",
+            ROOT / "docs" / "05_TROUBLESHOOTING.md",
+            ROOT / "docs" / "07_GUI_WINDOWS_UBUNTU.md",
+            ROOT / ".agents" / "skills" / "b300-ota-stlink" / "SKILL.md",
+            ROOT / ".agents" / "skills" / "b300-ota-stlink" / "references" / "safety.md",
+        )
+        for path in paths:
+            with self.subTest(path=path):
+                text = path.read_text(encoding="utf-8")
+                self.assertNotIn("53544C4B", text)
+                self.assertNotIn("40002860", text)
+
+    def test_normal_and_factory_workflows_are_documented_separately(self) -> None:
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        flash_guide = (ROOT / "docs" / "03_FLASH_FIRMWARE.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("provision-bootloader", readme)
+        self.assertIn("Sector 0", readme)
+        self.assertIn("flash erase_sector 0 3 7", flash_guide)
+        self.assertIn("BKP1R", flash_guide)
+        skill = (ROOT / ".agents" / "skills" / "b300-ota-stlink" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("provision-bootloader", skill)
+        self.assertIn("PROVISION BOOTLOADER", skill)
+
+
 if __name__ == "__main__":
     unittest.main()
