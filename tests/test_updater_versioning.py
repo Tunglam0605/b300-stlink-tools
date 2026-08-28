@@ -2,11 +2,17 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
+import b300_core.update_platform as update_platform
 from b300_core.update_platform import UpdatePlatform, detect_update_platform
 from b300_core.versioning import SemVer
 
 
 class UpdaterVersioningTests(unittest.TestCase):
+    def _detect_cli(self, system: str, machine: str):
+        detector = getattr(update_platform, "detect_cli_update_platform", None)
+        self.assertIsNotNone(detector, "CLI update platform detector is missing")
+        return detector(system, machine)
+
     def test_semver_compares_numeric_components(self) -> None:
         self.assertLess(SemVer.parse("0.9.9"), SemVer.parse("0.10.0"))
         self.assertLess(SemVer.parse("0.10.0"), SemVer.parse("1.0.0"))
@@ -43,6 +49,44 @@ class UpdaterVersioningTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(RuntimeError, "Unsupported update platform"):
             detect_update_platform(Path("tool"), "Linux", "riscv64")
+
+    def test_detects_cli_platform_from_os_and_cpu_only(self) -> None:
+        cases = (
+            ("Windows", "AMD64", "windows-x64-cli"),
+            ("Windows", "x86_64", "windows-x64-cli"),
+            ("Linux", "AMD64", "linux-x64-cli"),
+            ("Linux", "x86_64", "linux-x64-cli"),
+            ("Linux", "ARM64", "linux-arm64-cli"),
+            ("Linux", "aarch64", "linux-arm64-cli"),
+        )
+        for system, machine, expected in cases:
+            with self.subTest(system=system, machine=machine):
+                self.assertEqual(self._detect_cli(system, machine).value, expected)
+
+    def test_cli_empty_machine_uses_stable_platform_fallback(self) -> None:
+        with mock.patch(
+            "b300_core.update_platform.platform.machine", return_value=""
+        ), mock.patch(
+            "b300_core.update_platform.sysconfig.get_platform", return_value="linux-aarch64"
+        ):
+            self.assertEqual(
+                self._detect_cli("Linux", "").value,
+                "linux-arm64-cli",
+            )
+
+    def test_cli_detection_is_independent_of_gui_package_mode(self) -> None:
+        with mock.patch.dict("os.environ", {"APPIMAGE": "/tmp/B300.AppImage"}):
+            self.assertEqual(
+                self._detect_cli("Linux", "x86_64").value,
+                "linux-x64-cli",
+            )
+
+    def test_cli_rejects_unsupported_os_or_cpu(self) -> None:
+        for system, machine in (("Darwin", "x86_64"), ("Linux", "riscv64")):
+            with self.subTest(system=system, machine=machine), self.assertRaisesRegex(
+                RuntimeError, "Unsupported CLI update platform"
+            ):
+                self._detect_cli(system, machine)
 
 
 if __name__ == "__main__":

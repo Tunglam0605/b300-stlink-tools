@@ -24,6 +24,7 @@ from b300_cli.reporting import (
     flash_result_fields, flash_start_fields, format_probes_text, memory_snapshot,
     metadata_snapshot, probe_record,
 )
+from b300_cli.update_commands import run_update_command
 from b300_core.diagnostics import DiagnosticsService
 from b300_core.hex_image import inspect_image
 from b300_core.models import ProbeRef
@@ -216,6 +217,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         build_parser().error("the following arguments are required: command")
     reporter = Reporter(args.json)
     try:
+        if args.command == "update":
+            return run_update_command(args, __version__)
+
         if args.command == "probes":
             probes = list_probes()
             if not probes:

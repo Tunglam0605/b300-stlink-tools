@@ -9,6 +9,18 @@ from scripts.release.build_metadata import build_release_metadata
 from scripts.release.release_contract import EXPECTED_PACKAGE_ASSETS
 
 
+EXPECTED_UPDATE_FILES = {
+    "windows-x64": "B300-STLink-GUI-Windows-x64.exe",
+    "linux-x64-appimage": "B300-STLink-GUI-Ubuntu-x64.AppImage",
+    "linux-x64-deb": "b300-stlink-gui_amd64.deb",
+    "linux-arm64-appimage": "B300-STLink-GUI-Ubuntu-arm64.AppImage",
+    "linux-arm64-deb": "b300-stlink-gui_arm64.deb",
+    "windows-x64-cli": "B300-STLink-CLI-Windows-x64.zip",
+    "linux-x64-cli": "B300-STLink-CLI-Linux-x64.tar.gz",
+    "linux-arm64-cli": "B300-STLink-CLI-Linux-arm64.tar.gz",
+}
+
+
 class ReleaseMetadataTests(unittest.TestCase):
     def _write_packages(self, root: Path) -> None:
         for index, name in enumerate(EXPECTED_PACKAGE_ASSETS):
@@ -42,6 +54,10 @@ class ReleaseMetadataTests(unittest.TestCase):
             self.assertEqual(manifest["openocd"], "0.12.0-7")
             self.assertEqual(set(manifest["assets"]), set(EXPECTED_PACKAGE_ASSETS))
             self.assertEqual(latest["schema_version"], 1)
+            self.assertEqual(
+                {key: value["file"] for key, value in latest["platforms"].items()},
+                EXPECTED_UPDATE_FILES,
+            )
             self.assertEqual(
                 latest["platforms"]["windows-x64"]["file"],
                 "B300-STLink-GUI-Windows-x64.exe",

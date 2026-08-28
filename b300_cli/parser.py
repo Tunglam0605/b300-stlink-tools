@@ -153,6 +153,22 @@ def build_parser() -> argparse.ArgumentParser:
     read_sector.add_argument("--openocd")
     read_sector.add_argument("--probe-serial", type=parse_probe_serial,
                              help="Select one ST-Link when multiple probes are connected.")
+
+    update = commands.add_parser(
+        "update", help="Check for or download a signed CLI update.", parents=[json_parent],
+    )
+    update_commands = update.add_subparsers(dest="update_command")
+    update_commands.add_parser(
+        "check", help="Check the signed release manifest.", parents=[json_parent],
+    )
+    update_download = update_commands.add_parser(
+        "download", help="Download and verify the available CLI update.",
+        parents=[json_parent],
+    )
+    update_download.add_argument(
+        "--dest", type=Path,
+        help="Destination directory (default: the per-user update cache).",
+    )
     return parser
 
 
