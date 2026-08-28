@@ -6,7 +6,7 @@
 
 **Architecture:** Keep all hardware discovery, target validation, flash ownership, memory bounds, metadata decoding, updater verification, and installation safety in `b300_core`. Add a focused `b300_cli` presentation/controller package and retain `b300_stlink.py` as the backward-compatible executable entry point. Extend the signed release contract with separate CLI asset keys so GUI update selection remains unchanged.
 
-**Tech Stack:** Python 3.9+, `argparse`, immutable dataclasses, OpenOCD 0.12.0-7, `unittest`, PyInstaller, PowerShell, POSIX shell, GitHub Actions.
+**Tech Stack:** Python 3.9+, `argparse`, immutable dataclasses, OpenOCD 0.12.0-7, xPack GNU Arm Embedded GCC/GDB 15.2.1-1.1, `unittest`, PyInstaller, PowerShell, POSIX shell, GitHub Actions.
 
 **Spec:** `C:\Users\Admin\.codex\attachments\805a9284-a7d1-4cc7-9364-1fdf04948ffe\pasted-text-1.txt`
 
@@ -20,6 +20,9 @@
 - `b300_core` remains the single source of truth; the CLI must not duplicate probe, OpenOCD, WRP, Flash-map, metadata, or updater policy.
 - Preserve `flash`, `provision-bootloader`, and `debug` compatibility, including `b300-stlink debug --gdb-port 3333`.
 - Default debug bind address is `127.0.0.1`; Telnet and TCL remain disabled unless an existing loopback-only Telnet option is explicitly selected.
+- Debug readiness must be derived from the OpenOCD GDB-listener log, never by opening a raw TCP socket that OpenOCD reports as a rejected GDB client.
+- OpenOCD and GDB child processes run without a visible console window on Windows while stdout/stderr remain piped into the application log.
+- GUI debug artifacts bundle a pinned xPack `arm-none-eabi-gdb` runtime `15.2.1-1.1` for Windows x64, Linux x64, and Linux ARM64; build inputs are verified against exact SHA-256 trust anchors and binaries are not committed to Git.
 - Every suitable command supports stable JSON with `schema_version: 1`, a command identifier, status, and a stable machine-readable reason code on failure.
 - Do not modify Bootloader firmware, OTA protocol, Application address `0x08010000`, Metadata address `0x0800C000`, trusted Bootloader bytes, or GUI layout/source files.
 - Do not access real hardware or flash a board during automated implementation or packaging smoke tests.
@@ -382,7 +385,115 @@ git add AGENTS.md b300_core/hex_image.py b300_core/models.py b300_core/probe_sel
 git commit -m "feat(cli): harden factory selection and flash UX"
 ```
 
-### Task 5: Signed CLI update check and download contract
+### Task 5: Reliable bundled GDB and background OpenOCD process lifecycle
+
+**Files:**
+- Create: `b300_core/process_startup.py`
+- Create: `b300_core/gdb_runtime.py`
+- Create: `tests/test_process_startup.py`
+- Create: `tests/test_gdb_runtime.py`
+- Modify: `b300_core/openocd.py`
+- Modify: `b300_core/debug_service.py`
+- Modify: `b300_core/gdb_mi.py`
+- Modify: `build_native_bundle.py`
+- Modify: `package_internal.py`
+- Modify: `tests/test_core_openocd.py`
+- Modify: `tests/test_debug_service.py`
+- Modify: `tests/test_gdb_mi.py`
+- Modify: `tests/test_build_native_bundle.py`
+- Modify: `tests/test_gui_packaging.py`
+- Modify: `.github/workflows/release.yml`
+- Modify: `.github/workflows/release-dry-run.yml`
+- Modify: `docs/04_DEBUG.md`
+
+**Interfaces:**
+- Consumes: existing OpenOCD command builders/log sink, GDB/MI transport, native bundle builder, and platform bundle roots.
+- Produces: `child_process_kwargs() -> dict`; `resolve_gdb(explicit: Optional[str] = None) -> str`; `GdbRuntimeInfo`; log-correlated `DebugService` readiness; pinned GDB runtime inside GUI release artifacts.
+
+- [ ] **Step 1: Add failing Windows child-process policy tests**
+
+```python
+def test_windows_child_process_is_hidden_without_losing_pipes(self):
+    kwargs = child_process_kwargs(platform_name="windows")
+    self.assertTrue(kwargs["creationflags"] & subprocess.CREATE_NO_WINDOW)
+
+def test_non_windows_child_process_has_no_windows_creation_flags(self):
+    self.assertEqual(child_process_kwargs(platform_name="linux"), {})
+```
+
+Also inject process factories into `OpenOcdRunner`, `DebugService`, and `GdbMiBackend`; assert Windows startup kwargs are passed together with `stdout=PIPE`, `stderr=STDOUT`, `text=True`, and `shell=False` where supported.
+
+- [ ] **Step 2: Run process tests and verify RED**
+
+Run: `python -m unittest tests.test_process_startup tests.test_core_openocd tests.test_debug_service tests.test_gdb_mi -v`
+
+Expected: missing helper and no `CREATE_NO_WINDOW` in captured `Popen` kwargs.
+
+- [ ] **Step 3: Implement one shared child-process startup policy**
+
+On Windows use `subprocess.CREATE_NO_WINDOW` (and a hidden `STARTUPINFO` fallback when available); on Linux return no Windows-only flags. Apply it to one-shot OpenOCD, persistent Debug OpenOCD, and GDB/MI. Preserve redirected output so GUI/CLI logging is unchanged.
+
+- [ ] **Step 4: Replace the failing raw-TCP readiness test with failing log-readiness tests**
+
+Cover the exact listener line `Info : Listening on port 3333 for gdb connections`, unrelated logs, wrong port, process exit before readiness, and bounded timeout. Assert `socket.create_connection` is never called and no `attempted 'gdb' connection rejected` line is generated by the tool itself.
+
+- [ ] **Step 5: Run DebugService tests and verify RED**
+
+Run: `python -m unittest tests.test_debug_service -v`
+
+Expected: current `port_waiter`/raw socket design does not expose log-correlated readiness.
+
+- [ ] **Step 6: Implement log-correlated readiness without losing live logs**
+
+Start one output-forwarding thread before waiting. For every line, forward to the existing sink and set a readiness event only when the requested GDB port and listener phrase match. While waiting, also detect process exit. On timeout, stop OpenOCD, release the hardware-session lease, and report the last bounded log context.
+
+- [ ] **Step 7: Add failing GDB resolver tests**
+
+Cover explicit safe path, `B300_GDB`, verified bundled `vendor/gdb/bin/arm-none-eabi-gdb(.exe)`, PATH `arm-none-eabi-gdb`, Linux `gdb-multiarch` fallback, missing executable with actionable error, and platform-normalized runtime information. `GdbMiBackend()` must defer resolution until `start()` so the GUI can open even when diagnostic state is incomplete.
+
+- [ ] **Step 8: Run resolver tests and verify RED**
+
+Run: `python -m unittest tests.test_gdb_runtime tests.test_gdb_mi -v`
+
+Expected: hard-coded `arm-none-eabi-gdb` remains and no bundled candidate exists.
+
+- [ ] **Step 9: Implement GDB resolution and the shared diagnostic contract**
+
+Prefer an explicit/configured executable, then packaged runtime, then PATH. Validate unsafe control characters and executable existence. Expose path/version/availability through `GdbRuntimeInfo`; Task 2 consumes this shared contract when it creates the full Doctor diagnostics. Lack of GDB blocks integrated debug but does not block Application Flash.
+
+- [ ] **Step 10: Add failing pinned-runtime packaging tests**
+
+Pin these official xPack archives and SHA-256 values:
+
+```text
+Windows x64: xpack-arm-none-eabi-gcc-15.2.1-1.1-win32-x64.zip
+SHA256: bae6a3d1667697ce750c3b13d6d26d80973ecedc2cc87bf04869e83447fd93ea
+Linux x64: xpack-arm-none-eabi-gcc-15.2.1-1.1-linux-x64.tar.gz
+SHA256: da6a49ad4003944b823c6c93702a8787c922ab34bd7e918ec0eaf6933a9b1ff6
+Linux ARM64: xpack-arm-none-eabi-gcc-15.2.1-1.1-linux-arm64.tar.gz
+SHA256: 67980c7990eba7bb7ffdf39699102effd70889f5ac427be19a8c8a6c5fab2972
+```
+
+Assert the builder rejects a filename/hash mismatch, extracts a portable `vendor/gdb` runtime, includes upstream license/provenance, packages GDB only in GUI artifacts (CLI debug-server artifacts remain small), and smoke-runs bundled `arm-none-eabi-gdb --version` on each native CI runner.
+
+- [ ] **Step 11: Implement trusted build-time GDB acquisition and packaging**
+
+Download only from immutable xPack GitHub Release URLs, verify the pinned digest before bounded safe extraction, and never commit the archive/binaries. Reuse the GUI bundle root so Windows ZIP/installer, AppImage, and DEB automatically carry `vendor/gdb`. Preserve stable release filenames.
+
+- [ ] **Step 12: Run focused backend and packaging regression**
+
+Run: `python -m unittest tests.test_process_startup tests.test_gdb_runtime tests.test_debug_service tests.test_gdb_mi tests.test_core_openocd tests.test_build_native_bundle tests.test_gui_packaging tests.test_gui_smoke tests.test_debug_tab -v`
+
+Expected: PASS; OpenOCD/GDB log pipes remain live, no raw readiness connection occurs, and no GUI source file changed.
+
+- [ ] **Step 13: Commit Task 5**
+
+```text
+git add b300_core/process_startup.py b300_core/gdb_runtime.py b300_core/openocd.py b300_core/debug_service.py b300_core/gdb_mi.py build_native_bundle.py package_internal.py .github/workflows docs/04_DEBUG.md tests
+git commit -m "fix(debug): bundle GDB and hide backend processes"
+```
+
+### Task 6: Signed CLI update check and download contract
 
 **Files:**
 - Create: `b300_core/cli_update.py`
@@ -450,14 +561,14 @@ Run: `python -m unittest tests.test_cli_update tests.test_updater tests.test_rel
 
 Expected: PASS and GUI still selects its original installer/AppImage/DEB keys.
 
-- [ ] **Step 10: Commit Task 5**
+- [ ] **Step 10: Commit Task 6**
 
 ```text
 git add b300_core/cli_update.py b300_core/release_manifest.py b300_cli/update_commands.py b300_cli/parser.py b300_stlink.py scripts/release tests/test_cli_update.py tests/test_release_manifest.py tests/test_release_metadata.py tests/test_release_published_verifier.py
 git commit -m "feat(cli): add signed update check and download"
 ```
 
-### Task 6: Controlled self-install, Ubuntu setup, and native CLI packaging
+### Task 7: Controlled self-install, Ubuntu setup, and native CLI packaging
 
 **Files:**
 - Create: `b300_core/cli_update_install.py`
@@ -529,14 +640,14 @@ Run: `python -m unittest tests.test_cli_update_install tests.test_linux_usb_setu
 
 Expected: PASS.
 
-- [ ] **Step 12: Commit Task 6**
+- [ ] **Step 12: Commit Task 7**
 
 ```text
 git add b300_core/cli_update_install.py b300_core/linux_usb.py b300_cli build_native_bundle.py package_internal.py install.ps1 install.sh .github/workflows tests/test_cli_update_install.py tests/test_linux_usb_setup.py tests/test_build_native_bundle.py tests/test_gui_packaging.py tests/test_release_workflow.py
 git commit -m "feat(cli): add managed updates and native packaging"
 ```
 
-### Task 7: Operator documentation, full regression, packaging smoke, and final safety audit
+### Task 8: Operator documentation, full regression, packaging smoke, and final safety audit
 
 **Files:**
 - Modify: `README.md`
@@ -556,7 +667,7 @@ git commit -m "feat(cli): add managed updates and native packaging"
 - Create: `tests/test_cli_safety_contract.py`
 
 **Interfaces:**
-- Consumes: every command and package completed in Tasks 1 through 6.
+- Consumes: every command and package completed in Tasks 1 through 7.
 - Produces: concise operator flow, complete AI/automation reference, hardware acceptance checklist, and final test/safety evidence.
 
 - [ ] **Step 1: Add failing documentation behavior tests**
@@ -617,7 +728,7 @@ Run: `python -m unittest tests.test_gui_smoke tests.test_gui_memory tests.test_g
 
 Expected: PASS without any GUI source modifications on this branch.
 
-- [ ] **Step 12: Commit Task 7**
+- [ ] **Step 12: Commit Task 8**
 
 ```text
 git add README.md DOWNLOAD.md CHANGELOG.md docs tests/test_release_documentation.py tests/test_cli_safety_contract.py
