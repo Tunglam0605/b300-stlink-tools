@@ -27,6 +27,11 @@ from b300_cli.reporting import (
 from b300_cli.update_commands import run_update_command
 from b300_core.diagnostics import DiagnosticsService
 from b300_core.hex_image import inspect_image
+from b300_core.linux_usb import (
+    LinuxUsbSetupReport,
+    SystemChangeConfirmationRequired,
+    perform_linux_usb_setup,
+)
 from b300_core.models import ProbeRef
 from b300_core.openocd import build_debug_command, resolve_openocd, validate_openocd_value
 from b300_core.debug_service import DebugConfig, DebugService, DebugState
@@ -192,8 +197,29 @@ def _memory_dump_record(command: str, address: int, data: bytes, output: Path) -
     return record
 
 
+def _linux_setup_record(report: LinuxUsbSetupReport) -> dict:
+    return {
+        "schema_version": 1,
+        "command": "setup",
+        "status": "ok" if report.supported else "error",
+        "supported": report.supported,
+        "rule_installed": report.rule_installed,
+        "dry_run": report.dry_run,
+        "changed": report.changed,
+        "reason_code": report.reason_code,
+        "message": report.message,
+        "next_action": report.next_action,
+        "rule_path": str(report.rule_path),
+        "commands": [list(command) for command in report.commands],
+    }
+
+
 def main(argv: Optional[List[str]] = None) -> int:
-    args = parse_args(sys.argv[1:] if argv is None else argv)
+    selected_argv = list(sys.argv[1:] if argv is None else argv)
+    if selected_argv and selected_argv[0] == "--apply-cli-update":
+        from b300_core.cli_update_install import main as cli_update_helper_main
+        return cli_update_helper_main(selected_argv[1:])
+    args = parse_args(selected_argv)
     if args.version:
         version_record = {
             "schema_version": 1,
@@ -217,8 +243,41 @@ def main(argv: Optional[List[str]] = None) -> int:
         build_parser().error("the following arguments are required: command")
     reporter = Reporter(args.json)
     try:
-        if args.command == "update":
+        if args.command in {"update", "self-update"}:
             return run_update_command(args, __version__)
+
+        if args.command == "setup":
+            def announce_setup(plan: LinuxUsbSetupReport) -> None:
+                reporter.emit(
+                    "setup_plan",
+                    command="setup",
+                    rule_path=str(plan.rule_path),
+                    commands=[list(command) for command in plan.commands],
+                    message=plan.message,
+                )
+
+            try:
+                report = perform_linux_usb_setup(
+                    install_requested=args.install_udev_rule,
+                    confirmed=args.confirm_system_change,
+                    announce=announce_setup,
+                )
+            except SystemChangeConfirmationRequired as error:
+                record = {
+                    "schema_version": 1,
+                    "command": "setup",
+                    "status": "error",
+                    "reason_code": error.reason_code,
+                    "message": str(error),
+                }
+                emit_snapshot(record, args.json, "%s: %s" % (error.reason_code, error))
+                return 1
+            record = _linux_setup_record(report)
+            text = "%s: %s\nnext_action=%s" % (
+                report.reason_code, report.message, report.next_action,
+            )
+            emit_snapshot(record, args.json, text)
+            return 0 if report.supported else 1
 
         if args.command == "probes":
             probes = list_probes()

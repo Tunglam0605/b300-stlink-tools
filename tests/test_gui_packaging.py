@@ -234,12 +234,16 @@ class GuiPackagingTests(unittest.TestCase):
     def test_internal_cli_zip_excludes_gui(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            cli = root / "b300-stlink.exe"
+            application = root / "b300-stlink"
+            cli = application / "b300-stlink.exe"
             bootstrap = root / "install.ps1"
             openocd = root / "openocd"
             xpack = root / "xpack-openocd.zip"
+            (application / "_internal").mkdir(parents=True)
             (openocd / "bin").mkdir(parents=True)
-            for path in (cli, bootstrap, openocd / "bin" / "openocd.exe"):
+            for path in (
+                    cli, application / "_internal" / "python311.dll", bootstrap,
+                    openocd / "bin" / "openocd.exe"):
                 path.write_bytes(b"test")
             xpack.write_bytes(b"trusted archive")
             output = root / "cli.zip"
@@ -254,6 +258,7 @@ class GuiPackagingTests(unittest.TestCase):
                 package_internal.main([
                     "--flavor", "cli",
                     "--executable", str(cli),
+                    "--application-root", str(application),
                     "--openocd-root", str(openocd),
                     "--bootstrap", str(bootstrap),
                     "--output", str(output),
@@ -267,8 +272,45 @@ class GuiPackagingTests(unittest.TestCase):
                 names = set(archive.namelist())
                 metadata = archive.read("BUNDLE-METADATA.txt").decode("ascii")
         self.assertIn("b300-stlink.exe", names)
+        self.assertIn("_internal/python311.dll", names)
         self.assertNotIn("b300-stlink-gui.exe", names)
+        self.assertIn("vendor/openocd/bin/openocd.exe", names)
         self.assertIn("flavor=cli", metadata)
+
+    def test_native_install_launchers_do_not_require_python_or_cubeide(self) -> None:
+        for filename in ("install.ps1", "install.sh"):
+            text = (ROOT / filename).read_text(encoding="utf-8").lower()
+            self.assertNotIn("python", text)
+            self.assertNotIn("cubeide", text)
+            self.assertIn("b300-stlink", text)
+
+    def test_windows_cli_packaging_requires_the_complete_onedir_application_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cli = root / "b300-stlink.exe"
+            bootstrap = root / "install.ps1"
+            openocd = root / "openocd"
+            xpack = root / "xpack.zip"
+            (openocd / "bin").mkdir(parents=True)
+            for path in (cli, bootstrap, openocd / "bin" / "openocd.exe", xpack):
+                path.write_bytes(b"runtime")
+            manifest_digest = hashlib.sha256(
+                package_internal.openocd_manifest(openocd)
+            ).hexdigest()
+            stderr = io.StringIO()
+            with mock.patch.object(
+                    package_internal, "TRUSTED_TREE_MANIFESTS",
+                    {"windows-x64": manifest_digest},
+            ), redirect_stderr(stderr), self.assertRaises(SystemExit):
+                package_internal.main([
+                    "--flavor", "cli", "--executable", str(cli),
+                    "--openocd-root", str(openocd), "--bootstrap", str(bootstrap),
+                    "--output", str(root / "cli.zip"), "--platform", "windows-x64",
+                    "--openocd-archive", "xpack.zip", "--openocd-sha256", "A" * 64,
+                    "--openocd-package", str(xpack), "--internal-distribution-approved",
+                ])
+            self.assertIn("application-root", stderr.getvalue())
+
 
     def test_gui_package_includes_gdb_but_cli_package_rejects_it(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

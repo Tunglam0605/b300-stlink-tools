@@ -169,6 +169,39 @@ def build_parser() -> argparse.ArgumentParser:
         "--dest", type=Path,
         help="Destination directory (default: the per-user update cache).",
     )
+    update_install = update_commands.add_parser(
+        "install", help="Verify and hand off a managed per-user CLI update.",
+        parents=[json_parent],
+    )
+    update_install.add_argument(
+        "--verified-package", type=Path,
+        help=(
+            "Reuse this package only when it matches the freshly checked signed asset; "
+            "otherwise the signed asset is downloaded again."
+        ),
+    )
+
+    self_update = commands.add_parser(
+        "self-update", help="Alias for update install.", parents=[json_parent],
+    )
+    self_update.set_defaults(update_command="install")
+    self_update.add_argument(
+        "--verified-package", type=Path,
+        help="Reuse a package that matches the freshly checked signed asset.",
+    )
+
+    setup = commands.add_parser(
+        "setup", help="Inspect Linux USB access; optionally install the canonical udev rule.",
+        parents=[json_parent],
+    )
+    setup.add_argument(
+        "--install-udev-rule", action="store_true",
+        help="Request installation of the canonical 49-b300-stlink.rules file.",
+    )
+    setup.add_argument(
+        "--confirm-system-change", action="store_true",
+        help="Confirm the displayed privileged rule copy, reload, and narrow USB trigger.",
+    )
     return parser
 
 

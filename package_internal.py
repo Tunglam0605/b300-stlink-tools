@@ -105,6 +105,11 @@ def main(argv=None) -> int:
             parser.error("--gdb-sha256 must contain exactly 64 hexadecimal characters.")
     elif any(argument is not None for argument in gdb_arguments):
         parser.error("GDB runtime arguments are allowed only in GUI artifacts.")
+    if args.flavor == "cli" and args.platform == "windows-x64":
+        if args.application_root is None:
+            parser.error("Windows CLI artifacts require --application-root for the onedir runtime.")
+        if not (args.application_root / "_internal").is_dir():
+            parser.error("Windows CLI --application-root is missing the _internal runtime.")
     required = [args.executable, args.openocd_root, args.bootstrap, args.openocd_package]
     if args.gdb_root is not None:
         required.append(args.gdb_root)

@@ -16,15 +16,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from b300_version import __version__ as TOOL_VERSION
+from b300_core.linux_usb import B300_UDEV_RULE
 
 DESKTOP_SOURCE = ROOT / "packaging" / "linux" / "b300-stlink-gui.desktop"
 ICON_SOURCE = ROOT / "branding" / "b300-stlink-icon.png"
-
-B300_UDEV_RULE = (
-    'SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="374?", '
-    'MODE="0660", GROUP="plugdev", TAG+="uaccess"\n'
-)
-
 
 def gui_output_names(architecture: str):
     if architecture == "x86_64":

@@ -162,6 +162,26 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertGreaterEqual(workflow.count("Smoke-test Linux GUI on X11"), 2)
         self.assertGreaterEqual(workflow.count("env -u QT_QPA_PLATFORM xvfb-run -a"), 2)
 
+    def test_all_native_cli_archives_are_staged_and_smoked_without_probe_access(self) -> None:
+        for name in ("release.yml", "release-dry-run.yml"):
+            with self.subTest(workflow=name):
+                workflow = load_workflow(name)
+                text = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+                self.assertIn("B300-STLink-CLI-Windows-x64.zip", text)
+                self.assertIn("Expand-Archive", text)
+                self.assertIn("windows-cli-bundle", text)
+                self.assertIn("b300-stlink.exe --help", text)
+                self.assertIn("b300-stlink.exe --version --json", text)
+                self.assertIn("b300-stlink.exe doctor --json", text)
+                self.assertIn("windows-cli-bundle\\vendor\\openocd\\bin\\openocd.exe", text)
+                self.assertIn("tar -xzf", text)
+                self.assertIn("linux-cli-bundle", text)
+                self.assertIn("linux-cli-bundle/b300-stlink --help", text)
+                self.assertIn("linux-cli-bundle/b300-stlink --version --json", text)
+                self.assertIn("linux-cli-bundle/b300-stlink doctor --json", text)
+                self.assertIn("linux-cli-bundle/vendor/openocd/bin/openocd --version", text)
+                self.assertNotIn("sudo b300-stlink", text)
+
 
 
 if __name__ == "__main__":

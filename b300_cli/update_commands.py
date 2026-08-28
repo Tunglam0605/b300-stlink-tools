@@ -12,6 +12,11 @@ from b300_core.cli_update import (
     build_cli_update_runtime,
     default_cli_update_cache,
 )
+from b300_core.cli_update_install import (
+    ManagedInstallUnsupported,
+    launch_managed_cli_install,
+    verify_cli_package,
+)
 from b300_core.release_manifest import ManifestError, ReleaseAsset, SignatureError
 from b300_core.updater import DownloadCancelled, UpdateDownloadError
 
@@ -82,52 +87,88 @@ def run_update_command(
         environ: Optional[Mapping[str, str]] = None,
         home: Optional[Path] = None) -> int:
     action = getattr(args, "update_command", None)
-    command = "update" if action is None else "update %s" % action
-    if action not in {"check", "download"}:
+    command = (
+        "self-update" if getattr(args, "command", None) == "self-update" else
+        ("update" if action is None else "update %s" % action)
+    )
+    if action not in {"check", "download", "install"}:
         return _emit_failure(
             args, "update", "UPDATE_SUBCOMMAND_REQUIRED",
-            ValueError("The update command requires check or download."),
+            ValueError("The update command requires check, download, or install."),
         )
     try:
         selected_runtime = runtime or build_cli_update_runtime()
         result = selected_runtime.client.check(current_version)
         record = _result_record(command, current_version, selected_runtime, result)
         if action == "check" or not result.available:
-            if action == "download":
+            if action in {"download", "install"}:
                 record["downloaded"] = False
                 record["path"] = None
+            if action == "install":
+                record["handoff_started"] = False
             emit_snapshot(record, args.json, _format_result(record))
             return 0
 
         if result.asset is None:
             raise ManifestError("Available update is missing its signed CLI asset.")
-        destination = (
-            Path(args.dest) if args.dest is not None else
-            default_cli_update_cache(
-                selected_runtime.platform, environ=environ, home=home,
+        verified_package = getattr(args, "verified_package", None)
+        if action == "install" and verified_package is not None:
+            final_path = verify_cli_package(
+                Path(verified_package).expanduser().resolve(),
+                result.asset,
+                selected_runtime.platform,
             )
-        ).expanduser().resolve()
-        final_path = selected_runtime.client.download(
-            result.asset,
-            destination,
-            lambda _received, _total: None,
-            cancel if cancel is not None else Event(),
-        ).resolve()
-        record["downloaded"] = True
+            record["downloaded"] = False
+        else:
+            explicit_destination = getattr(args, "dest", None)
+            destination = (
+                Path(explicit_destination) if explicit_destination is not None else
+                default_cli_update_cache(
+                    selected_runtime.platform, environ=environ, home=home,
+                )
+            ).expanduser().resolve()
+            final_path = selected_runtime.client.download(
+                result.asset,
+                destination,
+                lambda _received, _total: None,
+                cancel if cancel is not None else Event(),
+            ).resolve()
+            record["downloaded"] = True
         record["path"] = str(final_path)
+        if action == "install":
+            # Recheck even a just-downloaded file at the mutation boundary.
+            verified_path = verify_cli_package(
+                final_path, result.asset, selected_runtime.platform,
+            )
+            handoff = launch_managed_cli_install(
+                verified_path, result.asset, selected_runtime.platform.value,
+                environ=environ, home=home,
+            )
+            record["handoff_started"] = True
+            record["result_log"] = str(handoff.result_log)
         emit_snapshot(record, args.json, _format_result(record))
         return 0
     except (SignatureError, ManifestError) as error:
         return _emit_failure(args, command, "UPDATE_SECURITY_FAILURE", error)
     except DownloadCancelled as error:
         return _emit_failure(args, command, "UPDATE_CANCELLED", error)
+    except ManagedInstallUnsupported as error:
+        return _emit_failure(args, command, error.reason_code, error)
     except UpdateDownloadError as error:
         reason = "UPDATE_CHECK_FAILED" if action == "check" else "UPDATE_DOWNLOAD_FAILED"
         return _emit_failure(args, command, reason, error)
-    except (OSError, RuntimeError, ValueError) as error:
+    except ValueError as error:
+        reason = "UPDATE_SECURITY_FAILURE" if action == "install" else (
+            "UPDATE_CHECK_FAILED" if action == "check" else "UPDATE_DOWNLOAD_FAILED"
+        )
+        return _emit_failure(args, command, reason, error)
+    except (OSError, RuntimeError) as error:
         reason = (
             "UNSUPPORTED_UPDATE_PLATFORM"
             if str(error).startswith("Unsupported CLI update platform:")
-            else ("UPDATE_CHECK_FAILED" if action == "check" else "UPDATE_DOWNLOAD_FAILED")
+            else (
+                "UPDATE_CHECK_FAILED" if action == "check" else
+                ("UPDATE_INSTALL_FAILED" if action == "install" else "UPDATE_DOWNLOAD_FAILED")
+            )
         )
         return _emit_failure(args, command, reason, error)

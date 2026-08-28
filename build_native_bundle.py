@@ -14,8 +14,10 @@ import tarfile
 import tempfile
 import urllib.request
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 from pathlib import PurePosixPath
+from typing import Optional
 
 from b300_version import __version__ as TOOL_VERSION
 from b300_core.offline_setup import (
@@ -119,6 +121,36 @@ def runtime_resources(platform_name: str):
 def pyinstaller_data_argument(source: Path) -> str:
     separator = ";" if platform.system().lower() == "windows" else ":"
     return "%s%sresources/firmware" % (source, separator)
+
+
+@dataclass(frozen=True)
+class CliPyinstallerPlan:
+    command: tuple[str, ...]
+    executable: Path
+    application_root: Optional[Path]
+
+
+def cli_pyinstaller_plan(
+        platform_name: str, output_dir: Path, work_dir: Path) -> CliPyinstallerPlan:
+    """Keep Windows CLI onedir and Linux CLI onefile without changing GUI packaging."""
+    output = Path(output_dir)
+    command = [
+        sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
+        "--onedir" if platform_name == "windows-x64" else "--onefile",
+        "--name", "b300-stlink", "--distpath", str(output),
+        "--workpath", str(work_dir),
+        "--icon", str(ROOT / "branding" / "b300-stlink-icon.ico"),
+    ]
+    for resource in runtime_resources(platform_name):
+        command.extend(["--add-data", pyinstaller_data_argument(resource)])
+    command.append(str(ROOT / "b300_stlink.py"))
+    if platform_name == "windows-x64":
+        return CliPyinstallerPlan(
+            tuple(command),
+            Path("b300-stlink") / "b300-stlink.exe",
+            output / "b300-stlink",
+        )
+    return CliPyinstallerPlan(tuple(command), Path("b300-stlink"), None)
 
 
 def fetch(url: str, output: Path) -> None:
@@ -417,17 +449,12 @@ def main(argv=None) -> int:
             extract_trusted_gdb_package(gdb_archive, gdb_root, platform_name)
         subprocess.check_call([sys.executable, "-m", "pip", "install", "--user",
                                "-r", str(ROOT / "requirements-build.txt")])
+        cli_plan = None
         if args.flavor in {"all", "cli"}:
-            command = [
-                sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
-                "--onefile", "--name", "b300-stlink", "--distpath", str(args.output_dir),
-                "--workpath", str(temp / "pyinstaller-cli"),
-                "--icon", str(ROOT / "branding" / "b300-stlink-icon.ico"),
-            ]
-            for resource in runtime_resources(platform_name):
-                command.extend(["--add-data", pyinstaller_data_argument(resource)])
-            command.append(str(ROOT / "b300_stlink.py"))
-            subprocess.check_call(command)
+            cli_plan = cli_pyinstaller_plan(
+                platform_name, args.output_dir, temp / "pyinstaller-cli",
+            )
+            subprocess.check_call(list(cli_plan.command))
         gui_executable = "b300-stlink-gui.exe" if platform_name == "windows-x64" else "b300-stlink-gui"
         gui_application_root = None
         if args.flavor in {"all", "gui"}:
@@ -471,8 +498,12 @@ def main(argv=None) -> int:
             subprocess.check_call(command)
 
         if args.flavor in {"all", "cli"}:
-            package("cli", executable, cli_name,
-                    [ROOT / "LICENSE"] + runtime_resources(platform_name))
+            assert cli_plan is not None
+            package(
+                "cli", str(cli_plan.executable), cli_name,
+                [ROOT / "LICENSE"] + runtime_resources(platform_name),
+                application_root=cli_plan.application_root,
+            )
         if args.flavor in {"all", "gui"}:
             package(
                 "gui", gui_executable, gui_name,

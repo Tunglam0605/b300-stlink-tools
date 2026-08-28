@@ -94,6 +94,28 @@ class NativeBundleTargetTests(unittest.TestCase):
             ),
         )
 
+    def test_windows_cli_uses_onedir_while_linux_cli_remains_onefile(self) -> None:
+        module = builder()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            windows = module.cli_pyinstaller_plan(
+                "windows-x64", root / "release", root / "work"
+            )
+            linux = module.cli_pyinstaller_plan(
+                "linux-x64", root / "release", root / "work"
+            )
+        self.assertIn("--onedir", windows.command)
+        self.assertNotIn("--onefile", windows.command)
+        self.assertEqual(windows.application_root, root / "release" / "b300-stlink")
+        self.assertEqual(
+            windows.executable,
+            Path("b300-stlink") / "b300-stlink.exe",
+        )
+        self.assertIn("--onefile", linux.command)
+        self.assertNotIn("--onedir", linux.command)
+        self.assertIsNone(linux.application_root)
+        self.assertEqual(linux.executable, Path("b300-stlink"))
+
 
     def test_native_builder_includes_trusted_bootloader_resources_for_every_bundle(self) -> None:
         module = builder()
