@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import io
+import subprocess
 import sys
 import tempfile
 import threading
@@ -25,7 +27,7 @@ from b300_core.openocd import (
     resolve_openocd,
 )
 from b300_core.policy import build_flash_plan
-from tests.test_core_hex_policy import write_hex
+from tests.test_core_hex_policy import APPLICATION_VECTOR, write_hex
 
 
 class OpenOcdCoreTests(unittest.TestCase):
@@ -95,7 +97,7 @@ class OpenOcdCoreTests(unittest.TestCase):
                 self.assertEqual(resolve_openocd(), "openocd")
 
     def make_plan(self, directory: str):
-        image = inspect_image(write_hex(directory, 0x08010000, b"\xAA"))
+        image = inspect_image(write_hex(directory, 0x08010000, APPLICATION_VECTOR))
         return build_flash_plan(
             image,
             ProbeRef(serial="SAFE123"),
@@ -166,6 +168,32 @@ class OpenOcdCoreTests(unittest.TestCase):
         result = OpenOcdRunner().run(["definitely-missing-b300-openocd"])
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("not found", result.output.lower())
+
+    def test_runner_passes_hidden_process_policy_without_losing_log_pipes(self) -> None:
+        captured = {}
+
+        class Process:
+            stdout = io.StringIO("")
+
+            def poll(self):
+                return 0
+
+            def wait(self, timeout=None):
+                return 0
+
+        with mock.patch("b300_core.process_startup.subprocess.CREATE_NO_WINDOW", 0x08000000,
+                        create=True):
+            result = OpenOcdRunner(
+                process_factory=lambda command, **kwargs: captured.update(kwargs) or Process(),
+                platform_name="windows",
+            ).run(["openocd"])
+
+        self.assertEqual(result.returncode, 0)
+        self.assertTrue(captured["creationflags"] & 0x08000000)
+        self.assertEqual(captured["stdout"], subprocess.PIPE)
+        self.assertEqual(captured["stderr"], subprocess.STDOUT)
+        self.assertTrue(captured["text"])
+        self.assertFalse(captured["shell"])
 
     def test_runner_timeout_terminates_process_and_preserves_output(self) -> None:
         started = time.monotonic()
@@ -253,6 +281,20 @@ class OpenOcdCoreTests(unittest.TestCase):
             "#  2: 0x00008000 (0x4000 16kB) protected"
         )
         self.assertTrue(info.readout_protected)
+        self.assertEqual(info.protected_sectors, (0, 1, 2))
+
+    def test_target_parser_marks_truncated_sector_report_incomplete(self) -> None:
+        info = parse_target_info(
+            "Info : Target voltage: 3.10\n"
+            "Info : device id = 0x101f6413\n"
+            "Info : flash size = 512 KiB\n"
+            "#  0: 0x00000000 (0x4000 16kB) protected\n"
+            "#  1: 0x00004000 (0x4000 16kB) protected\n"
+            "#  2: 0x00008000 (0x4000 16kB) protected\n"
+            "#  3: 0x0000c000 (0x4000 16kB) not protected"
+        )
+
+        self.assertFalse(info.protection_reported)
         self.assertEqual(info.protected_sectors, (0, 1, 2))
 
 

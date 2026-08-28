@@ -20,6 +20,17 @@ def load_workflow(name: str):
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
+    def test_windows_dry_run_smokes_the_gui_onedir_executable(self) -> None:
+        text = (
+            ROOT / ".github" / "workflows" / "release-dry-run.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            r"-FilePath .\release\b300-stlink-gui\b300-stlink-gui.exe", text,
+        )
+        self.assertNotIn(
+            r"-FilePath .\release\b300-stlink-gui.exe", text,
+        )
+
     def test_official_release_is_tag_only_and_publish_is_least_privileged(self) -> None:
         workflow = load_workflow("release.yml")
         self.assertEqual(workflow["on"], {"push": {"tags": ["v*"]}})
@@ -148,11 +159,39 @@ class ReleaseWorkflowTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIn(name, text)
 
+    def test_linux_release_smoke_tests_detached_update_helper(self) -> None:
+        for name in ("release.yml", "release-dry-run.yml"):
+            with self.subTest(workflow=name):
+                workflow = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+                self.assertIn("--apply-verified-update --help", workflow)
+        release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        self.assertGreaterEqual(release.count("--apply-verified-update --help"), 2)
+
     def test_linux_release_uses_x11_smoke_test(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
         self.assertIn("xauth xvfb", workflow)
         self.assertGreaterEqual(workflow.count("Smoke-test Linux GUI on X11"), 2)
         self.assertGreaterEqual(workflow.count("env -u QT_QPA_PLATFORM xvfb-run -a"), 2)
+
+    def test_all_native_cli_archives_are_staged_and_smoked_without_probe_access(self) -> None:
+        for name in ("release.yml", "release-dry-run.yml"):
+            with self.subTest(workflow=name):
+                workflow = load_workflow(name)
+                text = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+                self.assertIn("B300-STLink-CLI-Windows-x64.zip", text)
+                self.assertIn("Expand-Archive", text)
+                self.assertIn("windows-cli-bundle", text)
+                self.assertIn("b300-stlink.exe --help", text)
+                self.assertIn("b300-stlink.exe --version --json", text)
+                self.assertIn("b300-stlink.exe doctor --json", text)
+                self.assertIn("windows-cli-bundle\\vendor\\openocd\\bin\\openocd.exe", text)
+                self.assertIn("tar -xzf", text)
+                self.assertIn("linux-cli-bundle", text)
+                self.assertIn("linux-cli-bundle/b300-stlink --help", text)
+                self.assertIn("linux-cli-bundle/b300-stlink --version --json", text)
+                self.assertIn("linux-cli-bundle/b300-stlink doctor --json", text)
+                self.assertIn("linux-cli-bundle/vendor/openocd/bin/openocd --version", text)
+                self.assertNotIn("sudo b300-stlink", text)
 
 
 

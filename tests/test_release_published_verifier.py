@@ -6,7 +6,6 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from scripts.release.release_contract import UPDATE_PLATFORM_FILES
 from scripts.release.verify_published import verify_once, verify_with_retry
 
 
@@ -14,10 +13,20 @@ VERSION = "1.2.3"
 BASE = "https://github.com/Tunglam0605/b300-stlink-tools/releases/download/v%s/" % VERSION
 MANIFEST_URL = "https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/latest.json"
 SIGNATURE_URL = MANIFEST_URL + ".minisig"
+EXPECTED_UPDATE_FILES = {
+    "windows-x64": "B300-STLink-GUI-Windows-x64.exe",
+    "linux-x64-appimage": "B300-STLink-GUI-Ubuntu-x64.AppImage",
+    "linux-x64-deb": "b300-stlink-gui_amd64.deb",
+    "linux-arm64-appimage": "B300-STLink-GUI-Ubuntu-arm64.AppImage",
+    "linux-arm64-deb": "b300-stlink-gui_arm64.deb",
+    "windows-x64-cli": "B300-STLink-CLI-Windows-x64.zip",
+    "linux-x64-cli": "B300-STLink-CLI-Linux-x64.tar.gz",
+    "linux-arm64-cli": "B300-STLink-CLI-Linux-arm64.tar.gz",
+}
 
 
 def manifest_bytes(platforms=None) -> bytes:
-    selected = platforms or UPDATE_PLATFORM_FILES
+    selected = platforms or EXPECTED_UPDATE_FILES
     value = {
         "notes": "release",
         "platforms": {
@@ -69,7 +78,7 @@ class PublishedReleaseVerifierTests(unittest.TestCase):
 
         self.assertEqual(len(commands), 1)
         self.assertIn("-Vm", commands[0])
-        self.assertEqual(set(probed), {BASE + name for name in UPDATE_PLATFORM_FILES.values()})
+        self.assertEqual(set(probed), {BASE + name for name in EXPECTED_UPDATE_FILES.values()})
 
     def test_signature_failure_is_fail_closed_before_asset_probe(self) -> None:
         probed = []
@@ -90,7 +99,7 @@ class PublishedReleaseVerifierTests(unittest.TestCase):
         self.assertEqual(probed, [])
 
     def test_missing_platform_is_rejected_even_with_valid_signature(self) -> None:
-        subset = dict(UPDATE_PLATFORM_FILES)
+        subset = dict(EXPECTED_UPDATE_FILES)
         subset.pop(next(iter(subset)))
         with self.assertRaisesRegex(ValueError, "platform set mismatch"):
             verify_once(

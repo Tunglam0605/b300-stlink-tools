@@ -9,7 +9,7 @@ from b300_core.hex_image import inspect_image
 from b300_core.models import CommandResult, ProbeRef, TargetInfo
 from b300_core.policy import build_flash_plan
 from b300_core.service import B300Service, ProvisioningError
-from tests.test_core_hex_policy import write_hex
+from tests.test_core_hex_policy import APPLICATION_VECTOR, write_hex
 
 
 class ScriptedRunner:
@@ -52,7 +52,7 @@ def supported_target() -> CommandResult:
 
 class FlashServiceTests(unittest.TestCase):
     def make_plan(self, directory: str):
-        image = inspect_image(write_hex(directory, 0x08010000, b"\x01"))
+        image = inspect_image(write_hex(directory, 0x08010000, APPLICATION_VECTOR))
         return build_flash_plan(
             image,
             ProbeRef("SAFE123"),

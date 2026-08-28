@@ -564,32 +564,41 @@ class B300Service:
                     final_target=final_target,
                 )
 
+    def _read_memory(self, probe: ProbeRef, address: int, length: int,
+                     event_sink: Optional[EventSink] = None,
+                     cancel_event: Optional[threading.Event] = None) -> bytes:
+        """Perform one bounded OpenOCD memory read inside an existing session."""
+        return read_memory(
+            probe,
+            address,
+            length,
+            executable=self.executable,
+            runner=self.runner,
+            event_sink=event_sink,
+            cancel_event=cancel_event,
+        )
+
+    def read_memory(self, probe: ProbeRef, address: int, length: int,
+                    event_sink: Optional[EventSink] = None,
+                    cancel_event: Optional[threading.Event] = None) -> bytes:
+        """Read a policy-bounded flash range without exposing a write operation."""
+        with self._exclusive_hardware_operation(HardwareMode.READING, probe):
+            return self._read_memory(probe, address, length, event_sink, cancel_event)
+
     def read_sector(self, probe: ProbeRef, sector_index: int,
                     event_sink: Optional[EventSink] = None,
                     cancel_event: Optional[threading.Event] = None) -> bytes:
+        sector = sector_by_index(sector_index)
         with self._exclusive_hardware_operation(HardwareMode.READING, probe):
-            sector = sector_by_index(sector_index)
-            return read_memory(
-                probe,
-                sector.start_address,
-                sector.size,
-                executable=self.executable,
-                runner=self.runner,
-                event_sink=event_sink,
-                cancel_event=cancel_event,
+            return self._read_memory(
+                probe, sector.start_address, sector.size, event_sink, cancel_event
             )
 
     def read_metadata(self, probe: ProbeRef,
                       event_sink: Optional[EventSink] = None,
                       cancel_event: Optional[threading.Event] = None) -> OtaMetadata:
         with self._exclusive_hardware_operation(HardwareMode.READING, probe):
-            data = read_memory(
-                probe,
-                METADATA_ADDRESS,
-                OTA_META_SIZE,
-                executable=self.executable,
-                runner=self.runner,
-                event_sink=event_sink,
-                cancel_event=cancel_event,
+            data = self._read_memory(
+                probe, METADATA_ADDRESS, OTA_META_SIZE, event_sink, cancel_event
             )
             return decode_ota_metadata(data)

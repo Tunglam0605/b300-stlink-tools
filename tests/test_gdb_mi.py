@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import queue
+import subprocess
 import threading
 import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 from b300_core.gdb_mi import (
     GdbMiBackend,
@@ -80,7 +82,8 @@ class GdbMiBackendTests(unittest.TestCase):
             process_factory=lambda command, **kwargs: process,
             response_timeout_seconds=timeout,
         )
-        backend.start()
+        with mock.patch("b300_core.gdb_mi.resolve_gdb", return_value="test-gdb"):
+            backend.start()
         return backend, process
 
     @staticmethod
@@ -107,6 +110,28 @@ class GdbMiBackendTests(unittest.TestCase):
         self.assertEqual(captured[0].token, 1)
         self.assertEqual(captured[0].result_class, "connected")
         self.assertEqual(process.stdin.writes, ["1-target-select remote 127.0.0.1:3333\n"])
+        backend.stop()
+
+    def test_start_defers_gdb_resolution_and_uses_hidden_process_policy(self) -> None:
+        process = FakeGdbProcess()
+        captured = {}
+        backend = GdbMiBackend(
+            process_factory=lambda command, **kwargs: captured.update(kwargs) or process,
+            response_timeout_seconds=0.2,
+            platform_name="windows",
+        )
+        with mock.patch("b300_core.gdb_mi.resolve_gdb", return_value="bundled-gdb") as resolver, \
+             mock.patch("b300_core.process_startup.subprocess.CREATE_NO_WINDOW", 0x08000000,
+                        create=True):
+            self.assertIsNone(backend.executable)
+            backend.start()
+        resolver.assert_called_once_with(None)
+        self.assertTrue(captured["creationflags"] & 0x08000000)
+        self.assertEqual(captured["stdin"], subprocess.PIPE)
+        self.assertEqual(captured["stdout"], subprocess.PIPE)
+        self.assertEqual(captured["stderr"], subprocess.STDOUT)
+        self.assertTrue(captured["text"])
+        self.assertFalse(captured["shell"])
         backend.stop()
 
     def test_wrong_token_and_async_records_do_not_satisfy_command(self) -> None:

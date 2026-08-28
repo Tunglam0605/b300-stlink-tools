@@ -18,6 +18,34 @@ class UpdatePlatform(str, Enum):
     LINUX_ARM64_DEB = "linux-arm64-deb"
 
 
+class CliUpdatePlatform(str, Enum):
+    WINDOWS_X64 = "windows-x64-cli"
+    LINUX_X64 = "linux-x64-cli"
+    LINUX_ARM64 = "linux-arm64-cli"
+
+
+def detect_cli_update_platform(
+        system: Optional[str] = None,
+        machine: Optional[str] = None) -> CliUpdatePlatform:
+    selected_system = (system or platform.system()).lower()
+    selected_machine = (machine or platform.machine()).lower()
+    if not selected_machine:
+        selected_machine = {
+            "win-amd64": "x86_64",
+            "linux-x86_64": "x86_64",
+            "linux-aarch64": "aarch64",
+        }.get(sysconfig.get_platform().lower(), "")
+    if selected_system == "windows" and selected_machine in {"amd64", "x86_64"}:
+        return CliUpdatePlatform.WINDOWS_X64
+    if selected_system == "linux" and selected_machine in {"amd64", "x86_64"}:
+        return CliUpdatePlatform.LINUX_X64
+    if selected_system == "linux" and selected_machine in {"arm64", "aarch64"}:
+        return CliUpdatePlatform.LINUX_ARM64
+    raise RuntimeError(
+        "Unsupported CLI update platform: %s/%s" % (selected_system, selected_machine)
+    )
+
+
 def detect_update_platform(
         executable: Path, system: Optional[str] = None,
         machine: Optional[str] = None) -> UpdatePlatform:

@@ -62,7 +62,9 @@ xác nhận rõ file/board được phép nạp trong phiên hiện tại.
 `provision-bootloader` là workflow duy nhất được phép thay đổi WRP, chỉ dành cho
 main/chip mới hoặc bảo trì Bootloader được ủy quyền. Dùng artifact bundle có
 hash/provenance cố định, dry-run trước, rồi chỉ chạy lệnh thật với
-`--confirm-factory-provision` và CLI thật phải pin đúng `--probe-serial`. Nó chỉ
+`--confirm-factory-provision`. CLI thật phải chọn đúng một probe vật lý: khi chỉ có
+một probe không có serial, `ProbeRef(None)` là hợp lệ; khi có nhiều probe thì phải
+pin chính xác bằng `--probe-serial`, không được bịa serial từ USB identity. Nó chỉ
 `flash protect 0 0 2 off/on`, reset/halt để reload Option Bytes sau mỗi thay đổi
 WRP, verify trạng thái, erase/program đúng S0--S2, restore/verify WRP rồi mới
 `reset run`. Không mass erase, không thay RDP và không `stm32f2x lock/unlock`.
@@ -101,9 +103,12 @@ cơ cấu thật.
 1. Có thể dry-run: `b300-stlink debug --dry-run --json`.
 2. Local dùng mặc định loopback:
    `b300-stlink debug --gdb-port 3333`.
+   Khi cần OpenOCD TCL automation local, dùng:
+   `b300-stlink debug --gdb-port 3333 --tcl-port 6666`.
 3. Remote qua IPC chỉ khi user cho phép và mạng tin cậy:
    `b300-stlink debug --bind-address 0.0.0.0 --gdb-port 3333`.
 4. Telnet/TCL phải giữ disabled cho remote; không lách validation để mở cổng.
+   Các debug port đang bật phải khác nhau; `3333`/`6666` là cặp chuẩn local.
 5. Dùng đúng AXF/ELF tương ứng để đọc symbol. Không chạy GDB `load`, `restore`
    hoặc lệnh flash trong mode debug.
 6. Trước khi đóng, chạy `monitor reset run`, `detach`, `quit`; dừng OpenOCD và

@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import subprocess
 import sys
 import unittest
+import hashlib
+import tempfile
+import tarfile
+import zipfile
 from pathlib import Path
+from unittest import mock
 
 import b300_version
 import b300_core
@@ -88,6 +94,28 @@ class NativeBundleTargetTests(unittest.TestCase):
             ),
         )
 
+    def test_windows_cli_uses_onedir_while_linux_cli_remains_onefile(self) -> None:
+        module = builder()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            windows = module.cli_pyinstaller_plan(
+                "windows-x64", root / "release", root / "work"
+            )
+            linux = module.cli_pyinstaller_plan(
+                "linux-x64", root / "release", root / "work"
+            )
+        self.assertIn("--onedir", windows.command)
+        self.assertNotIn("--onefile", windows.command)
+        self.assertEqual(windows.application_root, root / "release" / "b300-stlink")
+        self.assertEqual(
+            windows.executable,
+            Path("b300-stlink") / "b300-stlink.exe",
+        )
+        self.assertIn("--onefile", linux.command)
+        self.assertNotIn("--onedir", linux.command)
+        self.assertIsNone(linux.application_root)
+        self.assertEqual(linux.executable, Path("b300-stlink"))
+
 
     def test_native_builder_includes_trusted_bootloader_resources_for_every_bundle(self) -> None:
         module = builder()
@@ -96,6 +124,159 @@ class NativeBundleTargetTests(unittest.TestCase):
                 names = {path.name for path in module.runtime_resources(platform_name)}
                 self.assertIn("b300_bootloader_f407ze_com3_v00050001.hex", names)
                 self.assertIn("b300_bootloader_manifest.json", names)
+
+    def test_gdb_trust_anchors_match_the_pinned_xpack_archives(self) -> None:
+        module = builder()
+        self.assertEqual(module.TRUSTED_GDB_PACKAGES["windows-x64"], (
+            "xpack-arm-none-eabi-gcc-15.2.1-1.1-win32-x64.zip",
+            "bae6a3d1667697ce750c3b13d6d26d80973ecedc2cc87bf04869e83447fd93ea",
+        ))
+        self.assertEqual(module.TRUSTED_GDB_PACKAGES["linux-x64"][1],
+                         "da6a49ad4003944b823c6c93702a8787c922ab34bd7e918ec0eaf6933a9b1ff6")
+        self.assertEqual(module.TRUSTED_GDB_PACKAGES["linux-arm64"][1],
+                         "67980c7990eba7bb7ffdf39699102effd70889f5ac427be19a8c8a6c5fab2972")
+        with self.assertRaisesRegex(RuntimeError, "trust anchor"):
+            module.validate_trusted_gdb_package("windows-x64", "wrong.zip", "0" * 64)
+
+    def test_gdb_extraction_verifies_digest_and_preserves_license(self) -> None:
+        module = builder()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "runtime.zip"
+            with zipfile.ZipFile(archive, "w") as bundle:
+                bundle.writestr("xpack-arm-none-eabi-gcc-test/bin/arm-none-eabi-gdb.exe", b"gdb")
+                bundle.writestr("xpack-arm-none-eabi-gcc-test/LICENSE", b"upstream license")
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            with mock.patch.object(module, "TRUSTED_GDB_PACKAGES", {
+                "windows-x64": (archive.name, digest),
+            }):
+                executable = module.extract_trusted_gdb_package(
+                    archive, root / "gdb", "windows-x64"
+                )
+            self.assertEqual(executable, root / "gdb" / "bin" / "arm-none-eabi-gdb.exe")
+            self.assertEqual((root / "gdb" / "LICENSE").read_bytes(), b"upstream license")
+
+    def test_gdb_extraction_copies_safe_relative_tar_symlinks(self) -> None:
+        module = builder()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "runtime.tar.gz"
+            package_root = "xpack-arm-none-eabi-gcc-test"
+            with tarfile.open(archive, "w:gz") as bundle:
+                for name, data in (
+                    ("bin/arm-none-eabi-gdb", b"gdb"),
+                    ("lib/libgdb.so.1", b"library"),
+                ):
+                    info = tarfile.TarInfo(package_root + "/" + name)
+                    info.size = len(data)
+                    bundle.addfile(info, io.BytesIO(data))
+                link = tarfile.TarInfo(package_root + "/lib/libgdb.so")
+                link.type = tarfile.SYMTYPE
+                link.linkname = "libgdb.so.1"
+                bundle.addfile(link)
+                hard_link = tarfile.TarInfo(package_root + "/lib/libgdb-hard.so")
+                hard_link.type = tarfile.LNKTYPE
+                hard_link.linkname = package_root + "/lib/libgdb.so.1"
+                bundle.addfile(hard_link)
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            with mock.patch.object(module, "TRUSTED_GDB_PACKAGES", {
+                "linux-x64": (archive.name, digest),
+            }):
+                module.extract_trusted_gdb_package(archive, root / "gdb", "linux-x64")
+            self.assertEqual((root / "gdb" / "lib" / "libgdb.so").read_bytes(), b"library")
+            self.assertEqual((root / "gdb" / "lib" / "libgdb-hard.so").read_bytes(), b"library")
+
+    def test_gdb_extraction_hashes_archive_in_streaming_chunks(self) -> None:
+        module = builder()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "runtime.zip"
+            with zipfile.ZipFile(archive, "w") as bundle:
+                bundle.writestr("xpack-arm-none-eabi-gcc-test/bin/arm-none-eabi-gdb.exe", b"gdb")
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            with mock.patch.object(module, "TRUSTED_GDB_PACKAGES", {"windows-x64": (archive.name, digest)}), \
+                 mock.patch.object(Path, "read_bytes", side_effect=AssertionError("must stream")):
+                module.extract_trusted_gdb_package(archive, root / "gdb", "windows-x64")
+
+    def test_gdb_extraction_rejects_archive_larger_than_package_bound(self) -> None:
+        module = builder()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "runtime.zip"
+            with zipfile.ZipFile(archive, "w") as bundle:
+                bundle.writestr("xpack-arm-none-eabi-gcc-test/bin/arm-none-eabi-gdb.exe", b"gdb")
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            with mock.patch.object(module, "TRUSTED_GDB_PACKAGES", {"windows-x64": (archive.name, digest)}), \
+                 mock.patch.object(module, "MAX_GDB_PACKAGE_BYTES", 1):
+                with self.assertRaisesRegex(ValueError, "compressed size limit"):
+                    module.extract_trusted_gdb_package(archive, root / "gdb", "windows-x64")
+
+    def test_gdb_extraction_rejects_cumulative_expanded_size(self) -> None:
+        module = builder()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "runtime.zip"
+            with zipfile.ZipFile(archive, "w") as bundle:
+                bundle.writestr("xpack-arm-none-eabi-gcc-test/bin/arm-none-eabi-gdb.exe", b"gdb")
+                bundle.writestr("xpack-arm-none-eabi-gcc-test/lib/libgdb.so", b"library")
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            with mock.patch.object(module, "TRUSTED_GDB_PACKAGES", {"windows-x64": (archive.name, digest)}), \
+                 mock.patch.object(module, "MAX_GDB_EXPANDED_BYTES", 5):
+                with self.assertRaisesRegex(ValueError, "expanded size limit"):
+                    module.extract_trusted_gdb_package(archive, root / "gdb", "windows-x64")
+
+    def test_tar_cumulative_limit_is_preflighted_before_copying_files(self) -> None:
+        module = builder()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "runtime.tar.gz"
+            package_root = "xpack-arm-none-eabi-gcc-test"
+            with tarfile.open(archive, "w:gz") as bundle:
+                for name in ("bin/arm-none-eabi-gdb", "lib/libgdb.so"):
+                    info = tarfile.TarInfo(package_root + "/" + name)
+                    info.size = 3
+                    bundle.addfile(info, io.BytesIO(b"gdb"))
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            with mock.patch.object(module, "TRUSTED_GDB_PACKAGES", {"linux-x64": (archive.name, digest)}), \
+                 mock.patch.object(module, "MAX_GDB_EXPANDED_BYTES", 5), \
+                 mock.patch.object(module, "_copy_gdb_stream", wraps=module._copy_gdb_stream) as copied:
+                with self.assertRaisesRegex(ValueError, "expanded size limit"):
+                    module.extract_trusted_gdb_package(archive, root / "gdb", "linux-x64")
+            self.assertEqual(copied.call_count, 0)
+
+    def test_gdb_extraction_rejects_compression_ratio_bomb(self) -> None:
+        module = builder()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "runtime.zip"
+            with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+                bundle.writestr("xpack-arm-none-eabi-gcc-test/bin/arm-none-eabi-gdb.exe", b"g" * 512)
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            with mock.patch.object(module, "TRUSTED_GDB_PACKAGES", {"windows-x64": (archive.name, digest)}), \
+                 mock.patch.object(module, "MAX_GDB_COMPRESSION_RATIO", 2):
+                with self.assertRaisesRegex(ValueError, "compression ratio"):
+                    module.extract_trusted_gdb_package(archive, root / "gdb", "windows-x64")
+
+    def test_gdb_extraction_counts_copied_tar_link_bytes_toward_expanded_limit(self) -> None:
+        module = builder()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "runtime.tar.gz"
+            package_root = "xpack-arm-none-eabi-gcc-test"
+            with tarfile.open(archive, "w:gz") as bundle:
+                for name in ("bin/arm-none-eabi-gdb", "lib/libgdb.so.1"):
+                    info = tarfile.TarInfo(package_root + "/" + name)
+                    info.size = 3
+                    bundle.addfile(info, io.BytesIO(b"gdb"))
+                link = tarfile.TarInfo(package_root + "/lib/libgdb.so")
+                link.type = tarfile.SYMTYPE
+                link.linkname = "libgdb.so.1"
+                bundle.addfile(link)
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            with mock.patch.object(module, "TRUSTED_GDB_PACKAGES", {"linux-x64": (archive.name, digest)}), \
+                 mock.patch.object(module, "MAX_GDB_EXPANDED_BYTES", 7):
+                with self.assertRaisesRegex(ValueError, "expanded size limit"):
+                    module.extract_trusted_gdb_package(archive, root / "gdb", "linux-x64")
 
 
 if __name__ == "__main__":

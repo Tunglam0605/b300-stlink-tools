@@ -11,12 +11,12 @@ thể bị halt/reset nên chỉ dùng khi board và cơ cấu đang ở trạng
 - File `.axf` hoặc `.elf` có symbol, được build từ đúng source đang chạy trên
   board. File HEX chỉ dùng để nạp, không thay thế file symbol khi debug.
 - Một GDB client tương thích ARM:
-  - Windows: `arm-none-eabi-gdb` từ GNU Arm Embedded Toolchain.
-  - Ubuntu: `arm-none-eabi-gdb` hoặc `gdb-multiarch`.
+  - GUI release bundle mang theo `arm-none-eabi-gdb` trong `vendor/gdb/bin`.
+  - Khi chạy từ source/CLI, tool tìm `B300_GDB`, GDB trong bundle, sau đó
+    `arm-none-eabi-gdb` trên `PATH`; Ubuntu cuối cùng có thể dùng `gdb-multiarch`.
 
-Bundle của repo mang theo OpenOCD server nhưng không mang cả GNU toolchain để
-giữ gói nhẹ. Kiểm tra GDB client bằng `arm-none-eabi-gdb --version` hoặc
-`gdb-multiarch --version`.
+Nếu GDB không có, chỉ Debug tích hợp bị chặn; Application Flash vẫn hoạt động.
+Đặt `B300_GDB` tới executable GDB hợp lệ hoặc cài `arm-none-eabi-gdb`.
 
 ## Cách A — Debug trên cùng một máy
 
@@ -27,9 +27,9 @@ b300-stlink doctor
 b300-stlink debug --dry-run --json
 ```
 
-Dry-run phải chỉ có cấu hình OpenOCD, `bindto`, GDB port, Telnet/TCL ở trạng thái
-`disabled` và `init`; không được có `erase_sector`, `program`, `mww` hoặc
-`mass_erase`.
+Dry-run phải chỉ có cấu hình OpenOCD, `bindto`, GDB port, các listener phụ được
+yêu cầu rõ ràng và `init`; không được có `erase_sector`, `program`, `mww` hoặc
+`mass_erase`. Mặc định Telnet/TCL đều `disabled`.
 
 ### Bước 2: Mở GDB server
 
@@ -77,9 +77,16 @@ quit
 Sau đó nhấn `Ctrl+C` tại terminal đang chạy `b300-stlink debug` và xác nhận port
 3333 đã đóng.
 
-Telnet/TCL không cần cho luồng GDB và bị tắt mặc định. Khi thực sự cần OpenOCD
-Telnet trên cùng máy, có thể thêm `--telnet-port 4444`; tool không cho mở Telnet
-khi bind ra mạng.
+Telnet/TCL không cần cho luồng GDB và bị tắt mặc định. Khi cần OpenOCD TCL để
+automation/read-only control trên cùng máy, dùng:
+
+```text
+b300-stlink debug --gdb-port 3333 --tcl-port 6666
+```
+
+CLI chỉ báo `READY` sau khi OpenOCD đã mở đủ listener được yêu cầu. Có thể dùng
+`--telnet-port 4444` khi thực sự cần Telnet local. TCL/Telnet đều bị từ chối nếu
+`--bind-address` không phải loopback, và các port đang bật không được trùng nhau.
 
 ## Cách B — ST-Link cắm vào Ubuntu IPC, GDB chạy trên máy khác
 

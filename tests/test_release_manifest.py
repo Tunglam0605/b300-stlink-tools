@@ -12,6 +12,7 @@ from b300_core.release_manifest import (
     verify_minisign,
 )
 from b300_core.update_platform import UpdatePlatform
+from scripts.release.release_contract import UPDATE_PLATFORM_FILES
 
 
 TEST_PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(bytes(range(32)))
@@ -37,6 +38,40 @@ def sign_message(message: bytes, trusted_comment: bytes = b"fixture") -> bytes:
 
 
 class ReleaseManifestTests(unittest.TestCase):
+    def test_latest_manifest_contains_gui_and_cli_platforms(self) -> None:
+        self.assertEqual(
+            UPDATE_PLATFORM_FILES["windows-x64"],
+            "B300-STLink-GUI-Windows-x64.exe",
+        )
+        self.assertEqual(
+            UPDATE_PLATFORM_FILES["linux-x64-appimage"],
+            "B300-STLink-GUI-Ubuntu-x64.AppImage",
+        )
+        self.assertEqual(
+            UPDATE_PLATFORM_FILES["linux-x64-deb"],
+            "b300-stlink-gui_amd64.deb",
+        )
+        self.assertEqual(
+            UPDATE_PLATFORM_FILES["linux-arm64-appimage"],
+            "B300-STLink-GUI-Ubuntu-arm64.AppImage",
+        )
+        self.assertEqual(
+            UPDATE_PLATFORM_FILES["linux-arm64-deb"],
+            "b300-stlink-gui_arm64.deb",
+        )
+        self.assertEqual(
+            UPDATE_PLATFORM_FILES["windows-x64-cli"],
+            "B300-STLink-CLI-Windows-x64.zip",
+        )
+        self.assertEqual(
+            UPDATE_PLATFORM_FILES["linux-x64-cli"],
+            "B300-STLink-CLI-Linux-x64.tar.gz",
+        )
+        self.assertEqual(
+            UPDATE_PLATFORM_FILES["linux-arm64-cli"],
+            "B300-STLink-CLI-Linux-arm64.tar.gz",
+        )
+
     def test_verifies_official_minisign_packet_and_parses_release(self) -> None:
         verify_minisign(MESSAGE, SIGNATURE, TEST_PUBLIC_KEY)
         release = parse_latest_manifest(MESSAGE, SIGNATURE, TEST_PUBLIC_KEY)
@@ -48,6 +83,27 @@ class ReleaseManifestTests(unittest.TestCase):
         self.assertEqual(
             release.select(UpdatePlatform.WINDOWS_X64).filename,
             "B300-STLink-GUI-Windows-x64.exe",
+        )
+
+    def test_parses_signed_cli_asset_without_changing_schema_version(self) -> None:
+        value = json.loads(MESSAGE)
+        value["platforms"]["windows-x64-cli"] = {
+            "file": "B300-STLink-CLI-Windows-x64.zip",
+            "sha256": "b" * 64,
+            "size": 456,
+            "url": (
+                "https://github.com/Tunglam0605/b300-stlink-tools/releases/download/"
+                "v0.3.1/B300-STLink-CLI-Windows-x64.zip"
+            ),
+        }
+        message = json.dumps(value, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+
+        release = parse_latest_manifest(message, sign_message(message), TEST_PUBLIC_KEY)
+
+        self.assertEqual(value["schema_version"], 1)
+        self.assertEqual(
+            release.platforms["windows-x64-cli"].filename,
+            "B300-STLink-CLI-Windows-x64.zip",
         )
 
     def test_rejects_modified_message_and_trusted_comment(self) -> None:

@@ -434,18 +434,18 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Không thể cài cập nhật", str(error))
             return
         if not plan.managed:
-            if plan.open_directory is not None:
-                QDesktopServices.openUrl(QUrl.fromLocalFile(str(plan.open_directory)))
-            QMessageBox.information(
-                self, "Gói cập nhật đã được xác minh",
-                "Chạy lệnh sau để cài đặt:\n\n%s" % plan.instructions,
+            QMessageBox.warning(
+                self, "Không thể cài cập nhật",
+                "Nền tảng hiện tại không hỗ trợ cài đặt cập nhật tự động.",
             )
             return
         answer = QMessageBox.question(
             self,
-            "Cài đặt bản cập nhật",
+            "Cài đặt và khởi động lại",
             "Gói cập nhật đã vượt qua kiểm tra chữ ký và SHA-256.\n\n"
-            "Đóng B300 ST-Link Tools và chạy trình cài đặt ngay?",
+            "B300 ST-Link Tools sẽ tự động đóng, cài đặt bản mới và khởi động lại. "
+            "Trên Ubuntu có thể xuất hiện hộp thoại xác thực quyền quản trị.\n\n"
+            "Tiếp tục cập nhật?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
         )
@@ -453,12 +453,19 @@ class MainWindow(QMainWindow):
             return
         try:
             self.update_installer(plan)
-        except OSError as error:
+        except (OSError, RuntimeError, ValueError) as error:
             QMessageBox.warning(self, "Không thể mở trình cài đặt", str(error))
             return
         if self.update_dialog is not None:
             self.update_dialog.close()
+        # The detached Linux helper waits for this process to disappear before
+        # replacing the AppImage or invoking apt through Polkit. Explicitly quit
+        # the Qt event loop after the close event is accepted so the old GUI
+        # cannot remain as a stale/frozen process during an update.
         self.close()
+        app = QGuiApplication.instance()
+        if app is not None:
+            QTimer.singleShot(0, app.quit)
 
     def _tab_changed(self, index: int) -> None:
         if self.busy or bool(self._threads):

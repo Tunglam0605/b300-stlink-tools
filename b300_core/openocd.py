@@ -15,6 +15,7 @@ from typing import Callable, List, Optional, Sequence
 from .models import BootVerification, CommandResult, FactoryPlan, FlashPlan, ProbeRef, TargetInfo
 from .offline_setup import installed_openocd_path, verify_openocd_tree
 from .policy import APPLICATION_ADDRESS, FLASH_END_ADDRESS
+from .process_startup import child_process_kwargs
 
 
 EventSink = Callable[[str], None]
@@ -82,7 +83,8 @@ def validate_openocd_value(value: object, label: str) -> None:
 
 
 def _base_command(probe: ProbeRef, executable: str, *, gdb_port: Optional[int] = None,
-                  telnet_port: Optional[int] = None, bind_address: str = "127.0.0.1") -> List[str]:
+                  telnet_port: Optional[int] = None, tcl_port: Optional[int] = None,
+                  bind_address: str = "127.0.0.1") -> List[str]:
     validate_openocd_value(executable, "OpenOCD path")
     validate_openocd_value(bind_address, "Bind address")
     command = [
@@ -93,7 +95,7 @@ def _base_command(probe: ProbeRef, executable: str, *, gdb_port: Optional[int] =
         "-f", "target/stm32f4x.cfg",
         "-c", "gdb port %s" % (gdb_port if gdb_port is not None else "disabled"),
         "-c", "telnet port %s" % (telnet_port if telnet_port is not None else "disabled"),
-        "-c", "tcl port disabled",
+        "-c", "tcl port %s" % (tcl_port if tcl_port is not None else "disabled"),
     ]
     if probe.serial:
         validate_openocd_value(probe.serial, "Probe serial")
@@ -179,12 +181,14 @@ def build_boot_verify_command(probe: ProbeRef, executable: str) -> List[str]:
 
 
 def build_debug_command(probe: ProbeRef, executable: str, bind_address: str,
-                        gdb_port: int, telnet_port: Optional[int] = None) -> List[str]:
+                        gdb_port: int, telnet_port: Optional[int] = None,
+                        tcl_port: Optional[int] = None) -> List[str]:
     return _base_command(
         probe,
         executable,
         gdb_port=gdb_port,
         telnet_port=telnet_port,
+        tcl_port=tcl_port,
         bind_address=bind_address,
     ) + ["-c", "init"]
 
@@ -222,6 +226,7 @@ def parse_target_info(output: str) -> TargetInfo:
     if not voltage_match or not device_match or not flash_match:
         raise ValueError("OpenOCD target inspection did not identify voltage/device/flash size.")
     protection_summary = " | ".join(protection_lines) or "Protection status not reported"
+    sector_states.sort(key=lambda item: item[0])
     if sector_states:
         groups = []
         start, end, protected = sector_states[0][0], sector_states[0][0], sector_states[0][1]
@@ -240,13 +245,16 @@ def parse_target_info(output: str) -> TargetInfo:
             for first, last, state in groups
         )
     protected_sectors = tuple(sector for sector, state in sector_states if state)
+    protection_reported = (
+        tuple(sector for sector, _state in sector_states) == tuple(range(8))
+    )
     return TargetInfo(
         device_id=int(device_match.group(1), 16),
         flash_kib=int(flash_match.group(1)),
         target_voltage=float(voltage_match.group(1)),
         protection_summary=protection_summary,
         protected_sectors=protected_sectors,
-        protection_reported=bool(sector_states),
+        protection_reported=protection_reported,
         readout_protected=("device security bit set" in output.lower()),
     )
 
@@ -274,12 +282,17 @@ def parse_boot_verification(output: str) -> BootVerification:
 class OpenOcdRunner:
     """Execute one command without a shell and stream normalized log lines."""
 
+    def __init__(self, process_factory: Optional[Callable[..., subprocess.Popen]] = None,
+                 platform_name: Optional[str] = None) -> None:
+        self._process_factory = process_factory or subprocess.Popen
+        self._platform_name = platform_name
+
     def run(self, command: Sequence[str], event_sink: Optional[EventSink] = None,
             timeout_seconds: Optional[float] = 60.0,
             cancel_event: Optional[threading.Event] = None) -> CommandResult:
         normalized = tuple(str(item) for item in command)
         try:
-            process = subprocess.Popen(
+            process = self._process_factory(
                 normalized,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -288,6 +301,7 @@ class OpenOcdRunner:
                 errors="replace",
                 bufsize=1,
                 shell=False,
+                **child_process_kwargs(self._platform_name),
             )
         except OSError as error:
             return CommandResult(normalized, 127, "OpenOCD not found: %s" % error)

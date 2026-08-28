@@ -3,49 +3,51 @@
 
 from __future__ import annotations
 
-import argparse
+import hashlib
 import ipaddress
-import json
-import re
+import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import List, Optional
 
+from b300_cli.parser import (
+    build_parser,
+    parse_args,
+    parse_bind_address,
+    parse_probe_serial,
+    parse_tcp_port,
+)
+from b300_cli.reporting import (
+    Reporter, diagnostic_snapshot, emit_snapshot, format_memory_rows, format_metadata_text,
+    flash_result_fields, flash_start_fields, format_probes_text, memory_snapshot,
+    metadata_snapshot, probe_record,
+)
+from b300_cli.update_commands import run_update_command
+from b300_core.diagnostics import DiagnosticsService
 from b300_core.hex_image import inspect_image
+from b300_core.linux_usb import (
+    LinuxUsbSetupReport,
+    SystemChangeConfirmationRequired,
+    perform_linux_usb_setup,
+)
 from b300_core.models import ProbeRef
 from b300_core.openocd import build_debug_command, resolve_openocd, validate_openocd_value
 from b300_core.debug_service import DebugConfig, DebugService, DebugState
+from b300_core.offline_setup import OPENOCD_VERSION, current_platform_name
 from b300_core.policy import (
     APPLICATION_ADDRESS,
     FLASH_END_ADDRESS,
     build_flash_plan,
     build_flash_preview,
+    sector_by_index,
+    validate_read_range,
 )
 from b300_core.service import B300Service, ProvisioningError
-
-
-def parse_bind_address(value: str) -> str:
-    try:
-        return str(ipaddress.ip_address(value))
-    except ValueError as error:
-        raise argparse.ArgumentTypeError("bind address must be a valid IP address") from error
-
-
-def parse_tcp_port(value: str) -> int:
-    try:
-        port = int(value)
-    except ValueError as error:
-        raise argparse.ArgumentTypeError("port must be an integer") from error
-    if not 1 <= port <= 65535:
-        raise argparse.ArgumentTypeError("port must be in range 1..65535")
-    return port
-
-
-def parse_probe_serial(value: str) -> str:
-    if not re.fullmatch(r"[A-Za-z0-9_.:-]+", value):
-        raise argparse.ArgumentTypeError("probe serial contains unsupported characters")
-    return value
+from b300_core.probe import list_probes
+from b300_core.probe_selection import ProbeSelectionError, select_probe
+from b300_version import __version__
 
 
 def validate_openocd_path(path: Path) -> None:
@@ -53,59 +55,10 @@ def validate_openocd_path(path: Path) -> None:
 
 
 def validate_debug_args(args: argparse.Namespace) -> None:
-    if args.telnet_port is not None and not ipaddress.ip_address(args.bind_address).is_loopback:
-        raise ValueError("Telnet is allowed only when OpenOCD binds to a loopback address.")
-
-
-class Reporter:
-    def __init__(self, as_json: bool) -> None:
-        self.as_json = as_json
-
-    def emit(self, event: str, **fields: object) -> None:
-        record = {"event": event, **fields}
-        if self.as_json:
-            print(json.dumps(record, sort_keys=True), flush=True)
-        else:
-            print("[%s] %s" % (event, " ".join(
-                "%s=%s" % (key, value) for key, value in fields.items())), flush=True)
-
-
-def parse_args(argv: List[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    commands = parser.add_subparsers(dest="command", required=True)
-    flash = commands.add_parser("flash", help="Provision an Application HEX safely.")
-    flash.add_argument("application", type=Path)
-    flash.add_argument("--openocd")
-    flash.add_argument("--probe-serial", type=parse_probe_serial,
-                       help="Select one ST-Link when multiple probes are connected.")
-    flash.add_argument("--dry-run", action="store_true")
-    flash.add_argument("--json", action="store_true")
-    factory = commands.add_parser(
-        "provision-bootloader",
-        help="Factory-provision the trusted bundled B300 Bootloader and restore S0-S2 WRP.",
-    )
-    factory.add_argument("--openocd")
-    factory.add_argument("--probe-serial", type=parse_probe_serial,
-                         help="Select one ST-Link when multiple probes are connected.")
-    factory.add_argument("--dry-run", action="store_true")
-    factory.add_argument("--confirm-factory-provision", action="store_true",
-                         help="Required for real S0-S2 Bootloader/WRP modification.")
-    factory.add_argument("--json", action="store_true")
-    debug = commands.add_parser("debug", help="Start non-mutating OpenOCD debugging.")
-    debug.add_argument("--openocd")
-    debug.add_argument("--probe-serial", type=parse_probe_serial,
-                       help="Select one ST-Link when multiple probes are connected.")
-    debug.add_argument("--bind-address", type=parse_bind_address, default="127.0.0.1",
-                       help="OpenOCD listen address (default: 127.0.0.1).")
-    debug.add_argument("--gdb-port", type=parse_tcp_port, default=3333,
-                       help="GDB server TCP port (default: 3333).")
-    debug.add_argument("--telnet-port", type=parse_tcp_port,
-                       help="Optional OpenOCD telnet port; loopback only (default: disabled).")
-    debug.add_argument("--dry-run", action="store_true")
-    debug.add_argument("--json", action="store_true")
-    doctor = commands.add_parser("doctor", help="Inspect local tool availability.")
-    doctor.add_argument("--json", action="store_true")
-    return parser.parse_args(argv)
+    DebugConfig(
+        ProbeRef(args.probe_serial), args.bind_address, args.gdb_port,
+        args.telnet_port, args.tcl_port,
+    ).validate()
 
 
 def validate_application_hex(application: Path) -> None:
@@ -119,6 +72,7 @@ def openocd_command(args: argparse.Namespace):
         args.bind_address,
         args.gdb_port,
         args.telnet_port,
+        args.tcl_port,
     )
 
 
@@ -129,13 +83,21 @@ def flash_command(args: argparse.Namespace):
 
 
 def run_debug(args: argparse.Namespace, reporter: Reporter) -> int:
+    if not ipaddress.ip_address(args.bind_address).is_loopback:
+        reporter.emit(
+            "warning",
+            reason_code="REMOTE_GDB_INSECURE",
+            message="GDB Remote Protocol is unauthenticated and unencrypted on a non-loopback bind.",
+            next_action="Prefer loopback access through an SSH tunnel.",
+        )
     command = openocd_command(args)
     reporter.emit("openocd", command=command, dry_run=args.dry_run)
     if args.dry_run:
         return 0
     service = DebugService(executable=args.openocd)
     config = DebugConfig(
-        ProbeRef(args.probe_serial), args.bind_address, args.gdb_port, args.telnet_port,
+        ProbeRef(args.probe_serial), args.bind_address, args.gdb_port,
+        args.telnet_port, args.tcl_port,
     )
     try:
         service.start(config, event_sink=lambda line: reporter.emit("openocd_output", line=line))
@@ -159,23 +121,353 @@ def run_openocd(command, dry_run: bool, reporter: Reporter) -> int:
     raise RuntimeError("Use run_debug() so the B300 hardware session is retained.")
 
 
+def _read_only_error(args: argparse.Namespace, command: str, reason_code: str,
+                     message: str) -> int:
+    record = {
+        "schema_version": 1,
+        "command": command,
+        "status": "error",
+        "reason_code": reason_code,
+        "message": message,
+    }
+    emit_snapshot(record, args.json, "%s: %s" % (reason_code, message))
+    return 1
+
+
+def _select_read_probe(args: argparse.Namespace, command: str) -> Optional[ProbeRef]:
+    try:
+        _info, probe = select_probe(list_probes(), args.probe_serial)
+        return probe
+    except ProbeSelectionError as error:
+        _read_only_error(args, command, error.code, error.message)
+        return None
+
+
+def _select_write_probe(args: argparse.Namespace, reporter: Reporter) -> Optional[ProbeRef]:
+    """Select one discovered probe and preserve core selection reason codes."""
+    try:
+        _info, probe = select_probe(list_probes(), args.probe_serial)
+        return probe
+    except ProbeSelectionError as error:
+        reporter.emit(
+            "error",
+            phase="probe_selection",
+            reason_code=error.code,
+            reason=error.message,
+            next_action=(
+                "Connect exactly one ST-Link or select the intended probe with --probe-serial."
+            ),
+        )
+        return None
+
+
+def _validated_output_path(path: Path, force: bool) -> Path:
+    output = path.expanduser().resolve()
+    if not output.parent.is_dir() or output.is_dir():
+        raise ValueError("Output path must name a file in an existing directory.")
+    if output.exists() and not force:
+        raise FileExistsError("Output file already exists; use --force to replace it.")
+    return output
+
+
+def _atomic_write_snapshot(output: Path, data: bytes, force: bool) -> None:
+    """Atomically replace a host snapshot only after its complete read succeeded."""
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+                mode="wb", prefix=".%s." % output.name, suffix=".tmp",
+                dir=str(output.parent), delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if output.exists() and not force:
+            raise FileExistsError("Output file already exists; use --force to replace it.")
+        os.replace(str(temporary), str(output))
+        temporary = None
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def _memory_dump_record(command: str, address: int, data: bytes, output: Path) -> dict:
+    record = memory_snapshot(command, address, data)
+    del record["data"]
+    record["output"] = str(output)
+    record["sha256"] = hashlib.sha256(data).hexdigest()
+    return record
+
+
+def _linux_setup_record(report: LinuxUsbSetupReport) -> dict:
+    return {
+        "schema_version": 1,
+        "command": "setup",
+        "status": "ok" if report.supported else "error",
+        "supported": report.supported,
+        "rule_installed": report.rule_installed,
+        "dry_run": report.dry_run,
+        "changed": report.changed,
+        "reason_code": report.reason_code,
+        "message": report.message,
+        "next_action": report.next_action,
+        "rule_path": str(report.rule_path),
+        "commands": [list(command) for command in report.commands],
+    }
+
+
 def main(argv: Optional[List[str]] = None) -> int:
-    args = parse_args(sys.argv[1:] if argv is None else argv)
+    selected_argv = list(sys.argv[1:] if argv is None else argv)
+    if selected_argv and selected_argv[0] == "--apply-cli-update":
+        from b300_core.cli_update_install import main as cli_update_helper_main
+        return cli_update_helper_main(selected_argv[1:])
+    args = parse_args(selected_argv)
+    if args.version:
+        version_record = {
+            "schema_version": 1,
+            "command": "version",
+            "status": "ok",
+            "version": __version__,
+            "cli_version": __version__,
+            "core_version": __version__,
+            "openocd_version": OPENOCD_VERSION,
+            "platform": current_platform_name(),
+        }
+        emit_snapshot(
+            version_record,
+            args.json,
+            "CLI/Core: %s\nOpenOCD: %s\nPlatform: %s" % (
+                __version__, OPENOCD_VERSION, version_record["platform"],
+            ),
+        )
+        return 0
+    if args.command is None:
+        build_parser().error("the following arguments are required: command")
     reporter = Reporter(args.json)
     try:
+        if args.command in {"update", "self-update"}:
+            return run_update_command(args, __version__)
+
+        if args.command == "setup":
+            def announce_setup(plan: LinuxUsbSetupReport) -> None:
+                reporter.emit(
+                    "setup_plan",
+                    command="setup",
+                    rule_path=str(plan.rule_path),
+                    commands=[list(command) for command in plan.commands],
+                    message=plan.message,
+                )
+
+            try:
+                report = perform_linux_usb_setup(
+                    install_requested=args.install_udev_rule,
+                    confirmed=args.confirm_system_change,
+                    announce=announce_setup,
+                )
+            except SystemChangeConfirmationRequired as error:
+                record = {
+                    "schema_version": 1,
+                    "command": "setup",
+                    "status": "error",
+                    "reason_code": error.reason_code,
+                    "message": str(error),
+                }
+                emit_snapshot(record, args.json, "%s: %s" % (error.reason_code, error))
+                return 1
+            record = _linux_setup_record(report)
+            text = "%s: %s\nnext_action=%s" % (
+                report.reason_code, report.message, report.next_action,
+            )
+            emit_snapshot(record, args.json, text)
+            return 0 if report.supported else 1
+
+        if args.command == "probes":
+            probes = list_probes()
+            if not probes:
+                record = {
+                    "schema_version": 1,
+                    "command": "probes",
+                    "status": "error",
+                    "reason_code": "NO_PROBE",
+                    "message": "No ST-Link probe was found.",
+                    "probes": [],
+                }
+                emit_snapshot(record, args.json, "reason_code=NO_PROBE No ST-Link probe was found.")
+                return 1
+            records = [probe_record(index, probe) for index, probe in enumerate(probes, start=1)]
+            emit_snapshot(
+                {
+                    "schema_version": 1,
+                    "command": "probes",
+                    "status": "ok",
+                    "probes": records,
+                },
+                args.json,
+                format_probes_text(probes),
+            )
+            return 0
+
         if args.command == "doctor":
-            available, executable = B300Service().doctor()
-            reporter.emit("dependency", name="OpenOCD", available=available, path=executable)
-            return 0 if available else 1
+            probes = list_probes()
+            report = DiagnosticsService(
+                service=B300Service(), probe_discovery=lambda: probes,
+            ).run()
+            emit_snapshot(
+                diagnostic_snapshot("doctor", report), args.json,
+                "%s (%s)" % (report.conclusion, report.reason_code),
+            )
+            return 0 if report.conclusion == "READY_FOR_APPLICATION_FLASH" else 1
+
+        if args.command == "target" and args.target_command is None:
+            record = {
+                "schema_version": 1,
+                "command": "target",
+                "status": "error",
+                "reason_code": "TARGET_SUBCOMMAND_REQUIRED",
+                "message": "The target command requires the inspect subcommand.",
+                "next_action": "Run target inspect to perform read-only target diagnostics.",
+            }
+            emit_snapshot(record, args.json, "%s: %s" % (record["reason_code"], record["message"]))
+            return 1
+
+        if args.command == "metadata" and args.metadata_command is None:
+            return _read_only_error(
+                args,
+                "metadata",
+                "METADATA_SUBCOMMAND_REQUIRED",
+                "The metadata command requires the show subcommand.",
+            )
+
+        if args.command == "memory" and args.memory_command is None:
+            return _read_only_error(
+                args,
+                "memory",
+                "MEMORY_SUBCOMMAND_REQUIRED",
+                "The memory command requires read, read-sector, or dump.",
+            )
+
+        if args.command == "target" and args.target_command == "inspect":
+            probes = list_probes()
+            try:
+                _info, probe = select_probe(probes, args.probe_serial)
+            except ProbeSelectionError as error:
+                record = {
+                    "schema_version": 1,
+                    "command": "target inspect",
+                    "status": "error",
+                    "reason_code": error.code,
+                    "message": error.message,
+                    "next_action": "Connect exactly one ST-Link or select one with --probe-serial.",
+                }
+                emit_snapshot(record, args.json, "%s: %s" % (error.code, error.message))
+                return 1
+            report = DiagnosticsService(
+                service=B300Service(executable=args.openocd), probe_discovery=lambda: probes,
+            ).run(probe.serial)
+            emit_snapshot(
+                diagnostic_snapshot("target inspect", report), args.json,
+                "%s (%s)" % (report.conclusion, report.reason_code),
+            )
+            return 0 if report.conclusion == "READY_FOR_APPLICATION_FLASH" else 1
+
+        if args.command == "metadata" and args.metadata_command == "show":
+            probe = _select_read_probe(args, "metadata show")
+            if probe is None:
+                return 1
+            try:
+                metadata = B300Service(executable=args.openocd).read_metadata(probe)
+            except (OSError, RuntimeError, ValueError) as error:
+                return _read_only_error(args, "metadata show", "MEMORY_READ_FAILED", str(error))
+            record = metadata_snapshot(metadata)
+            emit_snapshot(record, args.json, format_metadata_text(metadata))
+            return 0
+
+        if args.command == "memory" and args.memory_command in ("read", "dump"):
+            command = "memory %s" % args.memory_command
+            try:
+                validate_read_range(args.address, args.length)
+            except ValueError as error:
+                return _read_only_error(args, command, "INVALID_MEMORY_RANGE", str(error))
+            output = None
+            if args.memory_command == "dump":
+                try:
+                    output = _validated_output_path(args.output, args.force)
+                except FileExistsError as error:
+                    return _read_only_error(args, command, "OUTPUT_EXISTS", str(error))
+                except (OSError, RuntimeError, ValueError) as error:
+                    return _read_only_error(args, command, "INVALID_OUTPUT_PATH", str(error))
+            probe = _select_read_probe(args, command)
+            if probe is None:
+                return 1
+            try:
+                data = B300Service(executable=args.openocd).read_memory(
+                    probe, args.address, args.length,
+                )
+                if len(data) != args.length:
+                    raise RuntimeError("Memory read length mismatch.")
+            except (OSError, RuntimeError, ValueError) as error:
+                return _read_only_error(args, command, "MEMORY_READ_FAILED", str(error))
+            if args.memory_command == "read":
+                emit_snapshot(
+                    memory_snapshot(command, args.address, data), args.json,
+                    format_memory_rows(args.address, data),
+                )
+                return 0
+            assert output is not None
+            try:
+                _atomic_write_snapshot(output, data, args.force)
+            except FileExistsError as error:
+                return _read_only_error(args, command, "OUTPUT_EXISTS", str(error))
+            except OSError as error:
+                return _read_only_error(args, command, "INVALID_OUTPUT_PATH", str(error))
+            record = _memory_dump_record(command, args.address, data, output)
+            text = "address=%s end_address=%s size=%d output=%s sha256=%s" % (
+                record["address"], record["end_address"], record["size"], record["output"],
+                record["sha256"].upper(),
+            )
+            emit_snapshot(record, args.json, text)
+            return 0
+
+        if args.command == "memory" and args.memory_command == "read-sector":
+            command = "memory read-sector"
+            try:
+                sector = sector_by_index(args.sector)
+            except ValueError as error:
+                return _read_only_error(args, command, "INVALID_SECTOR", str(error))
+            probe = _select_read_probe(args, command)
+            if probe is None:
+                return 1
+            try:
+                data = B300Service(executable=args.openocd).read_sector(probe, args.sector)
+            except (OSError, RuntimeError, ValueError) as error:
+                return _read_only_error(args, command, "MEMORY_READ_FAILED", str(error))
+            emit_snapshot(
+                memory_snapshot(command, sector.start_address, data), args.json,
+                format_memory_rows(sector.start_address, data),
+            )
+            return 0
 
         if args.command == "debug":
             validate_debug_args(args)
             return run_debug(args, reporter)
 
         if args.command == "provision-bootloader":
+            if not args.dry_run and not args.confirm_factory_provision:
+                raise ProvisioningError(
+                    "authorization",
+                    "Factory Bootloader provisioning requires --confirm-factory-provision.",
+                    "Run --dry-run first, then repeat with explicit factory confirmation for the intended board.",
+                )
             service = B300Service(executable=args.openocd)
             trusted = service.trusted_bootloader()
-            probe = ProbeRef(args.probe_serial)
+            if args.dry_run:
+                probe = ProbeRef(args.probe_serial)
+            else:
+                probe = _select_write_probe(args, reporter)
+                if probe is None:
+                    return 1
             preview = service.factory_preview(trusted.image, probe)
             reporter.emit(
                 "factory_artifact",
@@ -200,18 +492,6 @@ def main(argv: Optional[List[str]] = None) -> int:
                 )
             if args.dry_run:
                 return 0
-            if not args.confirm_factory_provision:
-                raise ProvisioningError(
-                    "authorization",
-                    "Factory Bootloader provisioning requires --confirm-factory-provision.",
-                    "Run --dry-run first, then repeat with explicit factory confirmation for the intended board.",
-                )
-            if not args.probe_serial:
-                raise ProvisioningError(
-                    "authorization",
-                    "Real Factory provisioning requires --probe-serial to pin the intended ST-Link.",
-                    "Reconnect/select the intended probe, note its serial, then repeat the confirmed factory command.",
-                )
             try:
                 target = service.inspect_target(
                     probe,
@@ -257,10 +537,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                 str(error),
                 "Select a valid B300 F407 Application HEX linked at 0x08010000.",
             ) from error
-        probe = ProbeRef(args.probe_serial)
+        target = None
         if args.dry_run:
+            probe = ProbeRef(args.probe_serial)
             plan = service.preview_plan(image, probe)
         else:
+            probe = _select_write_probe(args, reporter)
+            if probe is None:
+                return 1
             try:
                 target = service.inspect_target(
                     probe,
@@ -282,14 +566,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 voltage=target.target_voltage,
                 protection=target.protection_summary,
             )
-        reporter.emit(
-            "flash_start",
-            application=str(image.path),
-            sha256=image.sha256,
-            start="0x%08X" % image.start_address,
-            end="0x%08X" % image.end_address,
-            dry_run=args.dry_run,
-        )
+        reporter.emit("flash_start", **flash_start_fields(plan, target, dry_run=args.dry_run))
         transactions = (
             ("program_verify", service.flash_command(plan)),
             ("reset", service.reset_command(plan.probe)),
@@ -316,20 +593,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 cancellable=event.cancellable,
             ),
         )
-        fields = {
-            "status": outcome.status,
-            "failure_phase": outcome.failure_phase,
-            "reason": outcome.reason,
-            "next_action": outcome.next_action,
-        }
-        if outcome.boot_verification is not None:
-            fields.update({
-                "pc": "0x%08X" % outcome.boot_verification.pc
-                if outcome.boot_verification.pc is not None else None,
-                "bkp1r": outcome.boot_verification.bkp1r,
-                "reason": outcome.boot_verification.reason,
-            })
-        reporter.emit("flash_result", **fields)
+        assert target is not None
+        reporter.emit("flash_result", **flash_result_fields(outcome, target))
         return 0 if outcome.succeeded else 1
     except (OSError, RuntimeError, ValueError) as error:
         fields = {"message": str(error)}

@@ -53,10 +53,24 @@ jobs:
       - name: Smoke-test executables
         shell: pwsh
         run: |
-          .\release\b300-stlink.exe --help
           $process = Start-Process -FilePath .\release\b300-stlink-gui\b300-stlink-gui.exe `
             -ArgumentList --smoke-test -Wait -PassThru -WindowStyle Hidden
           exit $process.ExitCode
+      - name: Smoke-test packaged Windows CLI without probes
+        shell: pwsh
+        run: |
+          Expand-Archive release\B300-STLink-CLI-Windows-x64.zip release\windows-cli-bundle -Force
+          .\release\windows-cli-bundle\b300-stlink.exe --help
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\release\windows-cli-bundle\b300-stlink.exe --version --json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\release\windows-cli-bundle\b300-stlink.exe doctor --json
+          $doctorExit = $LASTEXITCODE
+          if ($doctorExit -notin 0,1) { exit $doctorExit }
+          .\release\windows-cli-bundle\vendor\openocd\bin\openocd.exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $pythonDll = Get-ChildItem release\windows-cli-bundle\_internal -Filter "python*.dll" | Select-Object -First 1
+          if ($null -eq $pythonDll) { throw "Self-contained CLI Python runtime missing" }
       - name: Stage Windows installer source
         shell: pwsh
         run: >-
@@ -72,6 +86,8 @@ jobs:
           $vcRuntime = Get-ChildItem "$root\_internal" -Filter "VCRUNTIME140*.dll" | Select-Object -First 1
           if ($null -eq $pythonDll) { throw "Packaged Python DLL missing from onedir runtime" }
           if ($null -eq $vcRuntime) { throw "Packaged VC runtime missing from onedir runtime" }
+          & "$root\vendor\gdb\bin\arm-none-eabi-gdb.exe" --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $process = Start-Process -FilePath "$root\b300-stlink-gui.exe" `
             -ArgumentList --smoke-test -Wait -PassThru -WindowStyle Hidden
           exit $process.ExitCode
@@ -125,12 +141,23 @@ jobs:
         run: python3 build_native_bundle.py --internal-distribution-approved
       - name: Smoke-test executables
         run: |
-          ./release/b300-stlink --help
           ./release/b300-stlink-gui --smoke-test
+          ./release/b300-stlink-gui --apply-verified-update --help
+      - name: Smoke-test packaged Linux x64 CLI without probes
+        run: |
+          mkdir -p release/linux-cli-bundle
+          tar -xzf release/B300-STLink-CLI-Linux-x64.tar.gz -C release/linux-cli-bundle
+          ./release/linux-cli-bundle/b300-stlink --help
+          ./release/linux-cli-bundle/b300-stlink --version --json
+          doctor_code=0
+          ./release/linux-cli-bundle/b300-stlink doctor --json || doctor_code=$?
+          if [ "$doctor_code" -ne 0 ] && [ "$doctor_code" -ne 1 ]; then exit "$doctor_code"; fi
+          ./release/linux-cli-bundle/vendor/openocd/bin/openocd --version
       - name: Stage Linux GUI bundle
         run: |
           mkdir -p release/linux-gui-bundle
           tar -xzf release/B300-STLink-GUI-Linux-x64.tar.gz -C release/linux-gui-bundle
+          ./release/linux-gui-bundle/vendor/gdb/bin/arm-none-eabi-gdb --version
       - name: Smoke-test Linux GUI on X11
         run: |
           env -u QT_QPA_PLATFORM xvfb-run -a ./release/linux-gui-bundle/b300-stlink-gui --smoke-test
@@ -177,12 +204,23 @@ jobs:
         run: python3 build_native_bundle.py --internal-distribution-approved
       - name: Smoke-test executables
         run: |
-          ./release/b300-stlink --help
           ./release/b300-stlink-gui --smoke-test
+          ./release/b300-stlink-gui --apply-verified-update --help
+      - name: Smoke-test packaged Linux ARM64 CLI without probes
+        run: |
+          mkdir -p release/linux-cli-bundle
+          tar -xzf release/B300-STLink-CLI-Linux-arm64.tar.gz -C release/linux-cli-bundle
+          ./release/linux-cli-bundle/b300-stlink --help
+          ./release/linux-cli-bundle/b300-stlink --version --json
+          doctor_code=0
+          ./release/linux-cli-bundle/b300-stlink doctor --json || doctor_code=$?
+          if [ "$doctor_code" -ne 0 ] && [ "$doctor_code" -ne 1 ]; then exit "$doctor_code"; fi
+          ./release/linux-cli-bundle/vendor/openocd/bin/openocd --version
       - name: Stage Linux GUI bundle
         run: |
           mkdir -p release/linux-gui-bundle
           tar -xzf release/B300-STLink-GUI-Linux-arm64.tar.gz -C release/linux-gui-bundle
+          ./release/linux-gui-bundle/vendor/gdb/bin/arm-none-eabi-gdb --version
       - name: Smoke-test Linux GUI on X11
         run: |
           env -u QT_QPA_PLATFORM xvfb-run -a ./release/linux-gui-bundle/b300-stlink-gui --smoke-test

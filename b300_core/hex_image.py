@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
+from .application_vector import inspect_application_vector
 from .models import ImageInfo
 from .policy import (
     APPLICATION_ADDRESS,
@@ -108,7 +110,7 @@ def _inspect_hex(path: Path, *, label: str, allowed_start: int,
 
 
 def inspect_image(path: Path) -> ImageInfo:
-    image, _memory = _inspect_hex(
+    image, memory = _inspect_hex(
         path,
         label="Application",
         allowed_start=APPLICATION_ADDRESS,
@@ -116,7 +118,18 @@ def inspect_image(path: Path) -> ImageInfo:
         required_start=APPLICATION_ADDRESS,
         range_message="HEX touches protected range 0x%08X..0x%08X.",
     )
-    return image
+    try:
+        vector_data = bytes(memory[APPLICATION_ADDRESS + index] for index in range(8))
+    except KeyError as error:
+        raise ValueError("Application vector table is incomplete.") from error
+    vector = inspect_application_vector(vector_data)
+    if not vector.valid:
+        raise ValueError("Application vector table is invalid: %s" % vector.reason)
+    return replace(
+        image,
+        initial_msp=vector.initial_msp,
+        reset_vector=vector.reset_vector,
+    )
 
 
 def inspect_bootloader_image(path: Path) -> ImageInfo:

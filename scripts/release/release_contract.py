@@ -26,4 +26,7 @@ UPDATE_PLATFORM_FILES = {
     "linux-x64-deb": "b300-stlink-gui_amd64.deb",
     "linux-arm64-appimage": "B300-STLink-GUI-Ubuntu-arm64.AppImage",
     "linux-arm64-deb": "b300-stlink-gui_arm64.deb",
+    "windows-x64-cli": "B300-STLink-CLI-Windows-x64.zip",
+    "linux-x64-cli": "B300-STLink-CLI-Linux-x64.tar.gz",
+    "linux-arm64-cli": "B300-STLink-CLI-Linux-arm64.tar.gz",
 }

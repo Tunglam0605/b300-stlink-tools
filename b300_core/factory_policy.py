@@ -31,6 +31,10 @@ def build_factory_plan(image: ImageInfo, probe: ProbeRef,
                        target: TargetInfo) -> FactoryPlan:
     _validate_bootloader_image(image)
     validate_target_for_provisioning(target)
+    if not target.protection_reported:
+        raise ValueError(
+            "OpenOCD did not report sector write-protection; factory provisioning is blocked."
+        )
     return FactoryPlan(
         image=image,
         probe=probe,

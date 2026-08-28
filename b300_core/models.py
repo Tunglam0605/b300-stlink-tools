@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
+
+if TYPE_CHECKING:
+    from .application_vector import ApplicationVector
 
 
 @dataclass(frozen=True)
@@ -16,9 +19,16 @@ class ProbeRef:
 
 @dataclass(frozen=True)
 class ProbeInfo:
-    serial: str
+    serial: Optional[str]
     name: str
     source: str
+    usb_identity: Optional[str] = None
+    status: str = "available"
+
+    @property
+    def serial_available(self) -> bool:
+        """Whether this physical probe can be explicitly pinned in OpenOCD."""
+        return self.serial is not None
 
 
 @dataclass(frozen=True)
@@ -42,6 +52,8 @@ class ImageInfo:
     end_address: int
     size: int
     data_record_count: int
+    initial_msp: Optional[int] = None
+    reset_vector: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -124,3 +136,32 @@ class FlashPhaseEvent:
     progress: int
     message: str
     cancellable: bool = False
+
+
+@dataclass(frozen=True)
+class DiagnosticCheck:
+    """One ordered, operator-facing result from a read-only diagnostic run."""
+
+    name: str
+    status: str
+    code: str
+    message: str
+    next_action: str
+
+    @property
+    def ok(self) -> bool:
+        return self.status == "PASS"
+
+
+@dataclass(frozen=True)
+class DiagnosticReport:
+    """Immutable diagnostic snapshot shared by command-line and GUI callers."""
+
+    checks: Tuple[DiagnosticCheck, ...]
+    conclusion: str
+    reason_code: str
+    next_action: str
+    target: Optional[TargetInfo] = None
+    application_vector: Optional["ApplicationVector"] = None
+    metadata: Optional[OtaMetadata] = None
+    probe: Optional[ProbeInfo] = None
