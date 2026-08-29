@@ -18,15 +18,28 @@ METADATA_ASSETS = (
     "release-manifest.json.minisig",
     "latest.json",
     "latest.json.minisig",
+    "latest-cli.json",
+    "latest-cli.json.minisig",
 )
 
-UPDATE_PLATFORM_FILES = {
+# latest.json is intentionally frozen to the original GUI-only platform set.
+# GUI <=0.5.3 rejects any unknown platform key, so adding CLI entries here
+# breaks its signed update check. Keep this mapping backward-compatible.
+GUI_UPDATE_PLATFORM_FILES = {
     "windows-x64": "B300-STLink-GUI-Windows-x64.exe",
     "linux-x64-appimage": "B300-STLink-GUI-Ubuntu-x64.AppImage",
     "linux-x64-deb": "b300-stlink-gui_amd64.deb",
     "linux-arm64-appimage": "B300-STLink-GUI-Ubuntu-arm64.AppImage",
     "linux-arm64-deb": "b300-stlink-gui_arm64.deb",
+}
+
+CLI_UPDATE_PLATFORM_FILES = {
     "windows-x64-cli": "B300-STLink-CLI-Windows-x64.zip",
     "linux-x64-cli": "B300-STLink-CLI-Linux-x64.tar.gz",
     "linux-arm64-cli": "B300-STLink-CLI-Linux-arm64.tar.gz",
+}
+
+UPDATE_PLATFORM_FILES = {
+    **GUI_UPDATE_PLATFORM_FILES,
+    **CLI_UPDATE_PLATFORM_FILES,
 }

@@ -166,7 +166,7 @@ class GuiUpdaterTests(unittest.TestCase):
             window.close()
 
     def test_same_newer_or_corrupt_seen_version_does_not_show_whats_new(self) -> None:
-        for value in (CURRENT_VERSION, "0.6.0", "not-a-version"):
+        for value in (CURRENT_VERSION, "9.9.9", "not-a-version"):
             with self.subTest(value=value), tempfile.TemporaryDirectory() as temp:
                 settings = self.temporary_settings(Path(temp))
                 settings.setValue("updates/last_seen_version", value)

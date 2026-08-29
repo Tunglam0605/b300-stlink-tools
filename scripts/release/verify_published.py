@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Callable, Dict
 from urllib.parse import urlparse
 
-from .release_contract import UPDATE_PLATFORM_FILES
+from .release_contract import CLI_UPDATE_PLATFORM_FILES, GUI_UPDATE_PLATFORM_FILES
 from .version_tools import parse_semver
 
 
@@ -47,7 +47,8 @@ def _probe_url(url: str, timeout: float) -> None:
         response.read(1)
 
 
-def _validate_public_manifest(data: bytes, version: str) -> Dict[str, str]:
+def _validate_public_manifest(
+        data: bytes, version: str, expected_platform_files: Dict[str, str]) -> Dict[str, str]:
     if len(data) > 512 * 1024:
         raise ValueError("Published latest.json is unexpectedly large.")
     try:
@@ -67,7 +68,7 @@ def _validate_public_manifest(data: bytes, version: str) -> Dict[str, str]:
     platforms = value.get("platforms")
     if not isinstance(platforms, dict):
         raise ValueError("Published updater platforms are missing.")
-    expected_keys = set(UPDATE_PLATFORM_FILES)
+    expected_keys = set(expected_platform_files)
     if set(platforms) != expected_keys:
         raise ValueError(
             "Published updater platform set mismatch: missing=%s extra=%s"
@@ -78,7 +79,7 @@ def _validate_public_manifest(data: bytes, version: str) -> Dict[str, str]:
         "https://github.com/Tunglam0605/b300-stlink-tools/releases/download/v%s/" % version
     )
     urls: Dict[str, str] = {}
-    for platform, filename in UPDATE_PLATFORM_FILES.items():
+    for platform, filename in expected_platform_files.items():
         record = platforms.get(platform)
         if not isinstance(record, dict) or record.get("file") != filename:
             raise ValueError("Published updater filename mismatch for %s." % platform)
@@ -101,6 +102,7 @@ def _validate_public_manifest(data: bytes, version: str) -> Dict[str, str]:
 def verify_once(
         *, version: str, manifest_url: str, signature_url: str,
         minisign: Path, public_key: str, timeout: float,
+        expected_platform_files: Dict[str, str] = GUI_UPDATE_PLATFORM_FILES,
         fetch: FetchBytes = _fetch_bytes, probe: ProbeUrl = _probe_url,
         run_command: RunCommand = subprocess.run) -> None:
     manifest = fetch(manifest_url, timeout)
@@ -127,7 +129,7 @@ def verify_once(
             detail = (result.stderr or result.stdout or "minisign verification failed").strip()
             raise ValueError("Published updater signature is invalid: %s" % detail)
 
-    asset_urls = _validate_public_manifest(manifest, version)
+    asset_urls = _validate_public_manifest(manifest, version, expected_platform_files)
     for platform, url in sorted(asset_urls.items()):
         try:
             probe(url, timeout)
@@ -169,10 +171,14 @@ def main(argv=None) -> int:
     parser.add_argument("--attempts", type=int, default=8)
     parser.add_argument("--delay", type=float, default=5.0)
     parser.add_argument("--timeout", type=float, default=30.0)
+    parser.add_argument("--audience", choices=("gui", "cli"), default="gui")
     args = parser.parse_args(argv)
     if not args.minisign.is_file():
         parser.error("minisign executable does not exist: %s" % args.minisign)
     try:
+        expected_platform_files = (
+            GUI_UPDATE_PLATFORM_FILES if args.audience == "gui" else CLI_UPDATE_PLATFORM_FILES
+        )
         verify_with_retry(
             version=args.version,
             manifest_url=args.manifest_url,
@@ -180,6 +186,7 @@ def main(argv=None) -> int:
             minisign=args.minisign,
             public_key=args.public_key,
             timeout=args.timeout,
+            expected_platform_files=expected_platform_files,
             attempts=args.attempts,
             delay=args.delay,
         )

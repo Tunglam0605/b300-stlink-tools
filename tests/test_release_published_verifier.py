@@ -13,20 +13,24 @@ VERSION = "1.2.3"
 BASE = "https://github.com/Tunglam0605/b300-stlink-tools/releases/download/v%s/" % VERSION
 MANIFEST_URL = "https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/latest.json"
 SIGNATURE_URL = MANIFEST_URL + ".minisig"
-EXPECTED_UPDATE_FILES = {
+EXPECTED_GUI_UPDATE_FILES = {
     "windows-x64": "B300-STLink-GUI-Windows-x64.exe",
     "linux-x64-appimage": "B300-STLink-GUI-Ubuntu-x64.AppImage",
     "linux-x64-deb": "b300-stlink-gui_amd64.deb",
     "linux-arm64-appimage": "B300-STLink-GUI-Ubuntu-arm64.AppImage",
     "linux-arm64-deb": "b300-stlink-gui_arm64.deb",
+}
+
+EXPECTED_CLI_UPDATE_FILES = {
     "windows-x64-cli": "B300-STLink-CLI-Windows-x64.zip",
     "linux-x64-cli": "B300-STLink-CLI-Linux-x64.tar.gz",
     "linux-arm64-cli": "B300-STLink-CLI-Linux-arm64.tar.gz",
 }
 
 
+
 def manifest_bytes(platforms=None) -> bytes:
-    selected = platforms or EXPECTED_UPDATE_FILES
+    selected = platforms or EXPECTED_GUI_UPDATE_FILES
     value = {
         "notes": "release",
         "platforms": {
@@ -78,7 +82,30 @@ class PublishedReleaseVerifierTests(unittest.TestCase):
 
         self.assertEqual(len(commands), 1)
         self.assertIn("-Vm", commands[0])
-        self.assertEqual(set(probed), {BASE + name for name in EXPECTED_UPDATE_FILES.values()})
+        self.assertEqual(
+            set(probed), {BASE + name for name in EXPECTED_GUI_UPDATE_FILES.values()}
+        )
+
+    def test_cli_manifest_verifies_only_cli_platform_set(self) -> None:
+        manifest = manifest_bytes(EXPECTED_CLI_UPDATE_FILES)
+        probed = []
+        verify_once(
+            version=VERSION,
+            manifest_url=MANIFEST_URL,
+            signature_url=SIGNATURE_URL,
+            minisign=Path("minisign"),
+            public_key="PUBLIC",
+            timeout=2.0,
+            expected_platform_files=EXPECTED_CLI_UPDATE_FILES,
+            fetch=lambda url, timeout: manifest if url == MANIFEST_URL else b"signature",
+            probe=lambda url, timeout: probed.append(url),
+            run_command=lambda command, **kwargs: subprocess.CompletedProcess(
+                command, 0, stdout="ok", stderr=""
+            ),
+        )
+        self.assertEqual(
+            set(probed), {BASE + name for name in EXPECTED_CLI_UPDATE_FILES.values()}
+        )
 
     def test_signature_failure_is_fail_closed_before_asset_probe(self) -> None:
         probed = []
@@ -99,7 +126,7 @@ class PublishedReleaseVerifierTests(unittest.TestCase):
         self.assertEqual(probed, [])
 
     def test_missing_platform_is_rejected_even_with_valid_signature(self) -> None:
-        subset = dict(EXPECTED_UPDATE_FILES)
+        subset = dict(EXPECTED_GUI_UPDATE_FILES)
         subset.pop(next(iter(subset)))
         with self.assertRaisesRegex(ValueError, "platform set mismatch"):
             verify_once(

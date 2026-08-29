@@ -5,6 +5,28 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-08-29
+
+### Fixed
+
+- Khôi phục khả năng **Kiểm tra cập nhật** cho GUI `0.5.3`: `latest.json` được giữ đúng contract GUI legacy gồm 5 platform ban đầu, không còn chèn các key CLI khiến parser `0.5.3` từ chối toàn bộ signed manifest với lỗi `Update manifest contains an unsupported platform.`
+- Tách updater CLI sang signed manifest riêng `latest-cli.json`, tránh làm thay đổi schema/platform set mà các GUI đã phát hành trước đó đang tin cậy.
+
+### Changed
+
+- Release pipeline tạo, checksum, ký Minisign, upload và post-publish verify độc lập cho `latest.json` (GUI) và `latest-cli.json` (CLI).
+- CLI từ `0.6.1` dùng endpoint `releases/latest/download/latest-cli.json`; GUI tiếp tục dùng `latest.json`, giữ backward compatibility cho đường nâng cấp `0.5.3 -> 0.6.1`.
+
+### Compatibility
+
+- `latest.json` được đóng băng platform contract theo GUI `0.5.3`; regression test sẽ fail nếu một CLI platform vô tình được thêm lại vào manifest GUI.
+- CLI `0.6.0` là bản chuyển tiếp duy nhất đã dùng chung `latest.json`; từ `0.6.1` trở đi CLI có channel manifest riêng để các lần phát hành sau không tái diễn xung đột contract.
+
+### Validation
+
+- Focused updater/release compatibility regression: **47/47 tests PASS**.
+- Full regression trước release: **428 tests PASS, 2 skipped**.
+
 ## [0.6.0] - 2026-08-28
 
 ### Added

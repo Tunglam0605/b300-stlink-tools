@@ -314,8 +314,10 @@ jobs:
           chmod 600 "$RUNNER_TEMP/minisign.key"
           "$minisign_bin" -S -W -s "$RUNNER_TEMP/minisign.key" -m release-assets/release-manifest.json -x release-assets/release-manifest.json.minisig
           "$minisign_bin" -S -W -s "$RUNNER_TEMP/minisign.key" -m release-assets/latest.json -x release-assets/latest.json.minisig
+          "$minisign_bin" -S -W -s "$RUNNER_TEMP/minisign.key" -m release-assets/latest-cli.json -x release-assets/latest-cli.json.minisig
           "$minisign_bin" -Vm release-assets/release-manifest.json -x release-assets/release-manifest.json.minisig -P "$MINISIGN_PUBLIC_KEY"
           "$minisign_bin" -Vm release-assets/latest.json -x release-assets/latest.json.minisig -P "$MINISIGN_PUBLIC_KEY"
+          "$minisign_bin" -Vm release-assets/latest-cli.json -x release-assets/latest-cli.json.minisig -P "$MINISIGN_PUBLIC_KEY"
           rm -f "$RUNNER_TEMP/minisign.key"
       - name: Create draft release and upload exact assets
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
@@ -342,12 +344,14 @@ jobs:
             release-assets/release-manifest.json.minisig
             release-assets/latest.json
             release-assets/latest.json.minisig
+            release-assets/latest-cli.json
+            release-assets/latest-cli.json.minisig
           token: ${{ github.token }}
       - name: Publish as Latest after upload validation
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          test "$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length')" -eq 14
+          test "$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets | length')" -eq 16
           gh release edit "$GITHUB_REF_NAME" --draft=false --latest
       - name: Verify published signed updater state
         env:
@@ -356,8 +360,19 @@ jobs:
           test -n "$MINISIGN_PUBLIC_KEY"
           python -m scripts.release.verify_published \
             --version "${{ needs.prepare-release.outputs.version }}" \
+            --audience gui \
             --manifest-url "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json" \
             --signature-url "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json.minisig" \
+            --minisign "$RUNNER_TEMP/minisign-linux/x86_64/minisign" \
+            --public-key "$MINISIGN_PUBLIC_KEY" \
+            --attempts 8 \
+            --delay 5 \
+            --timeout 30
+          python -m scripts.release.verify_published \
+            --version "${{ needs.prepare-release.outputs.version }}" \
+            --audience cli \
+            --manifest-url "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest-cli.json" \
+            --signature-url "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest-cli.json.minisig" \
             --minisign "$RUNNER_TEMP/minisign-linux/x86_64/minisign" \
             --public-key "$MINISIGN_PUBLIC_KEY" \
             --attempts 8 \
@@ -369,7 +384,8 @@ jobs:
             B300-STLink-GUI-Windows-x64.exe \
             B300-STLink-GUI-Ubuntu-x64.AppImage \
             B300-STLink-GUI-Ubuntu-arm64.AppImage \
-            latest.json latest.json.minisig; do
+            latest.json latest.json.minisig \
+            latest-cli.json latest-cli.json.minisig; do
             curl -fIL --retry 8 --retry-all-errors --retry-delay 5 \
               "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/${asset}"
           done

@@ -11,9 +11,10 @@ from typing import Dict
 from urllib.parse import urlparse
 
 from .release_contract import (
+    CLI_UPDATE_PLATFORM_FILES,
     EXPECTED_PACKAGE_ASSETS,
+    GUI_UPDATE_PLATFORM_FILES,
     METADATA_ASSETS,
-    UPDATE_PLATFORM_FILES,
 )
 from .version_tools import parse_semver
 
@@ -90,24 +91,26 @@ def build_release_metadata(
         "schema_version": 1,
         "version": version,
     }
-    latest_platforms = {
-        platform_name: _asset_record(root / filename, base_url)
-        for platform_name, filename in sorted(UPDATE_PLATFORM_FILES.items())
-    }
-    latest = {
-        "notes": notes,
-        "platforms": latest_platforms,
-        "product": "B300 ST-Link Tools",
-        "published_at": published_at,
-        "release_page": release_page,
-        "schema_version": 1,
-        "version": version,
-    }
+    def latest_for(platform_files):
+        return {
+            "notes": notes,
+            "platforms": {
+                platform_name: _asset_record(root / filename, base_url)
+                for platform_name, filename in sorted(platform_files.items())
+            },
+            "product": "B300 ST-Link Tools",
+            "published_at": published_at,
+            "release_page": release_page,
+            "schema_version": 1,
+            "version": version,
+        }
+
     _write_json(root / "release-manifest.json", manifest)
-    _write_json(root / "latest.json", latest)
+    _write_json(root / "latest.json", latest_for(GUI_UPDATE_PLATFORM_FILES))
+    _write_json(root / "latest-cli.json", latest_for(CLI_UPDATE_PLATFORM_FILES))
 
     checksum_names = sorted(EXPECTED_PACKAGE_ASSETS) + [
-        "latest.json", "release-manifest.json"
+        "latest-cli.json", "latest.json", "release-manifest.json"
     ]
     checksum_text = "".join(
         "%s  %s\n" % (_sha256(root / name), name) for name in checksum_names
