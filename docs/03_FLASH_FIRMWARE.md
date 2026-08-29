@@ -108,11 +108,13 @@ thật. Chỉ tiếp tục khi hai lệnh cùng trỏ tới đúng probe và đ�
 
 Chỉ dùng khi main/chip mới hoặc khi được phép bảo trì Bootloader. Không dùng HEX
 tự chọn: tool dùng Bootloader đã bundle, kiểm SHA-256/provenance, và transaction
+trusted catalog do nhà phát hành kiểm soát. Người dùng chỉ được chọn các Bootloader profile có trong release chính thức; không thể import artifact bên ngoài. Việc thêm F407/H7 hoặc đổi COM/UART OTA là thay đổi của một release mới.
 riêng cho S0--S2/WRP.
 
 ```text
 b300-stlink provision-bootloader --dry-run --json
-b300-stlink provision-bootloader --probe-serial <STLINK_SERIAL> --confirm-factory-provision --json
+b300-stlink provision-bootloader --profile b300-f407ze-com3-v00060500 --dry-run --json
+b300-stlink provision-bootloader --profile b300-f407ze-com3-v00060500 --probe-serial <STLINK_SERIAL> --confirm-factory-provision --json
 ```
 
 Factory có thể tạm tắt rồi bắt buộc khôi phục WRP S0--S2. Sau mỗi thay đổi WRP,

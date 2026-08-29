@@ -127,6 +127,8 @@ sequence khi hợp lệ, đọc lại đúng target F407 512 KiB, chép HEX đã
 staging riêng và kiểm tra lại SHA-256/range/CRC.
 
 `provision-bootloader` là workflow Factory tách biệt. Bootloader là **publisher-controlled artifact**: chỉ nhà phát hành quyết định version/file nào được bundle trong từng release. Người dùng không có đường dẫn, nút Browse hay tham số để import/thay thế Bootloader bằng artifact ngoài release chính thức. Tool chỉ dùng Bootloader B300 chính thức đã bundle và kiểm hash/provenance; khi cần mới tạm tắt WRP S0–S2,
+Danh sách bản được phép dùng nằm trong **trusted Bootloader catalog** đóng gói cùng release và được pin SHA-256. GUI chỉ cho chọn các profile do nhà phát hành phát hành; thêm F407/H7 hoặc đổi cổng OTA phải đi qua release mới của B300 ST-Link Tools, không phải thao tác của người dùng. Profile hiện tại là `B300 F407 · COM3 OTA · Bootloader v0.6.5`: COM3 là tên cổng logic B300, phần cứng STM32 dùng USART1, TX PB6, RX PB7, DIR/RE PC13, 230400 baud, DMA2 Stream5 Channel 4.
+
 reset/halt để reload Option Bytes rồi xác minh WRP đã OFF trước khi erase/program
 đúng S0–S2. Sau program/verify, tool bật lại WRP S0–S2, reset/halt để reload
 Option Bytes, xác minh WRP đã ON, rồi mới `reset run`. Lệnh thật yêu cầu cả
@@ -170,6 +172,7 @@ b300-stlink gateway doctor   # preflight cho máy Gateway: SSH/ST-Link/OpenOCD/p
 b300-stlink flash <application.hex> --dry-run --json
 b300-stlink flash <application.hex>
 b300-stlink provision-bootloader --dry-run --json
+b300-stlink provision-bootloader --profile b300-f407ze-com3-v00060500 --dry-run --json
 b300-stlink-gui
 b300-stlink debug            # mặc định = debug gateway
 b300-stlink debug gateway    # cách viết tường minh

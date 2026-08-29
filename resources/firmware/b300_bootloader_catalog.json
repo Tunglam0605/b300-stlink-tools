@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "publisher": "TungLamAutomation",
+  "policy": "publisher-controlled",
+  "default_profile_id": "b300-f407ze-com3-v00060500",
+  "profiles": [
+    {
+      "profile_id": "b300-f407ze-com3-v00060500",
+      "display_name": "B300 F407 · COM3 OTA · Bootloader v0.6.5",
+      "manifest": "b300_bootloader_manifest.json",
+      "selectable": true,
+      "support_status": "stable",
+      "factory_backend": "stm32f4x",
+      "target": {
+        "board_family": "B300",
+        "mcu": "STM32F407ZET6",
+        "flash_kib": 512,
+        "board_token": "B300_F407ZE"
+      },
+      "ota": {
+        "logical_port": "COM3",
+        "physical_interface": "RS485 half-duplex UART",
+        "peripheral": "USART1",
+        "baudrate": 230400,
+        "tx_pin": "PB6",
+        "rx_pin": "PB7",
+        "direction_pin": "PC13",
+        "direction_tx_level": "LOW",
+        "direction_rx_level": "HIGH",
+        "dma_rx": "DMA2 Stream5 Channel 4",
+        "protocol_version": "0x00030000"
+      },
+      "memory": {
+        "bootloader": "S0-S2 · 0x08000000..0x0800BFFF",
+        "metadata": "S3 · 0x0800C000 · 44-byte B300 AppMeta",
+        "application": "S4-S7 · starts 0x08010000"
+      },
+      "capabilities": [
+        "OTA over Gateway MUX",
+        "OTAM metadata",
+        "STLM VERIFIED/CONFIRMED provisioning",
+        "BOOT_REQUEST handoff",
+        "UPDATE_CHECK request",
+        "Recovery mode"
+      ],
+      "operator_notes": [
+        "COM3 is the logical B300 port; the physical STM32 peripheral is USART1.",
+        "This profile is bundled and verified by the publisher; end users cannot import arbitrary Bootloader images."
+      ]
+    }
+  ]
+}

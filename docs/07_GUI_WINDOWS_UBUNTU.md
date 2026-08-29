@@ -122,6 +122,10 @@ nguyên nhân và hành động tiếp theo.
 
 Tab **Factory / Bootloader** tách hoàn toàn khỏi tab Application. GUI chỉ còn một thao tác chính: **NẠP BOOTLOADER**. Khi bấm nút, tool tự chạy preflight read-only để xác minh đúng STM32F407 512 KiB, RDP, trạng thái WRP và trusted bundled Bootloader; chỉ khi preflight đạt mới tạo Factory plan và chuyển sang provisioning.
 
+Trước khi nạp, GUI hiển thị **Bootloader OTA profile** do nhà phát hành đóng gói. Người dùng chỉ được chọn profile có trong trusted catalog của release hiện tại; không có nút Import/Browse Bootloader HEX. Profile mặc định hiện tại hiển thị rõ: `B300 F407 · COM3 OTA · Bootloader v0.6.5`, STM32F407ZET6/512 KiB, board token `B300_F407ZE`, COM3 logic → USART1 vật lý, 230400 baud, TX PB6, RX PB7, DIR/RE PC13 (TX=LOW/RX=HIGH), DMA2 Stream5 Channel 4, OTA protocol `0x00030000`, Bootloader S0–S2, metadata S3 `0x0800C000`, Application từ `0x08010000`, cùng SHA-256/source commit. **COM3 là tên cổng logic B300, không phải USART3.**
+
+Khi về sau có B300 F407 dùng cổng OTA khác hoặc B300 H7, nhà phát hành sẽ thêm artifact + profile tương ứng vào release mới của tool. Chỉ profile đã được release, xác thực và có backend tương thích mới xuất hiện/chọn được trong GUI.
+
 Factory service vẫn tự inspect target lần nữa ngay trước thao tác destructive, chỉ erase/program Sector 0-2, verify Bootloader, bật lại WRP S0-S2, reload Option Bytes và xác minh WRP đã ON trước `reset run`. Nếu có nhiều ST-Link, người dùng vẫn phải chọn đúng serial; nếu chỉ có một probe thì GUI tự chọn. RDP/security đang bật hoặc OpenOCD không report WRP sẽ chặn trước erase. Normal Application flow không có quyền thay đổi WRP/RDP.
 
 ## Bước 6 — Đọc Sector hoặc metadata

@@ -9,6 +9,8 @@ from unittest import mock
 
 from b300_core.factory_resource import (
     TRUSTED_BOOTLOADER_SHA256,
+    TRUSTED_CATALOG_SHA256,
+    list_trusted_bootloaders,
     load_trusted_bootloader,
 )
 
@@ -47,6 +49,19 @@ class FactoryResourceTests(unittest.TestCase):
         self.assertEqual(trusted.protocol_version, "0x00030000")
         self.assertEqual(trusted.board_token, "B300_F407ZE")
         self.assertEqual(trusted.transport, "COM3")
+        self.assertEqual(trusted.profile.profile_id, "b300-f407ze-com3-v00060500")
+        self.assertEqual(trusted.profile.logical_port, "COM3")
+        self.assertEqual(trusted.profile.peripheral, "USART1")
+        self.assertEqual(trusted.profile.baudrate, 230400)
+        self.assertEqual((trusted.profile.tx_pin, trusted.profile.rx_pin), ("PB6", "PB7"))
+        self.assertEqual(trusted.profile.direction_pin, "PC13")
+        self.assertEqual(trusted.profile.dma_rx, "DMA2 Stream5 Channel 4")
+        self.assertEqual(
+            hashlib.sha256(trusted.catalog_path.read_bytes()).hexdigest().upper(),
+            TRUSTED_CATALOG_SHA256,
+        )
+        listed = list_trusted_bootloaders()
+        self.assertEqual([item.profile.profile_id for item in listed], [trusted.profile.profile_id])
 
         artifact = trusted.image.path.read_bytes()
         self.assertTrue(artifact.endswith(b"\r\n"))
@@ -76,6 +91,7 @@ class FactoryResourceTests(unittest.TestCase):
         trusted = load_trusted_bootloader()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            (root / trusted.catalog_path.name).write_bytes(trusted.catalog_path.read_bytes())
             manifest = json.loads(trusted.manifest_path.read_text(encoding="utf-8"))
             (root / manifest["artifact"]).write_bytes(
                 trusted.image.path.read_bytes()
@@ -106,10 +122,27 @@ class FactoryResourceTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "provenance"):
                         load_trusted_bootloader(root)
 
+    def test_loader_rejects_tampered_or_unknown_publisher_catalog(self) -> None:
+        trusted = load_trusted_bootloader()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / trusted.image.path.name).write_bytes(trusted.image.path.read_bytes())
+            (root / trusted.manifest_path.name).write_bytes(trusted.manifest_path.read_bytes())
+            catalog = json.loads(trusted.catalog_path.read_text(encoding="utf-8"))
+            catalog["profiles"][0]["ota"]["peripheral"] = "USART3"
+            (root / trusted.catalog_path.name).write_text(json.dumps(catalog), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "catalog SHA-256"):
+                load_trusted_bootloader(root)
+
+    def test_loader_rejects_profile_not_shipped_by_publisher(self) -> None:
+        with self.assertRaisesRegex(ValueError, "profile is unavailable"):
+            load_trusted_bootloader(profile_id="user-custom-hex")
+
     def test_loader_rejects_malformed_artifact_line_endings_even_with_matching_artifact_sha(self) -> None:
         trusted = load_trusted_bootloader()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            (root / trusted.catalog_path.name).write_bytes(trusted.catalog_path.read_bytes())
             manifest = json.loads(trusted.manifest_path.read_text(encoding="utf-8"))
             malformed = trusted.image.path.read_bytes().replace(b"\r\n", b"\n", 1)
             digest = hashlib.sha256(malformed).hexdigest().upper()
@@ -126,6 +159,7 @@ class FactoryResourceTests(unittest.TestCase):
         trusted = load_trusted_bootloader()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            (root / trusted.catalog_path.name).write_bytes(trusted.catalog_path.read_bytes())
             manifest = json.loads(trusted.manifest_path.read_text(encoding="utf-8"))
             lines = trusted.image.path.read_bytes().split(b"\r\n")
             pair = next(
@@ -148,6 +182,7 @@ class FactoryResourceTests(unittest.TestCase):
         trusted = load_trusted_bootloader()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            (root / trusted.catalog_path.name).write_bytes(trusted.catalog_path.read_bytes())
             manifest = json.loads(trusted.manifest_path.read_text(encoding="utf-8"))
             (root / manifest["artifact"]).write_bytes(trusted.image.path.read_bytes())
             for field, value in (("legacy_stp1", "0x31505453"), ("bkp4r", "0x40002860")):

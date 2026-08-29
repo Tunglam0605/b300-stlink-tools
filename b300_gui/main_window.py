@@ -48,7 +48,7 @@ from b300_core.offline_setup import (
 from b300_core import __version__ as CORE_VERSION
 from b300_core.policy import SECTORS
 from b300_core.probe import list_probes
-from b300_core.factory_resource import load_trusted_bootloader
+from b300_core.factory_resource import load_trusted_bootloader, list_trusted_bootloaders
 from b300_core.service import B300Service, FactoryResult, FlashResult
 from b300_core.updater import UpdateCheckResult, should_auto_check
 from b300_core.update_install import launch_install_plan, prepare_install
@@ -684,22 +684,49 @@ class MainWindow(QMainWindow):
         self.progress.setFormat("Chưa chạy")
         right_layout.addWidget(self.progress)
 
-        # Factory Aliases for unified single-tab workflow
+        # Publisher-controlled Bootloader catalog. End users may only select
+        # trusted profiles bundled with this software release; there is no arbitrary
+        # Bootloader/HEX import path in the GUI.
+        factory_profile_group = QGroupBox("Bootloader OTA profile · Hồ sơ bản phát hành")
+        factory_profile_layout = QVBoxLayout(factory_profile_group)
+        profile_form = QFormLayout()
+        self.factory_profile_combo = QComboBox()
+        self.factory_profile_combo.setObjectName("factoryBootloaderProfileCombo")
+        self.factory_profile_combo.setToolTip(
+            "Chỉ hiển thị Bootloader profile do nhà phát hành đóng gói và xác thực. "
+            "Người dùng không thể import Bootloader HEX tùy ý."
+        )
+        profile_form.addRow("Bootloader profile", self.factory_profile_combo)
+        factory_profile_layout.addLayout(profile_form)
+        self.factory_artifact_label = QLabel()
+        self.factory_artifact_label.setObjectName("factoryBootloaderProfileInfo")
+        self.factory_artifact_label.setWordWrap(True)
+        self.factory_artifact_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        factory_profile_layout.addWidget(self.factory_artifact_label)
+        self.factory_profiles = ()
+        self.factory_trusted = None
         try:
-            self.factory_trusted = load_trusted_bootloader()
-            image = self.factory_trusted.image
-            self.factory_artifact_label = QLabel(
-                "Phiên bản: FW %s · Mục tiêu: B300_F407ZE · Toàn vẹn: ĐÃ XÁC THỰC ✓\n"
-                "Vùng nhớ: 0x%08X..0x%08X (Sector 0–2)\n"
-                "SHA-256: %s\n"
-                "Source commit: %s" % (
-                    self.factory_trusted.firmware_version, image.start_address,
-                    image.end_address, image.sha256, self.factory_trusted.source_commit,
+            self.factory_profiles = list_trusted_bootloaders()
+            for trusted in self.factory_profiles:
+                self.factory_profile_combo.addItem(
+                    trusted.profile.display_name, trusted.profile.profile_id
                 )
-            )
+            if self.factory_profiles:
+                self.factory_profile_combo.setCurrentIndex(0)
+                self.factory_trusted = self.factory_profiles[0]
+                self._render_factory_profile_info()
+            else:
+                self.factory_artifact_label.setText(
+                    "Không có Bootloader profile được nhà phát hành cho phép trong bản này."
+                )
         except Exception as error:
+            self.factory_profiles = ()
             self.factory_trusted = None
-            self.factory_artifact_label = QLabel("Bootloader tin cậy không khả dụng: %s" % error)
+            self.factory_artifact_label.setText(
+                "Bootloader catalog tin cậy không khả dụng: %s" % error
+            )
+        self.factory_profile_combo.currentIndexChanged.connect(self._factory_profile_changed)
+        left_layout.addWidget(factory_profile_group)
 
         self.factory_probe_combo = self.probe_combo
         self.factory_log_view = self.log_view
@@ -732,6 +759,54 @@ class MainWindow(QMainWindow):
             self.flash_splitter.setStretchFactor(0, 3)
             self.flash_splitter.setStretchFactor(1, 2)
             self.flash_scroll_content.setMinimumHeight(650)
+
+    def _factory_profile_changed(self, index: int) -> None:
+        if index < 0 or not getattr(self, "factory_profiles", ()):
+            self.factory_trusted = None
+            self._update_controls()
+            return
+        profile_id = self.factory_profile_combo.itemData(index)
+        selected = next(
+            (item for item in self.factory_profiles
+             if item.profile.profile_id == profile_id),
+            None,
+        )
+        self.factory_trusted = selected
+        self._render_factory_profile_info()
+        if hasattr(self, "factory_target_summary"):
+            self.factory_target_summary.setText(
+                "Bootloader profile đã thay đổi; target/WRP sẽ được kiểm tra lại trước khi nạp"
+            )
+        self._update_controls()
+
+    def _render_factory_profile_info(self) -> None:
+        if self.factory_trusted is None:
+            self.factory_artifact_label.setText("Không có Bootloader profile khả dụng.")
+            return
+        trusted = self.factory_trusted
+        profile = trusted.profile
+        image = trusted.image
+        capabilities = " · ".join(profile.capabilities)
+        self.factory_artifact_label.setText(
+            "%s\n"
+            "Trạng thái: %s · FW %s · ĐÃ XÁC THỰC ✓\n"
+            "Target: %s · %d KiB Flash · board token %s\n"
+            "OTA: %s (cổng logic B300) → %s · %s · %d baud\n"
+            "GPIO MCU: TX %s · RX %s · DIR/RE %s (TX=%s / RX=%s)\n"
+            "RX DMA: %s · OTA protocol %s\n"
+            "Flash map: %s · %s · %s\n"
+            "Chức năng: %s\n"
+            "Lưu ý: COM3 là cổng logic của B300; peripheral MCU vật lý của profile này là USART1.\n"
+            "SHA-256: %s\nSource commit: %s" % (
+                profile.display_name, profile.support_status, trusted.firmware_version,
+                profile.mcu, profile.flash_kib, profile.board_token,
+                profile.logical_port, profile.peripheral, profile.physical_interface,
+                profile.baudrate, profile.tx_pin, profile.rx_pin, profile.direction_pin,
+                profile.direction_tx_level, profile.direction_rx_level, profile.dma_rx,
+                profile.protocol_version, profile.bootloader_memory, profile.metadata_memory,
+                profile.application_memory, capabilities, image.sha256, trusted.source_commit,
+            )
+        )
 
     def show_factory_dry_run(self) -> None:
         if self.factory_trusted is None or self.busy:
@@ -1210,6 +1285,8 @@ class MainWindow(QMainWindow):
                 factory_probe_ok and not main_locked
             )
             self.factory_probe_combo.setEnabled(not main_locked)
+            if hasattr(self, "factory_profile_combo"):
+                self.factory_profile_combo.setEnabled(not main_locked and self.factory_profile_combo.count() > 0)
         if hasattr(self, "memory_tab"):
             self.memory_tab.set_external_blocked(operation.memory_blocked_by_other)
         if hasattr(self, "debug_tab"):

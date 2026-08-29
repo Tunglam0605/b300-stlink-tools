@@ -24,6 +24,7 @@ a = Analysis(
         (str(build_commit_file), "."),
         (str(trusted_bootloader.image.path), "resources/firmware"),
         (str(trusted_bootloader.manifest_path), "resources/firmware"),
+        (str(trusted_bootloader.catalog_path), "resources/firmware"),
     ],
     hiddenimports=[],
     hookspath=[],

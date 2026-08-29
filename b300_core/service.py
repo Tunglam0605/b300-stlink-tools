@@ -145,8 +145,8 @@ class B300Service:
     def flash_command(self, plan: FlashPlan):
         return build_flash_command(plan, self.executable)
 
-    def trusted_bootloader(self) -> TrustedBootloader:
-        return load_trusted_bootloader()
+    def trusted_bootloader(self, profile_id: Optional[str] = None) -> TrustedBootloader:
+        return load_trusted_bootloader(profile_id=profile_id)
 
     def factory_preview(self, image: ImageInfo, probe: ProbeRef) -> FactoryPreview:
         return build_factory_preview(image, probe)

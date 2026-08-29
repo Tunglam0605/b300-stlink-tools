@@ -9,6 +9,7 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ### Added
 
+- Bổ sung trusted Bootloader catalog do nhà phát hành kiểm soát và thẻ `Bootloader OTA profile` trong GUI. Người dùng chỉ chọn profile được bundle/xác thực, không thể import Bootloader HEX tùy ý. CLI Factory có `--profile <trusted-id>` và cũng fail-closed với profile không nằm trong release. Profile v0.6.5 hiện hiển thị đầy đủ COM3 logic → USART1 vật lý, 230400 baud, TX PB6, RX PB7, DIR/RE PC13, DMA2 Stream5 Channel 4, protocol/Flash map/capabilities và provenance; kiến trúc sẵn sàng cho profile F407/H7/OTA transport khác qua release mới.
 - Đồng bộ normal Application provisioning với Bootloader v0.6.5 strict AppMeta: sau Application verify, tool ghi/verify/read-back chính xác 44 byte `STLM + VERIFIED` tại `0x0800C000`, reset rồi chỉ báo thành công khi Bootloader chuyển thành `STLM + CONFIRMED` với image size/CRC và sequence kế tiếp khớp.
 - Bổ sung sequence lifecycle dựa trên metadata trước đó, fallback xác định về sequence 1 khi metadata cũ invalid/unreadable, và bounded confirmation deadline trước post-verify PC/BKP1R.
 - Bổ sung phát hiện Intel HEX ghi đè xung đột cùng một địa chỉ trước khi provisioning.
@@ -37,7 +38,7 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 - Focused core/factory/AppMeta regression: **62 tests PASS**.
 - GUI Flash/Factory/Memory smoke regression sau AppMeta UX update: **21 tests PASS**.
 - Remote Debug focused regression cho GUI/CLI Client + VS Code/Cortex-Debug: **78 tests PASS**.
-- Full software regression cuối trước RC packaging: **558 tests PASS, 2 skipped, 0 failures/errors**.
+- Full software regression sau trusted Bootloader catalog/profile integration: **563 tests PASS, 2 skipped, 0 failures/errors**.
 - `compileall` và `git diff --check` PASS; trusted Bootloader v0.6.5 provenance loader xác minh artifact/hash/source commit thành công.
 - Hardware provisioning acceptance: Bootloader S0-S2 trusted v0.6.5 bit-for-bit PASS; Application span bit-for-bit PASS (`CRC32 0xC99ED31F`); final metadata `STLM + CONFIRMED seq=4`; WRP S0-S2 ON; target RUNNING. Evidence: `docs/12_HARDWARE_PROVISIONING_ACCEPTANCE_V0.9.0_2026-08-29.md`.
 

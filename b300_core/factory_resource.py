@@ -39,15 +39,49 @@ TRUSTED_ARTIFACT_TRANSFORMATION = {
 }
 TRUSTED_ARTIFACT_NAME = "b300_bootloader_f407ze_com3_v00060500.hex"
 MANIFEST_NAME = "b300_bootloader_manifest.json"
+CATALOG_NAME = "b300_bootloader_catalog.json"
+TRUSTED_CATALOG_SHA256 = "1A053672005A19D3B9A08CAC37012B32CE2A79CC26C194DEAFDE3BAF99FF5306"
 TRUSTED_IMAGE_START = 0x08000000
 TRUSTED_IMAGE_END = 0x08004BA3
 TRUSTED_IMAGE_DATA_BYTES = 19364
 
 
 @dataclass(frozen=True)
+class BootloaderProfile:
+    profile_id: str
+    display_name: str
+    manifest_name: str
+    selectable: bool
+    support_status: str
+    factory_backend: str
+    board_family: str
+    mcu: str
+    flash_kib: int
+    board_token: str
+    logical_port: str
+    physical_interface: str
+    peripheral: str
+    baudrate: int
+    tx_pin: str
+    rx_pin: str
+    direction_pin: str
+    direction_tx_level: str
+    direction_rx_level: str
+    dma_rx: str
+    protocol_version: str
+    bootloader_memory: str
+    metadata_memory: str
+    application_memory: str
+    capabilities: tuple[str, ...]
+    operator_notes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class TrustedBootloader:
     image: ImageInfo
     manifest_path: Path
+    catalog_path: Path
+    profile: BootloaderProfile
     source_repository: str
     source_path: str
     source_commit: str
@@ -69,6 +103,102 @@ def _default_resource_directory() -> Path:
     if getattr(sys, "frozen", False) and adjacent.is_dir():
         return adjacent
     return Path(__file__).resolve().parents[1] / "resources" / "firmware"
+
+
+def _load_profile_catalog(root: Path) -> tuple[Path, str, tuple[BootloaderProfile, ...]]:
+    catalog_path = root / CATALOG_NAME
+    try:
+        catalog_bytes = catalog_path.read_bytes()
+    except OSError as error:
+        raise ValueError("Trusted Bootloader catalog is unavailable: %s" % error) from error
+    digest = hashlib.sha256(catalog_bytes).hexdigest().upper()
+    if digest != TRUSTED_CATALOG_SHA256:
+        raise ValueError("Trusted Bootloader catalog SHA-256 does not match this release.")
+    try:
+        catalog = json.loads(catalog_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("Trusted Bootloader catalog is invalid: %s" % error) from error
+    if (not isinstance(catalog, dict) or
+            set(catalog) != {"schema_version", "publisher", "policy", "default_profile_id", "profiles"} or
+            catalog.get("schema_version") != 1 or
+            catalog.get("publisher") != "TungLamAutomation" or
+            catalog.get("policy") != "publisher-controlled" or
+            not isinstance(catalog.get("default_profile_id"), str) or
+            not isinstance(catalog.get("profiles"), list) or
+            not catalog["profiles"]):
+        raise ValueError("Trusted Bootloader catalog schema/publisher policy is invalid.")
+
+    profiles = []
+    seen = set()
+    for raw in catalog["profiles"]:
+        if not isinstance(raw, dict) or set(raw) != {
+            "profile_id", "display_name", "manifest", "selectable", "support_status",
+            "factory_backend", "target", "ota", "memory", "capabilities", "operator_notes",
+        }:
+            raise ValueError("Trusted Bootloader profile schema is invalid.")
+        target = raw.get("target")
+        ota = raw.get("ota")
+        memory = raw.get("memory")
+        if (not isinstance(target, dict) or
+                set(target) != {"board_family", "mcu", "flash_kib", "board_token"} or
+                not isinstance(ota, dict) or
+                set(ota) != {
+                    "logical_port", "physical_interface", "peripheral", "baudrate",
+                    "tx_pin", "rx_pin", "direction_pin", "direction_tx_level",
+                    "direction_rx_level", "dma_rx", "protocol_version",
+                } or
+                not isinstance(memory, dict) or
+                set(memory) != {"bootloader", "metadata", "application"} or
+                not isinstance(raw.get("capabilities"), list) or
+                not all(isinstance(item, str) and item for item in raw["capabilities"]) or
+                not isinstance(raw.get("operator_notes"), list) or
+                not all(isinstance(item, str) and item for item in raw["operator_notes"])):
+            raise ValueError("Trusted Bootloader profile details are invalid.")
+        profile_id = raw.get("profile_id")
+        manifest_name = raw.get("manifest")
+        if (not isinstance(profile_id, str) or not profile_id or profile_id in seen or
+                not isinstance(manifest_name, str) or not manifest_name or
+                Path(manifest_name).name != manifest_name):
+            raise ValueError("Trusted Bootloader profile identity/path is invalid.")
+        seen.add(profile_id)
+        profiles.append(BootloaderProfile(
+            profile_id=profile_id,
+            display_name=str(raw["display_name"]),
+            manifest_name=manifest_name,
+            selectable=bool(raw["selectable"]),
+            support_status=str(raw["support_status"]),
+            factory_backend=str(raw["factory_backend"]),
+            board_family=str(target["board_family"]),
+            mcu=str(target["mcu"]),
+            flash_kib=int(target["flash_kib"]),
+            board_token=str(target["board_token"]),
+            logical_port=str(ota["logical_port"]),
+            physical_interface=str(ota["physical_interface"]),
+            peripheral=str(ota["peripheral"]),
+            baudrate=int(ota["baudrate"]),
+            tx_pin=str(ota["tx_pin"]),
+            rx_pin=str(ota["rx_pin"]),
+            direction_pin=str(ota["direction_pin"]),
+            direction_tx_level=str(ota["direction_tx_level"]),
+            direction_rx_level=str(ota["direction_rx_level"]),
+            dma_rx=str(ota["dma_rx"]),
+            protocol_version=str(ota["protocol_version"]),
+            bootloader_memory=str(memory["bootloader"]),
+            metadata_memory=str(memory["metadata"]),
+            application_memory=str(memory["application"]),
+            capabilities=tuple(raw["capabilities"]),
+            operator_notes=tuple(raw["operator_notes"]),
+        ))
+    default_id = catalog["default_profile_id"]
+    if default_id not in seen:
+        raise ValueError("Trusted Bootloader catalog default profile does not exist.")
+    return catalog_path, default_id, tuple(profiles)
+
+
+def list_trusted_bootloader_profiles(resource_directory: Optional[Path] = None) -> tuple[BootloaderProfile, ...]:
+    root = Path(resource_directory or _default_resource_directory()).resolve()
+    _, _, profiles = _load_profile_catalog(root)
+    return tuple(profile for profile in profiles if profile.selectable)
 
 
 def _intel_hex_records(data: bytes, separator: bytes) -> tuple[bytes, ...]:
@@ -104,22 +234,40 @@ def _canonical_source_from_artifact(data: bytes) -> bytes:
 
 
 def load_trusted_bootloader(
-        resource_directory: Optional[Path] = None) -> TrustedBootloader:
+        resource_directory: Optional[Path] = None,
+        profile_id: Optional[str] = None) -> TrustedBootloader:
     root = Path(resource_directory or _default_resource_directory()).resolve()
-    manifest_path = root / MANIFEST_NAME
+    catalog_path, default_profile_id, profiles = _load_profile_catalog(root)
+    selected_id = profile_id or default_profile_id
+    profile = next((item for item in profiles if item.profile_id == selected_id), None)
+    if profile is None or not profile.selectable:
+        raise ValueError("Trusted Bootloader profile is unavailable in this publisher release.")
+    # v0.9.0 currently ships one production backend. Future F4/H7/alternate-COM
+    # profiles are added only by a publisher release together with matching core support.
+    if (profile.factory_backend != "stm32f4x" or
+            profile.mcu != "STM32F407ZET6" or profile.flash_kib != 512 or
+            profile.board_token != "B300_F407ZE" or profile.logical_port != "COM3" or
+            profile.peripheral != "USART1" or profile.baudrate != 230400 or
+            profile.tx_pin != "PB6" or profile.rx_pin != "PB7" or
+            profile.direction_pin != "PC13" or profile.direction_tx_level != "LOW" or
+            profile.direction_rx_level != "HIGH" or
+            profile.dma_rx != "DMA2 Stream5 Channel 4" or
+            profile.protocol_version != "0x00030000"):
+        raise ValueError("Trusted Bootloader profile is not supported by this release backend.")
+    manifest_path = root / profile.manifest_name
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("Trusted Bootloader manifest is unavailable or invalid: %s" % error) from error
 
     source = manifest.get("source", {})
-    profile = manifest.get("profile", {})
+    manifest_profile = manifest.get("profile", {})
     observed = manifest.get("observed_data_range", {})
     app_metadata = manifest.get("app_metadata", {})
     provenance_valid = (
         isinstance(manifest, dict) and
         isinstance(source, dict) and
-        isinstance(profile, dict) and
+        isinstance(manifest_profile, dict) and
         isinstance(observed, dict) and
         isinstance(app_metadata, dict) and
         isinstance(manifest.get("allowed_data_range", {}), dict) and
@@ -134,7 +282,7 @@ def load_trusted_bootloader(
             "artifact_transformation", "commit", "project", "target",
             "currentness_evidence",
         } and
-        set(profile) == {
+        set(manifest_profile) == {
             "mcu", "flash_kib", "board_token", "transport",
             "firmware_version", "protocol_version",
         } and
@@ -146,6 +294,7 @@ def load_trusted_bootloader(
         } and
         set(app_metadata.get("stlink_initial_state", {})) == {"name", "value"} and
         manifest.get("schema_version") == 1 and
+        profile.manifest_name == MANIFEST_NAME and
         manifest.get("artifact") == TRUSTED_ARTIFACT_NAME and
         str(manifest.get("sha256", "")).upper() == TRUSTED_BOOTLOADER_SHA256 and
         source.get("repository") == "https://github.com/Tunglam0605/TungLamvsOTA-B300.git" and
@@ -161,12 +310,17 @@ def load_trusted_bootloader(
         source.get("target") == "BOOTLOADER_STD" and
         isinstance(source.get("currentness_evidence"), str) and
         bool(source.get("currentness_evidence")) and
-        profile.get("mcu") == "STM32F407ZET6" and
-        profile.get("flash_kib") == 512 and
-        profile.get("firmware_version") == "0x00060500" and
-        profile.get("protocol_version") == "0x00030000" and
-        profile.get("board_token") == "B300_F407ZE" and
-        profile.get("transport") == "COM3" and
+        manifest_profile.get("mcu") == "STM32F407ZET6" and
+        manifest_profile.get("flash_kib") == 512 and
+        manifest_profile.get("firmware_version") == "0x00060500" and
+        manifest_profile.get("protocol_version") == "0x00030000" and
+        manifest_profile.get("board_token") == "B300_F407ZE" and
+        manifest_profile.get("transport") == "COM3" and
+        manifest_profile.get("mcu") == profile.mcu and
+        manifest_profile.get("flash_kib") == profile.flash_kib and
+        manifest_profile.get("board_token") == profile.board_token and
+        manifest_profile.get("transport") == profile.logical_port and
+        manifest_profile.get("protocol_version") == profile.protocol_version and
         manifest["allowed_data_range"].get("start") == "0x08000000" and
         manifest["allowed_data_range"].get("end") == "0x0800BFFF" and
         manifest["allowed_data_range"].get("sectors") == [0, 1, 2] and
@@ -208,6 +362,8 @@ def load_trusted_bootloader(
     return TrustedBootloader(
         image=image,
         manifest_path=manifest_path,
+        catalog_path=catalog_path,
+        profile=profile,
         source_repository=str(source.get("repository", "")),
         source_path=source["path"],
         source_commit=source["commit"],
@@ -216,8 +372,18 @@ def load_trusted_bootloader(
         source_raw_sha256=source["raw_sha256"],
         source_raw_size=source["raw_size"],
         artifact_transformation=dict(source["artifact_transformation"]),
-        firmware_version=profile["firmware_version"],
-        protocol_version=profile["protocol_version"],
-        board_token=profile["board_token"],
-        transport=profile["transport"],
+        firmware_version=manifest_profile["firmware_version"],
+        protocol_version=manifest_profile["protocol_version"],
+        board_token=manifest_profile["board_token"],
+        transport=manifest_profile["transport"],
+    )
+
+
+def list_trusted_bootloaders(resource_directory: Optional[Path] = None) -> tuple[TrustedBootloader, ...]:
+    root = Path(resource_directory or _default_resource_directory()).resolve()
+    _, _, profiles = _load_profile_catalog(root)
+    return tuple(
+        load_trusted_bootloader(root, profile.profile_id)
+        for profile in profiles
+        if profile.selectable
     )

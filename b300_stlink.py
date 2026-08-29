@@ -1071,7 +1071,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "Run --dry-run first, then repeat with explicit factory confirmation for the intended board.",
                 )
             service = B300Service(executable=args.openocd)
-            trusted = service.trusted_bootloader()
+            try:
+                trusted = (service.trusted_bootloader(args.bootloader_profile)
+                           if args.bootloader_profile else service.trusted_bootloader())
+            except ValueError as error:
+                raise ProvisioningError(
+                    "bootloader_profile", str(error),
+                    "Use only a Bootloader profile shipped by this B300 ST-Link Tools release.",
+                ) from error
             if args.dry_run:
                 probe = ProbeRef(args.probe_serial)
             else:
@@ -1084,8 +1091,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                 bootloader=str(trusted.image.path),
                 sha256=trusted.image.sha256,
                 source_commit=trusted.source_commit,
+                profile_id=trusted.profile.profile_id,
+                profile_name=trusted.profile.display_name,
                 firmware_version=trusted.firmware_version,
                 board_token=trusted.board_token,
+                ota_logical_port=trusted.profile.logical_port,
+                ota_peripheral=trusted.profile.peripheral,
+                ota_baudrate=trusted.profile.baudrate,
+                ota_tx_pin=trusted.profile.tx_pin,
+                ota_rx_pin=trusted.profile.rx_pin,
+                ota_direction_pin=trusted.profile.direction_pin,
                 start="0x%08X" % trusted.image.start_address,
                 end="0x%08X" % trusted.image.end_address,
             )

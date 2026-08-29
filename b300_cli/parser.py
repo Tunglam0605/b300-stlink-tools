@@ -74,6 +74,11 @@ def build_parser() -> argparse.ArgumentParser:
     factory.add_argument("--probe-serial", type=parse_probe_serial,
                          help="Select one ST-Link when multiple probes are connected.")
     factory.add_argument("--dry-run", action="store_true")
+    factory.add_argument(
+        "--profile", dest="bootloader_profile",
+        help=("Select a publisher-bundled trusted Bootloader profile ID. "
+              "Arbitrary Bootloader paths/HEX files are not accepted."),
+    )
     factory.add_argument("--confirm-factory-provision", action="store_true",
                          help="Required for real S0-S2 Bootloader/WRP modification.")
 

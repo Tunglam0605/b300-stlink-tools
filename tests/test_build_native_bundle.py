@@ -124,6 +124,7 @@ class NativeBundleTargetTests(unittest.TestCase):
                 names = {path.name for path in module.runtime_resources(platform_name)}
                 self.assertIn("b300_bootloader_f407ze_com3_v00060500.hex", names)
                 self.assertIn("b300_bootloader_manifest.json", names)
+                self.assertIn("b300_bootloader_catalog.json", names)
 
     def test_gdb_trust_anchors_match_the_pinned_xpack_archives(self) -> None:
         module = builder()

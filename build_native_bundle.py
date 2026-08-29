@@ -114,7 +114,7 @@ def runtime_resources(platform_name: str):
     """Immutable resources required by both frozen entry points."""
     del platform_name
     trusted = load_trusted_bootloader(ROOT / "resources" / "firmware")
-    return [trusted.image.path, trusted.manifest_path]
+    return [trusted.image.path, trusted.manifest_path, trusted.catalog_path]
 
 
 def pyinstaller_data_argument(source: Path) -> str:
