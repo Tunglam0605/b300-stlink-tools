@@ -99,7 +99,7 @@ class ElfMatcherTests(unittest.TestCase):
             make_elf(good, bytes(range(64)))
             make_elf(hidden, bytes(range(64)))
             found = discover_symbol_files([root], max_files=8, max_depth=8)
-        self.assertEqual(found, (good,))
+            self.assertEqual(found, (good.resolve(),))
 
     def test_ambiguous_exact_matches_fail_closed(self) -> None:
         payload = bytes(range(64))
