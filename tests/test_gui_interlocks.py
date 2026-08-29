@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -82,6 +83,35 @@ class GuiHardwareInterlockTests(unittest.TestCase):
         debug.state = DebugState.STOPPED
         window._hardware_activity_changed(False)
         self.assertTrue(window.flash_button.isEnabled())
+        self.assertTrue(window.memory_tab.read_button.isEnabled())
+        window.close()
+
+    def test_main_worker_completion_releases_memory_interlock_without_gui_restart(self) -> None:
+        window = MainWindow(
+            service=FakeService(), debug_service=FakeDebugService(DebugState.STOPPED),
+            probe_loader=lambda: (),
+        )
+        self.assertTrue(window.memory_tab.metadata_button.isEnabled())
+        window.busy = True
+        window._update_controls()
+        self.assertFalse(window.memory_tab.metadata_button.isEnabled())
+
+        def completed(_result) -> None:
+            # Matches flash/inspect callbacks: logical busy clears before the
+            # QThread.finished signal removes the worker from window._threads.
+            window.busy = False
+            window._update_controls()
+            self.assertFalse(window.memory_tab.metadata_button.isEnabled())
+
+        window._start_worker(lambda _log, _phase, _cancel: "done", completed)
+        deadline = time.monotonic() + 1.0
+        while window._threads and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.01)
+        self.app.processEvents()
+        self.assertFalse(window._threads)
+        self.assertFalse(window.busy)
+        self.assertTrue(window.memory_tab.metadata_button.isEnabled())
         self.assertTrue(window.memory_tab.read_button.isEnabled())
         window.close()
 

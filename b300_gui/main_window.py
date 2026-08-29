@@ -1235,6 +1235,13 @@ class MainWindow(QMainWindow):
             self._cancellable_worker = None
             self.cancel_button.setEnabled(False)
         worker.deleteLater()
+        # completed/failed callbacks run before QThread.finished, so their first
+        # _update_controls() still sees this worker in self._threads and keeps
+        # Memory/Metadata/Debug externally blocked. Refresh again only after the
+        # worker has actually left the ownership list. Without this, ST-Link is
+        # physically free but the GUI remains latched busy until another UI event
+        # (or an application restart) happens.
+        self._update_controls()
 
     def cancel_operation(self) -> None:
         if self._cancellable_worker is None:
@@ -1293,6 +1300,9 @@ class MainWindow(QMainWindow):
                 ("0x%08X" % verification.pc if verification and verification.pc else "N/A"),
                 "success",
             )
+            self.memory_tab.invalidate_metadata_view(
+                "Application provisioning vừa erase/program S3–S7."
+            )
         elif result.status == "programmed_boot_failed":
             self.progress.setFormat("Boot verify lỗi")
             self._set_status(
@@ -1341,6 +1351,11 @@ class MainWindow(QMainWindow):
                 "error",
             )
             self.append_log("Close blocked: an ST-Link operation is still active.")
+            return
+        self._update_poll_timer.stop()
+        if not self.debug_tab.prepare_shutdown():
+            event.ignore()
+            self._set_status("Debug worker chưa dừng sạch; thử đóng lại sau vài giây.", "error")
             return
         event.accept()
 

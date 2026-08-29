@@ -138,8 +138,8 @@ class DebugTab(QWidget):
         layout.addWidget(self.client_box)
 
         config_grid = QHBoxLayout()
-        symbols_box = QGroupBox("Debug symbols (.elf / .axf)")
-        symbols_layout = QHBoxLayout(symbols_box)
+        self.symbols_box = QGroupBox("Debug symbols (.elf / .axf)")
+        symbols_layout = QHBoxLayout(self.symbols_box)
         self.symbol_path = QLineEdit()
         self.symbol_path.setObjectName("debugSymbolPath")
         self.symbol_path.setPlaceholderText("Tùy chọn: firmware.elf hoặc firmware.axf")
@@ -155,17 +155,18 @@ class DebugTab(QWidget):
         symbols_layout.addWidget(self.symbol_path, 1)
         symbols_layout.addWidget(self.symbol_browse_button)
         symbols_layout.addWidget(self.symbol_auto_button)
-        config_grid.addWidget(symbols_box, 3)
+        config_grid.addWidget(self.symbols_box, 3)
 
-        connection_box = QGroupBox("Kết nối nội bộ an toàn")
-        connection_layout = QHBoxLayout(connection_box)
+        self.connection_box = QGroupBox("Kết nối nội bộ an toàn")
+        connection_layout = QHBoxLayout(self.connection_box)
         self.bind_address = QLineEdit("127.0.0.1")
         self.bind_address.setObjectName("debugBindAddress")
         self.bind_address.setReadOnly(True)
         self.bind_address.setToolTip("Integrated debug luôn bind loopback để không lộ TCL/GDB ra mạng.")
         self.gdb_port = QLineEdit("3333")
         self.gdb_port.setObjectName("debugGdbPort")
-        self.gdb_port.setToolTip("Cổng GDB local. TCL nội bộ cố định 6666.")
+        self.gdb_port.setReadOnly(True)
+        self.gdb_port.setToolTip("Tool tự chọn cổng loopback cho Local; Gateway luôn dùng GDB 3333.")
         self.tcl_display = QLabel("TCL: 6666 · loopback only")
         self.tcl_display.setStyleSheet("color: #64748B;")
         connection_layout.addWidget(QLabel("Host:"))
@@ -173,7 +174,7 @@ class DebugTab(QWidget):
         connection_layout.addWidget(QLabel("GDB:"))
         connection_layout.addWidget(self.gdb_port)
         connection_layout.addWidget(self.tcl_display)
-        config_grid.addWidget(connection_box, 2)
+        config_grid.addWidget(self.connection_box, 2)
         layout.addLayout(config_grid)
 
         actions_box = QGroupBox("Điều khiển phiên Debug")
@@ -206,17 +207,25 @@ class DebugTab(QWidget):
         self.continue_button.setObjectName("debugContinueButton")
         self.reset_button = QPushButton("Reset + Halt")
         self.reset_button.setObjectName("debugResetButton")
+        self.step_into_button = QPushButton("Step Into")
+        self.step_into_button.setObjectName("debugStepIntoButton")
+        self.step_over_button = QPushButton("Step Over")
+        self.step_over_button.setObjectName("debugStepOverButton")
         self.halt_button.clicked.connect(self.halt_target)
         self.continue_button.clicked.connect(self.continue_target)
         self.reset_button.clicked.connect(self.reset_halt_target)
+        self.step_into_button.clicked.connect(self.step_into_target)
+        self.step_over_button.clicked.connect(self.step_over_target)
         actions_layout.addWidget(self.halt_button)
         actions_layout.addWidget(self.continue_button)
         actions_layout.addWidget(self.reset_button)
+        actions_layout.addWidget(self.step_into_button)
+        actions_layout.addWidget(self.step_over_button)
         actions_layout.addStretch(1)
         layout.addWidget(actions_box)
 
-        diagnostics_box = QGroupBox("Chẩn đoán source-level · tự giữ nguyên trạng thái RUN/HALT")
-        diagnostics_layout = QVBoxLayout(diagnostics_box)
+        self.diagnostics_box = QGroupBox("Chẩn đoán source-level · tự giữ nguyên trạng thái RUN/HALT")
+        diagnostics_layout = QVBoxLayout(self.diagnostics_box)
         diagnostic_actions = QHBoxLayout()
         self.where_button = QPushButton("Vị trí hiện tại")
         self.where_button.setObjectName("debugWhereButton")
@@ -283,7 +292,7 @@ class DebugTab(QWidget):
             "Kết quả chẩn đoán sẽ hiển thị ở đây. Nếu target đang RUNNING, tool chỉ Halt tạm thời rồi tự Resume."
         )
         diagnostics_layout.addWidget(self.diagnostic_view)
-        layout.addWidget(diagnostics_box)
+        layout.addWidget(self.diagnostics_box)
 
         log_box = QGroupBox("Nhật ký OpenOCD / GDB")
         log_layout = QVBoxLayout(log_box)
@@ -396,6 +405,16 @@ class DebugTab(QWidget):
             summary = "Local debug trực tiếp ST-Link trên máy này."
         self.role_summary.setText(summary)
         self.client_box.setVisible(role == "client")
+        self.symbols_box.setVisible(role in {"local", "client"})
+        self.connection_box.setVisible(role == "gateway")
+        self.diagnostics_box.setVisible(role in {"local", "client"})
+        self.remote_kit_button.setVisible(role == "gateway")
+        if role == "gateway":
+            self.tcl_display.setText("GDB 3333 · TCL 6666 · loopback only")
+        elif role == "client":
+            self.tcl_display.setText("GDB/TCL: SSH tunnel tự chọn")
+        else:
+            self.tcl_display.setText("GDB/TCL: tự chọn loopback")
         self.start_button.setText(
             {"local": "BẮT ĐẦU LOCAL", "gateway": "KHỞI ĐỘNG GATEWAY", "client": "KẾT NỐI GATEWAY"}[role]
         )
@@ -612,6 +631,9 @@ class DebugTab(QWidget):
         self.halt_button.setEnabled(not worker_busy and active and self._target_state == "running")
         self.continue_button.setEnabled(not worker_busy and active and self._target_state == "halted")
         self.reset_button.setEnabled(not worker_busy and active)
+        halted_controls = not worker_busy and active and self._target_state == "halted"
+        self.step_into_button.setEnabled(halted_controls)
+        self.step_over_button.setEnabled(halted_controls)
         diagnostic_enabled = not worker_busy and active
         self.where_button.setEnabled(diagnostic_enabled)
         self.stack_button.setEnabled(diagnostic_enabled)
@@ -624,9 +646,7 @@ class DebugTab(QWidget):
         self.stop_timeout.setEnabled(diagnostic_enabled)
         self.break_once_button.setEnabled(one_shot_enabled)
         self.watch_once_button.setEnabled(one_shot_enabled)
-        self.gdb_port.setEnabled(
-            not worker_busy and not server_active and not active and self._resolved_role() != "client"
-        )
+        self.gdb_port.setEnabled(False)
         self.symbol_path.setEnabled(not worker_busy and not server_active and not active)
         self.symbol_browse_button.setEnabled(not worker_busy and not server_active and not active)
         self.symbol_auto_button.setEnabled(
@@ -857,47 +877,89 @@ class DebugTab(QWidget):
         self._refresh_controls()
 
     def start_debug(self) -> None:
+        symbol_text = self.symbol_path.text().strip()
+        symbols = Path(symbol_text).expanduser() if symbol_text else None
+        if symbols is not None and not symbols.is_file():
+            if self._symbol_root is not None and self._symbol_root.is_dir():
+                self.log.emit("Stored AXF/ELF no longer exists; Local will fall back to project auto-match.")
+                symbols = None
+            else:
+                self._start_failed_message("AXF/ELF đã chọn không tồn tại: %s" % symbols)
+                return
         try:
-            port = int(self.gdb_port.text().strip())
-            symbol_text = self.symbol_path.text().strip()
-            symbols = Path(symbol_text) if symbol_text else None
+            gdb_port = find_available_loopback_port(3333)
+            tcl_port = find_available_loopback_port(6666, avoid=(gdb_port,))
+            self.gdb_port.setText(str(gdb_port))
             config = DebugSessionConfig(
-                probe=self.selected_probe(),
-                symbol_file=symbols,
-                bind_address="127.0.0.1",
-                gdb_port=port,
-                tcl_port=6666,
+                probe=self.selected_probe(), symbol_file=None, bind_address="127.0.0.1",
+                gdb_port=gdb_port, tcl_port=tcl_port,
             )
             config.validate()
-        except (ValueError, TypeError) as error:
+        except (ValueError, TypeError, RuntimeError) as error:
             self._start_failed_message(str(error))
             return
 
         def operation(log, _phase, _cancel):
-            info = self.session.start(config, event_sink=log)
-            state = self.session.target_poll()
-            # Attaching GDB can halt Cortex-M. Preserve normal operation by restoring
-            # a target that was running before the debugger attached.
-            if info.initial_target_state.lower() == "running" and state == "halted":
-                log("GDB attach halted a previously running target; restoring RUNNING state.")
-                state = self.session.continue_execution()
-            return info, state
+            try:
+                info = self.session.start(config, event_sink=log)
+                state_before_match = self.session.target_poll()
+                if info.initial_target_state.lower() == "running" and state_before_match == "halted":
+                    log("GDB attach halted a previously running target; restoring RUNNING state.")
+                    state_before_match = self.session.continue_execution()
+                selected_symbols = symbols
+                if selected_symbols is not None:
+                    selected, results = find_matching_symbol_file((selected_symbols,), self.session.read_words)
+                    if selected is None:
+                        detail = results[0].reason if results else "ELF/AXF could not be parsed or sampled"
+                        raise RuntimeError("AXF/ELF đã chọn không khớp firmware đang chạy: %s" % detail)
+                    selected_symbols = selected.path
+                    log("Verified selected Local AXF/ELF against Application Flash: %s" % selected_symbols)
+                elif self._symbol_root is not None and self._symbol_root.is_dir():
+                    candidates = discover_symbol_files([self._symbol_root], max_files=128, max_depth=8)
+                    if candidates:
+                        selected, results = find_matching_symbol_file(candidates, self.session.read_words)
+                        if selected is None:
+                            exact_count = sum(1 for item in results if item.matched)
+                            if exact_count > 1:
+                                raise RuntimeError("Có nhiều AXF/ELF cùng khớp firmware; hãy chọn đúng file một lần để ghim Local Debug.")
+                            raise RuntimeError("Không tìm được AXF/ELF khớp firmware đang chạy trong project đã lưu.")
+                        selected_symbols = selected.path
+                        log("Auto-selected verified Local symbols: %s" % selected_symbols)
+                if selected_symbols is not None:
+                    self.session.load_symbols(selected_symbols)
+                state_after_match = self.session.target_poll()
+                if state_after_match != state_before_match:
+                    raise RuntimeError(
+                        "Local symbol matching changed target state unexpectedly: %s -> %s" %
+                        (state_before_match, state_after_match)
+                    )
+                return info, state_after_match, selected_symbols
+            except BaseException:
+                self.session.stop()
+                raise
 
-        self._begin_worker(operation, self._started, "Đang mở phiên Debug tích hợp...", self._start_failed)
+        self._begin_worker(
+            operation, self._started, "Đang tự kết nối ST-Link và xác minh firmware...",
+            self._start_failed,
+        )
 
     def _started(self, result) -> None:
         self._status_override = None
-        info, state = result
+        info, state, selected_symbols = result
         assert isinstance(info, DebugSessionInfo)
         self._initial_target_state = info.initial_target_state
         self._set_target_state(state)
-        if info.symbols:
-            self.log.emit("Loaded debug symbols: %s" % info.symbols)
+        if selected_symbols is not None:
+            self.symbol_path.setText(str(selected_symbols))
+            self.log.emit("Loaded verified debug symbols: %s" % selected_symbols)
+        else:
+            self.log.emit("Local connected without AXF/ELF; source-level names may be unavailable.")
         self.log.emit(
-            "Integrated debug connected: GDB %s · TCL %s · initial target %s." %
+            "LOCAL CONNECTED: GDB %s · TCL %s · initial target %s." %
             (info.gdb_endpoint, info.tcl_endpoint, info.initial_target_state)
         )
         self._watchdog.start()
+        self._save_debug_preferences()
         self._refresh_controls()
 
     def _start_failed(self, failure: WorkerFailure) -> None:
@@ -998,6 +1060,12 @@ class DebugTab(QWidget):
 
     def reset_halt_target(self) -> None:
         self._run_control("Reset + Halt", self.session.reset_halt)
+
+    def step_into_target(self) -> None:
+        self._run_control("Step Into", self.session.step_once)
+
+    def step_over_target(self) -> None:
+        self._run_control("Step Over", self.session.next_once)
 
     def _run_control(self, label: str, command) -> None:
         if not self.session.active:
@@ -1216,3 +1284,21 @@ class DebugTab(QWidget):
         self.operation_state_changed.emit(False)
         self._set_target_state(None)
         self._refresh_controls()
+
+    def prepare_shutdown(self) -> bool:
+        """Stop GUI-owned timers/workers on the GUI thread before Qt destroys children."""
+        self._watchdog.stop()
+        worker = self._worker
+        if worker is not None and worker.isRunning():
+            worker.cancel()
+            if not worker.wait(3000):
+                return False
+        self._worker = None
+        self._retired_workers.clear()
+        return True
+
+    def closeEvent(self, event) -> None:
+        if not self.prepare_shutdown():
+            event.ignore()
+            return
+        super().closeEvent(event)

@@ -47,6 +47,16 @@ class GuiMemoryTests(unittest.TestCase):
         self.assertEqual(tab.metadata_values["State"].text(), "CONFIRMED (3)")
         self.assertEqual(tab.metadata_values["Board token"].text(), "B300_F407ZE")
 
+    def test_metadata_snapshot_is_invalidated_after_external_flash_change(self) -> None:
+        tab = MemoryTab(service=object(), probe_provider=lambda: None)
+        tab.show_metadata(decode_ota_metadata(make_metadata(state=1)))
+        self.assertEqual(tab.metadata_values["State"].text(), "IN_PROGRESS (1)")
+        tab.invalidate_metadata_view("Application provisioning completed.")
+        self.assertEqual(tab.metadata_values["Classification"].text(), "STALE")
+        self.assertEqual(tab.metadata_values["State"].text(), "—")
+        self.assertIn("cần đọc lại", tab.status_label.text())
+        self.assertIn("Đọc OTA metadata", tab.metadata_notice.text())
+
     def test_memory_labels_pair_vietnamese_with_technical_english(self) -> None:
         tab = MemoryTab(service=object(), probe_provider=lambda: None)
         labels = {label.text() for label in tab.findChildren(QLabel)}

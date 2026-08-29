@@ -344,5 +344,20 @@ class GdbMiBackendTests(unittest.TestCase):
         backend.stop()
 
 
+
+    def test_step_and_next_wait_for_async_stop(self) -> None:
+        backend = GdbMiBackend(executable="gdb")
+        calls = []
+        backend._async_records = []
+        backend.step = lambda: calls.append("step")
+        backend.next = lambda: calls.append("next")
+        backend.wait_for_stopped = lambda **kwargs: (calls.append(("wait", kwargs)), "stopped")[1]
+        self.assertEqual(backend.step_and_wait_stopped(timeout_seconds=2.0), "stopped")
+        self.assertEqual(backend.next_and_wait_stopped(timeout_seconds=3.0), "stopped")
+        self.assertEqual(calls[0], "step")
+        self.assertEqual(calls[2], "next")
+        self.assertEqual(calls[1][1]["timeout_seconds"], 2.0)
+        self.assertEqual(calls[3][1]["timeout_seconds"], 3.0)
+
 if __name__ == "__main__":
     unittest.main()

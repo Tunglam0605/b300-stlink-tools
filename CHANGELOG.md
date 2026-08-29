@@ -5,18 +5,28 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-29
+
 ### Added
 
 - GUI Debug có `Auto / Local / Gateway / Client`; Client giữ source + AXF/ELF, tự mở SSH local forwarding cho GDB/Safe TCL và dùng cùng `DebugSession` preserve-state với Local.
 - GUI `Break Once` / `Watch Once` dùng hardware breakpoint/watchpoint one-shot, tự cleanup resource và đưa target ban đầu `RUNNING` trở lại chạy.
+- GUI Local có `Halt`, `Continue`, `Reset + Halt`, `Step Into` và `Step Over`; cổng GDB/TCL Local được tự chọn trên loopback để giảm xung đột session cũ.
 - `b300-stlink gateway doctor` preflight riêng cho máy cổng: OpenOCD, ST-Link selection, SSH server, loopback ports `3333/6666` và IPv4 candidate; không yêu cầu GDB/AXF/source.
 - Bootstrap CLI một lệnh cho Windows x64 (`install-cli.ps1`) và Linux x64/ARM64 (`install-cli.sh`). Bootstrap verify signed `latest-cli.json`, bootstrap Minisign 0.12 bằng SHA-256 pin, rồi verify package SHA-256/size trước managed per-user install.
 
 ### Changed
 
+- Local Debug xác minh AXF/ELF với Application Flash trước khi load symbols; load symbol table chỉ halt tạm khi GDB yêu cầu rồi khôi phục chính xác trạng thái RUN/HALT ban đầu.
 - `b300-stlink debug` mặc định trở thành vai trò `gateway`; `debug server` được giữ làm legacy alias. Gateway chỉ làm cầu nối ST-Link/OpenOCD và không cần local GDB.
 - Base GUI/CLI không còn bundle toàn bộ GNU Arm GDB toolchain; Local/Client tự resolve GDB từ `B300_GDB`, STM32CubeIDE/toolchain hoặc PATH.
 - Remote VS Code kit sinh lệnh Gateway canonical thay vì legacy `debug server`.
+
+### Fixed
+
+- Sau Application flash, Memory/Metadata không còn hiển thị snapshot OTA cũ như dữ liệu hiện tại; snapshot được đánh dấu `STALE` và yêu cầu đọc lại Sector 3.
+- Sửa lifecycle GUI worker khiến Memory/Metadata có thể tiếp tục bị khóa sau khi flash/inspect đã kết thúc; ST-Link được sử dụng lại ngay trong cùng GUI, không cần restart ứng dụng.
+- Sửa Local symbol loading khi target đang `RUNNING`: GDB không còn lỗi `Cannot execute this command while the target is running`; tool halt tạm, load symbols và resume tự động.
 
 ### Security
 
@@ -28,6 +38,11 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 - GUI Local trên STM32F407 thật: Auto→Local, `Where`, variable `xTickCount`, Break Once tại `vApplicationIdleHook`, Watch Once tại `xTickCount`, cleanup và Stop đều PASS; target được giữ/khôi phục về `RUNNING`.
 - Packaged CLI Local debug tự resolve GDB từ STM32CubeIDE và source-map AXF thật thành công mà không bundle GDB.
+- Cùng một GUI/STM32/ST-Link thật: main ST-Link operation hoàn tất, interlock tự release, sau đó `Đọc OTA metadata` ngay lập tức PASS (`ERASED`) mà không restart GUI hoặc rút/cắm ST-Link.
+
+### Validation
+
+- Pre-release full regression sau các fix Local/Metadata: **521 tests PASS, 2 skipped**.
 
 ## [0.7.0] - 2026-08-29
 

@@ -254,6 +254,29 @@ class MemoryTab(QWidget):
     def has_active_operation(self) -> bool:
         return bool(self._threads)
 
+    def invalidate_metadata_view(self, reason: str = "Target Flash đã thay đổi.") -> None:
+        """Mark the displayed OTA metadata snapshot stale after a write transaction."""
+        for value in self.metadata_values.values():
+            value.setText("—")
+        self.metadata_values["Classification"].setText("STALE")
+        self.metadata_values["Classification"].setStyleSheet(
+            "color: #92400E; font-weight: 700; font-family: 'Cascadia Code', 'Consolas', monospace; "
+            "padding: 3px 8px; background-color: #FFFBEB; border-radius: 4px; "
+            "border: 1px solid #FDE68A;"
+        )
+        self.metadata_notice.setText(
+            "⚠ Snapshot metadata trước đó đã hết hiệu lực. %s\n"
+            "Nhấn 'Đọc OTA metadata' để lấy trạng thái thật hiện tại từ Sector 3." % reason
+        )
+        self.metadata_notice.setStyleSheet(
+            "background-color: #FFFBEB; color: #92400E; border: 1px solid #FDE68A; "
+            "border-radius: 6px; padding: 8px 12px; font-size: 12px; font-weight: 500;"
+        )
+        self.status_label.setText("OTA metadata: STALE · cần đọc lại")
+        self.range_info_label.setText(
+            "Target memory đã thay đổi · snapshot Sector 3 trước đó không còn hợp lệ"
+        )
+
     def read_selected_sector(self) -> None:
         sector_index = int(self.sector_combo.currentData())
         probe = self.probe_provider()

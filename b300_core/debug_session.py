@@ -319,6 +319,20 @@ class DebugSession:
             self.gdb.continue_execution()
         return self.tcl.wait_for_target_state("running")
 
+    def load_symbols(self, symbol_file: Path) -> str:
+        """Load host-side symbols while preserving the target RUN/HALT state."""
+        self._require_active()
+        path = Path(symbol_file).expanduser().resolve()
+        if path.suffix.lower() not in (".elf", ".axf"):
+            raise ValueError("Debug symbols must be an ELF or AXF file.")
+        if not path.is_file():
+            raise ValueError("Debug symbol file does not exist: %s" % path)
+        # GDB rejects -file-exec-and-symbols while a remote target is running.
+        # Halt only for the host-side symbol-table operation, then restore the
+        # exact prior run state. This never programs or erases target Flash.
+        self._with_preserved_run_state(lambda: self.gdb.load_symbols(path))
+        return str(path)
+
     def step(self):
         self._require_active()
         return self.gdb.step()
@@ -326,6 +340,22 @@ class DebugSession:
     def next(self):
         self._require_active()
         return self.gdb.next()
+
+    def step_once(self, timeout_seconds: float = 5.0) -> str:
+        self._require_active()
+        assert self.tcl is not None
+        if self.tcl.wait_target_state() != "halted":
+            raise RuntimeError("Step Into requires a HALTED target.")
+        self.gdb.step_and_wait_stopped(timeout_seconds=timeout_seconds)
+        return self.tcl.wait_for_target_state("halted")
+
+    def next_once(self, timeout_seconds: float = 5.0) -> str:
+        self._require_active()
+        assert self.tcl is not None
+        if self.tcl.wait_target_state() != "halted":
+            raise RuntimeError("Step Over requires a HALTED target.")
+        self.gdb.next_and_wait_stopped(timeout_seconds=timeout_seconds)
+        return self.tcl.wait_for_target_state("halted")
 
     def reset_halt(self) -> str:
         self._require_active()

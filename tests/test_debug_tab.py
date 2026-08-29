@@ -122,6 +122,23 @@ class FakeSession:
         self.state = "halted"
         return self.state
 
+    def load_symbols(self, symbol_file):
+        path = Path(symbol_file).resolve()
+        self.events.append(("load-symbols", path))
+        return str(path)
+
+    def step_once(self, timeout_seconds=5.0):
+        self.events.append(("step-into", timeout_seconds))
+        if self.state != "halted":
+            raise RuntimeError("Step Into requires HALTED")
+        return self.state
+
+    def next_once(self, timeout_seconds=5.0):
+        self.events.append(("step-over", timeout_seconds))
+        if self.state != "halted":
+            raise RuntimeError("Step Over requires HALTED")
+        return self.state
+
     def capture_where(self):
         from types import SimpleNamespace
         self.events.append("where")
@@ -267,13 +284,17 @@ class DebugTabTests(unittest.TestCase):
         self.assertEqual(tab.remote_server_button.text(), "Gateway nhanh")
         self.assertTrue(tab.remote_server_button.isEnabled())
         self.assertEqual(tab.remote_kit_button.text(), "Xuất VS Code Kit…")
-        self.assertTrue(tab.remote_kit_button.isEnabled())
+        self.assertTrue(tab.remote_kit_button.isHidden())
+        self.assertTrue(tab.connection_box.isHidden())
+        self.assertFalse(tab.symbols_box.isHidden())
         self.assertFalse(tab.halt_button.isEnabled())
         self.assertFalse(tab.continue_button.isEnabled())
         self.assertFalse(tab.reset_button.isEnabled())
+        self.assertFalse(tab.step_into_button.isEnabled())
+        self.assertFalse(tab.step_over_button.isEnabled())
         self.assertFalse(tab.break_once_button.isEnabled())
         self.assertFalse(tab.watch_once_button.isEnabled())
-        self.assertIn("6666", tab.tcl_display.text())
+        self.assertIn("tự chọn loopback", tab.tcl_display.text())
         tab.close()
 
     def test_start_loads_symbols_and_auto_resumes_previously_running_target(self) -> None:
@@ -282,8 +303,17 @@ class DebugTabTests(unittest.TestCase):
             symbols = Path(directory) / "application.elf"
             symbols.write_bytes(b"ELF")
             tab.symbol_path.setText(str(symbols))
-            tab.start_debug()
-            self.wait_until(lambda: tab._worker is None)
+            from types import SimpleNamespace
+            from unittest import mock
+            matched = SimpleNamespace(
+                path=symbols.resolve(), matched=True, matched_samples=4, total_samples=4,
+                score=1.0, reason="match",
+            )
+            with mock.patch(
+                "b300_gui.debug_tab.find_matching_symbol_file", return_value=(matched, (matched,)),
+            ):
+                tab.start_debug()
+                self.wait_until(lambda: tab._worker is None)
 
         self.assertEqual(service.state, DebugState.CONNECTED)
         self.assertTrue(session.active)
@@ -294,8 +324,9 @@ class DebugTabTests(unittest.TestCase):
         self.assertTrue(tab.reset_button.isEnabled())
         self.assertIn("TARGET RUNNING", tab.status_label.text())
         start_config = next(item[1] for item in session.events if isinstance(item, tuple) and item[0] == "start")
-        self.assertEqual(start_config.tcl_port, 6666)
-        self.assertEqual(start_config.symbol_file, symbols)
+        self.assertIsNotNone(start_config.tcl_port)
+        self.assertIsNone(start_config.symbol_file)
+        self.assertIn(("load-symbols", symbols.resolve()), session.events)
         tab.stop_debug()
         self.wait_until(lambda: tab._worker is None)
         tab.close()
@@ -311,7 +342,16 @@ class DebugTabTests(unittest.TestCase):
         self.assertEqual(tab._target_state, "halted")
         self.assertFalse(tab.halt_button.isEnabled())
         self.assertTrue(tab.continue_button.isEnabled())
+        self.assertTrue(tab.step_into_button.isEnabled())
+        self.assertTrue(tab.step_over_button.isEnabled())
         self.assertIn("TARGET HALTED", tab.status_label.text())
+
+        tab.step_into_target()
+        self.wait_until(lambda: tab._worker is None)
+        self.assertEqual(tab._target_state, "halted")
+        tab.step_over_target()
+        self.wait_until(lambda: tab._worker is None)
+        self.assertEqual(tab._target_state, "halted")
 
         tab.continue_target()
         self.wait_until(lambda: tab._worker is None)
@@ -320,6 +360,8 @@ class DebugTabTests(unittest.TestCase):
         self.assertFalse(tab.continue_button.isEnabled())
         self.assertIn("halt", session.events)
         self.assertGreaterEqual(session.events.count("continue"), 2)
+        self.assertIn(("step-into", 5.0), session.events)
+        self.assertIn(("step-over", 5.0), session.events)
 
         tab.stop_debug()
         self.wait_until(lambda: tab._worker is None)
@@ -539,6 +581,58 @@ class DebugTabTests(unittest.TestCase):
         tab.stop_debug()
         self.wait_until(lambda: tab._worker is None)
         tab.close()
+
+    def test_local_start_auto_matches_saved_project_and_loads_verified_symbols(self) -> None:
+        from types import SimpleNamespace
+        from unittest import mock
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidate = root / "Objects" / "F407" / "main.axf"
+            candidate.parent.mkdir(parents=True)
+            candidate.write_bytes(b"ELF")
+            settings = FakeSettings({"debug/symbol_root": str(root), "debug/mode": "local"})
+            tab, _service, session = self.make_tab(settings=settings)
+            matched = SimpleNamespace(
+                path=candidate.resolve(), matched=True, matched_samples=4, total_samples=4,
+                score=1.0, reason="match",
+            )
+            with mock.patch(
+                "b300_gui.debug_tab.discover_symbol_files", return_value=(candidate,),
+            ), mock.patch(
+                "b300_gui.debug_tab.find_matching_symbol_file", return_value=(matched, (matched,)),
+            ):
+                tab.start_selected_mode()
+                self.wait_until(lambda: tab._worker is None)
+            self.assertTrue(session.active)
+            self.assertEqual(tab.symbol_path.text(), str(candidate.resolve()))
+            self.assertIn(("load-symbols", candidate.resolve()), session.events)
+            tab.stop_debug()
+            self.wait_until(lambda: tab._worker is None)
+            tab.close()
+            self.app.processEvents()
+
+    def test_local_explicit_symbol_mismatch_fails_closed_and_stops_session(self) -> None:
+        from types import SimpleNamespace
+        from unittest import mock
+        tab, service, session = self.make_tab()
+        with TemporaryDirectory() as directory:
+            symbols = Path(directory) / "wrong.axf"
+            symbols.write_bytes(b"ELF")
+            tab.symbol_path.setText(str(symbols))
+            miss = SimpleNamespace(
+                path=symbols.resolve(), matched=False, matched_samples=0, total_samples=4,
+                score=0.0, reason="machine code mismatch",
+            )
+            with mock.patch(
+                "b300_gui.debug_tab.find_matching_symbol_file", return_value=(None, (miss,)),
+            ):
+                tab.start_debug()
+                self.wait_until(lambda: tab._worker is None)
+        self.assertFalse(session.active)
+        self.assertEqual(service.state, DebugState.STOPPED)
+        self.assertIn("không khớp firmware", tab.status_label.text())
+        tab.close()
+        self.app.processEvents()
 
     def test_start_failure_releases_interlock_and_reports_error(self) -> None:
         tab, service, _session = self.make_tab(fail_start=RuntimeError("remote rejected"))

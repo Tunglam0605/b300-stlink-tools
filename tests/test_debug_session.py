@@ -295,5 +295,21 @@ class DebugSessionTests(unittest.TestCase):
         session.stop()
 
 
+    def test_load_symbols_preserves_running_target_state(self) -> None:
+        session, _service, _gdb, events = self.make_session(poll_state="running")
+        session.start(DebugSessionConfig(ProbeRef("TEST"), None))
+        with tempfile.TemporaryDirectory() as directory:
+            symbols = Path(directory) / "firmware.axf"
+            symbols.write_bytes(b"ELF")
+            loaded = session.load_symbols(symbols)
+        self.assertEqual(loaded, str(symbols.resolve()))
+        symbol_event = ("symbols", str(symbols.resolve()))
+        symbol_index = events.index(symbol_event)
+        self.assertEqual(events[symbol_index - 1], "interrupt-stopped")
+        self.assertEqual(events[symbol_index + 1], "continue")
+        self.assertEqual(session.target_poll(), "running")
+        session.stop()
+
+
 if __name__ == "__main__":
     unittest.main()

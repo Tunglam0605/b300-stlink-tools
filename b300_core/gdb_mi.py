@@ -371,8 +371,20 @@ class GdbMiBackend:
     def step(self) -> MiResult:
         return self._request("-exec-step", ("running", "done"))
 
+    def step_and_wait_stopped(self, timeout_seconds: Optional[float] = None) -> MiRecord:
+        with self._condition:
+            start_index = len(self._async_records)
+        self.step()
+        return self.wait_for_stopped(start_index=start_index, timeout_seconds=timeout_seconds)
+
     def next(self) -> MiResult:
         return self._request("-exec-next", ("running", "done"))
+
+    def next_and_wait_stopped(self, timeout_seconds: Optional[float] = None) -> MiRecord:
+        with self._condition:
+            start_index = len(self._async_records)
+        self.next()
+        return self.wait_for_stopped(start_index=start_index, timeout_seconds=timeout_seconds)
 
     def stop(self) -> None:
         process = self._process
