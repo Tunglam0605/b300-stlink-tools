@@ -52,7 +52,7 @@ class DiagnosticsService:
             checks.append(DiagnosticCheck(
                 "runtime", "LIMITED", "GDB_UNAVAILABLE",
                 runtime.reason or "GDB runtime is unavailable.",
-                "Install GDB or configure B300_GDB to enable integrated debugging."
+                "Install STM32CubeIDE/GDB, configure B300_GDB, or install the optional debug runtime."
             ))
 
         available, executable = self._service.doctor()

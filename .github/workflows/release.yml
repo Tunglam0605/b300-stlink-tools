@@ -50,6 +50,11 @@ jobs:
       - name: Build independent native GUI and CLI bundles
         shell: pwsh
         run: python build_native_bundle.py --internal-distribution-approved
+      - name: Enforce Windows base bundle size budgets
+        shell: pwsh
+        run: |
+          python scripts/release/check_size_budget.py release\B300-STLink-GUI-Windows-x64.zip --max-mib 80
+          python scripts/release/check_size_budget.py release\B300-STLink-CLI-Windows-x64.zip --max-mib 25
       - name: Smoke-test executables
         shell: pwsh
         run: |
@@ -86,8 +91,6 @@ jobs:
           $vcRuntime = Get-ChildItem "$root\_internal" -Filter "VCRUNTIME140*.dll" | Select-Object -First 1
           if ($null -eq $pythonDll) { throw "Packaged Python DLL missing from onedir runtime" }
           if ($null -eq $vcRuntime) { throw "Packaged VC runtime missing from onedir runtime" }
-          & "$root\vendor\gdb\bin\arm-none-eabi-gdb.exe" --version
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $process = Start-Process -FilePath "$root\b300-stlink-gui.exe" `
             -ArgumentList --smoke-test -Wait -PassThru -WindowStyle Hidden
           exit $process.ExitCode
@@ -102,6 +105,9 @@ jobs:
             "/DOutputDir=$((Resolve-Path release).Path)" `
             "/DAppVersion=${{ needs.prepare-release.outputs.version }}" `
             packaging\windows\b300-stlink-gui.iss
+      - name: Enforce Windows installer size budget
+        shell: pwsh
+        run: python scripts/release/check_size_budget.py release\B300-STLink-GUI-Windows-x64.exe --max-mib 90
       - name: Smoke-test installed Windows GUI
         shell: pwsh
         run: |
@@ -139,6 +145,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Build independent native GUI and CLI bundles
         run: python3 build_native_bundle.py --internal-distribution-approved
+      - name: Enforce Linux x64 CLI size budget
+        run: python3 scripts/release/check_size_budget.py release/B300-STLink-CLI-Linux-x64.tar.gz --max-mib 25
       - name: Smoke-test executables
         run: |
           ./release/b300-stlink-gui --smoke-test
@@ -157,7 +165,6 @@ jobs:
         run: |
           mkdir -p release/linux-gui-bundle
           tar -xzf release/B300-STLink-GUI-Linux-x64.tar.gz -C release/linux-gui-bundle
-          ./release/linux-gui-bundle/vendor/gdb/bin/arm-none-eabi-gdb --version
       - name: Smoke-test Linux GUI on X11
         run: |
           env -u QT_QPA_PLATFORM xvfb-run -a ./release/linux-gui-bundle/b300-stlink-gui --smoke-test
@@ -178,6 +185,10 @@ jobs:
             --version "${{ needs.prepare-release.outputs.version }}" \
             --appimagetool release/appimagetool-x86_64.AppImage \
             --build-deb
+      - name: Enforce Linux x64 GUI size budgets
+        run: |
+          python3 scripts/release/check_size_budget.py release/gui/B300-STLink-GUI-Ubuntu-x64.AppImage --max-mib 220
+          python3 scripts/release/check_size_budget.py release/gui/b300-stlink-gui_amd64.deb --max-mib 180
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-linux-x64
@@ -202,6 +213,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Build independent native GUI and CLI bundles
         run: python3 build_native_bundle.py --internal-distribution-approved
+      - name: Enforce Linux ARM64 CLI size budget
+        run: python3 scripts/release/check_size_budget.py release/B300-STLink-CLI-Linux-arm64.tar.gz --max-mib 25
       - name: Smoke-test executables
         run: |
           ./release/b300-stlink-gui --smoke-test
@@ -220,7 +233,6 @@ jobs:
         run: |
           mkdir -p release/linux-gui-bundle
           tar -xzf release/B300-STLink-GUI-Linux-arm64.tar.gz -C release/linux-gui-bundle
-          ./release/linux-gui-bundle/vendor/gdb/bin/arm-none-eabi-gdb --version
       - name: Smoke-test Linux GUI on X11
         run: |
           env -u QT_QPA_PLATFORM xvfb-run -a ./release/linux-gui-bundle/b300-stlink-gui --smoke-test
@@ -241,6 +253,10 @@ jobs:
             --version "${{ needs.prepare-release.outputs.version }}" \
             --appimagetool release/appimagetool-aarch64.AppImage \
             --build-deb
+      - name: Enforce Linux ARM64 GUI size budgets
+        run: |
+          python3 scripts/release/check_size_budget.py release/gui/B300-STLink-GUI-Ubuntu-arm64.AppImage --max-mib 220
+          python3 scripts/release/check_size_budget.py release/gui/b300-stlink-gui_arm64.deb --max-mib 180
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-linux-arm64

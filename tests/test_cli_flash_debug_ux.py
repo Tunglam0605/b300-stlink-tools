@@ -249,21 +249,30 @@ class DebugCliCompatibilityTests(unittest.TestCase):
             result = module.main(["debug", *arguments, "--dry-run", "--json"])
         return result, [json.loads(line) for line in output.getvalue().splitlines()]
 
-    def test_debug_and_debug_server_build_the_same_read_only_command(self) -> None:
+    def test_debug_defaults_to_gateway_while_server_remains_legacy_alias(self) -> None:
         direct_result, direct = self.debug_records()
+        gateway_result, gateway = self.debug_records("gateway")
         server_result, server = self.debug_records("server")
 
-        self.assertEqual((direct_result, server_result), (0, 0))
+        self.assertEqual((direct_result, gateway_result, server_result), (0, 0, 0))
         direct_command = next(record["command"] for record in direct if record["event"] == "openocd")
+        gateway_command = next(record["command"] for record in gateway if record["event"] == "openocd")
         server_command = next(record["command"] for record in server if record["event"] == "openocd")
-        self.assertEqual(direct_command, server_command)
+        self.assertEqual(direct_command, gateway_command)
+        role = next(record for record in direct if record["event"] == "debug_role")
+        self.assertEqual(role["role"], "gateway")
+        self.assertFalse(role["requires_local_gdb"])
         rendered = " ".join(direct_command).lower()
         self.assertIn("bindto 127.0.0.1", direct_command)
         self.assertIn("telnet port disabled", direct_command)
-        self.assertIn("tcl port disabled", direct_command)
-        self.assertNotIn("erase", rendered)
-        self.assertNotIn("program", rendered)
-        self.assertNotIn("mww", rendered)
+        self.assertIn("tcl port 6666", direct_command)
+        self.assertIn("tcl port disabled", server_command)
+        self.assertIn("gdb flash_program disable", rendered)
+        self.assertIn("gdb breakpoint_override hard", rendered)
+        self.assertNotIn("flash erase_sector", rendered)
+        self.assertNotIn("mass_erase", rendered)
+        self.assertNotIn("program {", rendered)
+        self.assertNotIn("mww ", rendered)
 
     def test_remote_debug_emits_stable_gdb_security_warning(self) -> None:
         result, records = self.debug_records("server", "--bind-address", "0.0.0.0")

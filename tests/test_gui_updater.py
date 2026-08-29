@@ -176,6 +176,44 @@ class GuiUpdaterTests(unittest.TestCase):
                 self.assertEqual(settings.value("updates/last_seen_version"), CURRENT_VERSION)
                 window.close()
 
+    def test_periodic_automatic_update_tick_checks_when_last_check_is_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            settings = self.temporary_settings(Path(temp))
+            settings.setValue("updates/automatic", True)
+            settings.setValue("updates/last_check_utc", "2020-01-01T00:00:00Z")
+            window = self.make_window(
+                client=FakeUpdateClient(), settings=settings, automatic_updates=False,
+            )
+            with mock.patch.object(window, "check_for_updates") as check:
+                window._automatic_update_tick()
+                check.assert_called_once_with(manual=False)
+            window.close()
+
+    def test_periodic_automatic_update_tick_is_throttled_after_recent_check(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            settings = self.temporary_settings(Path(temp))
+            settings.setValue("updates/automatic", True)
+            settings.setValue("updates/last_check_utc", window_time := MainWindow._utc_now_text())
+            self.assertTrue(window_time)
+            window = self.make_window(
+                client=FakeUpdateClient(), settings=settings, automatic_updates=False,
+            )
+            with mock.patch.object(window, "check_for_updates") as check:
+                window._automatic_update_tick()
+                check.assert_not_called()
+            window.close()
+
+    def test_available_automatic_update_marks_gui_without_manual_check(self) -> None:
+        result = UpdateCheckResult(True, RELEASE, RELEASE.platforms["windows-x64"])
+        window = self.make_window(FakeUpdateClient(result=result))
+        window._update_check_finished(result, manual=False)
+        self.assertIn("có sẵn", window.update_channel_label.text())
+        self.assertIn(str(RELEASE.version), window.update_channel_label.text())
+        self.assertIsNotNone(window.update_dialog)
+        self.assertTrue(window.update_dialog.isVisible())
+        window.update_dialog.close()
+        window.close()
+
     def test_disabled_automatic_updates_do_not_schedule_check(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             settings = self.temporary_settings(Path(temp))

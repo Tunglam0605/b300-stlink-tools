@@ -52,6 +52,8 @@ class DebugServiceTests(unittest.TestCase):
         self.assertIn("gdb port 3333", commands[0])
         self.assertIn("telnet port disabled", commands[0])
         self.assertIn("tcl port disabled", commands[0])
+        self.assertIn("gdb flash_program disable", commands[0])
+        self.assertIn("gdb breakpoint_override hard", commands[0])
         rendered = " ".join(commands[0]).lower()
         self.assertNotIn("erase_sector", rendered)
         self.assertNotIn("program {", rendered)

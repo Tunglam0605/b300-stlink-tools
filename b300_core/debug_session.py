@@ -82,10 +82,13 @@ class DebugSession:
         self.config: Optional[DebugSessionConfig] = None
         self.initial_target_state: Optional[str] = None
         self._active = False
+        self._owns_service = False
 
     @property
     def active(self) -> bool:
-        return self._active and self.service.state == DebugState.CONNECTED and self.gdb.running
+        if not self._active or not self.gdb.running:
+            return False
+        return (not self._owns_service) or self.service.state == DebugState.CONNECTED
 
     def start(self, config: DebugSessionConfig,
               event_sink: Optional[EventSink] = None) -> DebugSessionInfo:
@@ -93,6 +96,7 @@ class DebugSession:
             raise RuntimeError("Integrated debug session is already active.")
         config.validate()
         symbols = None
+        self._owns_service = True
         try:
             self.service.start(
                 DebugConfig(
@@ -120,6 +124,13 @@ class DebugSession:
                 symbols = str(symbol_path)
             self.gdb.connect(config.bind_address, config.gdb_port)
             self.service.mark_connected()
+            # GDB attach can halt Cortex-M even when the application was running.
+            # Restore the pre-attach RUNNING state immediately so merely opening
+            # a debug session never freezes production firmware.
+            post_attach_state = self.tcl.wait_target_state()
+            if "running" in lowered_initial and post_attach_state == "halted":
+                self.gdb.continue_execution()
+                self.tcl.wait_for_target_state("running")
         except BaseException:
             try:
                 self.gdb.stop()
@@ -129,6 +140,7 @@ class DebugSession:
                 self.config = None
                 self.initial_target_state = None
                 self._active = False
+                self._owns_service = False
             raise
         self.config = config
         self._active = True
@@ -141,17 +153,79 @@ class DebugSession:
             initial_target_state=initial_target_state,
         )
 
+    def start_external(self, *, symbol_file: Optional[Path],
+                       gdb_host: str = "127.0.0.1", gdb_port: int = 3333,
+                       tcl_host: str = "127.0.0.1", tcl_port: int = 6666) -> DebugSessionInfo:
+        """Attach to loopback endpoints supplied by an SSH tunnel; do not own OpenOCD."""
+        if self._active:
+            raise RuntimeError("Integrated debug session is already active.")
+        for label, host in (("GDB", gdb_host), ("TCL", tcl_host)):
+            address = ipaddress.ip_address(host)
+            if not address.is_loopback:
+                raise ValueError("%s client endpoint must be loopback-only; use an SSH tunnel." % label)
+        for label, port in (("GDB", gdb_port), ("TCL", tcl_port)):
+            if not 1 <= int(port) <= 65535:
+                raise ValueError("%s port must be in range 1..65535." % label)
+        symbols = None
+        symbol_path = None
+        if symbol_file is not None:
+            symbol_path = Path(symbol_file).expanduser().resolve()
+            if symbol_path.suffix.lower() not in (".elf", ".axf"):
+                raise ValueError("Debug symbols must be an ELF or AXF file.")
+            if not symbol_path.is_file():
+                raise ValueError("Debug symbol file does not exist: %s" % symbol_path)
+        self._owns_service = False
+        try:
+            self.tcl = self._tcl_factory(TclEndpoint(tcl_host, tcl_port))
+            tcl_version = self.tcl.version()
+            initial_target_state = self.tcl.wait_target_state()
+            if initial_target_state not in {"running", "halted"}:
+                raise RuntimeError(
+                    "Unable to classify initial target run state from forwarded OpenOCD TCL: %s" %
+                    initial_target_state
+                )
+            self.initial_target_state = initial_target_state
+            self.gdb.start()
+            if symbol_path is not None:
+                self.gdb.load_symbols(symbol_path)
+                symbols = str(symbol_path)
+            self.gdb.connect(gdb_host, gdb_port)
+            post_attach_state = self.tcl.wait_target_state()
+            if initial_target_state == "running" and post_attach_state == "halted":
+                self.gdb.continue_execution()
+                self.tcl.wait_for_target_state("running")
+        except BaseException:
+            self.gdb.stop()
+            self.tcl = None
+            self.initial_target_state = None
+            self._active = False
+            self._owns_service = False
+            raise
+        self.config = None
+        self._active = True
+        return DebugSessionInfo(
+            state="CONNECTED",
+            gdb_endpoint="%s:%d" % (gdb_host, gdb_port),
+            tcl_endpoint="%s:%d" % (tcl_host, tcl_port),
+            symbols=symbols,
+            tcl_version=tcl_version,
+            initial_target_state=initial_target_state,
+        )
+
     def stop(self) -> None:
+        owns_service = self._owns_service
         try:
             if self._active:
                 self._restore_initial_run_state_best_effort()
             self.gdb.stop()
         finally:
-            self.service.stop()
+            if owns_service:
+                self.service.stop()
             self.tcl = None
             self.config = None
             self.initial_target_state = None
             self._active = False
+            self._owns_service = False
 
     def where(self):
         self._require_active()
@@ -229,13 +303,21 @@ class DebugSession:
         self._require_active()
         return self.gdb.delete_breakpoint(number)
 
-    def halt(self):
+    def halt(self) -> str:
         self._require_active()
-        return self.gdb.interrupt()
+        assert self.tcl is not None
+        current = self.tcl.wait_target_state()
+        if current == "running":
+            self.gdb.interrupt_and_wait_stopped()
+        return self.tcl.wait_for_target_state("halted")
 
-    def continue_execution(self):
+    def continue_execution(self) -> str:
         self._require_active()
-        return self.gdb.continue_execution()
+        assert self.tcl is not None
+        current = self.tcl.wait_target_state()
+        if current == "halted":
+            self.gdb.continue_execution()
+        return self.tcl.wait_for_target_state("running")
 
     def step(self):
         self._require_active()
@@ -245,9 +327,11 @@ class DebugSession:
         self._require_active()
         return self.gdb.next()
 
-    def reset_halt(self):
+    def reset_halt(self) -> str:
         self._require_active()
-        return self.gdb.reset_halt()
+        assert self.tcl is not None
+        self.gdb.reset_halt()
+        return self.tcl.wait_for_target_state("halted")
 
     def target_poll(self) -> str:
         self._require_active()
@@ -313,15 +397,13 @@ class DebugSession:
 
     def _with_preserved_run_state(self, operation):
         self._require_active()
-        initial = self.initial_target_state or ""
-        initial_lower = initial.lower()
-        should_run_after = "running" in initial_lower
-        if not should_run_after and "halted" not in initial_lower:
-            raise RuntimeError("Initial target state is unavailable or ambiguous.")
         current = self.target_poll()
         current_lower = current.lower()
-        if "running" in current_lower:
+        should_run_after = "running" in current_lower
+        if should_run_after:
             self.gdb.interrupt_and_wait_stopped()
+            assert self.tcl is not None
+            self.tcl.wait_for_target_state("halted")
         elif "halted" not in current_lower:
             raise RuntimeError("Unable to classify target run state from OpenOCD TCL poll: %s" % current)
         try:
@@ -329,7 +411,9 @@ class DebugSession:
         finally:
             if should_run_after:
                 self.gdb.continue_execution()
-        return initial, should_run_after, result
+                assert self.tcl is not None
+                self.tcl.wait_for_target_state("running")
+        return current, should_run_after, result
 
     def _restore_initial_run_state_best_effort(self) -> None:
         initial = (self.initial_target_state or "").lower()

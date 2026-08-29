@@ -1,4 +1,4 @@
-"""Minimal safe GUI surface for OpenOCD + verified GDB/MI control."""
+"""Integrated, state-aware GUI debug surface for B300 STM32F407."""
 
 from __future__ import annotations
 
@@ -7,54 +7,82 @@ from typing import Callable, Optional
 
 from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
-    QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-    QPlainTextEdit, QPushButton, QVBoxLayout, QWidget,
+    QComboBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+    QPlainTextEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from b300_core.debug_service import DebugConfig, DebugService, DebugState
+from b300_core.debug_session import DebugSession, DebugSessionConfig, DebugSessionInfo
+from b300_core.elf_matcher import discover_symbol_files, find_matching_symbol_file
 from b300_core.gdb_mi import GdbMiBackend
 from b300_core.models import ProbeRef
+from b300_core.remote_debug_guard import RemoteDebugGuard
+from b300_core.ssh_debug_tunnel import (
+    SshDebugTunnel, SshDebugTunnelConfig, find_available_loopback_port,
+)
+from b300_core.tcl_client import SafeTclClient, TclEndpoint
 
 from .workers import FunctionWorker, WorkerFailure
 from .log_highlighter import format_log_html
+from .remote_vscode_dialog import RemoteVsCodeDialog
 
 
 class DebugTab(QWidget):
-    """Debug controls only; firmware programming remains in provisioning services."""
+    """One owner for OpenOCD + TCL + GDB, with verified target-state transitions."""
 
     operation_state_changed = Signal(bool)
     log = Signal(str)
 
     def __init__(self, service: DebugService,
                  selected_probe: Callable[[], ProbeRef], parent=None,
-                 gdb_backend: Optional[GdbMiBackend] = None) -> None:
+                 gdb_backend: Optional[GdbMiBackend] = None,
+                 debug_session: Optional[DebugSession] = None,
+                 tcl_factory=SafeTclClient, settings=None,
+                 probe_count: Optional[Callable[[], int]] = None,
+                 tunnel_factory=SshDebugTunnel) -> None:
         super().__init__(parent)
         self.service = service
         self.selected_probe = selected_probe
-        self.gdb_backend = gdb_backend or GdbMiBackend()
+        if debug_session is not None:
+            self.session = debug_session
+            self.gdb_backend = debug_session.gdb
+        else:
+            self.gdb_backend = gdb_backend or GdbMiBackend()
+            self.session = DebugSession(service=service, gdb=self.gdb_backend)
         self._worker = None
         self._retired_workers = []
-        self._active_config: Optional[DebugConfig] = None
-        self._pending_config: Optional[DebugConfig] = None
         self._external_blocked = False
+        self._target_state: Optional[str] = None
+        self._initial_target_state: Optional[str] = None
+        self._status_override: Optional[tuple[str, str]] = None
+        self._remote_server_active = False
+        self._remote_tcl = None
+        self._remote_guard = None
+        self._remote_vscode_dialog = None
+        self._client_tunnel = None
+        self._client_mode_active = False
+        self._symbol_root: Optional[Path] = None
+        self._tcl_factory = tcl_factory
+        self._settings = settings
+        self._probe_count = probe_count
+        self._tunnel_factory = tunnel_factory
+
         self._watchdog = QTimer(self)
-        self._watchdog.setInterval(500)
+        self._watchdog.setInterval(750)
         self._watchdog.timeout.connect(self._poll_debug_service)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
 
-        # Target & State Banner
         header_card = QGroupBox("Mục tiêu & Trạng thái Debug")
         header_layout = QHBoxLayout(header_card)
-
         probe_info_layout = QVBoxLayout()
         self.probe_display = QLabel("ST-Link Probe: Tự động chọn")
         self.probe_display.setStyleSheet("font-weight: 700; color: #0F172A;")
         safety = QLabel(
-            "Debug chỉ điều khiển target qua OpenOCD/GDB · Không xóa flash, không nạp firmware "
-            "và không sửa Option Bytes."
+            "Debug tích hợp chỉ dùng OpenOCD/TCL/GDB · Không xóa flash, không nạp firmware "
+            "và không sửa Option Bytes. Trạng thái RUN/HALT được xác nhận trước khi hiển thị."
         )
         safety.setStyleSheet("color: #64748B; font-size: 12px;")
         safety.setWordWrap(True)
@@ -68,9 +96,48 @@ class DebugTab(QWidget):
         header_layout.addWidget(self.status_label)
         layout.addWidget(header_card)
 
-        # Symbols & Connections Grid
-        config_grid = QHBoxLayout()
+        role_box = QGroupBox("Chế độ Debug")
+        role_layout = QHBoxLayout(role_box)
+        self.mode_combo = QComboBox()
+        self.mode_combo.setObjectName("debugModeSelector")
+        for label, value in (
+            ("Tự động", "auto"),
+            ("Local · Debug trực tiếp", "local"),
+            ("Gateway · Máy cắm ST-Link", "gateway"),
+            ("Client · Debug qua Gateway", "client"),
+        ):
+            self.mode_combo.addItem(label, value)
+        self.mode_combo.setToolTip(
+            "Auto: có ST-Link local thì debug trực tiếp; không có thì dùng Gateway đã lưu."
+        )
+        self.role_summary = QLabel("")
+        self.role_summary.setStyleSheet("color: #64748B;")
+        role_layout.addWidget(QLabel("Vai trò:"))
+        role_layout.addWidget(self.mode_combo)
+        role_layout.addWidget(self.role_summary, 1)
+        layout.addWidget(role_box)
 
+        self.client_box = QGroupBox("Gateway từ xa · chỉ cần cấu hình một lần")
+        client_layout = QHBoxLayout(self.client_box)
+        self.client_host = QLineEdit()
+        self.client_host.setObjectName("debugClientHost")
+        self.client_host.setPlaceholderText("IP/hostname Gateway")
+        self.client_user = QLineEdit()
+        self.client_user.setObjectName("debugClientUser")
+        self.client_user.setPlaceholderText("SSH user")
+        self.client_ssh_port = QSpinBox()
+        self.client_ssh_port.setObjectName("debugClientSshPort")
+        self.client_ssh_port.setRange(1, 65535)
+        self.client_ssh_port.setValue(22)
+        client_layout.addWidget(QLabel("Gateway:"))
+        client_layout.addWidget(self.client_host, 2)
+        client_layout.addWidget(QLabel("SSH user:"))
+        client_layout.addWidget(self.client_user, 1)
+        client_layout.addWidget(QLabel("SSH:"))
+        client_layout.addWidget(self.client_ssh_port)
+        layout.addWidget(self.client_box)
+
+        config_grid = QHBoxLayout()
         symbols_box = QGroupBox("Debug symbols (.elf / .axf)")
         symbols_layout = QHBoxLayout(symbols_box)
         self.symbol_path = QLineEdit()
@@ -79,53 +146,58 @@ class DebugTab(QWidget):
         self.symbol_browse_button = QPushButton("Chọn ELF/AXF")
         self.symbol_browse_button.setObjectName("debugSymbolBrowseButton")
         self.symbol_browse_button.clicked.connect(self.choose_symbol_file)
+        self.symbol_auto_button = QPushButton("Tự tìm đúng AXF/ELF")
+        self.symbol_auto_button.setObjectName("debugSymbolAutoButton")
+        self.symbol_auto_button.setToolTip(
+            "Chọn thư mục project; tool so các mẫu Application Flash để tìm duy nhất AXF/ELF khớp."
+        )
+        self.symbol_auto_button.clicked.connect(self.auto_match_symbols)
         symbols_layout.addWidget(self.symbol_path, 1)
         symbols_layout.addWidget(self.symbol_browse_button)
+        symbols_layout.addWidget(self.symbol_auto_button)
         config_grid.addWidget(symbols_box, 3)
 
-        connection_box = QGroupBox("Cấu hình cổng kết nối")
-        form = QHBoxLayout(connection_box)
-
+        connection_box = QGroupBox("Kết nối nội bộ an toàn")
+        connection_layout = QHBoxLayout(connection_box)
         self.bind_address = QLineEdit("127.0.0.1")
         self.bind_address.setObjectName("debugBindAddress")
-        self.bind_address.setToolTip("Địa chỉ bind mạng")
-
+        self.bind_address.setReadOnly(True)
+        self.bind_address.setToolTip("Integrated debug luôn bind loopback để không lộ TCL/GDB ra mạng.")
         self.gdb_port = QLineEdit("3333")
         self.gdb_port.setObjectName("debugGdbPort")
-        self.gdb_port.setToolTip("Cổng TCP cho GDB")
-
-        self.telnet_port = QLineEdit()
-        self.telnet_port.setObjectName("debugTelnetPort")
-        self.telnet_port.setPlaceholderText("Telnet tắt")
-        self.telnet_port.setToolTip("Cổng Telnet (để trống để tắt)")
-
-        form.addWidget(QLabel("Host:"))
-        form.addWidget(self.bind_address)
-        form.addWidget(QLabel("GDB:"))
-        form.addWidget(self.gdb_port)
-        form.addWidget(QLabel("Telnet:"))
-        form.addWidget(self.telnet_port)
+        self.gdb_port.setToolTip("Cổng GDB local. TCL nội bộ cố định 6666.")
+        self.tcl_display = QLabel("TCL: 6666 · loopback only")
+        self.tcl_display.setStyleSheet("color: #64748B;")
+        connection_layout.addWidget(QLabel("Host:"))
+        connection_layout.addWidget(self.bind_address)
+        connection_layout.addWidget(QLabel("GDB:"))
+        connection_layout.addWidget(self.gdb_port)
+        connection_layout.addWidget(self.tcl_display)
         config_grid.addWidget(connection_box, 2)
         layout.addLayout(config_grid)
 
-        # Actions Toolbar
         actions_box = QGroupBox("Điều khiển phiên Debug")
         actions_layout = QHBoxLayout(actions_box)
-
-        self.start_button = QPushButton("Khởi động Server")
+        self.start_button = QPushButton("BẮT ĐẦU")
         self.start_button.setObjectName("debugStartButton")
-        self.connect_button = QPushButton("Kết nối GDB")
-        self.connect_button.setObjectName("debugConnectButton")
+        self.start_button.setToolTip("Tự khởi động Local, Gateway hoặc Client theo chế độ đã chọn.")
+        self.remote_server_button = QPushButton("Gateway nhanh")
+        self.remote_server_button.setObjectName("debugRemoteServerButton")
+        self.remote_server_button.setVisible(False)
+        self.remote_kit_button = QPushButton("Xuất VS Code Kit…")
+        self.remote_kit_button.setObjectName("debugRemoteKitButton")
+        self.remote_kit_button.setToolTip(
+            "Sinh launch.json, Cortex-Debug recommendation, SSH tunnel và checklist remote debug."
+        )
         self.stop_button = QPushButton("Dừng Debug")
         self.stop_button.setObjectName("debugStopButton")
-        self.start_button.clicked.connect(self.start_debug)
-        self.connect_button.clicked.connect(self.connect_gdb)
+        self.start_button.clicked.connect(self.start_selected_mode)
+        self.remote_server_button.clicked.connect(self.start_remote_server)
+        self.remote_kit_button.clicked.connect(self.show_remote_vscode_dialog)
         self.stop_button.clicked.connect(self.stop_debug)
-
         actions_layout.addWidget(self.start_button)
-        actions_layout.addWidget(self.connect_button)
+        actions_layout.addWidget(self.remote_kit_button)
         actions_layout.addWidget(self.stop_button)
-
         actions_layout.addSpacing(16)
 
         self.halt_button = QPushButton("Tạm dừng (Halt)")
@@ -137,14 +209,82 @@ class DebugTab(QWidget):
         self.halt_button.clicked.connect(self.halt_target)
         self.continue_button.clicked.connect(self.continue_target)
         self.reset_button.clicked.connect(self.reset_halt_target)
-
         actions_layout.addWidget(self.halt_button)
         actions_layout.addWidget(self.continue_button)
         actions_layout.addWidget(self.reset_button)
         actions_layout.addStretch(1)
         layout.addWidget(actions_box)
 
-        # Log Console
+        diagnostics_box = QGroupBox("Chẩn đoán source-level · tự giữ nguyên trạng thái RUN/HALT")
+        diagnostics_layout = QVBoxLayout(diagnostics_box)
+        diagnostic_actions = QHBoxLayout()
+        self.where_button = QPushButton("Vị trí hiện tại")
+        self.where_button.setObjectName("debugWhereButton")
+        self.stack_button = QPushButton("Call Stack")
+        self.stack_button.setObjectName("debugStackButton")
+        self.registers_button = QPushButton("Registers")
+        self.registers_button.setObjectName("debugRegistersButton")
+        self.where_button.clicked.connect(self.inspect_where)
+        self.stack_button.clicked.connect(self.inspect_stack)
+        self.registers_button.clicked.connect(self.inspect_registers)
+        diagnostic_actions.addWidget(self.where_button)
+        diagnostic_actions.addWidget(self.stack_button)
+        diagnostic_actions.addWidget(self.registers_button)
+        diagnostic_actions.addSpacing(16)
+        diagnostic_actions.addWidget(QLabel("Biến:"))
+        self.variable_expression = QLineEdit()
+        self.variable_expression.setObjectName("debugVariableExpression")
+        self.variable_expression.setPlaceholderText("Ví dụ: bRUN, xTickCount, motor_state")
+        self.variable_button = QPushButton("Đọc biến")
+        self.variable_button.setObjectName("debugVariableButton")
+        self.variable_button.clicked.connect(self.inspect_variable)
+        diagnostic_actions.addWidget(self.variable_expression, 1)
+        diagnostic_actions.addWidget(self.variable_button)
+        diagnostics_layout.addLayout(diagnostic_actions)
+
+        stop_actions = QHBoxLayout()
+        stop_actions.addWidget(QLabel("Breakpoint:"))
+        self.break_location = QLineEdit()
+        self.break_location.setObjectName("debugBreakLocation")
+        self.break_location.setPlaceholderText("Hàm hoặc file.c:line")
+        self.break_once_button = QPushButton("Break Once")
+        self.break_once_button.setObjectName("debugBreakOnceButton")
+        self.break_once_button.setToolTip("Đặt hardware breakpoint một lần, chờ hit rồi tự xóa và Resume.")
+        stop_actions.addWidget(self.break_location, 1)
+        stop_actions.addWidget(self.break_once_button)
+        stop_actions.addSpacing(12)
+        stop_actions.addWidget(QLabel("Watch:"))
+        self.watch_expression = QLineEdit()
+        self.watch_expression.setObjectName("debugWatchExpression")
+        self.watch_expression.setPlaceholderText("Ví dụ: xTickCount")
+        self.watch_once_button = QPushButton("Watch Once")
+        self.watch_once_button.setObjectName("debugWatchOnceButton")
+        self.watch_once_button.setToolTip("Đặt hardware watchpoint một lần, chờ trigger rồi tự xóa và Resume.")
+        stop_actions.addWidget(self.watch_expression, 1)
+        stop_actions.addWidget(self.watch_once_button)
+        stop_actions.addSpacing(12)
+        stop_actions.addWidget(QLabel("Timeout:"))
+        self.stop_timeout = QSpinBox()
+        self.stop_timeout.setObjectName("debugStopTimeout")
+        self.stop_timeout.setRange(1, 60)
+        self.stop_timeout.setValue(5)
+        self.stop_timeout.setSuffix(" s")
+        stop_actions.addWidget(self.stop_timeout)
+        diagnostics_layout.addLayout(stop_actions)
+        self.break_once_button.clicked.connect(self.break_once)
+        self.watch_once_button.clicked.connect(self.watch_once)
+
+        self.diagnostic_view = QPlainTextEdit()
+        self.diagnostic_view.setObjectName("debugDiagnosticView")
+        self.diagnostic_view.setReadOnly(True)
+        self.diagnostic_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.diagnostic_view.setMaximumHeight(180)
+        self.diagnostic_view.setPlaceholderText(
+            "Kết quả chẩn đoán sẽ hiển thị ở đây. Nếu target đang RUNNING, tool chỉ Halt tạm thời rồi tự Resume."
+        )
+        diagnostics_layout.addWidget(self.diagnostic_view)
+        layout.addWidget(diagnostics_box)
+
         log_box = QGroupBox("Nhật ký OpenOCD / GDB")
         log_layout = QVBoxLayout(log_box)
         self.log_view = QPlainTextEdit()
@@ -154,42 +294,132 @@ class DebugTab(QWidget):
         log_layout.addWidget(self.log_view)
         layout.addWidget(log_box, 1)
         self.log.connect(self._append_log)
+        self.mode_combo.currentIndexChanged.connect(self._mode_changed)
+        self.client_host.textChanged.connect(self._save_debug_preferences)
+        self.client_user.textChanged.connect(self._save_debug_preferences)
+        self.client_ssh_port.valueChanged.connect(self._save_debug_preferences)
+        self.symbol_path.textChanged.connect(self._save_debug_preferences)
+        self._restore_debug_preferences()
+        self._refresh_controls()
 
+    def _setting_value(self, key: str, default=None):
+        if self._settings is None:
+            return default
+        try:
+            return self._settings.value(key, default)
+        except Exception:
+            return default
+
+    def _restore_debug_preferences(self) -> None:
+        # Read the complete snapshot before touching widgets: their change signals
+        # persist values, so incremental reads could otherwise overwrite fields that
+        # have not been restored yet.
+        mode = str(self._setting_value("debug/mode", "auto") or "auto")
+        host = str(self._setting_value("debug/gateway_host", "") or "")
+        user = str(self._setting_value("debug/gateway_user", "") or "")
+        last_symbols = str(self._setting_value("debug/last_symbols", "") or "")
+        root_text = str(self._setting_value("debug/symbol_root", "") or "")
+        try:
+            ssh_port = int(self._setting_value("debug/gateway_ssh_port", 22) or 22)
+        except (TypeError, ValueError):
+            ssh_port = 22
+        widgets = (self.mode_combo, self.client_host, self.client_user, self.client_ssh_port, self.symbol_path)
+        for widget in widgets:
+            widget.blockSignals(True)
+        try:
+            index = self.mode_combo.findData(mode)
+            self.mode_combo.setCurrentIndex(index if index >= 0 else 0)
+            self.client_host.setText(host)
+            self.client_user.setText(user)
+            self.client_ssh_port.setValue(max(1, min(65535, ssh_port)))
+            if last_symbols and Path(last_symbols).is_file():
+                self.symbol_path.setText(last_symbols)
+            if root_text and Path(root_text).is_dir():
+                self._symbol_root = Path(root_text).expanduser().resolve()
+        finally:
+            for widget in widgets:
+                widget.blockSignals(False)
+        self._update_role_ui()
+
+    def _save_debug_preferences(self, *_args) -> None:
+        if self._settings is None:
+            return
+        try:
+            self._settings.setValue("debug/mode", self.mode_combo.currentData() or "auto")
+            self._settings.setValue("debug/gateway_host", self.client_host.text().strip())
+            self._settings.setValue("debug/gateway_user", self.client_user.text().strip())
+            self._settings.setValue("debug/gateway_ssh_port", self.client_ssh_port.value())
+            symbol_text = self.symbol_path.text().strip()
+            if symbol_text:
+                self._settings.setValue("debug/last_symbols", symbol_text)
+            if self._symbol_root is not None:
+                self._settings.setValue("debug/symbol_root", str(self._symbol_root))
+        except Exception:
+            pass
+
+    def _local_probe_count(self) -> int:
+        if self._probe_count is None:
+            # Standalone/embed callers historically represent a local debug surface.
+            # MainWindow provides the real probe count for Auto role resolution.
+            return 1
+        try:
+            return max(0, int(self._probe_count()))
+        except Exception:
+            return 0
+
+    def _resolved_role(self) -> str:
+        selected = str(self.mode_combo.currentData() or "auto")
+        if selected in {"local", "gateway", "client"}:
+            return selected
+        if self._local_probe_count() > 0:
+            return "local"
+        return "client"
+
+    def _mode_changed(self, *_args) -> None:
+        self._save_debug_preferences()
+        self._update_role_ui()
+        self._refresh_controls()
+
+    def _update_role_ui(self) -> None:
+        role = self._resolved_role()
+        selected = str(self.mode_combo.currentData() or "auto")
+        if selected == "auto":
+            if role == "local":
+                summary = "AUTO → Local vì phát hiện ST-Link trên máy này."
+            else:
+                summary = "AUTO → Client vì không phát hiện ST-Link local."
+        elif role == "gateway":
+            summary = "Gateway giữ ST-Link/OpenOCD; máy khác kết nối qua SSH."
+        elif role == "client":
+            summary = "Client tự mở SSH tunnel rồi GDB/MI attach tới Gateway."
+        else:
+            summary = "Local debug trực tiếp ST-Link trên máy này."
+        self.role_summary.setText(summary)
+        self.client_box.setVisible(role == "client")
+        self.start_button.setText(
+            {"local": "BẮT ĐẦU LOCAL", "gateway": "KHỞI ĐỘNG GATEWAY", "client": "KẾT NỐI GATEWAY"}[role]
+        )
+
+    def refresh_environment(self) -> None:
+        """Refresh Auto role after probe discovery without changing explicit user choice."""
+        self._update_role_ui()
         self._refresh_controls()
 
     def _append_log(self, line: str) -> None:
-        html_line = format_log_html(str(line))
-        self.log_view.appendHtml(html_line)
-        self.log_view.verticalScrollBar().setValue(
-            self.log_view.verticalScrollBar().maximum()
-        )
+        self.log_view.appendHtml(format_log_html(str(line)))
+        self.log_view.verticalScrollBar().setValue(self.log_view.verticalScrollBar().maximum())
         self.log_view.horizontalScrollBar().setValue(0)
 
     @property
     def has_active_operation(self) -> bool:
-        return self._worker is not None or self.service.state in (
+        tunnel_active = self._client_tunnel is not None and self._client_tunnel.active
+        return self._worker is not None or self.session.active or tunnel_active or self.service.state in (
             DebugState.STARTING, DebugState.READY, DebugState.CONNECTED,
         )
 
     def set_external_blocked(self, blocked: bool) -> None:
-        """Block creation of a debug session while Flash/Factory/Memory owns ST-Link."""
         self._external_blocked = bool(blocked)
         self._refresh_controls()
-
-    def _poll_debug_service(self) -> None:
-        state = self.service.state
-        if state == DebugState.FAILED:
-            self._watchdog.stop()
-            try:
-                self.gdb_backend.stop()
-            except Exception as error:
-                self.log.emit("GDB cleanup after OpenOCD failure: %s" % error)
-            self._active_config = None
-            self._pending_config = None
-            self.status_label.setText("OpenOCD đã dừng bất ngờ; debug session được giải phóng")
-            self.log.emit("OpenOCD exited unexpectedly; hardware interlock released.")
-            self.operation_state_changed.emit(False)
-            self._refresh_controls()
 
     def choose_symbol_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -197,6 +427,109 @@ class DebugTab(QWidget):
         )
         if path:
             self.symbol_path.setText(str(Path(path)))
+
+    def auto_match_symbols(self) -> None:
+        root_text = QFileDialog.getExistingDirectory(
+            self, "Chọn thư mục project để tìm AXF/ELF", ""
+        )
+        if not root_text:
+            return
+        root = Path(root_text).expanduser().resolve()
+        self._symbol_root = root
+        self._save_debug_preferences()
+        if self._resolved_role() == "client" and not self.session.active:
+            candidates = discover_symbol_files([root], max_files=128, max_depth=8)
+            if not candidates:
+                self._operation_failed_message(
+                    "Project đã lưu nhưng chưa tìm thấy .elf/.axf. Hãy build firmware trên máy Client trước."
+                )
+                return
+            self._status_override = None
+            self.diagnostic_view.setPlainText(
+                "Đã lưu project root: %s\nTìm thấy %d AXF/ELF candidate.\n"
+                "Khi bấm KẾT NỐI GATEWAY, tool sẽ tự so Flash qua SSH và chọn đúng file." %
+                (root, len(candidates))
+            )
+            self.log.emit("Saved Client symbol root for automatic match: %s" % root)
+            self._refresh_controls()
+            return
+
+        def operation(log, _phase, _cancel):
+            candidates = discover_symbol_files([root], max_files=128, max_depth=8)
+            if not candidates:
+                raise RuntimeError("Không tìm thấy file .elf/.axf trong phạm vi project đã chọn.")
+            temporary_server = not self.session.active
+            tcl = None
+            state_before = None
+            try:
+                if temporary_server:
+                    try:
+                        port = int(self.gdb_port.text().strip())
+                    except ValueError as error:
+                        raise ValueError("GDB port phải là số nguyên hợp lệ.") from error
+                    config = DebugConfig(
+                        self.selected_probe(), "127.0.0.1", port, None, 6666,
+                    )
+                    config.validate()
+                    self.service.start(config, event_sink=log)
+                    tcl = self._tcl_factory(TclEndpoint("127.0.0.1", 6666))
+                    state_before = tcl.wait_target_state()
+                    reader = tcl.read_words
+                else:
+                    state_before = self.session.target_poll()
+                    reader = self.session.read_words
+
+                selected, results = find_matching_symbol_file(candidates, reader)
+                if temporary_server:
+                    assert tcl is not None
+                    state_after = tcl.wait_target_state()
+                else:
+                    state_after = self.session.target_poll()
+                if state_after != state_before:
+                    raise RuntimeError(
+                        "Symbol matching changed target state unexpectedly: %s -> %s" %
+                        (state_before, state_after)
+                    )
+                return selected, results, state_before, root
+            finally:
+                if temporary_server:
+                    self.service.stop()
+
+        self._begin_worker(
+            operation, self._symbol_match_completed,
+            "Đang đối chiếu AXF/ELF với Flash...",
+        )
+
+    def _symbol_match_completed(self, result) -> None:
+        selected, results, state, root = result
+        lines = ["Project root: %s" % root, "Target state preserved: %s" % state.upper(), ""]
+        for item in results:
+            lines.append(
+                "%s  %d/%d  %.0f%%  %s" % (
+                    "MATCH" if item.matched else "MISS",
+                    item.matched_samples, item.total_samples, item.score * 100.0, item.path,
+                )
+            )
+        self.diagnostic_view.setPlainText("\n".join(lines))
+        if selected is None:
+            exact_count = sum(1 for item in results if item.matched)
+            if exact_count > 1:
+                self._status_override = (
+                    "Nhiều AXF/ELF khớp hoàn toàn · hãy chọn thủ công", "failed",
+                )
+                self.log.emit("Symbol auto-match is ambiguous: %d exact matches." % exact_count)
+            else:
+                self._status_override = (
+                    "Không có AXF/ELF khớp firmware đang chạy", "failed",
+                )
+                self.log.emit("Symbol auto-match found no exact firmware match.")
+        else:
+            self.symbol_path.setText(str(selected.path))
+            self._status_override = None
+            self.log.emit("Verified matching debug symbols: %s" % selected.path)
+            if self.session.active:
+                self.log.emit("Restart Debug to load the newly matched symbols into GDB.")
+        self._refresh_controls()
 
     def _update_probe_display(self) -> None:
         try:
@@ -206,51 +539,114 @@ class DebugTab(QWidget):
         except Exception:
             self.probe_display.setText("ST-Link Probe: Tự động chọn")
 
-    def _refresh_controls(self) -> None:
-        self._update_probe_display()
-        state = self.service.state
-        worker_busy = self._worker is not None
-        server_active = state in (DebugState.STARTING, DebugState.READY, DebugState.CONNECTED)
-        connected = state == DebugState.CONNECTED
-        self.start_button.setEnabled(
-            not worker_busy and not self._external_blocked and
-            state in (DebugState.STOPPED, DebugState.FAILED)
-        )
-        self.connect_button.setEnabled(not worker_busy and state == DebugState.READY)
-        self.stop_button.setEnabled(not worker_busy and server_active)
-        self.halt_button.setEnabled(not worker_busy and connected)
-        self.continue_button.setEnabled(not worker_busy and connected)
-        self.reset_button.setEnabled(not worker_busy and connected)
-        self.bind_address.setEnabled(not worker_busy and not server_active)
-        self.gdb_port.setEnabled(not worker_busy and not server_active)
-        self.telnet_port.setEnabled(not worker_busy and not server_active)
-        self.symbol_path.setEnabled(not worker_busy and not connected)
-        self.symbol_browse_button.setEnabled(not worker_busy and not connected)
-
-        badge_state = "stopped"
-        if state == DebugState.READY:
-            badge_state = "ready"
-        elif state == DebugState.CONNECTED:
-            badge_state = "connected"
-        elif state == DebugState.FAILED:
-            badge_state = "failed"
-        elif worker_busy:
-            badge_state = "running"
-        self.status_label.setProperty("state", badge_state)
+    def _set_target_state(self, state: Optional[str]) -> None:
+        normalized = (state or "").strip().lower()
+        self._target_state = normalized if normalized in {"running", "halted"} else None
+        if self._status_override is not None:
+            text, badge = self._status_override
+            self.status_label.setText(text)
+            self.status_label.setProperty("state", badge)
+            if self.status_label.style() is not None:
+                self.status_label.style().unpolish(self.status_label)
+                self.status_label.style().polish(self.status_label)
+            return
+        if self._target_state == "running":
+            if self._client_mode_active:
+                self.status_label.setText("CLIENT CONNECTED · TARGET RUNNING")
+            elif self._remote_server_active:
+                self.status_label.setText("GATEWAY READY · TARGET RUNNING")
+            else:
+                self.status_label.setText("LOCAL CONNECTED · TARGET RUNNING")
+            badge = "running"
+        elif self._target_state == "halted":
+            if self._client_mode_active:
+                self.status_label.setText("CLIENT CONNECTED · TARGET HALTED")
+            elif self._remote_server_active:
+                self.status_label.setText("GATEWAY · TARGET HALTED")
+            else:
+                self.status_label.setText("LOCAL CONNECTED · TARGET HALTED")
+            badge = "halted"
+        elif self.session.active:
+            self.status_label.setText(
+                "CLIENT CONNECTED · TARGET UNKNOWN" if self._client_mode_active
+                else "LOCAL CONNECTED · TARGET UNKNOWN"
+            )
+            badge = "connected"
+        elif self._remote_server_active:
+            self.status_label.setText("GATEWAY READY")
+            badge = "ready"
+        elif self.service.state == DebugState.READY:
+            self.status_label.setText("OpenOCD READY")
+            badge = "ready"
+        elif self.service.state == DebugState.FAILED:
+            self.status_label.setText("DEBUG FAILED")
+            badge = "failed"
+        else:
+            self.status_label.setText("ĐÃ DỪNG")
+            badge = "stopped"
+        self.status_label.setProperty("state", badge)
         if self.status_label.style() is not None:
             self.status_label.style().unpolish(self.status_label)
             self.status_label.style().polish(self.status_label)
 
-    def _begin_worker(self, operation, completed, status_text: str,
-                      failed=None) -> None:
+    def _refresh_controls(self) -> None:
+        self._update_probe_display()
+        worker_busy = self._worker is not None
+        active = self.session.active
+        server_active = self.service.state in (
+            DebugState.STARTING, DebugState.READY, DebugState.CONNECTED,
+        )
+        tunnel_active = self._client_tunnel is not None and self._client_tunnel.active
+        can_start = (
+            not worker_busy and not self._external_blocked and not server_active and not active and not tunnel_active
+        )
+        self.start_button.setEnabled(can_start)
+        self.remote_server_button.setEnabled(can_start)
+        self.remote_kit_button.setEnabled(not worker_busy)
+        self.stop_button.setEnabled(not worker_busy and (server_active or active or tunnel_active))
+        self.mode_combo.setEnabled(not worker_busy and not server_active and not active and not tunnel_active)
+        client_editable = not worker_busy and not active and not tunnel_active
+        self.client_host.setEnabled(client_editable)
+        self.client_user.setEnabled(client_editable)
+        self.client_ssh_port.setEnabled(client_editable)
+        self.halt_button.setEnabled(not worker_busy and active and self._target_state == "running")
+        self.continue_button.setEnabled(not worker_busy and active and self._target_state == "halted")
+        self.reset_button.setEnabled(not worker_busy and active)
+        diagnostic_enabled = not worker_busy and active
+        self.where_button.setEnabled(diagnostic_enabled)
+        self.stack_button.setEnabled(diagnostic_enabled)
+        self.registers_button.setEnabled(diagnostic_enabled)
+        self.variable_expression.setEnabled(diagnostic_enabled)
+        self.variable_button.setEnabled(diagnostic_enabled)
+        one_shot_enabled = diagnostic_enabled and self._target_state == "running"
+        self.break_location.setEnabled(diagnostic_enabled)
+        self.watch_expression.setEnabled(diagnostic_enabled)
+        self.stop_timeout.setEnabled(diagnostic_enabled)
+        self.break_once_button.setEnabled(one_shot_enabled)
+        self.watch_once_button.setEnabled(one_shot_enabled)
+        self.gdb_port.setEnabled(
+            not worker_busy and not server_active and not active and self._resolved_role() != "client"
+        )
+        self.symbol_path.setEnabled(not worker_busy and not server_active and not active)
+        self.symbol_browse_button.setEnabled(not worker_busy and not server_active and not active)
+        self.symbol_auto_button.setEnabled(
+            not worker_busy and not self._external_blocked and (active or not server_active)
+        )
+        if not worker_busy:
+            self._update_role_ui()
+            self._set_target_state(self._target_state)
+
+    def _begin_worker(self, operation, completed, status_text: str, failed=None) -> None:
         if self._worker is not None:
             return
+        self._status_override = None
         self.status_label.setText(status_text)
+        self.status_label.setProperty("state", "connected" if self.session.active else "ready")
         worker = FunctionWorker(operation, self)
         self._worker = worker
         worker.log.connect(self.log)
         worker.completed.connect(completed)
-        worker.failed.connect(failed or self._gdb_failed)
+        worker.failed.connect(failed or self._operation_failed)
         worker.finished.connect(self._worker_finished)
         self._refresh_controls()
         self.operation_state_changed.emit(True)
@@ -259,147 +655,564 @@ class DebugTab(QWidget):
     def _worker_finished(self) -> None:
         worker = self.sender()
         if worker is not None:
-            # QThread.finished can be delivered while Qt is still completing teardown;
-            # join before dropping the last Python reference to avoid "QThread destroyed" aborts.
             worker.wait()
         if worker is self._worker:
             self._worker = None
         if worker is not None:
-            # Keep a Python reference to the finished QThread for the widget lifetime.
-            # PySide/Qt can abort if a queued delete races final QThread teardown.
             self._retired_workers.append(worker)
         self._refresh_controls()
         self.operation_state_changed.emit(self.has_active_operation)
 
-    def start_debug(self) -> None:
+    def start_selected_mode(self) -> None:
+        role = self._resolved_role()
+        self._save_debug_preferences()
+        if role == "gateway":
+            self.start_remote_server()
+        elif role == "client":
+            self.start_client_debug()
+        else:
+            self.start_debug()
+
+    def start_client_debug(self) -> None:
+        host = self.client_host.text().strip()
+        user = self.client_user.text().strip()
+        if not host or not user:
+            self._start_failed_message(
+                "Client cần Gateway host và SSH user. Chỉ phải nhập lần đầu; tool sẽ ghi nhớ."
+            )
+            return
+        symbol_text = self.symbol_path.text().strip()
+        symbols = Path(symbol_text).expanduser() if symbol_text else None
+        if symbols is not None and not symbols.is_file():
+            if self._symbol_root is not None and self._symbol_root.is_dir():
+                self.log.emit("Stored AXF/ELF no longer exists; falling back to project auto-match.")
+                symbols = None
+            else:
+                self._start_failed_message("AXF/ELF đã lưu không còn tồn tại: %s" % symbols)
+                return
         try:
-            port = int(self.gdb_port.text().strip())
-            telnet_text = self.telnet_port.text().strip()
-            telnet = int(telnet_text) if telnet_text else None
+            local_gdb = find_available_loopback_port(13333)
+            local_tcl = find_available_loopback_port(16666, avoid=(local_gdb,))
+            tunnel_config = SshDebugTunnelConfig(
+                host=host, user=user, ssh_port=self.client_ssh_port.value(),
+                local_gdb_port=local_gdb, local_tcl_port=local_tcl,
+                gateway_gdb_port=3333, gateway_tcl_port=6666,
+            )
+            tunnel_config.validate()
+        except (ValueError, RuntimeError) as error:
+            self._start_failed_message(str(error))
+            return
+
+        def operation(log, _phase, _cancel):
+            tunnel = self._tunnel_factory(tunnel_config)
+            try:
+                log(
+                    "Opening managed SSH tunnel to %s@%s; local GDB=%d TCL=%d." %
+                    (user, host, local_gdb, local_tcl)
+                )
+                version = tunnel.start()
+                tcl = self._tcl_factory(TclEndpoint("127.0.0.1", local_tcl))
+                state_before_match = tcl.wait_target_state()
+                selected_symbols = symbols
+                if selected_symbols is not None:
+                    selected, results = find_matching_symbol_file((selected_symbols,), tcl.read_words)
+                    if selected is None:
+                        detail = results[0].reason if results else "ELF/AXF could not be parsed or sampled"
+                        raise RuntimeError(
+                            "AXF/ELF đã chọn không khớp firmware đang chạy trên Gateway: %s" % detail
+                        )
+                    selected_symbols = selected.path
+                    log("Verified selected AXF/ELF against remote Application Flash: %s" % selected_symbols)
+                elif self._symbol_root is not None and self._symbol_root.is_dir():
+                    candidates = discover_symbol_files([self._symbol_root], max_files=128, max_depth=8)
+                    if not candidates:
+                        raise RuntimeError("Project root đã lưu không chứa AXF/ELF; hãy build firmware trước.")
+                    selected, results = find_matching_symbol_file(candidates, tcl.read_words)
+                    if selected is None:
+                        exact_count = sum(1 for item in results if item.matched)
+                        if exact_count > 1:
+                            raise RuntimeError(
+                                "Có nhiều AXF/ELF cùng khớp firmware; hãy chọn đúng file một lần để ghim Client."
+                            )
+                        raise RuntimeError(
+                            "Không tìm được AXF/ELF khớp firmware đang chạy trong project đã lưu."
+                        )
+                    selected_symbols = selected.path
+                    log("Auto-selected verified Client symbols: %s" % selected_symbols)
+                state_after_match = tcl.wait_target_state()
+                if state_after_match != state_before_match:
+                    raise RuntimeError(
+                        "Remote symbol matching changed target state unexpectedly: %s -> %s" %
+                        (state_before_match, state_after_match)
+                    )
+                info = self.session.start_external(
+                    symbol_file=selected_symbols,
+                    gdb_host="127.0.0.1", gdb_port=local_gdb,
+                    tcl_host="127.0.0.1", tcl_port=local_tcl,
+                )
+                state = self.session.target_poll()
+                return tunnel, info, state, version
+            except BaseException:
+                try:
+                    self.session.stop()
+                finally:
+                    tunnel.stop()
+                raise
+
+        self._begin_worker(
+            operation, self._client_started,
+            "Đang tự kết nối Gateway qua SSH...", self._start_failed,
+        )
+
+    def _client_started(self, result) -> None:
+        tunnel, info, state, version = result
+        assert isinstance(info, DebugSessionInfo)
+        self._status_override = None
+        self._client_tunnel = tunnel
+        self._client_mode_active = True
+        self._initial_target_state = info.initial_target_state
+        self._set_target_state(state)
+        self.log.emit(
+            "CLIENT CONNECTED · %s · GDB %s · TCL %s · target initially %s." %
+            (version, info.gdb_endpoint, info.tcl_endpoint, info.initial_target_state)
+        )
+        if info.symbols:
+            self.symbol_path.setText(info.symbols)
+            self.log.emit("Loaded verified local debug symbols: %s" % info.symbols)
+        else:
+            self.log.emit("Client connected without AXF/ELF; source-level names may be unavailable.")
+        self._watchdog.start()
+        self._save_debug_preferences()
+        self._refresh_controls()
+
+    def show_remote_vscode_dialog(self) -> None:
+        if self._remote_vscode_dialog is None:
+            self._remote_vscode_dialog = RemoteVsCodeDialog(self.selected_probe, self)
+        self._remote_vscode_dialog.refresh_preview()
+        self._remote_vscode_dialog.show()
+        self._remote_vscode_dialog.raise_()
+        self._remote_vscode_dialog.activateWindow()
+
+    def start_remote_server(self) -> None:
+        """Start the generic headless-safe Gateway role without launching local GDB."""
+        try:
+            # B300 GUI Client uses the canonical Gateway endpoints. Keep Gateway
+            # one-click and deterministic even if the Local advanced field was edited.
+            port = 3333
+            self.gdb_port.setText(str(port))
             config = DebugConfig(
-                self.selected_probe(), self.bind_address.text().strip(), port, telnet
+                self.selected_probe(), "127.0.0.1", port, None, 6666,
             )
             config.validate()
         except (ValueError, TypeError) as error:
             self._start_failed_message(str(error))
             return
-        self._pending_config = config
+
+        def operation(log, _phase, _cancel):
+            guard_holder = [None]
+
+            def server_log(line):
+                log(line)
+                guard = guard_holder[0]
+                if guard is not None:
+                    try:
+                        guard.handle_openocd_line(line)
+                    except Exception as error:
+                        log("Remote debug guard warning: %s" % error)
+
+            try:
+                self.service.start(config, event_sink=server_log)
+                tcl = self._tcl_factory(TclEndpoint("127.0.0.1", 6666))
+                version = tcl.version()
+                guard = RemoteDebugGuard(
+                    tcl,
+                    lambda event, message: log("Remote guard %s: %s" % (event, message)),
+                )
+                state = guard.capture_initial_state()
+                guard_holder[0] = guard
+                return tcl, guard, state, version
+            except BaseException:
+                self.service.stop()
+                raise
+
         self._begin_worker(
-            lambda log, _phase, _cancel: self.service.start(config, event_sink=log),
-            self._started,
-            "Đang khởi động OpenOCD...",
-            self._start_failed,
+            operation, self._remote_started,
+            "Đang khởi động Debug Gateway...", self._start_failed,
         )
 
-    def _started(self, _state) -> None:
-        self._active_config = self._pending_config
-        self._pending_config = None
-        config = self._active_config
-        if config is None:
-            self._start_failed_message("Debug configuration was lost during startup.")
-            return
-        self.status_label.setText(
-            "OpenOCD sẵn sàng; GDB: %s:%d" % (config.bind_address, config.gdb_port)
+    def _remote_started(self, result) -> None:
+        self._status_override = None
+        tcl, guard, state, version = result
+        self._remote_server_active = True
+        self._remote_tcl = tcl
+        self._remote_guard = guard
+        self._initial_target_state = state
+        self._set_target_state(state)
+        self.log.emit(
+            "GATEWAY READY: OpenOCD 127.0.0.1:%s · TCL loopback 6666 · initial target %s." %
+            (self.gdb_port.text().strip(), state)
         )
-        self.log.emit("Debug server ready.")
+        self.log.emit("TCL remains loopback-only on the Gateway; B300 Client may forward it only inside SSH. %s" % version)
+        self._watchdog.start()
+        self._refresh_controls()
+
+    def start_debug(self) -> None:
+        try:
+            port = int(self.gdb_port.text().strip())
+            symbol_text = self.symbol_path.text().strip()
+            symbols = Path(symbol_text) if symbol_text else None
+            config = DebugSessionConfig(
+                probe=self.selected_probe(),
+                symbol_file=symbols,
+                bind_address="127.0.0.1",
+                gdb_port=port,
+                tcl_port=6666,
+            )
+            config.validate()
+        except (ValueError, TypeError) as error:
+            self._start_failed_message(str(error))
+            return
+
+        def operation(log, _phase, _cancel):
+            info = self.session.start(config, event_sink=log)
+            state = self.session.target_poll()
+            # Attaching GDB can halt Cortex-M. Preserve normal operation by restoring
+            # a target that was running before the debugger attached.
+            if info.initial_target_state.lower() == "running" and state == "halted":
+                log("GDB attach halted a previously running target; restoring RUNNING state.")
+                state = self.session.continue_execution()
+            return info, state
+
+        self._begin_worker(operation, self._started, "Đang mở phiên Debug tích hợp...", self._start_failed)
+
+    def _started(self, result) -> None:
+        self._status_override = None
+        info, state = result
+        assert isinstance(info, DebugSessionInfo)
+        self._initial_target_state = info.initial_target_state
+        self._set_target_state(state)
+        if info.symbols:
+            self.log.emit("Loaded debug symbols: %s" % info.symbols)
+        self.log.emit(
+            "Integrated debug connected: GDB %s · TCL %s · initial target %s." %
+            (info.gdb_endpoint, info.tcl_endpoint, info.initial_target_state)
+        )
         self._watchdog.start()
         self._refresh_controls()
 
     def _start_failed(self, failure: WorkerFailure) -> None:
         self._watchdog.stop()
-        self._pending_config = None
-        self._active_config = None
+        self._target_state = None
+        self._initial_target_state = None
+        self._remote_server_active = False
+        self._remote_tcl = None
+        self._remote_guard = None
+        if self._client_tunnel is not None:
+            try:
+                self._client_tunnel.stop()
+            except Exception:
+                pass
+        self._client_tunnel = None
+        self._client_mode_active = False
         self._start_failed_message(failure.message)
 
     def _start_failed_message(self, message: str) -> None:
-        self.status_label.setText("Không thể khởi động Debug: %s" % message)
         self.log.emit("Debug start failed: %s" % message)
         self.operation_state_changed.emit(False)
+        self._status_override = ("Không thể bắt đầu Debug: %s" % message, "failed")
         self._refresh_controls()
 
-    def connect_gdb(self) -> None:
-        if self._active_config is None or self.service.state != DebugState.READY:
-            self._gdb_failed_message("OpenOCD chưa sẵn sàng để GDB kết nối.")
-            return
-        config = self._active_config
-        symbol_text = self.symbol_path.text().strip()
-
-        def operation(log, _phase, _cancel):
-            self.gdb_backend.start()
-            if symbol_text:
-                self.gdb_backend.load_symbols(Path(symbol_text))
-                log("Loaded debug symbols: %s" % symbol_text)
-            self.gdb_backend.connect(config.bind_address, config.gdb_port)
-            self.service.mark_connected()
-            return True
-
-        self._begin_worker(operation, self._gdb_connected, "Đang kết nối GDB...")
-
-    def _gdb_connected(self, _result) -> None:
-        config = self._active_config
-        if config is None:
-            self._gdb_failed_message("Missing active debug configuration.")
-            return
-        self.status_label.setText(
-            "GDB đã kết nối: %s:%d" % (config.bind_address, config.gdb_port)
-        )
-        self.log.emit("GDB connected and verified by backend.")
-        self._refresh_controls()
-
-    def _gdb_failed(self, failure: WorkerFailure) -> None:
-        # A GDB command failure must not pretend the still-running OpenOCD session is idle.
+    def _operation_failed(self, failure: WorkerFailure) -> None:
+        self.log.emit("GDB operation failed: %s" % failure.message)
+        # Do not guess RUN/HALT after a failed control command. Query through the
+        # read-only TCL channel if the integrated session is still alive.
         try:
-            if self.service.state == DebugState.READY:
-                self.gdb_backend.stop()
-        finally:
-            self._gdb_failed_message(failure.message)
-
-    def _gdb_failed_message(self, message: str) -> None:
-        state = self.service.state
-        if state in (DebugState.READY, DebugState.CONNECTED):
-            prefix = "GDB lỗi (OpenOCD vẫn đang chạy)"
-        else:
-            prefix = "Debug lỗi"
-        self.status_label.setText("%s: %s" % (prefix, message))
-        self.log.emit("GDB operation failed: %s" % message)
-        self.operation_state_changed.emit(self.has_active_operation)
+            self._target_state = self.session.target_poll() if self.session.active else None
+        except Exception as error:
+            self._target_state = None
+            self.log.emit("Unable to verify target state after failure: %s" % error)
+        self._status_override = ("Debug operation failed: %s" % failure.message, "failed")
         self._refresh_controls()
+
+    def _poll_debug_service(self) -> None:
+        if self._client_mode_active and self._client_tunnel is not None and not self._client_tunnel.active:
+            self._watchdog.stop()
+            try:
+                self.session.stop()
+            except Exception as error:
+                self.log.emit("Client cleanup after SSH tunnel loss: %s" % error)
+            self._client_tunnel = None
+            self._client_mode_active = False
+            self._target_state = None
+            self._initial_target_state = None
+            self._status_override = (
+                "Mất SSH tunnel tới Gateway · kiểm tra mạng/SSH rồi bấm Kết nối lại", "failed",
+            )
+            self.operation_state_changed.emit(False)
+            self._refresh_controls()
+            return
+        if not self._client_mode_active and self.service.state == DebugState.FAILED:
+            self._watchdog.stop()
+            try:
+                self.session.stop()
+            except Exception as error:
+                self.log.emit("Debug cleanup after OpenOCD failure: %s" % error)
+            self._target_state = None
+            self._initial_target_state = None
+            self._remote_server_active = False
+            self._remote_tcl = None
+            self._remote_guard = None
+            self.log.emit("OpenOCD exited unexpectedly; hardware interlock released.")
+            self.operation_state_changed.emit(False)
+            self._set_target_state(None)
+            self._refresh_controls()
+            return
+        if self.session.active and self._worker is None:
+            try:
+                state = self.session.target_poll()
+            except Exception as error:
+                self.log.emit("Target-state poll failed: %s" % error)
+                self._target_state = None
+            else:
+                if state != self._target_state:
+                    self.log.emit("Target state changed: %s" % state.upper())
+                self._target_state = state
+            self._refresh_controls()
+        elif self._remote_server_active and self._remote_tcl is not None and self._worker is None:
+            try:
+                state = self._remote_tcl.target_state()
+            except Exception as error:
+                self.log.emit("Remote target-state poll failed: %s" % error)
+                self._target_state = None
+            else:
+                if state != self._target_state:
+                    self.log.emit("Remote target state changed: %s" % state.upper())
+                self._target_state = state
+            self._refresh_controls()
 
     def halt_target(self) -> None:
-        self._run_control("Halt", self.gdb_backend.interrupt)
+        self._run_control("Halt", self.session.halt)
 
     def continue_target(self) -> None:
-        self._run_control("Continue", self.gdb_backend.continue_execution)
+        self._run_control("Continue", self.session.continue_execution)
 
     def reset_halt_target(self) -> None:
-        self._run_control("Reset + Halt", self.gdb_backend.reset_halt)
+        self._run_control("Reset + Halt", self.session.reset_halt)
 
     def _run_control(self, label: str, command) -> None:
-        if self.service.state != DebugState.CONNECTED:
-            self._gdb_failed_message("GDB chưa ở trạng thái CONNECTED.")
+        if not self.session.active:
+            self._operation_failed_message("GDB chưa ở trạng thái CONNECTED.")
             return
         self._begin_worker(
             lambda _log, _phase, _cancel: command(),
-            lambda _result, action=label: self._control_completed(action),
+            lambda state, action=label: self._control_completed(action, state),
             "Đang thực hiện %s..." % label,
         )
 
-    def _control_completed(self, label: str) -> None:
-        self.status_label.setText("GDB CONNECTED; thao tác %s hoàn tất" % label)
-        self.log.emit("GDB control completed: %s" % label)
+    def _operation_failed_message(self, message: str) -> None:
+        self.log.emit("Debug operation failed: %s" % message)
+        self._status_override = ("Debug lỗi: %s" % message, "failed")
         self._refresh_controls()
 
-    def stop_debug(self) -> None:
-        if self._worker is not None:
+    def _control_completed(self, label: str, state: str) -> None:
+        self._status_override = None
+        self._set_target_state(state)
+        self.log.emit("GDB control completed: %s · target=%s" % (label, state.upper()))
+        self._refresh_controls()
+
+    @staticmethod
+    def _format_frame(frame) -> str:
+        address = getattr(frame, "address", None) or "?"
+        function = getattr(frame, "function", None) or "?"
+        file_name = getattr(frame, "file", None) or getattr(frame, "fullname", None) or "?"
+        line = getattr(frame, "line", None)
+        return "%s  %s  %s:%s" % (
+            address, function, file_name, line if line is not None else "?",
+        )
+
+    def _run_diagnostic(self, label: str, operation, formatter) -> None:
+        if not self.session.active:
+            self._operation_failed_message("Debug session chưa CONNECTED.")
             return
-        try:
-            self.gdb_backend.stop()
-        finally:
-            self.service.stop()
+
+        def execute(_log, _phase, _cancel):
+            result = operation()
+            state = self.session.target_poll()
+            return result, state
+
+        self._begin_worker(
+            execute,
+            lambda result, name=label, render=formatter: self._diagnostic_completed(
+                name, result[0], result[1], render,
+            ),
+            "Đang đọc %s..." % label,
+        )
+
+    def _diagnostic_completed(self, label: str, result, state: str, formatter) -> None:
+        self._status_override = None
+        self._set_target_state(state)
+        text = formatter(result)
+        self.diagnostic_view.setPlainText(text)
+        self.log.emit("Diagnostic completed: %s · target restored=%s" % (label, state.upper()))
+        self._refresh_controls()
+
+    def inspect_where(self) -> None:
+        self._run_diagnostic(
+            "Where", self.session.capture_where, self._format_frame,
+        )
+
+    def inspect_stack(self) -> None:
+        self._run_diagnostic(
+            "Call Stack", lambda: self.session.capture_stack(12),
+            lambda frames: "\n".join(
+                "#%d  %s" % (index, self._format_frame(frame))
+                for index, frame in enumerate(frames)
+            ) or "Không có stack frame.",
+        )
+
+    def inspect_registers(self) -> None:
+        self._run_diagnostic(
+            "Registers", self.session.capture_registers,
+            lambda registers: "\n".join(
+                "%s = %s" % (getattr(item, "name", "reg?"), getattr(item, "value", "?"))
+                for item in registers
+            ) or "Không có register value.",
+        )
+
+    def inspect_variable(self) -> None:
+        expression = self.variable_expression.text().strip()
+        if not expression:
+            self._operation_failed_message("Hãy nhập tên biến cần đọc.")
+            return
+        self._run_diagnostic(
+            "Variable", lambda: self.session.capture_variable(expression),
+            lambda value: "%s = %s" % (
+                getattr(value, "expression", expression), getattr(value, "value", value),
+            ),
+        )
+
+    def _format_stop_snapshot(self, snapshot) -> str:
+        lines = [
+            "%s #%s · %s" % (snapshot.kind, snapshot.number, snapshot.reason),
+            "Location: %s" % snapshot.location,
+            "Frame: %s" % self._format_frame(snapshot.frame),
+        ]
+        if getattr(snapshot, "value", None) is not None:
+            value = snapshot.value
+            lines.append("Value: %s = %s" % (
+                getattr(value, "expression", snapshot.location),
+                getattr(value, "value", value),
+            ))
+        lines.append("Resource deleted automatically; target restored to RUNNING.")
+        return "\n".join(lines)
+
+    def _run_one_shot(self, label: str, operation) -> None:
+        if not self.session.active:
+            self._operation_failed_message("Debug session chưa CONNECTED.")
+            return
+        if self._target_state != "running":
+            self._operation_failed_message("Break/Watch Once chỉ chạy khi target đang RUNNING.")
+            return
+
+        def execute(_log, _phase, _cancel):
+            result = operation()
+            state = self.session.target_poll()
+            return result, state
+
+        self._begin_worker(
+            execute,
+            lambda result, name=label: self._diagnostic_completed(
+                name, result[0], result[1], self._format_stop_snapshot,
+            ),
+            "Đang chờ %s..." % label,
+        )
+
+    def break_once(self) -> None:
+        location = self.break_location.text().strip()
+        if not location:
+            self._operation_failed_message("Hãy nhập hàm hoặc file.c:line cho breakpoint.")
+            return
+        timeout = float(self.stop_timeout.value())
+        self._run_one_shot(
+            "Hardware Break Once", lambda: self.session.break_once(location, timeout_seconds=timeout),
+        )
+
+    def watch_once(self) -> None:
+        expression = self.watch_expression.text().strip()
+        if not expression:
+            self._operation_failed_message("Hãy nhập biến cần watch.")
+            return
+        timeout = float(self.stop_timeout.value())
+        self._run_one_shot(
+            "Hardware Watch Once", lambda: self.session.watch_once(expression, timeout_seconds=timeout),
+        )
+
+    def stop_debug(self) -> None:
+        if self._worker is not None or not self.has_active_operation:
+            return
+        gateway_mode = self._remote_server_active
+        client_mode = self._client_mode_active
+
+        def operation(log, _phase, _cancel):
+            before = None
+            if gateway_mode:
+                if self._remote_tcl is not None:
+                    before = self._remote_tcl.target_state()
+                if self._remote_guard is not None:
+                    snapshot = self._remote_guard.restore_initial_state(reason="gateway_gui_shutdown")
+                    log(
+                        "Gateway guard restore: initial=%s final=%s restored=%s" %
+                        (snapshot.initial_target_state, snapshot.final_target_state, snapshot.restored)
+                    )
+                self.service.stop()
+                log("Gateway stopped; GDB/TCL endpoints released.")
+            elif client_mode:
+                if self.session.active:
+                    try:
+                        before = self.session.target_poll()
+                    except Exception:
+                        pass
+                # Restore target while the SSH tunnel still exists, then close the tunnel.
+                self.session.stop()
+                if self._client_tunnel is not None:
+                    self._client_tunnel.stop()
+                log("Client disconnected safely; target restoration ran before SSH tunnel close.")
+            else:
+                if self.session.active:
+                    try:
+                        before = self.session.target_poll()
+                    except Exception:
+                        pass
+                self.session.stop()
+                log("Local debug stopped; initial target state restoration attempted.")
+            return before
+
+        self._begin_worker(
+            operation, self._stopped, "Đang dừng Debug an toàn...",
+            self._remote_stop_failed if gateway_mode else None,
+        )
+
+    def _remote_stop_failed(self, failure: WorkerFailure) -> None:
+        self.log.emit("Gateway stop failed: %s" % failure.message)
+        self._status_override = ("Gateway vẫn chạy · %s" % failure.message, "failed")
+        self._refresh_controls()
+
+    def _stopped(self, _before) -> None:
+        self._status_override = None
         self._watchdog.stop()
-        self._active_config = None
-        self._pending_config = None
-        self.status_label.setText("Đã dừng")
-        self.log.emit("Debug server stopped.")
+        self._target_state = None
+        self._initial_target_state = None
+        self._remote_server_active = False
+        self._remote_tcl = None
+        self._remote_guard = None
+        if self._client_tunnel is not None:
+            try:
+                self._client_tunnel.stop()
+            except Exception:
+                pass
+        self._client_tunnel = None
+        self._client_mode_active = False
+        self.log.emit("Debug session stopped and endpoints released.")
         self.operation_state_changed.emit(False)
+        self._set_target_state(None)
         self._refresh_controls()

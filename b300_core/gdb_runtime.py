@@ -9,7 +9,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Iterable, List, Optional
 
 from .process_startup import child_process_kwargs
 
@@ -56,6 +56,51 @@ def _existing_path(value: str, label: str) -> str:
     return str(candidate)
 
 
+def _bounded_glob(root: Path, pattern: str, limit: int = 24) -> Iterable[Path]:
+    if not root.is_dir():
+        return ()
+    matches = []
+    try:
+        for candidate in root.glob(pattern):
+            if candidate.is_file():
+                matches.append(candidate)
+                if len(matches) >= limit:
+                    break
+    except (OSError, PermissionError):
+        return ()
+    return tuple(sorted(matches, key=lambda item: str(item).lower(), reverse=True))
+
+
+def _development_gdb_candidates() -> Iterable[Path]:
+    """Discover bounded, common STM32CubeIDE toolchain locations."""
+    executable_name = "arm-none-eabi-gdb.exe" if os.name == "nt" else "arm-none-eabi-gdb"
+    roots = []
+    if os.name == "nt":
+        roots.append(Path("C:/ST"))
+        for variable in ("ProgramFiles", "ProgramFiles(x86)"):
+            value = os.environ.get(variable)
+            if value:
+                roots.append(Path(value) / "STMicroelectronics")
+        patterns = (
+            "STM32CubeIDE_*/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.*/tools/bin/%s" % executable_name,
+            "STM32CubeIDE*/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.*/tools/bin/%s" % executable_name,
+        )
+    else:
+        roots.extend((Path("/opt/st"), Path.home() / "STMicroelectronics"))
+        patterns = (
+            "stm32cubeide_*/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.*/tools/bin/%s" % executable_name,
+            "STM32CubeIDE_*/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.*/tools/bin/%s" % executable_name,
+        )
+    seen = set()
+    for root in roots:
+        for pattern in patterns:
+            for candidate in _bounded_glob(root, pattern):
+                key = str(candidate.resolve())
+                if key not in seen:
+                    seen.add(key)
+                    yield candidate
+
+
 def resolve_gdb(explicit: Optional[str] = None) -> str:
     """Prefer explicit/configured GDB, then bundled, then the system PATH."""
     if explicit is not None:
@@ -72,6 +117,8 @@ def resolve_gdb(explicit: Optional[str] = None) -> str:
             seen.add(key)
             if candidate.is_file():
                 return str(candidate)
+    for candidate in _development_gdb_candidates():
+        return str(candidate)
     arm_gdb = shutil.which("arm-none-eabi-gdb")
     if arm_gdb:
         return arm_gdb
@@ -80,7 +127,7 @@ def resolve_gdb(explicit: Optional[str] = None) -> str:
         if multiarch:
             return multiarch
     raise RuntimeError(
-        "GDB was not found. Install arm-none-eabi-gdb, or set B300_GDB to a valid executable."
+        "GDB was not found. Install arm-none-eabi-gdb/STM32CubeIDE, or set B300_GDB to a valid executable."
     )
 
 

@@ -190,7 +190,11 @@ def build_debug_command(probe: ProbeRef, executable: str, bind_address: str,
         telnet_port=telnet_port,
         tcl_port=tcl_port,
         bind_address=bind_address,
-    ) + ["-c", "init"]
+    ) + [
+        "-c", "gdb flash_program disable",
+        "-c", "gdb breakpoint_override hard",
+        "-c", "init",
+    ]
 
 
 def build_target_inspect_command(probe: ProbeRef, executable: str) -> List[str]:

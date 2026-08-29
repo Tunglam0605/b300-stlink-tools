@@ -10,83 +10,52 @@ thể bị halt/reset nên chỉ dùng khi board và cơ cấu đang ở trạng
   khác chiếm dụng.
 - File `.axf` hoặc `.elf` có symbol, được build từ đúng source đang chạy trên
   board. File HEX chỉ dùng để nạp, không thay thế file symbol khi debug.
-- Một GDB client tương thích ARM:
-  - GUI release bundle mang theo `arm-none-eabi-gdb` trong `vendor/gdb/bin`.
-  - Khi chạy từ source/CLI, tool tìm `B300_GDB`, GDB trong bundle, sau đó
-    `arm-none-eabi-gdb` trên `PATH`; Ubuntu cuối cùng có thể dùng `gdb-multiarch`.
+- Máy thực sự phân tích source (**Local** hoặc **Client**) cần GDB ARM. Base GUI/CLI
+  không nhúng toàn bộ GNU Arm toolchain để giữ package nhẹ. Tool ưu tiên `B300_GDB`,
+  tự tìm GDB từ STM32CubeIDE/toolchain đã cài, sau đó tìm `arm-none-eabi-gdb` trên
+  `PATH`; Ubuntu có thể dùng `gdb-multiarch` khi phù hợp.
+- **Gateway** không cần GDB, source hay AXF/ELF. Gateway chỉ cần ST-Link, OpenOCD
+  và SSH server; `b300-stlink debug gateway` giữ GDB/TCL ở loopback.
+- **Client** giữ source + AXF/ELF. GUI Client tự tạo SSH local forwarding, xác minh
+  AXF/ELF với Application Flash rồi mới attach GDB.
 
-Nếu GDB không có, chỉ Debug tích hợp bị chặn; Application Flash vẫn hoạt động.
-Đặt `B300_GDB` tới executable GDB hợp lệ hoặc cài `arm-none-eabi-gdb`.
+Nếu Gateway không có GDB local thì Flash, Factory provisioning và Debug Gateway vẫn
+hoạt động bình thường.
 
-## Cách A — Debug trên cùng một máy
+## Cách A — Debug Local trên cùng máy
 
-### Bước 1: Kiểm tra và xem trước lệnh
+Luồng khuyến nghị là GUI: mở tab **Debug**, để **Auto** hoặc chọn **Local**, chọn
+AXF/ELF đúng firmware rồi bấm **BẮT ĐẦU LOCAL**. Khi chỉ có một ST-Link, GUI tự
+chọn probe. GDB được tự tìm từ `B300_GDB`, STM32CubeIDE hoặc `PATH`.
 
-```text
-b300-stlink doctor
-b300-stlink debug --dry-run --json
-```
+Sau khi attach, GUI xác nhận target `RUNNING/HALTED`. Nếu GDB attach làm một target
+đang RUNNING bị HALT, `DebugSession` tự Resume ngay. Các thao tác Where, Call Stack,
+Registers và Variable chỉ halt tạm khi cần rồi khôi phục trạng thái trước thao tác.
+Hardware breakpoint/watchpoint là one-shot và được cleanup sau hit/timeout.
 
-Dry-run phải chỉ có cấu hình OpenOCD, `bindto`, GDB port, các listener phụ được
-yêu cầu rõ ràng và `init`; không được có `erase_sector`, `program`, `mww` hoặc
-`mass_erase`. Mặc định Telnet/TCL đều `disabled`.
+Nhấn **Dừng Debug** để restore trạng thái ban đầu, đóng GDB/OpenOCD và giải phóng
+ST-Link. Không có lệnh flash trong flow này.
 
-### Bước 2: Mở GDB server
+### Manual/legacy external GDB server
 
-```text
-b300-stlink debug --gdb-port 3333
-```
-
-Giữ terminal này mở. Mặc định server chỉ nghe tại `127.0.0.1`.
-
-Nếu có nhiều ST-Link:
-
-```text
-b300-stlink debug --probe-serial <ST-LINK-SN> --gdb-port 3333
-```
-
-### Bước 3: Kết nối GDB và nạp symbol
-
-Mở terminal thứ hai:
+Nếu cần tự điều khiển một GDB ngoài thay vì GUI, dùng alias legacy tường minh:
 
 ```text
-arm-none-eabi-gdb <duong-dan-application.axf>
+b300-stlink debug server --gdb-port 3333
 ```
 
-Trong GDB:
+`debug` không có mode **không còn có nghĩa là legacy server**; từ v0.8 nó mặc định
+thành `debug gateway`. Legacy server vẫn bind loopback mặc định. Chỉ mở Telnet/TCL
+legacy khi thật sự cần và không mở chúng ra non-loopback.
 
 ```text
-target extended-remote 127.0.0.1:3333
-monitor reset halt
+b300-stlink debug server --dry-run --json
+b300-stlink debug server --gdb-port 3333 --tcl-port 6666
 ```
 
-Sau đó có thể đặt breakpoint, đọc biến/register và dùng `continue`, `step`,
-`next`. Không dùng `load`, `restore` hoặc lệnh flash trong phiên debug này vì
-chúng có thể ghi flash ngoài quy trình provisioning an toàn.
-
-### Bước 4: Kết thúc an toàn
-
-Trong GDB:
-
-```text
-monitor reset run
-detach
-quit
-```
-
-Sau đó nhấn `Ctrl+C` tại terminal đang chạy `b300-stlink debug` và xác nhận port
-3333 đã đóng.
-
-Telnet/TCL không cần cho luồng GDB và bị tắt mặc định. Khi cần OpenOCD TCL để
-automation/read-only control trên cùng máy, dùng:
-
-```text
-b300-stlink debug --gdb-port 3333 --tcl-port 6666
-```
-
-CLI chỉ báo `READY` sau khi OpenOCD đã mở đủ listener được yêu cầu. Có thể dùng
-`--telnet-port 4444` khi thực sự cần Telnet local. TCL/Telnet đều bị từ chối nếu
-`--bind-address` không phải loopback, và các port đang bật không được trùng nhau.
+Không dùng `load`, `restore`, raw flash command hoặc arbitrary memory write từ GDB.
+OpenOCD debug profile server-side vẫn có `gdb flash_program disable` và ép hardware
+breakpoint.
 
 ## Integrated CLI debug — GDB/MI + Safe TCL
 
@@ -150,74 +119,146 @@ lượng hardware breakpoint/watchpoint hữu hạn; OpenOCD trên board nghiệ
 
 ### Safe TCL
 
-CLI không expose raw TCL. Core chỉ có các primitive read-only/diagnostic đã
-validate như `version`, `targets`, bounded aligned `mdw` và đọc register. Các lệnh
-`flash erase_sector`, `program`, `mww`, Option Bytes hoặc WRP không nằm trong
-Safe TCL surface. CPU state được lấy từ cột `State` của `targets`; OpenOCD `poll`
+CLI không expose raw TCL. Core chỉ có các primitive allow-listed đã validate như
+`version`, `targets`, bounded aligned `mdw`, đọc register và `resume` có kiểm soát.
+`resume` chỉ được dùng để khôi phục trạng thái RUNNING đã được ghi nhận trước phiên
+remote debug; không có raw write-memory. Các lệnh `flash erase_sector`, `program`,
+`mww`, Option Bytes hoặc WRP không nằm trong Safe TCL surface. CPU state được lấy
+từ cột `State` của `targets`; OpenOCD `poll`
 chỉ phản ánh background polling/TAP và không được dùng để kết luận CPU đang
 `running` hay `halted`.
 
-## Cách B — ST-Link cắm vào Ubuntu IPC, GDB chạy trên máy khác
+## Cách B — B300 Tools Gateway + Client qua SSH
 
-### Bước 1: Mở server trên IPC
-
-Chỉ thực hiện trong mạng nội bộ tin cậy:
-
-```bash
-b300-stlink debug --bind-address 0.0.0.0 --gdb-port 3333
-```
-
-Nếu có nhiều probe, thêm `--probe-serial <ST-LINK-SN>`. Không mở các port này
-ra Internet; dùng firewall hoặc SSH tunnel khi mạng không được tin cậy. Telnet
-và TCL vẫn bị tắt trong phiên remote.
-
-### Bước 2: Kết nối từ máy phát triển
-
-Mở GDB với file AXF/ELF tương ứng:
+Đây là workflow remote mặc định. Không mở GDB/TCL trực tiếp ra LAN/Internet.
 
 ```text
-arm-none-eabi-gdb <duong-dan-application.axf>
+STM32 ─SWD─ ST-Link ─ B300 Gateway
+                         ├─ OpenOCD GDB 127.0.0.1:3333
+                         ├─ Safe TCL    127.0.0.1:6666
+                         ├─ RemoteDebugGuard
+                         └─ SSH server
+                                │
+                                │ encrypted local forwarding
+                                ▼
+                         B300 GUI Client
+                         ├─ GDB/MI local
+                         ├─ AXF/ELF local
+                         └─ source code local
 ```
 
-Sau khi vào GDB, kết nối tới IP của IPC:
+### Gateway CLI
+
+Máy cắm ST-Link có thể chạy headless, không cần GUI/GDB/AXF. Trước khi mở service, chạy preflight:
 
 ```text
-target extended-remote <IP-IPC>:3333
-monitor reset halt
+b300-stlink gateway doctor
 ```
 
-Ví dụ với IPC `10.1.200.208`:
+Preflight chỉ kiểm tra host dependency: OpenOCD, lựa chọn ST-Link, SSH server, ports `3333/6666` còn trống và IPv4 candidate. Nó không yêu cầu GDB/source/AXF và không erase/program Flash. Khi báo `READY`:
 
 ```text
-target extended-remote 10.1.200.208:3333
+b300-stlink debug          # mặc định Gateway
+# tương đương: b300-stlink debug gateway
 ```
 
-Khi kết thúc, chạy `monitor reset run`, `detach`, `quit`, rồi `Ctrl+C` trên IPC.
+Nếu chỉ có một ST-Link, tool tự chọn. Nếu có nhiều probe, ghim đúng serial bằng
+`--probe-serial`. Gateway profile cố định các nguyên tắc an toàn:
 
-## GUI Debug
+- bind `127.0.0.1`;
+- GDB `3333`, Safe TCL `6666`, Telnet disabled;
+- `gdb flash_program disable`;
+- `gdb breakpoint_override hard`;
+- không `erase_sector`, `program {}`, `mass_erase`, `mww`, Option Bytes hay WRP;
+- RemoteDebugGuard ghi trạng thái RUN/HALT ban đầu và tự khôi phục RUNNING khi cần.
 
-Tab **Debug** trong `b300-stlink-gui` dùng cùng một `HardwareSessionManager` với
-Flash, Factory và Memory. Khi một phiên Debug đang giữ ST-Link, GUI sẽ khóa các
-thao tác nạp, Factory, đổi probe và đọc Memory thay vì chờ backend báo xung đột.
+CLI vẫn giữ đầy đủ các chức năng khác như nạp Application, factory-provision
+Bootloader, doctor, memory/metadata read-only. Chỉ riêng vai trò **Debug Gateway**
+không cần source-level debugger trên máy cổng. `debug server` được giữ làm alias
+legacy; workflow mới dùng `debug gateway`.
 
-Luồng vận hành:
+### B300 GUI: Auto / Local / Gateway / Client
 
-1. Giữ mặc định `127.0.0.1:3333` nếu debug tại máy local.
-2. Chọn file `.elf` hoặc `.axf` khớp đúng firmware đang chạy nếu cần source/symbol.
-3. Nhấn **Khởi động Debug Server**.
-4. Khi OpenOCD sẵn sàng, nhấn **Kết nối GDB**.
-5. Sau khi GDB/MI xác nhận kết nối, các nút **Halt**, **Continue** và
-   **Reset + Halt** mới được bật.
-6. Nhấn **Dừng Debug** để dừng GDB/OpenOCD và giải phóng ST-Link.
+Tab **Debug** có bốn lựa chọn:
 
-GUI không coi thao tác GDB thành công chỉ vì đã ghi lệnh vào stdin. Backend phải
-nhận đúng result record có cùng MI token (`^done`, `^connected`, `^running`...)
-trong timeout giới hạn; `^error` hoặc timeout được hiển thị là lỗi.
+- **Auto**: có ST-Link local → Local; không có ST-Link → Client.
+- **Local**: máy này cắm ST-Link và dùng GUI để debug trực tiếp.
+- **Gateway**: máy này cắm ST-Link và phục vụ client ngoài; GUI chỉ giám sát
+  Gateway/target, không mở một GDB controller thứ hai.
+- **Client**: máy này không cần ST-Link; source + AXF/ELF nằm tại đây.
 
-Nếu OpenOCD dừng bất ngờ, watchdog của tab Debug sẽ phát hiện trạng thái FAILED,
-dừng GDB còn lại, giải phóng interlock phần cứng và cho phép người vận hành bắt
-đầu một phiên mới sau khi xử lý nguyên nhân. Log OpenOCD/GDB được hiển thị ngay
-trong tab Debug và đồng thời đưa vào log chung của ứng dụng.
+Gateway GUI muốn tự debug trực tiếp thì chuyển sang **Local** sau khi remote client
+đã ngắt. Tool không cho hai GDB controller cùng điều khiển một STM32.
+
+### Client one-click
+
+Lần đầu Client cần Gateway host, SSH user và project/AXF. Các lần sau GUI ghi nhớ
+profile. Khi bấm **KẾT NỐI GATEWAY**, tool tự động:
+
+1. chọn hai local loopback port còn trống;
+2. chạy OpenSSH với `BatchMode=yes`, `StrictHostKeyChecking=yes`,
+   `ExitOnForwardFailure=yes`;
+3. forward GDB và Safe TCL **bên trong SSH mà thôi**; cả hai endpoint vẫn là loopback
+   ở Gateway và Client, không public ra mạng;
+4. xác nhận forwarded TCL hoạt động;
+5. nếu đã chọn AXF/ELF, so machine-code samples với Application Flash; mismatch thì
+   fail-closed;
+6. nếu đã lưu project root, scan bounded project tree và chọn **duy nhất một**
+   AXF/ELF exact-match; nhiều hoặc không có match thì yêu cầu người dùng xử lý;
+7. tự tìm GDB trên Client, load symbols và attach bằng GDB/MI async;
+8. nếu attach làm target đang RUNNING bị HALT, tự Resume về RUNNING;
+9. bật Where, Call Stack, Registers, Variable, hardware breakpoint/watchpoint.
+
+Tool không lưu password SSH plaintext. Gateway host key phải đã có trong
+`known_hosts`; nên dùng SSH key/agent. Đây là điểm cố ý không tự động hóa để không
+đánh đổi xác thực Gateway.
+
+Khi Stop Client: tool khôi phục target trước, đóng GDB sau đó mới đóng SSH tunnel.
+Nếu tunnel chết bất ngờ, GUI fail-closed và báo mất kết nối thay vì giả vờ session
+vẫn hoạt động.
+
+### Chọn project một lần
+
+Trong Client, nút **Tự tìm đúng AXF/ELF** khi chưa kết nối chỉ lưu một project root
+bounded. Tool không quét cả ổ đĩa. Khi kết nối lần sau, matcher đọc một số cửa sổ
+Application Flash qua Safe TCL và tự chọn đúng AXF/ELF.
+
+## Cách C — VS Code là client tùy chọn
+
+VS Code không phải con đường bắt buộc. Cùng Gateway ở trên có thể phục vụ
+Cortex-Debug/GDB qua SSH tunnel chỉ forward GDB. TCL không cần forward cho VS Code.
+
+Sinh kit:
+
+```text
+b300-stlink debug vscode \
+  --ssh-host <GATEWAY-IP-OR-HOSTNAME> \
+  --ssh-user <SSH-USER> \
+  --program-relative Objects/F407/Main_V2_F407.axf \
+  --output-dir <VS-CODE-WORKSPACE> \
+  --json
+```
+
+Kit gồm `.vscode/launch.json`, `.vscode/extensions.json`, lệnh Gateway, lệnh SSH
+tunnel và checklist. Gateway command mới tương đương:
+
+```text
+b300-stlink debug gateway
+```
+
+Máy VS Code giữ source/AXF và GDB. Không dùng `load`/flash từ debugger. Không
+NAT/port-forward trực tiếp `3333` hoặc `6666`; nếu khác mạng, dùng SSH/VPN được
+quản trị và vẫn giữ OpenOCD ở loopback.
+
+## GUI Debug safety/lifecycle
+
+Tab Debug dùng cùng `HardwareSessionManager` với Flash, Factory và Memory. Khi một
+phiên local/gateway giữ ST-Link, GUI khóa các thao tác phần cứng xung đột. Backend
+GDB/MI yêu cầu đúng result record cùng token; timeout hoặc `^error` là lỗi thật.
+
+Local và Client dùng cùng `DebugSession`, nên cùng một logic preserve RUN/HALT.
+OpenOCD server-side luôn disable GDB flash programming và ép hardware breakpoint.
+Watchdog phát hiện OpenOCD/tunnel chết, cleanup session và giải phóng interlock.
 
 ## Phạm vi của tool
 

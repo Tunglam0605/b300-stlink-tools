@@ -436,17 +436,12 @@ def main(argv=None) -> int:
         validate_trusted_package(platform_name, filename, verified_sha256)
         openocd_root = temp / "openocd-runtime"
         extract_trusted_openocd_package(archive, openocd_root, platform_name)
+        # Keep the base GUI/CLI lean. GDB is discovered from an installed toolchain
+        # (for example STM32CubeIDE) or a separately managed optional debug runtime.
+        # Never embed the full GNU Arm toolchain in the base application bundle.
         gdb_archive = None
         gdb_sha256 = None
         gdb_root = None
-        if args.flavor in {"all", "gui"}:
-            gdb_filename, gdb_sha256 = TRUSTED_GDB_PACKAGES[platform_name]
-            gdb_archive = temp / gdb_filename
-            fetch("%s/%s" % (GDB_BASE, gdb_filename), gdb_archive)
-            actual_gdb_sha256 = hash_file(gdb_archive)
-            validate_trusted_gdb_package(platform_name, gdb_filename, actual_gdb_sha256)
-            gdb_root = temp / "gdb-runtime"
-            extract_trusted_gdb_package(gdb_archive, gdb_root, platform_name)
         subprocess.check_call([sys.executable, "-m", "pip", "install", "--user",
                                "-r", str(ROOT / "requirements-build.txt")])
         cli_plan = None
@@ -487,8 +482,8 @@ def main(argv=None) -> int:
             ]
             if application_root is not None:
                 command.extend(["--application-root", str(application_root)])
-            if flavor_name == "gui":
-                assert gdb_root is not None and gdb_archive is not None and gdb_sha256 is not None
+            if gdb_root is not None:
+                assert gdb_archive is not None and gdb_sha256 is not None
                 command.extend([
                     "--gdb-root", str(gdb_root), "--gdb-archive", gdb_archive.name,
                     "--gdb-sha256", gdb_sha256,

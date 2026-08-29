@@ -12,7 +12,23 @@ xong, chuyển sang [Bước 3 — Nạp firmware](03_FLASH_FIRMWARE.md).
 - ST-Link đã được Windows nhận trong Device Manager.
 - Không cần Git, Python, STM32CubeProgrammer hoặc OpenOCD cài riêng.
 
-## Các bước
+## Cài CLI headless nhanh bằng PowerShell
+
+Nếu máy chỉ làm Gateway/terminal, không cần tải ZIP thủ công:
+
+```powershell
+irm https://raw.githubusercontent.com/Tunglam0605/b300-stlink-tools/main/install-cli.ps1 | iex
+```
+
+Script verify signed CLI manifest + package trước khi cài per-user. Sau đó chạy:
+
+```powershell
+b300-stlink gateway doctor
+```
+
+`gateway doctor` không yêu cầu GDB/AXF; nó kiểm tra OpenOCD, ST-Link, SSH server, loopback ports `3333/6666` và IP candidate.
+
+## Các bước GUI/portable
 
 1. Nếu dùng `B300-STLink-GUI-Windows-x64.exe`, chạy file và hoàn tất wizard.
 2. Nếu dùng `B300-STLink-GUI-Windows-x64.zip`, giải nén vào một thư mục riêng,

@@ -36,20 +36,33 @@ class GdbRuntimeTests(unittest.TestCase):
 
     def test_path_arm_gdb_is_used_when_no_runtime_exists(self) -> None:
         with mock.patch("b300_core.gdb_runtime._runtime_roots", return_value=[]), \
+             mock.patch("b300_core.gdb_runtime._development_gdb_candidates", return_value=()), \
              mock.patch("b300_core.gdb_runtime.shutil.which", side_effect=lambda name: "/opt/gdb" if name == "arm-none-eabi-gdb" else None):
             self.assertEqual(resolve_gdb(), "/opt/gdb")
 
     def test_linux_falls_back_to_gdb_multiarch(self) -> None:
         with mock.patch("b300_core.gdb_runtime._runtime_roots", return_value=[]), \
+             mock.patch("b300_core.gdb_runtime._development_gdb_candidates", return_value=()), \
              mock.patch("b300_core.gdb_runtime.platform.system", return_value="Linux"), \
              mock.patch("b300_core.gdb_runtime.shutil.which", side_effect=lambda name: "/usr/bin/gdb-multiarch" if name == "gdb-multiarch" else None):
             self.assertEqual(resolve_gdb(), "/usr/bin/gdb-multiarch")
 
     def test_missing_gdb_has_actionable_error(self) -> None:
         with mock.patch("b300_core.gdb_runtime._runtime_roots", return_value=[]), \
+             mock.patch("b300_core.gdb_runtime._development_gdb_candidates", return_value=()), \
              mock.patch("b300_core.gdb_runtime.shutil.which", return_value=None):
             with self.assertRaisesRegex(RuntimeError, "GDB.*B300_GDB"):
                 resolve_gdb()
+
+
+    def test_stm32cubeide_discovery_is_used_before_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / ("arm-none-eabi-gdb.exe" if os.name == "nt" else "arm-none-eabi-gdb")
+            executable.write_bytes(b"gdb")
+            with mock.patch("b300_core.gdb_runtime._runtime_roots", return_value=[]), \
+                 mock.patch("b300_core.gdb_runtime._development_gdb_candidates", return_value=(executable,)), \
+                 mock.patch("b300_core.gdb_runtime.shutil.which", return_value="/path/gdb"):
+                self.assertEqual(resolve_gdb(), str(executable))
 
     def test_runtime_info_normalizes_platform_and_reports_availability(self) -> None:
         info = GdbRuntimeInfo.from_path("/opt/gdb", platform_name="Windows")

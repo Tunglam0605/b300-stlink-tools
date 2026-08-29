@@ -105,10 +105,13 @@ cơ cấu thật.
    `b300-stlink debug --gdb-port 3333`.
    Khi cần OpenOCD TCL automation local, dùng:
    `b300-stlink debug --gdb-port 3333 --tcl-port 6666`.
-3. Remote qua IPC chỉ khi user cho phép và mạng tin cậy:
-   `b300-stlink debug --bind-address 0.0.0.0 --gdb-port 3333`.
-4. Telnet/TCL phải giữ disabled cho remote; không lách validation để mở cổng.
-   Các debug port đang bật phải khác nhau; `3333`/`6666` là cặp chuẩn local.
+3. Remote VSCode mặc định phải dùng SSH/VPN tunnel; OpenOCD vẫn bind loopback:
+   `b300-stlink debug gateway`. `debug server` chỉ là alias legacy.
+   Không dùng `0.0.0.0` cho workflow remote production và không NAT/port-forward 3333/6666.
+4. TCL `6666` chỉ được bật loopback cho integrated debug/Remote Debug Guard. Không
+   expose/NAT TCL ra LAN/Internet. B300 GUI Client được phép SSH local-forward TCL
+   cùng GDB để preserve RUN/HALT và verify AXF/ELF; VS Code client chỉ cần forward GDB.
+   Telnet giữ disabled. Các debug port đang bật phải khác nhau; `3333`/`6666` là cặp chuẩn.
 5. Dùng đúng AXF/ELF tương ứng để đọc symbol. Không chạy GDB `load`, `restore`
    hoặc lệnh flash trong mode debug. Integrated CLI one-shot hỗ trợ `where`,
    `stack`, `registers`, `variable`, `read-words`, `break` và `watch`; phải giữ

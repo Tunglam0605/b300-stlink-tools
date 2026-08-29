@@ -9,7 +9,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Protocol, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Protocol, Sequence, Set, Tuple
 
 from .gdb_runtime import resolve_gdb
 from .process_startup import child_process_kwargs
@@ -178,6 +178,7 @@ class GdbMiBackend:
         self._condition = threading.Condition(threading.RLock())
         self._command_lock = threading.Lock()
         self._results: Dict[int, MiResult] = {}
+        self._pending_tokens: Set[int] = set()
         self._async_records: List[MiRecord] = []
         self._reader_thread: Optional[threading.Thread] = None
         self._reader_finished = True
@@ -214,6 +215,7 @@ class GdbMiBackend:
             self._process = process
             self._next_token = 1
             self._results.clear()
+            self._pending_tokens.clear()
             self._async_records.clear()
             self._reader_finished = False
             self._reader_thread = threading.Thread(
@@ -225,8 +227,14 @@ class GdbMiBackend:
         address = ipaddress.ip_address(host)
         if not 1 <= port <= 65535:
             raise ValueError("GDB port must be in range 1..65535.")
+        # MI async mode is required so control commands such as -exec-interrupt
+        # remain serviceable while the remote target is running. Without it,
+        # GDB can accept -exec-continue yet stop consuming later MI requests
+        # until the inferior stops, which presents as a false token timeout.
+        self._request("-gdb-set mi-async on", ("done",))
         return self._request(
-            "-target-select remote %s:%d" % (address, port), ("connected", "done"),
+            "-target-select extended-remote %s:%d" % (address, port),
+            ("connected", "done"),
         )
 
     def load_symbols(self, symbol_file: Path) -> MiResult:
@@ -387,6 +395,8 @@ class GdbMiBackend:
             reader.join(timeout=3.0)
         with self._condition:
             self._process = None
+            self._pending_tokens.clear()
+            self._results.clear()
             self._reader_finished = True
             self._condition.notify_all()
 
@@ -398,8 +408,14 @@ class GdbMiBackend:
             with self._condition:
                 token = self._next_token
                 self._next_token += 1
-            self._write_raw("%d%s\n" % (token, command))
-            result = self._wait_for_result(token)
+                self._pending_tokens.add(token)
+            try:
+                self._write_raw("%d%s\n" % (token, command))
+                result = self._wait_for_result(token)
+            finally:
+                with self._condition:
+                    self._pending_tokens.discard(token)
+                    self._results.pop(token, None)
             if result.result_class == "error":
                 raise GdbMiCommandError(
                     "GDB command %d failed: %s" % (token, result.message or result.payload or result.raw)
@@ -436,10 +452,13 @@ class GdbMiBackend:
                     continue
                 with self._condition:
                     if record.prefix == "^" and record.token is not None:
-                        result_class, separator, payload = record.body.partition(",")
-                        self._results[record.token] = MiResult(
-                            record.token, result_class, payload if separator else "", record.raw,
-                        )
+                        # Accept result records only for commands that have actually been issued.
+                        # A stale/future token must never satisfy a later request.
+                        if record.token in self._pending_tokens:
+                            result_class, separator, payload = record.body.partition(",")
+                            self._results[record.token] = MiResult(
+                                record.token, result_class, payload if separator else "", record.raw,
+                            )
                     else:
                         self._async_records.append(record)
                     self._condition.notify_all()

@@ -75,6 +75,14 @@ class SafeTclClientTests(unittest.TestCase):
         with self.assertRaisesRegex(TclClientError, "selected target state"):
             client.target_state()
 
+    def test_resume_target_is_allowlisted_and_waits_for_running(self) -> None:
+        client, _sock, _calls = self.make_client(b"\x1a")
+        with mock.patch.object(client, "target_state", side_effect=["halted", "running"]), \
+                mock.patch.object(client, "_request", return_value="") as request, \
+                mock.patch("b300_core.tcl_client.time.sleep"):
+            self.assertEqual(client.resume_target(), "running")
+        request.assert_called_once_with("resume")
+
     def test_read_words_is_bounded_and_parses_exact_word_count(self) -> None:
         client, sock, _calls = self.make_client(
             b"0x20000000: 12345678 9abcdef0\n\x1a"
@@ -103,6 +111,15 @@ class SafeTclClientTests(unittest.TestCase):
         with self.assertRaisesRegex(TclClientError, "terminator"):
             client.version()
 
+
+    def test_wait_for_target_state_requires_the_requested_stable_state(self) -> None:
+        client, _sock, _calls = self.make_client(b"\x1a")
+        with mock.patch.object(client, "target_state", side_effect=["halted", "running"]), \
+                mock.patch("b300_core.tcl_client.time.sleep"):
+            self.assertEqual(
+                client.wait_for_target_state("running", timeout_seconds=0.2, poll_interval=0.001),
+                "running",
+            )
 
 if __name__ == "__main__":
     unittest.main()

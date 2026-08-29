@@ -31,6 +31,20 @@ Nếu chỉ muốn sử dụng tool, **không cần clone repository**. Hãy ch�
 - **Linux x64:** [B300-STLink-CLI-Linux-x64.tar.gz](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-CLI-Linux-x64.tar.gz)
 - **Linux ARM64:** [B300-STLink-CLI-Linux-arm64.tar.gz](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-CLI-Linux-arm64.tar.gz)
 
+Cài CLI trực tiếp bằng terminal (bootstrap tự xác định platform, verify signed `latest-cli.json`, SHA-256 và size trước khi cài):
+
+```powershell
+# Windows x64 PowerShell
+irm https://raw.githubusercontent.com/Tunglam0605/b300-stlink-tools/main/install-cli.ps1 | iex
+```
+
+```bash
+# Linux x64 / ARM64
+curl -fsSL https://raw.githubusercontent.com/Tunglam0605/b300-stlink-tools/main/install-cli.sh | sh
+```
+
+Bootstrap chỉ cài vào vùng user. Nó không chạy toàn bộ B300 CLI bằng `sudo`; quyền udev trên Linux vẫn dùng flow `b300-stlink setup` riêng.
+
 ### Không biết Linux là x64 hay ARM64?
 
 Chạy:
@@ -146,6 +160,7 @@ cd b300-stlink-tools
 
 ```text
 b300-stlink doctor
+b300-stlink gateway doctor   # preflight cho máy Gateway: SSH/ST-Link/OpenOCD/ports/IP
 ```
 
 ### 4. Nạp, mở GUI hoặc debug
@@ -155,11 +170,13 @@ b300-stlink flash <application.hex> --dry-run --json
 b300-stlink flash <application.hex>
 b300-stlink provision-bootloader --dry-run --json
 b300-stlink-gui
-b300-stlink debug --gdb-port 3333
-b300-stlink debug where --symbols <application.axf> --json
-b300-stlink debug break --location <function> --symbols <application.axf> --timeout 5 --json
-b300-stlink debug watch --expression <variable> --symbols <application.axf> --timeout 5 --json
-b300-stlink debug --bind-address 0.0.0.0 --gdb-port 3333
+b300-stlink debug            # mặc định = debug gateway
+b300-stlink debug gateway    # cách viết tường minh
+# Gateway CLI vẫn có đầy đủ flash/provision/doctor; riêng Debug chỉ làm cầu nối ST-Link/OpenOCD.
+# GUI Debug: Auto | Local | Gateway | Client. Client giữ source + AXF/ELF và tự mở SSH tunnel.
+b300-stlink debug where --symbols <application.axf> --json   # compatibility/local diagnostics
+b300-stlink debug vscode --ssh-host <gateway> --ssh-user <user> \
+  --program-relative Objects/F407/Main_V2_F407.axf --output-dir <workspace>
 ```
 
 Flash thật làm thay đổi Sector 3–7. Luôn kiểm tra dry-run và xác nhận đúng board,
@@ -174,7 +191,7 @@ file HEX, probe trước khi chạy.
 | [Setup Windows](docs/01_SETUP_WINDOWS.md) | Cài tool trên Windows x64. |
 | [Setup Ubuntu IPC](docs/02_SETUP_UBUNTU_IPC.md) | Cài tool và quyền USB trên IPC. |
 | [Nạp firmware](docs/03_FLASH_FIRMWARE.md) | Provision Application F407 an toàn. |
-| [Debug OpenOCD](docs/04_DEBUG.md) | Debug local hoặc remote qua IPC. |
+| [Debug OpenOCD](docs/04_DEBUG.md) | Local/Gateway/Client bằng B300 Tools hoặc VS Code qua SSH tunnel. |
 | [Xử lý lỗi](docs/05_TROUBLESHOOTING.md) | Chẩn đoán lỗi thường gặp. |
 | [Hướng dẫn AI agent](docs/06_AI_AGENT_MANUAL.md) | Dùng thủ công, playbook hoặc Agent Skill. |
 | [GUI Windows/Ubuntu](docs/07_GUI_WINDOWS_UBUNTU.md) | Vận hành giao diện theo 7 bước. |

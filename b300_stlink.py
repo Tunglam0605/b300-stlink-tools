@@ -26,6 +26,7 @@ from b300_cli.reporting import (
 )
 from b300_cli.update_commands import run_update_command
 from b300_core.diagnostics import DiagnosticsService
+from b300_core.gateway_readiness import inspect_gateway_readiness
 from b300_core.hex_image import inspect_image
 from b300_core.linux_usb import (
     LinuxUsbSetupReport,
@@ -36,6 +37,10 @@ from b300_core.models import ProbeRef
 from b300_core.openocd import build_debug_command, resolve_openocd, validate_openocd_value
 from b300_core.debug_service import DebugConfig, DebugService, DebugState
 from b300_core.debug_session import DebugSession, DebugSessionConfig
+from b300_core.elf_matcher import discover_symbol_files, find_matching_symbol_file
+from b300_core.tcl_client import SafeTclClient, TclEndpoint
+from b300_core.remote_vscode import RemoteVsCodeProfile, workspace_executable
+from b300_core.remote_debug_guard import RemoteDebugGuard
 from b300_core.offline_setup import OPENOCD_VERSION, current_platform_name
 from b300_core.policy import (
     APPLICATION_ADDRESS,
@@ -96,6 +101,127 @@ def _frame_record(frame):
 
 def _register_record(item):
     return {"number": item.number, "name": item.name, "value": item.value}
+
+
+def run_vscode_profile(args: argparse.Namespace) -> int:
+    if not args.ssh_host or not args.ssh_user:
+        raise ValueError("debug vscode requires --ssh-host HOST and --ssh-user USER.")
+    if not args.program_relative:
+        raise ValueError("debug vscode requires --program-relative PATH_TO_AXF_OR_ELF.")
+    profile = RemoteVsCodeProfile(
+        ssh_host=args.ssh_host,
+        ssh_user=args.ssh_user,
+        ssh_port=args.ssh_port,
+        local_gdb_port=args.local_gdb_port,
+        remote_gdb_port=args.gdb_port,
+        executable=workspace_executable(args.program_relative),
+        gdb_path=args.vscode_gdb_path,
+        probe_serial=args.probe_serial,
+    )
+    record = profile.record()
+    if args.output_dir is not None:
+        outputs = profile.write_kit(args.output_dir, force=args.force)
+        record["kit_files"] = [str(path) for path in outputs]
+    if args.json:
+        emit_snapshot(record, True, "")
+    else:
+        text = profile.instructions_text()
+        if args.output_dir is not None:
+            text += "\nGenerated kit: %s" % Path(args.output_dir).expanduser().resolve()
+        emit_snapshot(record, False, text)
+    return 0
+
+
+def run_symbol_match(args: argparse.Namespace, reporter: Reporter) -> int:
+    """Find one unique ELF/AXF whose sampled Application bytes match target Flash."""
+    if args.telnet_port is not None:
+        raise ValueError("debug symbols does not enable Telnet.")
+    if not ipaddress.ip_address(args.bind_address).is_loopback:
+        raise ValueError("debug symbols is loopback-only; use an SSH/VPN tunnel for remote access.")
+    if not args.symbol_root:
+        raise ValueError("debug symbols requires at least one --symbol-root PROJECT_DIR.")
+    if not 1 <= args.symbol_max_files <= 512:
+        raise ValueError("--symbol-max-files must be in range 1..512.")
+    roots = tuple(Path(root).expanduser().resolve() for root in args.symbol_root)
+    candidates = discover_symbol_files(roots, max_files=args.symbol_max_files)
+    tcl_port = args.tcl_port if args.tcl_port is not None else 6666
+    config = DebugConfig(
+        ProbeRef(args.probe_serial), args.bind_address, args.gdb_port, None, tcl_port,
+    )
+    config.validate()
+    if args.dry_run:
+        record = {
+            "schema_version": 1,
+            "command": "debug symbols",
+            "status": "planned",
+            "roots": [str(root) for root in roots],
+            "candidate_count": len(candidates),
+            "candidates": [str(path) for path in candidates],
+            "max_files": args.symbol_max_files,
+            "preserve_target_state": True,
+            "requires_gdb": False,
+        }
+        emit_snapshot(record, args.json, "Found %d ELF/AXF candidate(s)." % len(candidates))
+        return 0
+    if not candidates:
+        record = {
+            "schema_version": 1,
+            "command": "debug symbols",
+            "status": "no_candidates",
+            "roots": [str(root) for root in roots],
+            "candidate_count": 0,
+            "selected": None,
+        }
+        emit_snapshot(record, args.json, "No ELF/AXF candidates found in the bounded search roots.")
+        return 1
+
+    service = DebugService(executable=args.openocd)
+    try:
+        service.start(config)
+        tcl = SafeTclClient(TclEndpoint(config.bind_address, config.tcl_port))
+        state_before = tcl.wait_target_state()
+        selected, results = find_matching_symbol_file(candidates, tcl.read_words)
+        state_after = tcl.wait_target_state()
+        if state_after != state_before:
+            raise RuntimeError(
+                "Read-only symbol matching changed target state unexpectedly: %s -> %s" %
+                (state_before, state_after)
+            )
+        record = {
+            "schema_version": 1,
+            "command": "debug symbols",
+            "status": "ok" if selected is not None else "no_unique_match",
+            "requires_gdb": False,
+            "initial_target_state": state_before,
+            "final_target_state": state_after,
+            "candidate_count": len(candidates),
+            "selected": str(selected.path) if selected is not None else None,
+            "matches": [
+                {
+                    "path": str(result.path),
+                    "matched": result.matched,
+                    "matched_samples": result.matched_samples,
+                    "total_samples": result.total_samples,
+                    "score": result.score,
+                    "reason": result.reason,
+                }
+                for result in results
+            ],
+        }
+        exact_count = sum(1 for result in results if result.matched)
+        if selected is not None:
+            text = "Matched ELF/AXF: %s" % selected.path
+            code = 0
+        elif exact_count > 1:
+            text = "Multiple ELF/AXF files match exactly; choose one explicitly."
+            code = 1
+        else:
+            text = "No ELF/AXF candidate matches the Application Flash samples."
+            code = 1
+        emit_snapshot(record, args.json, text)
+        return code
+    finally:
+        service.stop()
 
 
 def run_integrated_debug(args: argparse.Namespace, reporter: Reporter) -> int:
@@ -233,6 +359,26 @@ def run_integrated_debug(args: argparse.Namespace, reporter: Reporter) -> int:
         session.stop()
 
 
+def run_debug_gateway(args: argparse.Namespace, reporter: Reporter) -> int:
+    """Run the headless debug-gateway role with fixed loopback safety defaults."""
+    if not ipaddress.ip_address(args.bind_address).is_loopback:
+        raise ValueError("debug gateway is loopback-only; remote clients must use SSH forwarding.")
+    if args.telnet_port is not None:
+        raise ValueError("debug gateway does not enable Telnet.")
+    args.bind_address = "127.0.0.1"
+    if args.tcl_port is None:
+        args.tcl_port = 6666
+    DebugConfig(
+        ProbeRef(args.probe_serial), args.bind_address, args.gdb_port, None, args.tcl_port,
+    ).validate()
+    reporter.emit(
+        "debug_role", role="gateway", gdb_endpoint="127.0.0.1:%d" % args.gdb_port,
+        tcl_endpoint="127.0.0.1:%d" % args.tcl_port,
+        remote_transport="ssh-local-forwarding", requires_local_gdb=False,
+    )
+    return run_debug(args, reporter)
+
+
 def run_debug(args: argparse.Namespace, reporter: Reporter) -> int:
     if not ipaddress.ip_address(args.bind_address).is_loopback:
         reporter.emit(
@@ -250,8 +396,33 @@ def run_debug(args: argparse.Namespace, reporter: Reporter) -> int:
         ProbeRef(args.probe_serial), args.bind_address, args.gdb_port,
         args.telnet_port, args.tcl_port,
     )
+    guard = None
+
+    def openocd_event(line: str) -> None:
+        reporter.emit("openocd_output", line=line)
+        if guard is not None:
+            try:
+                guard.handle_openocd_line(line)
+            except Exception as error:
+                reporter.emit(
+                    "remote_guard", guard_event="error",
+                    message="Remote run-state guard failed: %s" % error,
+                )
+
     try:
-        service.start(config, event_sink=lambda line: reporter.emit("openocd_output", line=line))
+        service.start(config, event_sink=openocd_event)
+        if args.tcl_port is not None and ipaddress.ip_address(args.bind_address).is_loopback:
+            tcl = SafeTclClient(TclEndpoint(args.bind_address, args.tcl_port))
+            guard = RemoteDebugGuard(
+                tcl, event_sink=lambda event, message: reporter.emit(
+                    "remote_guard", guard_event=event, message=message,
+                ),
+            )
+            initial = guard.capture_initial_state()
+            reporter.emit(
+                "remote_guard", guard_event="armed", initial_target_state=initial,
+                policy="restore-running-on-gdb-disconnect-and-server-shutdown",
+            )
         reporter.emit("debug_state", state=DebugState.READY.value)
         while service.state in (DebugState.READY, DebugState.CONNECTED):
             time.sleep(0.2)
@@ -261,6 +432,19 @@ def run_debug(args: argparse.Namespace, reporter: Reporter) -> int:
         reporter.emit("debug_state", state="STOPPING")
         return 0
     finally:
+        if guard is not None:
+            try:
+                snapshot = guard.restore_initial_state(reason="server_shutdown")
+                reporter.emit(
+                    "remote_guard", guard_event="shutdown_restore",
+                    initial_target_state=snapshot.initial_target_state,
+                    final_target_state=snapshot.final_target_state,
+                    restored=snapshot.restored,
+                )
+            except Exception as error:
+                reporter.emit(
+                    "remote_guard", guard_event="shutdown_restore_failed", message=str(error),
+                )
         service.stop()
 
 
@@ -460,6 +644,55 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
             return 0
 
+        if args.command == "gateway":
+            report = inspect_gateway_readiness(
+                openocd=args.openocd, probe_serial=args.probe_serial,
+                ssh_port=args.ssh_port, gdb_port=args.gdb_port, tcl_port=args.tcl_port,
+            )
+            checks = [
+                {
+                    "name": check.name, "status": check.status, "code": check.code,
+                    "message": check.message, "next_action": check.next_action,
+                }
+                for check in report.checks
+            ]
+            probe = None
+            if report.probe is not None:
+                probe = {
+                    "name": report.probe.name,
+                    "serial": report.probe.serial,
+                    "serial_available": report.probe.serial_available,
+                    "source": report.probe.source,
+                    "usb_identity": report.probe.usb_identity,
+                }
+            record = {
+                "schema_version": 1,
+                "command": "gateway doctor",
+                "status": "ok" if report.ready else "blocked",
+                "conclusion": report.conclusion,
+                "ready": report.ready,
+                "ipv4_addresses": list(report.ipv4_addresses),
+                "ssh_port": report.ssh_port,
+                "gdb_endpoint": "127.0.0.1:%d" % report.gdb_port,
+                "tcl_endpoint": "127.0.0.1:%d" % report.tcl_port,
+                "openocd": report.openocd,
+                "probe": probe,
+                "checks": checks,
+                "start_command": "b300-stlink debug",
+                "remote_transport": "ssh-local-forwarding",
+            }
+            text_lines = ["B300 DEBUG GATEWAY %s" % report.conclusion]
+            text_lines.extend(
+                "[%s] %s: %s" % (check.status, check.name, check.message)
+                for check in report.checks
+            )
+            if report.ipv4_addresses:
+                text_lines.append("Client SSH IP candidate(s): %s" % ", ".join(report.ipv4_addresses))
+            text_lines.append("Start Gateway: b300-stlink debug")
+            text_lines.append("GDB/TCL remain loopback-only; Client connects through SSH forwarding.")
+            emit_snapshot(record, args.json, "\n".join(text_lines))
+            return 0 if report.ready else 1
+
         if args.command == "doctor":
             probes = list_probes()
             report = DiagnosticsService(
@@ -601,9 +834,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
         if args.command == "debug":
+            if args.debug_mode == "gateway":
+                return run_debug_gateway(args, reporter)
             if args.debug_mode == "server":
                 validate_debug_args(args)
                 return run_debug(args, reporter)
+            if args.debug_mode == "vscode":
+                return run_vscode_profile(args)
+            if args.debug_mode == "symbols":
+                return run_symbol_match(args, reporter)
             return run_integrated_debug(args, reporter)
 
         if args.command == "provision-bootloader":

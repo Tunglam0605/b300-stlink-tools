@@ -100,16 +100,30 @@ class GdbMiBackendTests(unittest.TestCase):
         thread.start()
         return thread, captured
 
+    def wait_for_writes(self, process: FakeGdbProcess, count: int, timeout: float = 1.0) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if len(process.stdin.writes) >= count:
+                return
+            time.sleep(0.005)
+        self.fail("Timed out waiting for %d GDB MI command writes" % count)
+
     def test_connect_accepts_matching_connected_result(self) -> None:
         backend, process = self.make_backend()
         thread, captured = self.invoke(lambda: backend.connect("127.0.0.1", 3333))
-        process.stdout.emit("1^connected\n")
+        self.wait_for_writes(process, 1)
+        process.stdout.emit("1^done\n")
+        self.wait_for_writes(process, 2)
+        process.stdout.emit("2^connected\n")
         thread.join(timeout=1)
 
         self.assertFalse(thread.is_alive())
-        self.assertEqual(captured[0].token, 1)
+        self.assertEqual(captured[0].token, 2)
         self.assertEqual(captured[0].result_class, "connected")
-        self.assertEqual(process.stdin.writes, ["1-target-select remote 127.0.0.1:3333\n"])
+        self.assertEqual(process.stdin.writes, [
+            "1-gdb-set mi-async on\n",
+            "2-target-select extended-remote 127.0.0.1:3333\n",
+        ])
         backend.stop()
 
     def test_start_defers_gdb_resolution_and_uses_hidden_process_policy(self) -> None:
@@ -137,22 +151,29 @@ class GdbMiBackendTests(unittest.TestCase):
     def test_wrong_token_and_async_records_do_not_satisfy_command(self) -> None:
         backend, process = self.make_backend()
         thread, captured = self.invoke(lambda: backend.connect("127.0.0.1", 3333))
+        self.wait_for_writes(process, 1)
         process.stdout.emit("*running,thread-id=\"all\"\n")
         process.stdout.emit("~\"console noise\\n\"\n")
-        process.stdout.emit("2^connected\n")
+        process.stdout.emit("99^connected\n")
         time.sleep(0.03)
         self.assertTrue(thread.is_alive())
-        process.stdout.emit("1^connected\n")
+        process.stdout.emit("1^done\n")
+        self.wait_for_writes(process, 2)
+        self.assertTrue(thread.is_alive())
+        process.stdout.emit("2^connected\n")
         thread.join(timeout=1)
 
-        self.assertEqual(captured[0].token, 1)
+        self.assertEqual(captured[0].token, 2)
         self.assertEqual([record.prefix for record in backend.async_records], ["*", "~"])
         backend.stop()
 
     def test_error_result_raises_instead_of_reporting_connected(self) -> None:
         backend, process = self.make_backend()
         thread, captured = self.invoke(lambda: backend.connect("127.0.0.1", 3333))
-        process.stdout.emit('1^error,msg="Remote communication error"\n')
+        self.wait_for_writes(process, 1)
+        process.stdout.emit("1^done\n")
+        self.wait_for_writes(process, 2)
+        process.stdout.emit('2^error,msg="Remote communication error"\n')
         thread.join(timeout=1)
 
         self.assertIsInstance(captured[0], GdbMiCommandError)
@@ -162,14 +183,18 @@ class GdbMiBackendTests(unittest.TestCase):
     def test_tokens_increment_for_verified_control_commands(self) -> None:
         backend, process = self.make_backend()
         connect_thread, connect = self.invoke(lambda: backend.connect("127.0.0.1", 3333))
+        self.wait_for_writes(process, 1)
         process.stdout.emit("1^done\n")
+        self.wait_for_writes(process, 2)
+        process.stdout.emit("2^done\n")
         connect_thread.join(timeout=1)
         halt_thread, halt = self.invoke(backend.reset_halt)
-        process.stdout.emit("2^done\n")
+        self.wait_for_writes(process, 3)
+        process.stdout.emit("3^done\n")
         halt_thread.join(timeout=1)
 
-        self.assertEqual((connect[0].token, halt[0].token), (1, 2))
-        self.assertEqual(process.stdin.writes[1], '2-interpreter-exec console "monitor reset halt"\n')
+        self.assertEqual((connect[0].token, halt[0].token), (2, 3))
+        self.assertEqual(process.stdin.writes[2], '3-interpreter-exec console "monitor reset halt"\n')
         backend.stop()
 
     def test_continue_waits_for_verified_stopped_notification(self) -> None:
@@ -220,6 +245,7 @@ class GdbMiBackendTests(unittest.TestCase):
             symbols = Path(directory) / "app with space.axf"
             symbols.write_text("symbols", encoding="utf-8")
             thread, captured = self.invoke(lambda: backend.load_symbols(symbols))
+            self.wait_for_writes(process, 1)
             process.stdout.emit("1^done\n")
             thread.join(timeout=1)
 

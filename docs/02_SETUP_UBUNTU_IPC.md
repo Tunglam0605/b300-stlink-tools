@@ -27,7 +27,19 @@ sudo udevadm trigger --subsystem-match=usb --attr-match=idVendor=0483
 
 Rút/cắm lại ST-Link nếu cần. Không dùng `sudo b300-stlink`.
 
-## Các bước cài từ Release
+## Cài CLI headless nhanh
+
+Trên Gateway Ubuntu/Linux, bootstrap tự nhận `x86_64` hoặc `aarch64` và verify signed CLI manifest/package:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Tunglam0605/b300-stlink-tools/main/install-cli.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+b300-stlink gateway doctor
+```
+
+Bootstrap không chạy B300 CLI bằng `sudo`. Nếu thiếu udev rule, dùng `b300-stlink setup` theo flow xác nhận riêng.
+
+## Các bước cài thủ công từ Release
 
 1. Xác định đúng kiến trúc:
 

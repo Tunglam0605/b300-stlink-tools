@@ -121,6 +121,10 @@ class FakeTcl:
     def wait_target_state(self):
         return self.poll_state
 
+    def wait_for_target_state(self, expected, timeout_seconds=2.0, poll_interval=0.05):
+        self.poll_state = expected
+        return self.poll_state
+
     def read_words(self, address, count):
         return (address, count)
 
@@ -229,6 +233,45 @@ class DebugSessionTests(unittest.TestCase):
         self.assertIn(("delete", 2), events)
         self.assertEqual(events[-1], "continue")
         session.stop()
+
+    def test_verified_target_controls_transition_through_tcl_state(self) -> None:
+        session, _service, _gdb, events = self.make_session(poll_state="running")
+        session.start(DebugSessionConfig(ProbeRef("TEST")))
+        self.assertEqual(session.halt(), "halted")
+        self.assertIn("interrupt-stopped", events)
+        self.assertEqual(session.continue_execution(), "running")
+        self.assertIn("continue", events)
+        self.assertEqual(session.reset_halt(), "halted")
+        session.stop()
+
+    def test_external_session_reuses_forwarded_loopback_endpoints_without_starting_openocd(self) -> None:
+        session, service, _gdb, events = self.make_session(poll_state="running")
+        with tempfile.TemporaryDirectory() as directory:
+            symbols = Path(directory) / "firmware.axf"
+            symbols.write_bytes(b"AXF")
+            info = session.start_external(
+                symbol_file=symbols,
+                gdb_host="127.0.0.1", gdb_port=13333,
+                tcl_host="127.0.0.1", tcl_port=16666,
+            )
+        self.assertTrue(session.active)
+        self.assertEqual(info.gdb_endpoint, "127.0.0.1:13333")
+        self.assertEqual(info.tcl_endpoint, "127.0.0.1:16666")
+        self.assertNotIn("openocd-start", events)
+        self.assertIn(("tcl-create", "127.0.0.1", 16666), events)
+        self.assertIn(("gdb-connect", "127.0.0.1", 13333), events)
+        session.stop()
+        self.assertNotIn("openocd-stop", events)
+        self.assertEqual(service.state, DebugState.STOPPED)
+
+    def test_external_session_rejects_non_loopback_forward_targets(self) -> None:
+        session, _service, _gdb, events = self.make_session()
+        with self.assertRaisesRegex(ValueError, "loopback-only"):
+            session.start_external(
+                symbol_file=None, gdb_host="10.0.0.5", gdb_port=3333,
+                tcl_host="127.0.0.1", tcl_port=6666,
+            )
+        self.assertEqual(events, [])
 
     def test_integrated_session_rejects_non_loopback_bind(self) -> None:
         session, _service, _gdb, events = self.make_session()

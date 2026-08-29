@@ -144,6 +144,29 @@ CLI dành cho headless system, script, CI, automation hoặc AI agent cần gọ
 | Linux x64 | [B300-STLink-CLI-Linux-x64.tar.gz](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-CLI-Linux-x64.tar.gz) |
 | Linux ARM64 | [B300-STLink-CLI-Linux-arm64.tar.gz](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-CLI-Linux-arm64.tar.gz) |
 
+### Cài CLI trực tiếp từ terminal
+
+Windows x64 PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/Tunglam0605/b300-stlink-tools/main/install-cli.ps1 | iex
+```
+
+Linux x64/ARM64:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Tunglam0605/b300-stlink-tools/main/install-cli.sh | sh
+```
+
+Bootstrap lấy `latest-cli.json` + chữ ký Minisign, bootstrap verifier từ archive Minisign 0.12 có SHA-256 pin, sau đó chỉ tải asset từ URL version-tag bất biến ghi trong manifest đã ký. Package tiếp tục được kiểm tra SHA-256 và kích thước trước khi chạy managed per-user installer.
+
+Sau cài, với máy dự kiến làm Debug Gateway:
+
+```text
+b300-stlink gateway doctor
+b300-stlink debug
+```
+
 **Không chọn CLI chỉ vì tên file nhỏ gọn hơn.** Nếu người dùng muốn thao tác bằng giao diện, chọn GUI.
 
 ## 6. Các file không phải bộ cài

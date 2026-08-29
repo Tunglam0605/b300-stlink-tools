@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -81,7 +81,7 @@ class MainWindow(QMainWindow):
                  probe_loader: Callable = list_probes,
                  setup_bundle_provider: Optional[Callable[[], Optional[Path]]] = None,
                  setup_installer: Callable[[Path], Path] = install_offline_bundle,
-                 update_client=None, automatic_updates: bool = False,
+                 update_client=None, automatic_updates: bool = True,
                  update_installer=None, settings=None,
                  debug_service: Optional[DebugService] = None) -> None:
         super().__init__()
@@ -111,6 +111,10 @@ class MainWindow(QMainWindow):
         self.whats_new_dialog = None
         self._update_result = None
         self._downloaded_update = None
+        self._automatic_updates = bool(automatic_updates)
+        self._update_poll_timer = QTimer(self)
+        self._update_poll_timer.setInterval(15 * 60 * 1000)
+        self._update_poll_timer.timeout.connect(self._automatic_update_tick)
 
         self.setWindowTitle("B300 ST-Link Provisioning")
         self.setWindowIcon(QIcon(str(asset_path("b300-stlink-icon.png"))))
@@ -135,14 +139,11 @@ class MainWindow(QMainWindow):
         )
         self.refresh_probes()
         self._restore_last_image()
-        if automatic_updates:
+        if self._automatic_updates:
             QTimer.singleShot(0, self._show_whats_new_if_needed)
-            if (
-                self.update_client is not None and
-                self.settings.value("updates/automatic", True, type=bool) and
-                should_auto_check(self.settings.value("updates/last_check_utc"))
-            ):
-                QTimer.singleShot(2000, lambda: self.check_for_updates(manual=False))
+            if self._automatic_updates_enabled():
+                self._update_poll_timer.start()
+                QTimer.singleShot(2000, self._automatic_update_tick)
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -222,7 +223,8 @@ class MainWindow(QMainWindow):
         self.memory_tab.operation_state_changed.connect(self._hardware_activity_changed)
         self.tabs.addTab(self.memory_tab, "Memory / Metadata")
         self.debug_tab = DebugTab(
-            self.debug_service, self._selected_probe, self
+            self.debug_service, self._selected_probe, self,
+            settings=self.settings, probe_count=lambda: len(self._probes),
         )
         self.debug_tab.log.connect(self.append_log)
         self.debug_tab.operation_state_changed.connect(self._hardware_activity_changed)
@@ -291,6 +293,25 @@ class MainWindow(QMainWindow):
     def _utc_now_text() -> str:
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    def _automatic_updates_enabled(self) -> bool:
+        return bool(
+            self.update_client is not None and
+            self.settings.value("updates/automatic", True, type=bool)
+        )
+
+    def _automatic_update_tick(self) -> None:
+        """Background update discovery without blocking or spamming the release endpoint."""
+        if not self._automatic_updates_enabled():
+            self._update_poll_timer.stop()
+            return
+        if any(isinstance(worker, UpdateCheckWorker) for worker in self._update_workers):
+            return
+        if should_auto_check(
+            self.settings.value("updates/last_check_utc"),
+            interval=timedelta(hours=1),
+        ):
+            self.check_for_updates(manual=False)
+
     def check_for_updates(self, manual: bool = False) -> None:
         if self.update_client is None:
             if manual:
@@ -323,7 +344,16 @@ class MainWindow(QMainWindow):
         channel = getattr(self.update_client, "channel", "stable")
         channel_name = getattr(channel, "value", str(channel)).capitalize()
         status = "Có bản mới" if result.available else "Đã mới nhất"
-        self.update_channel_label.setText("v%s · %s · %s" % (__version__, channel_name, status))
+        if result.available:
+            self.update_channel_label.setText(
+                "⬆ v%s có sẵn · đang dùng v%s" % (result.release.version, __version__)
+            )
+            self.update_channel_label.setToolTip(
+                "Có bản cập nhật mới. Nhấn để xem hoặc kiểm tra lại."
+            )
+        else:
+            self.update_channel_label.setText("v%s · %s · %s" % (__version__, channel_name, status))
+            self.update_channel_label.setToolTip("Đang dùng phiên bản mới nhất. Nhấn để kiểm tra lại.")
         if not result.available or result.asset is None:
             if manual:
                 QMessageBox.information(
@@ -799,6 +829,8 @@ class MainWindow(QMainWindow):
             self.append_log("Probe check failed: %s" % error)
 
         self._probes = tuple(probes)
+        if hasattr(self, "debug_tab"):
+            self.debug_tab.refresh_environment()
 
         self.probe_combo.blockSignals(True)
         self.probe_combo.clear()

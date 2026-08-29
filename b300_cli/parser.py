@@ -82,9 +82,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     debug.add_argument(
         "debug_mode", nargs="?",
-        choices=("server", "inspect", "where", "registers", "stack", "variable", "poll", "read-words", "break", "watch"),
-        default="server", metavar="mode",
-        help="Debug mode: server (legacy) or one-shot integrated diagnostics.",
+        choices=("gateway", "server", "vscode", "symbols", "inspect", "where", "registers", "stack", "variable", "poll", "read-words", "break", "watch"),
+        default="gateway", metavar="mode",
+        help="Debug mode: gateway (recommended headless role), server (legacy alias), or compatibility diagnostics.",
     )
     debug.add_argument("--openocd")
     debug.add_argument("--probe-serial", type=parse_probe_serial,
@@ -99,6 +99,26 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Optional OpenOCD telnet port; loopback only (default: disabled).")
     debug.add_argument("--symbols", type=Path,
                        help="ELF/AXF symbol file for integrated debug diagnostics.")
+    debug.add_argument("--symbol-root", action="append", type=Path, default=[],
+                       help="Bounded project root searched by debug symbols; repeatable.")
+    debug.add_argument("--symbol-max-files", type=parse_integer, default=128,
+                       help="Maximum ELF/AXF candidates inspected by debug symbols (default: 128).")
+    debug.add_argument("--ssh-host",
+                       help="SSH host of the B300 debug gateway for debug vscode.")
+    debug.add_argument("--ssh-user",
+                       help="Optional SSH username for debug vscode.")
+    debug.add_argument("--ssh-port", type=parse_tcp_port, default=22,
+                       help="SSH port for debug vscode (default: 22).")
+    debug.add_argument("--local-gdb-port", type=parse_tcp_port, default=3333,
+                       help="VSCode-side forwarded GDB port (default: 3333).")
+    debug.add_argument("--program-relative",
+                       help="Workspace-relative AXF/ELF path used in generated launch.json.")
+    debug.add_argument("--vscode-gdb-path", default="arm-none-eabi-gdb",
+                       help="GDB executable/path used by Cortex-Debug on the VSCode machine.")
+    debug.add_argument("--output-dir", type=Path,
+                       help="Directory where debug vscode writes the .vscode kit.")
+    debug.add_argument("--force", action="store_true",
+                       help="Allow debug vscode to replace only its generated kit files.")
     debug.add_argument("--frames", type=parse_integer, default=8,
                        help="Maximum stack frames for inspect/stack (default: 8).")
     debug.add_argument("--expression",
@@ -112,6 +132,20 @@ def build_parser() -> argparse.ArgumentParser:
     debug.add_argument("--count", type=parse_integer, default=1,
                        help="Word count for debug read-words (default: 1, max: 256).")
     debug.add_argument("--dry-run", action="store_true")
+
+    gateway = commands.add_parser(
+        "gateway", help="Inspect remote Debug Gateway host readiness.", parents=[json_parent],
+    )
+    gateway.add_argument("gateway_action", nargs="?", choices=("doctor",), default="doctor")
+    gateway.add_argument("--openocd")
+    gateway.add_argument("--probe-serial", type=parse_probe_serial,
+                         help="Select one ST-Link when multiple probes are connected.")
+    gateway.add_argument("--ssh-port", type=parse_tcp_port, default=22,
+                         help="Local SSH server port expected by Client (default: 22).")
+    gateway.add_argument("--gdb-port", type=parse_tcp_port, default=3333,
+                         help="Gateway loopback GDB port (default: 3333).")
+    gateway.add_argument("--tcl-port", type=parse_tcp_port, default=6666,
+                         help="Gateway loopback Safe TCL port (default: 6666).")
 
     doctor = commands.add_parser(
         "doctor", help="Inspect local tool availability.", parents=[json_parent],

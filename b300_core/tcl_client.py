@@ -1,4 +1,4 @@
-"""Loopback-only, read-only OpenOCD TCL client for B300 diagnostics."""
+"""Loopback-only, allow-listed OpenOCD TCL client for B300 diagnostics/control."""
 
 from __future__ import annotations
 
@@ -83,8 +83,36 @@ class SafeTclClient:
                 )
             time.sleep(min(poll_interval, max(0.0, deadline - time.monotonic())))
 
+    def wait_for_target_state(self, expected: str, timeout_seconds: float = 2.0,
+                              poll_interval: float = 0.05) -> str:
+        expected_state = str(expected).strip().lower()
+        if expected_state not in {"running", "halted"}:
+            raise ValueError("Expected target state must be running or halted.")
+        if timeout_seconds <= 0 or poll_interval <= 0:
+            raise ValueError("Target-state wait timing must be positive.")
+        deadline = time.monotonic() + timeout_seconds
+        last_state = "unknown"
+        while True:
+            last_state = self.target_state()
+            if last_state == expected_state:
+                return last_state
+            if time.monotonic() >= deadline:
+                raise TclClientError(
+                    "OpenOCD target did not become %s before timeout; last state: %s" %
+                    (expected_state, last_state)
+                )
+            time.sleep(min(poll_interval, max(0.0, deadline - time.monotonic())))
+
     def poll(self) -> str:
         return self._request("poll")
+
+    def resume_target(self) -> str:
+        """Resume only the selected target; no raw TCL or Flash-mutating command is exposed."""
+        current = self.wait_target_state()
+        if current == "running":
+            return current
+        self._request("resume")
+        return self.wait_for_target_state("running")
 
     def read_words(self, address: int, count: int = 1) -> Tuple[int, ...]:
         if not 0 <= address <= 0xFFFFFFFF or address % 4:

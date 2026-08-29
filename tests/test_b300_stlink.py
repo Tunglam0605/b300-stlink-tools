@@ -85,10 +85,13 @@ class B300StlinkTests(unittest.TestCase):
         with redirect_stdout(output):
             result = tool().main(["debug", "--dry-run", "--json"])
         self.assertEqual(result, 0)
-        command = json.loads(output.getvalue())["command"]
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        role = next(record for record in records if record["event"] == "debug_role")
+        command = next(record["command"] for record in records if record["event"] == "openocd")
+        self.assertEqual(role["role"], "gateway")
         self.assertIn("bindto 127.0.0.1", command)
         self.assertIn("telnet port disabled", command)
-        self.assertIn("tcl port disabled", command)
+        self.assertIn("tcl port 6666", command)
 
     def test_real_debug_uses_debug_service_lifecycle(self) -> None:
         module = tool()
@@ -115,17 +118,67 @@ class B300StlinkTests(unittest.TestCase):
         output = io.StringIO()
         with mock.patch.object(module, "DebugService", FakeDebugService), \
                 mock.patch.object(module.time, "sleep"), redirect_stdout(output):
-            result = module.main(["debug", "--probe-serial", "DEBUG123", "--json"])
+            result = module.main(["debug", "server", "--probe-serial", "DEBUG123", "--json"])
 
         self.assertEqual(result, 1)
         self.assertEqual(created[0].config.probe.serial, "DEBUG123")
         self.assertTrue(created[0].stopped)
 
+    def test_default_gateway_real_lifecycle_arms_guard_without_local_gdb(self) -> None:
+        module = tool()
+        created = []
+
+        class FakeDebugService:
+            def __init__(self, executable=None):
+                self.executable = executable
+                self._state_reads = 0
+                self.stopped = False
+                created.append(self)
+
+            @property
+            def state(self):
+                self._state_reads += 1
+                return module.DebugState.READY if self._state_reads == 1 else module.DebugState.STOPPED
+
+            def start(self, config, **kwargs):
+                self.config = config
+                return module.DebugState.READY
+
+            def stop(self):
+                self.stopped = True
+
+        class FakeTcl:
+            def __init__(self, _endpoint):
+                self.state = "running"
+
+            def wait_target_state(self, *args, **kwargs):
+                return self.state
+
+            def resume_target(self):
+                self.state = "running"
+                return self.state
+
+        output = io.StringIO()
+        with mock.patch.object(module, "DebugService", FakeDebugService), \
+                mock.patch.object(module, "SafeTclClient", FakeTcl), \
+                mock.patch.object(module.time, "sleep"), redirect_stdout(output):
+            result = module.main(["debug", "--json"])
+
+        self.assertEqual(result, 0)
+        self.assertTrue(created[0].stopped)
+        self.assertEqual(created[0].config.tcl_port, 6666)
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        role = next(record for record in records if record["event"] == "debug_role")
+        self.assertFalse(role["requires_local_gdb"])
+        guard_events = [record.get("guard_event") for record in records if record["event"] == "remote_guard"]
+        self.assertIn("armed", guard_events)
+        self.assertIn("shutdown_restore", guard_events)
+
     def test_debug_can_explicitly_listen_for_remote_gdb(self) -> None:
         output = io.StringIO()
         with redirect_stdout(output):
             result = tool().main([
-                "debug", "--bind-address", "0.0.0.0",
+                "debug", "server", "--bind-address", "0.0.0.0",
                 "--gdb-port", "4333",
                 "--probe-serial", "TEST-PROBE", "--dry-run", "--json",
             ])
@@ -142,7 +195,7 @@ class B300StlinkTests(unittest.TestCase):
         output = io.StringIO()
         with redirect_stdout(output):
             result = tool().main([
-                "debug", "--telnet-port", "4444", "--dry-run", "--json",
+                "debug", "server", "--telnet-port", "4444", "--dry-run", "--json",
             ])
         self.assertEqual(result, 0)
         command = json.loads(output.getvalue())["command"]
@@ -152,7 +205,7 @@ class B300StlinkTests(unittest.TestCase):
         output = io.StringIO()
         with redirect_stdout(output):
             result = tool().main([
-                "debug", "--bind-address", "0.0.0.0", "--telnet-port", "4444",
+                "debug", "server", "--bind-address", "0.0.0.0", "--telnet-port", "4444",
                 "--dry-run", "--json",
             ])
         self.assertEqual(result, 1)
@@ -162,7 +215,7 @@ class B300StlinkTests(unittest.TestCase):
         output = io.StringIO()
         with redirect_stdout(output):
             result = tool().main([
-                "debug", "--gdb-port", "3333", "--tcl-port", "6666",
+                "debug", "server", "--gdb-port", "3333", "--tcl-port", "6666",
                 "--dry-run", "--json",
             ])
         self.assertEqual(result, 0)
@@ -174,7 +227,7 @@ class B300StlinkTests(unittest.TestCase):
         output = io.StringIO()
         with redirect_stdout(output):
             result = tool().main([
-                "debug", "--bind-address", "0.0.0.0", "--tcl-port", "6666",
+                "debug", "server", "--bind-address", "0.0.0.0", "--tcl-port", "6666",
                 "--dry-run", "--json",
             ])
         self.assertEqual(result, 1)
@@ -208,6 +261,38 @@ class B300StlinkTests(unittest.TestCase):
                 "--dry-run",
             ])
 
+    def test_debug_gateway_dry_run_uses_fixed_safe_headless_profile(self) -> None:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            result = tool().main(["debug", "gateway", "--dry-run", "--json"])
+        self.assertEqual(result, 0)
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        role = next(record for record in records if record["event"] == "debug_role")
+        command = " ".join(next(record["command"] for record in records if record["event"] == "openocd")).lower()
+        self.assertEqual(role["role"], "gateway")
+        self.assertFalse(role["requires_local_gdb"])
+        self.assertEqual(role["gdb_endpoint"], "127.0.0.1:3333")
+        self.assertEqual(role["tcl_endpoint"], "127.0.0.1:6666")
+        self.assertIn("bindto 127.0.0.1", command)
+        self.assertIn("gdb port 3333", command)
+        self.assertIn("tcl port 6666", command)
+        self.assertIn("telnet port disabled", command)
+        self.assertIn("gdb flash_program disable", command)
+        self.assertIn("gdb breakpoint_override hard", command)
+        for forbidden in ("flash erase_sector", "mass_erase", "program {", "flash protect", "mww "):
+            self.assertNotIn(forbidden, command)
+
+    def test_debug_gateway_rejects_nonloopback_and_duplicate_ports_even_in_dry_run(self) -> None:
+        for argv, expected in (
+            (["debug", "gateway", "--bind-address", "0.0.0.0", "--dry-run", "--json"], "loopback-only"),
+            (["debug", "gateway", "--gdb-port", "6666", "--dry-run", "--json"], "must be distinct"),
+        ):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                result = tool().main(argv)
+            self.assertEqual(result, 1)
+            self.assertIn(expected, output.getvalue())
+
     def test_integrated_debug_inspect_dry_run_uses_safe_local_ports(self) -> None:
         output = io.StringIO()
         with redirect_stdout(output):
@@ -224,7 +309,9 @@ class B300StlinkTests(unittest.TestCase):
         self.assertIn("gdb port 3333", command)
         self.assertIn("tcl port 6666", command)
         self.assertIn("telnet port disabled", command)
-        for forbidden in ("erase_sector", "mass_erase", "program ", "flash protect", "mww "):
+        self.assertIn("gdb flash_program disable", command.lower())
+        self.assertIn("gdb breakpoint_override hard", command.lower())
+        for forbidden in ("flash erase_sector", "mass_erase", "program {", "flash protect", "mww "):
             self.assertNotIn(forbidden, command.lower())
 
     def test_integrated_debug_rejects_remote_bind_and_missing_variable_expression(self) -> None:
@@ -312,7 +399,9 @@ class B300StlinkTests(unittest.TestCase):
         self.assertEqual(record["location"], "main")
         self.assertEqual(record["timeout"], 2.5)
         rendered = " ".join(record["command"]).lower()
-        for forbidden in ("erase_sector", "mass_erase", "program ", "flash protect", "mww "):
+        self.assertIn("gdb flash_program disable", rendered)
+        self.assertIn("gdb breakpoint_override hard", rendered)
+        for forbidden in ("flash erase_sector", "mass_erase", "program {", "flash protect", "mww "):
             self.assertNotIn(forbidden, rendered)
 
     def test_integrated_break_watch_validate_required_inputs_before_hardware(self) -> None:

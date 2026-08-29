@@ -98,13 +98,11 @@ def main(argv=None) -> int:
     if not re.fullmatch(r"[0-9A-Fa-f]{64}", args.openocd_sha256):
         parser.error("--openocd-sha256 must contain exactly 64 hexadecimal characters.")
     gdb_arguments = (args.gdb_root, args.gdb_archive, args.gdb_sha256)
-    if args.flavor == "gui":
+    if any(argument is not None for argument in gdb_arguments):
         if any(argument is None for argument in gdb_arguments):
-            parser.error("GUI artifacts require --gdb-root, --gdb-archive, and --gdb-sha256.")
+            parser.error("GDB runtime arguments must be supplied as a complete set.")
         if not re.fullmatch(r"[0-9A-Fa-f]{64}", args.gdb_sha256):
             parser.error("--gdb-sha256 must contain exactly 64 hexadecimal characters.")
-    elif any(argument is not None for argument in gdb_arguments):
-        parser.error("GDB runtime arguments are allowed only in GUI artifacts.")
     if args.flavor == "cli" and args.platform == "windows-x64":
         if args.application_root is None:
             parser.error("Windows CLI artifacts require --application-root for the onedir runtime.")
