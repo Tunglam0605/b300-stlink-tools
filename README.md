@@ -48,7 +48,7 @@ Các link ở trên luôn trỏ tới [Stable Release mới nhất](https://gith
 
 **Hướng dẫn tải và cài đặt đầy đủ cho người dùng và AI agent:** [DOWNLOAD.md](DOWNLOAD.md). Tài liệu này mô tả cách chọn Stable hoặc exact version, xác định kiến trúc CPU, chọn GUI/CLI và mapping chính xác từ platform sang artifact.
 
-Các file kiểm chứng release: [SHA256SUMS.txt](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/SHA256SUMS.txt), [release-manifest.json](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/release-manifest.json) và [latest.json](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/latest.json).
+Các file kiểm chứng release: [SHA256SUMS.txt](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/SHA256SUMS.txt), [release-manifest.json](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/release-manifest.json), [latest.json](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/latest.json) cho GUI và [latest-cli.json](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/latest-cli.json) cho CLI.
 
 CLI và GUI đa nền tảng dùng ST-Link/SWD để provisioning Application cho Main
 Board B300 STM32F407. Cả hai dùng chung một core an toàn, giữ nguyên Bootloader,
@@ -62,7 +62,7 @@ Windows và Ubuntu.
 | `doctor` | Kiểm tra OpenOCD đã sẵn sàng trong môi trường cài đặt. |
 | `flash` | Validate Intel HEX, read WRP, chỉ xóa Sector 3–7, program, verify, reset và post-verify. |
 | `provision-bootloader` | Factory-only: nạp Bootloader đã được trust vào Sector 0–2, sau đó restore/verify WRP. |
-| `debug` | Mở GDB server local hoặc remote qua IPC; không tự ghi flash. |
+| `debug` | Mở GDB server hoặc chạy integrated GDB/MI + Safe TCL: source/stack/register/variable, hardware breakpoint và watchpoint one-shot; không ghi flash. |
 | GUI PySide6 | Application provisioning, Factory Bootloader one-click có preflight tự động, Debug, updater và đọc memory/metadata. |
 | Setup offline | Cài OpenOCD từ archive xPack gốc có SHA-256 tin cậy cố định; runtime portable/user-local cũng được kiểm toàn bộ cây file. |
 | Agent Skill | Cung cấp skill `b300-ota-stlink` và playbook cho AI agent. |
@@ -70,12 +70,17 @@ Windows và Ubuntu.
 
 ## Engineering diagnostics foundation
 
-The GUI Debug tab now provides a bounded engineering-debug workflow: start the
+The GUI Debug tab provides a bounded engineering-debug workflow: start the
 OpenOCD server, optionally select the matching `.elf`/`.axf` symbol file, connect
 through verified GDB/MI, then use **Halt**, **Continue**, **Reset + Halt**, and
-**Stop Debug**. A GDB command is not treated as successful until the matching MI
-token receives a valid result record. If OpenOCD exits unexpectedly, the GUI
-watchdog releases the hardware interlock and reports the failed debug session.
+**Stop Debug**. The CLI also provides local integrated one-shot diagnostics through
+GDB/MI on port 3333 and a loopback-only Safe TCL surface on port 6666: `where`,
+`stack`, `registers`, `variable`, bounded `read-words`, hardware `break`, and
+`watch`. A GDB command is not treated as successful until the matching MI token
+receives a valid result record. Breakpoint/watchpoint transactions verify the
+matching stop resource, clean it up in `finally`, and restore a target that was
+running before attach. If OpenOCD exits unexpectedly, the hardware interlock is
+released and the failed debug session is reported.
 
 Flash, Factory provisioning, Memory, and Debug share one exclusive hardware
 session. While Debug owns the ST-Link, destructive provisioning, probe changes,
@@ -151,6 +156,9 @@ b300-stlink flash <application.hex>
 b300-stlink provision-bootloader --dry-run --json
 b300-stlink-gui
 b300-stlink debug --gdb-port 3333
+b300-stlink debug where --symbols <application.axf> --json
+b300-stlink debug break --location <function> --symbols <application.axf> --timeout 5 --json
+b300-stlink debug watch --expression <variable> --symbols <application.axf> --timeout 5 --json
 b300-stlink debug --bind-address 0.0.0.0 --gdb-port 3333
 ```
 

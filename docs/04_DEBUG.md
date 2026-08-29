@@ -88,6 +88,75 @@ CLI chỉ báo `READY` sau khi OpenOCD đã mở đủ listener được yêu c�
 `--telnet-port 4444` khi thực sự cần Telnet local. TCL/Telnet đều bị từ chối nếu
 `--bind-address` không phải loopback, và các port đang bật không được trùng nhau.
 
+## Integrated CLI debug — GDB/MI + Safe TCL
+
+Từ v0.7.0, CLI có các lệnh debug one-shot tích hợp. **GDB/MI** (GDB Machine
+Interface — giao diện máy của GNU Debugger) chạy qua `127.0.0.1:3333`; **TCL**
+(Tool Command Language — giao diện điều khiển OpenOCD) read-only chạy qua
+`127.0.0.1:6666`. Integrated mode luôn loopback-only và không bật Telnet.
+
+```text
+b300-stlink debug poll --json
+b300-stlink debug read-words --address 0x08010000 --count 2 --json
+b300-stlink debug registers --json
+b300-stlink debug where --symbols firmware.axf --json
+b300-stlink debug stack --frames 8 --symbols firmware.axf --json
+b300-stlink debug variable --expression bRUN --symbols firmware.axf --json
+```
+
+`where`, `stack` và `variable` nên dùng AXF/ELF được build từ **đúng binary đang
+chạy**. Nếu symbol file khác build, địa chỉ có thể resolve thành hàm/dòng sai dù
+GDB vẫn nạp file thành công. Khi cần nghiệm thu, so byte code Flash với AXF/ELF
+trước khi tin kết quả source-level.
+
+GDB attach có thể halt Cortex-M4. Integrated session đọc trạng thái target bằng
+OpenOCD `targets` **trước khi GDB attach**. Nếu target ban đầu là `running`, các
+lệnh snapshot có thể halt tạm để đọc rồi tự `continue`; khi session kết thúc tool
+cố khôi phục target về `running`. Nếu target ban đầu đã `halted`, tool giữ nguyên
+trạng thái đó.
+
+### Hardware breakpoint one-shot
+
+```text
+b300-stlink debug break \
+  --location vApplicationIdleHook \
+  --symbols firmware.axf \
+  --timeout 2 \
+  --json
+```
+
+`debug break` chỉ dùng **hardware breakpoint** (điểm dừng phần cứng) qua
+`-break-insert -h`; không dùng software breakpoint có thể sửa instruction trong
+Flash. Transaction phải nhận đúng `*stopped` với `reason="breakpoint-hit"` và
+đúng breakpoint number vừa tạo. Sau hit hoặc lỗi/timeout, resource được cleanup
+trong `finally`; target ban đầu đang chạy sẽ được resume.
+
+### Watchpoint one-shot
+
+```text
+b300-stlink debug watch \
+  --expression xTickCount \
+  --symbols firmware.axf \
+  --timeout 2 \
+  --json
+```
+
+**Watchpoint** (điểm theo dõi thay đổi dữ liệu) chỉ nhận expression allow-list
+như tên biến, member hoặc index đơn giản; không cho function call hay raw GDB
+command. Khi hit, tool xác minh đúng watchpoint number, chụp frame và giá trị biến
+ngay lúc CPU đang dừng, sau đó xóa watchpoint rồi resume. STM32F407 chỉ có số
+lượng hardware breakpoint/watchpoint hữu hạn; OpenOCD trên board nghiệm thu báo
+6 breakpoint và 4 watchpoint.
+
+### Safe TCL
+
+CLI không expose raw TCL. Core chỉ có các primitive read-only/diagnostic đã
+validate như `version`, `targets`, bounded aligned `mdw` và đọc register. Các lệnh
+`flash erase_sector`, `program`, `mww`, Option Bytes hoặc WRP không nằm trong
+Safe TCL surface. CPU state được lấy từ cột `State` của `targets`; OpenOCD `poll`
+chỉ phản ánh background polling/TAP và không được dùng để kết luận CPU đang
+`running` hay `halted`.
+
 ## Cách B — ST-Link cắm vào Ubuntu IPC, GDB chạy trên máy khác
 
 ### Bước 1: Mở server trên IPC
@@ -152,7 +221,9 @@ trong tab Debug và đồng thời đưa vào log chung của ứng dụng.
 
 ## Phạm vi của tool
 
-Tool chịu trách nhiệm kiểm tra tham số và mở OpenOCD server đúng probe/port.
-Việc hiển thị source, breakpoint và watch do GDB client hoặc IDE tương thích GDB
-thực hiện. Keil vẫn dùng để build và tạo file AXF; chế độ debug native của Keil
-không phải là client của luồng OpenOCD trong tài liệu này.
+Tool hỗ trợ hai bề mặt: (1) mở OpenOCD server để IDE/GDB ngoài kết nối và (2)
+integrated CLI one-shot dùng GDB/MI + Safe TCL cho source location, stack,
+register, variable, hardware breakpoint và watchpoint. Keil vẫn dùng để build và
+tạo AXF; chế độ debug native của Keil không phải client của OpenOCD flow này.
+Integrated CLI không cung cấp flash/program, arbitrary memory write, raw TCL hay
+raw GDB console.

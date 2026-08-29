@@ -82,7 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     debug.add_argument(
         "debug_mode", nargs="?",
-        choices=("server", "inspect", "where", "registers", "stack", "variable", "poll", "read-words"),
+        choices=("server", "inspect", "where", "registers", "stack", "variable", "poll", "read-words", "break", "watch"),
         default="server", metavar="mode",
         help="Debug mode: server (legacy) or one-shot integrated diagnostics.",
     )
@@ -102,7 +102,11 @@ def build_parser() -> argparse.ArgumentParser:
     debug.add_argument("--frames", type=parse_integer, default=8,
                        help="Maximum stack frames for inspect/stack (default: 8).")
     debug.add_argument("--expression",
-                       help="Allow-listed variable expression for debug variable.")
+                       help="Allow-listed variable expression for debug variable/watch.")
+    debug.add_argument("--location",
+                       help="Function or basename:line for one-shot hardware breakpoint.")
+    debug.add_argument("--timeout", type=float, default=5.0,
+                       help="One-shot breakpoint/watch timeout in seconds (default: 5, max: 60).")
     debug.add_argument("--address", type=parse_integer,
                        help="32-bit aligned address for debug read-words.")
     debug.add_argument("--count", type=parse_integer, default=1,

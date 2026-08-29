@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Tuple
@@ -58,6 +59,16 @@ class DebugSnapshot:
     registers: Tuple[object, ...]
 
 
+@dataclass(frozen=True)
+class DebugStopSnapshot:
+    kind: str
+    number: int
+    location: str
+    reason: str
+    frame: object
+    value: Optional[object] = None
+
+
 class DebugSession:
     """Own one local debug session and clean every layer up on partial failure."""
 
@@ -94,7 +105,7 @@ class DebugSession:
                 TclEndpoint(config.bind_address, config.tcl_port)
             )
             tcl_version = self.tcl.version()
-            initial_target_state = self.tcl.poll()
+            initial_target_state = self.tcl.wait_target_state()
             lowered_initial = initial_target_state.lower()
             if "running" not in lowered_initial and "halted" not in lowered_initial:
                 raise RuntimeError(
@@ -177,6 +188,23 @@ class DebugSession:
         )
         return result
 
+    def break_once(self, location: str, timeout_seconds: float = 5.0) -> DebugStopSnapshot:
+        return self._stop_once(
+            kind="hardware-breakpoint", location=location, timeout_seconds=timeout_seconds,
+            create=lambda: self.gdb.insert_hardware_breakpoint(location),
+            accepted_reasons={"breakpoint-hit"}, capture=None,
+        )
+
+    def watch_once(self, expression: str, timeout_seconds: float = 5.0) -> DebugStopSnapshot:
+        return self._stop_once(
+            kind="watchpoint", location=expression, timeout_seconds=timeout_seconds,
+            create=lambda: self.gdb.insert_watchpoint(expression),
+            accepted_reasons={
+                "watchpoint-trigger", "read-watchpoint-trigger", "access-watchpoint-trigger",
+            },
+            capture=lambda: self.gdb.evaluate_variable(expression),
+        )
+
     def stack(self, max_frames: int = 16):
         self._require_active()
         return self.gdb.stack_frames(max_frames)
@@ -224,12 +252,64 @@ class DebugSession:
     def target_poll(self) -> str:
         self._require_active()
         assert self.tcl is not None
-        return self.tcl.poll()
+        return self.tcl.wait_target_state()
 
     def read_words(self, address: int, count: int = 1):
         self._require_active()
         assert self.tcl is not None
         return self.tcl.read_words(address, count)
+
+    def _stop_once(self, *, kind: str, location: str, timeout_seconds: float, create,
+                   accepted_reasons, capture) -> DebugStopSnapshot:
+        self._require_active()
+        if not 0.1 <= timeout_seconds <= 60.0:
+            raise ValueError("Debug stop timeout must be in range 0.1..60 seconds.")
+        if "running" not in (self.initial_target_state or "").lower():
+            raise RuntimeError("One-shot breakpoint/watchpoint requires a target that was initially running.")
+        current = self.target_poll().lower()
+        if "running" in current:
+            self.gdb.interrupt_and_wait_stopped()
+        elif "halted" not in current:
+            raise RuntimeError("Unable to establish a halted target before creating debug resource.")
+
+        resource = create()
+        stopped = None
+        try:
+            stopped = self.gdb.continue_and_wait_stopped(timeout_seconds=timeout_seconds)
+            reason_match = re.search(r'(?:^|,)reason="([^"]+)"', stopped.body)
+            number_match = re.search(
+                r'(?:^|,)bkptno="([0-9]+)"|(?:^|,)wpt=\{number="([0-9]+)"',
+                stopped.body,
+            )
+            reason = reason_match.group(1) if reason_match else "unknown"
+            if number_match:
+                number_text = number_match.group(1) or number_match.group(2)
+                stop_number = int(number_text)
+            else:
+                stop_number = None
+            if reason not in accepted_reasons or stop_number != resource.number:
+                raise RuntimeError(
+                    "Target stopped for unexpected reason/resource: reason=%s number=%s expected=%d" %
+                    (reason, stop_number, resource.number)
+                )
+            frame = self.gdb.current_frame()
+            captured_value = capture() if capture is not None else None
+            return DebugStopSnapshot(
+                kind, resource.number, location, reason, frame, captured_value
+            )
+        finally:
+            try:
+                state = self.target_poll().lower()
+                if "running" in state:
+                    self.gdb.interrupt_and_wait_stopped()
+                self.gdb.delete_breakpoint(resource.number)
+            finally:
+                try:
+                    state = self.target_poll().lower()
+                    if "halted" in state:
+                        self.gdb.continue_execution()
+                except BaseException:
+                    pass
 
     def _with_preserved_run_state(self, operation):
         self._require_active()
@@ -256,7 +336,7 @@ class DebugSession:
         if "running" not in initial or self.tcl is None or not self.gdb.running:
             return
         try:
-            current = self.tcl.poll().lower()
+            current = self.tcl.target_state().lower()
             if "halted" in current:
                 self.gdb.continue_execution()
         except BaseException:

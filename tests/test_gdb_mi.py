@@ -172,6 +172,21 @@ class GdbMiBackendTests(unittest.TestCase):
         self.assertEqual(process.stdin.writes[1], '2-interpreter-exec console "monitor reset halt"\n')
         backend.stop()
 
+    def test_continue_waits_for_verified_stopped_notification(self) -> None:
+        backend, process = self.make_backend()
+        thread, captured = self.invoke(lambda: backend.continue_and_wait_stopped(1.0))
+        process.stdout.emit('1^running\n')
+        process.stdout.emit('*running,thread-id="all"\n')
+        time.sleep(0.02)
+        self.assertTrue(thread.is_alive())
+        process.stdout.emit('*stopped,reason="breakpoint-hit",bkptno="1"\n')
+        thread.join(timeout=1)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(captured[0].prefix, "*")
+        self.assertIn('reason="breakpoint-hit"', captured[0].body)
+        self.assertEqual(process.stdin.writes[0], '1-exec-continue\n')
+        backend.stop()
+
     def test_interrupt_waits_for_verified_stopped_notification(self) -> None:
         backend, process = self.make_backend()
         thread, captured = self.invoke(backend.interrupt_and_wait_stopped)

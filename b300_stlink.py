@@ -103,8 +103,14 @@ def run_integrated_debug(args: argparse.Namespace, reporter: Reporter) -> int:
         raise ValueError("Integrated debug diagnostics do not enable Telnet.")
     if not 1 <= args.frames <= 64:
         raise ValueError("--frames must be in range 1..64.")
-    if args.debug_mode == "variable" and not args.expression:
-        raise ValueError("debug variable requires --expression NAME.")
+    if args.debug_mode in {"variable", "watch"} and not args.expression:
+        raise ValueError("debug %s requires --expression NAME." % args.debug_mode)
+    if args.debug_mode == "break" and not args.location:
+        raise ValueError("debug break requires --location FUNCTION_OR_FILE_LINE.")
+    if args.debug_mode in {"break", "watch"} and args.symbols is None:
+        raise ValueError("debug %s requires --symbols ELF_OR_AXF." % args.debug_mode)
+    if not 0.1 <= args.timeout <= 60.0:
+        raise ValueError("--timeout must be in range 0.1..60 seconds.")
     if args.debug_mode == "read-words" and args.address is None:
         raise ValueError("debug read-words requires --address ADDRESS.")
 
@@ -123,7 +129,8 @@ def run_integrated_debug(args: argparse.Namespace, reporter: Reporter) -> int:
             "debug_plan", mode=args.debug_mode, command=command, symbols=str(symbols) if symbols else None,
             gdb_endpoint="%s:%d" % (config.bind_address, config.gdb_port),
             tcl_endpoint="%s:%d" % (config.bind_address, config.tcl_port),
-            preserve_target_state=True, dry_run=True,
+            preserve_target_state=True, timeout=args.timeout, location=args.location,
+            expression=args.expression, dry_run=True,
         )
         return 0
 
@@ -176,6 +183,33 @@ def run_integrated_debug(args: argparse.Namespace, reporter: Reporter) -> int:
             value = session.capture_variable(args.expression)
             base["variable"] = {"expression": value.expression, "value": value.value}
             text = "%s=%s" % (value.expression, value.value)
+        elif args.debug_mode == "break":
+            hit = session.break_once(args.location, args.timeout)
+            base["hit"] = {
+                "kind": hit.kind, "number": hit.number, "location": hit.location,
+                "reason": hit.reason, "frame": _frame_record(hit.frame),
+            }
+            frame = base["hit"]["frame"]
+            text = "breakpoint #%d hit: %s %s:%s" % (
+                hit.number, frame["function"] or "?", frame["file"] or "?",
+                frame["line"] if frame["line"] is not None else "?",
+            )
+        elif args.debug_mode == "watch":
+            hit = session.watch_once(args.expression, args.timeout)
+            base["hit"] = {
+                "kind": hit.kind, "number": hit.number, "location": hit.location,
+                "reason": hit.reason, "frame": _frame_record(hit.frame),
+            }
+            if hit.value is None:
+                raise RuntimeError("Watchpoint hit did not capture the watched value.")
+            base["variable"] = {
+                "expression": hit.value.expression, "value": hit.value.value,
+            }
+            frame = base["hit"]["frame"]
+            text = "watchpoint #%d hit: %s=%s at %s %s:%s" % (
+                hit.number, hit.value.expression, hit.value.value, frame["function"] or "?",
+                frame["file"] or "?", frame["line"] if frame["line"] is not None else "?",
+            )
         elif args.debug_mode == "inspect":
             snapshot = session.inspect(args.frames)
             base.update({

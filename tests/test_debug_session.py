@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from b300_core.debug_service import DebugState
 from b300_core.debug_session import DebugSession, DebugSessionConfig
@@ -65,12 +66,15 @@ class FakeGdb:
         return ("variable", expression)
 
     def insert_hardware_breakpoint(self, location):
-        return ("break", location)
+        self.events.append(("break", location))
+        return SimpleNamespace(number=1, kind="hardware-breakpoint", location=location)
 
     def insert_watchpoint(self, expression):
-        return ("watch", expression)
+        self.events.append(("watch", expression))
+        return SimpleNamespace(number=2, kind="watchpoint", location=expression)
 
     def delete_breakpoint(self, number):
+        self.events.append(("delete", number))
         return ("delete", number)
 
     def interrupt(self):
@@ -84,6 +88,12 @@ class FakeGdb:
         self.events.append("continue")
         return "continue"
 
+    def continue_and_wait_stopped(self, timeout_seconds=None):
+        self.events.append(("continue-wait", timeout_seconds))
+        return SimpleNamespace(
+            prefix="*", body='stopped,reason="breakpoint-hit",bkptno="1"'
+        )
+
     def step(self):
         return "step"
 
@@ -95,7 +105,7 @@ class FakeGdb:
 
 
 class FakeTcl:
-    def __init__(self, endpoint, events, poll_state="target halted"):
+    def __init__(self, endpoint, events, poll_state="halted"):
         self.endpoint = endpoint
         self.events = events
         self.poll_state = poll_state
@@ -105,7 +115,10 @@ class FakeTcl:
         self.events.append("tcl-version")
         return "OpenOCD test"
 
-    def poll(self):
+    def target_state(self):
+        return self.poll_state
+
+    def wait_target_state(self):
         return self.poll_state
 
     def read_words(self, address, count):
@@ -113,7 +126,7 @@ class FakeTcl:
 
 
 class DebugSessionTests(unittest.TestCase):
-    def make_session(self, *, fail_connect=False, poll_state="target halted"):
+    def make_session(self, *, fail_connect=False, poll_state="halted"):
         events = []
         service = FakeService(events)
         gdb = FakeGdb(events, fail_connect=fail_connect)
@@ -152,10 +165,10 @@ class DebugSessionTests(unittest.TestCase):
         self.assertLess(events.index("gdb-stop"), events.index("openocd-stop"))
 
     def test_inspect_preserves_running_target_state(self) -> None:
-        session, _service, _gdb, events = self.make_session(poll_state="target running")
+        session, _service, _gdb, events = self.make_session(poll_state="running")
         session.start(DebugSessionConfig(ProbeRef("TEST")))
         snapshot = session.inspect(4)
-        self.assertEqual(snapshot.target_state_before, "target running")
+        self.assertEqual(snapshot.target_state_before, "running")
         self.assertTrue(snapshot.resumed)
         self.assertIn("interrupt-stopped", events)
         self.assertIn("continue", events)
@@ -163,12 +176,58 @@ class DebugSessionTests(unittest.TestCase):
         session.stop()
 
     def test_inspect_keeps_preexisting_halt_state(self) -> None:
-        session, _service, _gdb, events = self.make_session(poll_state="target halted")
+        session, _service, _gdb, events = self.make_session(poll_state="halted")
         session.start(DebugSessionConfig(ProbeRef("TEST")))
         snapshot = session.inspect(4)
         self.assertFalse(snapshot.resumed)
         self.assertNotIn("interrupt-stopped", events)
         self.assertNotIn("continue", events)
+        session.stop()
+
+    def test_break_once_verifies_hit_deletes_resource_and_resumes(self) -> None:
+        session, _service, gdb, events = self.make_session(poll_state="halted")
+        session.start(DebugSessionConfig(ProbeRef("TEST")))
+        session.initial_target_state = "running"
+        hit = session.break_once("main", timeout_seconds=2.5)
+        self.assertEqual(hit.kind, "hardware-breakpoint")
+        self.assertEqual(hit.number, 1)
+        self.assertEqual(hit.reason, "breakpoint-hit")
+        self.assertEqual(hit.frame, "frame")
+        self.assertIn(("break", "main"), events)
+        self.assertIn(("continue-wait", 2.5), events)
+        self.assertIn(("delete", 1), events)
+        self.assertEqual(events[-1], "continue")
+        session.stop()
+
+    def test_break_once_failure_still_deletes_resource_and_resumes(self) -> None:
+        session, _service, gdb, events = self.make_session(poll_state="halted")
+        session.start(DebugSessionConfig(ProbeRef("TEST")))
+        session.initial_target_state = "running"
+
+        def fail_wait(timeout_seconds=None):
+            events.append(("continue-wait", timeout_seconds))
+            raise RuntimeError("timeout")
+
+        gdb.continue_and_wait_stopped = fail_wait
+        with self.assertRaisesRegex(RuntimeError, "timeout"):
+            session.break_once("main", timeout_seconds=1.0)
+        self.assertIn(("delete", 1), events)
+        self.assertEqual(events[-1], "continue")
+        session.stop()
+
+    def test_watch_once_accepts_watchpoint_trigger_and_cleans_up(self) -> None:
+        session, _service, gdb, events = self.make_session(poll_state="halted")
+        session.start(DebugSessionConfig(ProbeRef("TEST")))
+        session.initial_target_state = "running"
+        gdb.continue_and_wait_stopped = lambda timeout_seconds=None: SimpleNamespace(
+            prefix="*", body='stopped,reason="watchpoint-trigger",wpt={number="2",exp="speed"}'
+        )
+        hit = session.watch_once("speed", timeout_seconds=3.0)
+        self.assertEqual(hit.kind, "watchpoint")
+        self.assertEqual(hit.number, 2)
+        self.assertEqual(hit.reason, "watchpoint-trigger")
+        self.assertIn(("delete", 2), events)
+        self.assertEqual(events[-1], "continue")
         session.stop()
 
     def test_integrated_session_rejects_non_loopback_bind(self) -> None:
@@ -186,9 +245,9 @@ class DebugSessionTests(unittest.TestCase):
         self.assertEqual(session.stack(4), ("stack", 4))
         self.assertEqual(session.registers(), ("registers",))
         self.assertEqual(session.variable("speed"), ("variable", "speed"))
-        self.assertEqual(session.hardware_breakpoint("main"), ("break", "main"))
-        self.assertEqual(session.watchpoint("speed"), ("watch", "speed"))
-        self.assertEqual(session.target_poll(), "target halted")
+        self.assertEqual(session.hardware_breakpoint("main").number, 1)
+        self.assertEqual(session.watchpoint("speed").number, 2)
+        self.assertEqual(session.target_poll(), "halted")
         self.assertEqual(session.read_words(0x20000000, 2), (0x20000000, 2))
         session.stop()
 

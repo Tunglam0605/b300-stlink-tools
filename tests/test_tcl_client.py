@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from b300_core.tcl_client import SafeTclClient, TclClientError, TclEndpoint
 
@@ -41,6 +42,38 @@ class SafeTclClientTests(unittest.TestCase):
         self.assertEqual(sock.sent, [b"version\x1a"])
         self.assertEqual(calls[0][0], ("127.0.0.1", 6666))
         self.assertTrue(sock.closed)
+
+    def test_target_state_parses_selected_target_from_real_openocd_shape(self) -> None:
+        response = (
+            b"TargetName         Type       Endian TapName            State       \
+"
+            b"--  ------------------ ---------- ------ ------------------ ------------\n"
+            b" 0* stm32f4x.cpu       cortex_m   little stm32f4x.cpu       running\n\x1a"
+        )
+        client, sock, _calls = self.make_client(response)
+        self.assertEqual(client.target_state(), "running")
+        self.assertEqual(sock.sent, [b"targets\x1a"])
+
+    def test_wait_target_state_tolerates_transient_unknown(self) -> None:
+        client, _sock, _calls = self.make_client(b"\x1a")
+        with mock.patch.object(client, "target_state", side_effect=["unknown", "running"]), \
+                mock.patch("b300_core.tcl_client.time.sleep"):
+            self.assertEqual(client.wait_target_state(timeout_seconds=1.0), "running")
+
+    def test_wait_target_state_times_out_closed(self) -> None:
+        client, _sock, _calls = self.make_client(b"\x1a")
+        with mock.patch.object(client, "target_state", return_value="unknown"), \
+                mock.patch("b300_core.tcl_client.time.monotonic", side_effect=[0.0, 0.0, 0.0, 2.0]), \
+                mock.patch("b300_core.tcl_client.time.sleep"):
+            with self.assertRaisesRegex(TclClientError, "before timeout"):
+                client.wait_target_state(timeout_seconds=1.0)
+
+    def test_target_state_fails_closed_when_selected_target_is_missing(self) -> None:
+        client, _sock, _calls = self.make_client(
+            b"TargetName Type Endian TapName State\n0 stm32f4x.cpu cortex_m little stm32f4x.cpu running\n\x1a"
+        )
+        with self.assertRaisesRegex(TclClientError, "selected target state"):
+            client.target_state()
 
     def test_read_words_is_bounded_and_parses_exact_word_count(self) -> None:
         client, sock, _calls = self.make_client(

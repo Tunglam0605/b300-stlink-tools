@@ -208,6 +208,177 @@ class B300StlinkTests(unittest.TestCase):
                 "--dry-run",
             ])
 
+    def test_integrated_debug_inspect_dry_run_uses_safe_local_ports(self) -> None:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            result = tool().main([
+                "debug", "inspect", "--dry-run", "--json",
+            ])
+        self.assertEqual(result, 0)
+        record = json.loads(output.getvalue())
+        self.assertEqual(record["event"], "debug_plan")
+        self.assertEqual(record["gdb_endpoint"], "127.0.0.1:3333")
+        self.assertEqual(record["tcl_endpoint"], "127.0.0.1:6666")
+        self.assertTrue(record["preserve_target_state"])
+        command = " ".join(record["command"])
+        self.assertIn("gdb port 3333", command)
+        self.assertIn("tcl port 6666", command)
+        self.assertIn("telnet port disabled", command)
+        for forbidden in ("erase_sector", "mass_erase", "program ", "flash protect", "mww "):
+            self.assertNotIn(forbidden, command.lower())
+
+    def test_integrated_debug_rejects_remote_bind_and_missing_variable_expression(self) -> None:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            result = tool().main([
+                "debug", "inspect", "--bind-address", "0.0.0.0", "--dry-run", "--json",
+            ])
+        self.assertEqual(result, 1)
+        self.assertIn("loopback-only", output.getvalue())
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            result = tool().main(["debug", "variable", "--dry-run", "--json"])
+        self.assertEqual(result, 1)
+        self.assertIn("requires --expression", output.getvalue())
+
+    def test_integrated_debug_where_reports_symbol_location_and_always_stops(self) -> None:
+        module = tool()
+        created = []
+
+        class FakeFrame:
+            level = 0
+            address = 0x08012345
+            function = "Motor_Update"
+            file = "motor.c"
+            fullname = "C:/fw/motor.c"
+            line = 417
+
+        class FakeInfo:
+            state = "CONNECTED"
+            gdb_endpoint = "127.0.0.1:3333"
+            tcl_endpoint = "127.0.0.1:6666"
+            symbols = "C:/fw/firmware.elf"
+            tcl_version = "OpenOCD test"
+            initial_target_state = "target running"
+
+        class FakeSession:
+            def __init__(self, *args, **kwargs):
+                self.stopped = False
+                created.append(self)
+
+            def start(self, config):
+                self.config = config
+                return FakeInfo()
+
+            def capture_where(self):
+                return FakeFrame()
+
+            def stop(self):
+                self.stopped = True
+
+        with tempfile.TemporaryDirectory() as directory:
+            symbols = Path(directory) / "firmware.elf"
+            symbols.write_bytes(b"ELF")
+            output = io.StringIO()
+            with mock.patch.object(module, "DebugSession", FakeSession), redirect_stdout(output):
+                result = module.main([
+                    "debug", "where", "--symbols", str(symbols), "--json",
+                ])
+
+        self.assertEqual(result, 0)
+        record = json.loads(output.getvalue())
+        self.assertEqual(record["command"], "debug where")
+        self.assertEqual(record["frame"]["address"], "0x08012345")
+        self.assertEqual(record["frame"]["function"], "Motor_Update")
+        self.assertEqual(record["frame"]["line"], 417)
+        self.assertTrue(created[0].stopped)
+
+    def test_integrated_break_dry_run_requires_symbols_and_is_hardware_only(self) -> None:
+        module = tool()
+        with tempfile.TemporaryDirectory() as directory:
+            symbols = Path(directory) / "firmware.axf"
+            symbols.write_bytes(b"AXF")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                result = module.main([
+                    "debug", "break", "--location", "main",
+                    "--symbols", str(symbols), "--timeout", "2.5",
+                    "--dry-run", "--json",
+                ])
+        self.assertEqual(result, 0)
+        record = json.loads(output.getvalue())
+        self.assertEqual(record["mode"], "break")
+        self.assertEqual(record["location"], "main")
+        self.assertEqual(record["timeout"], 2.5)
+        rendered = " ".join(record["command"]).lower()
+        for forbidden in ("erase_sector", "mass_erase", "program ", "flash protect", "mww "):
+            self.assertNotIn(forbidden, rendered)
+
+    def test_integrated_break_watch_validate_required_inputs_before_hardware(self) -> None:
+        module = tool()
+        cases = [
+            (["debug", "break", "--location", "main", "--dry-run", "--json"], "requires --symbols"),
+            (["debug", "break", "--dry-run", "--json"], "requires --location"),
+            (["debug", "watch", "--dry-run", "--json"], "requires --expression"),
+        ]
+        for argv, expected in cases:
+            with self.subTest(argv=argv):
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    result = module.main(argv)
+                self.assertEqual(result, 1)
+                self.assertIn(expected, output.getvalue())
+
+    def test_integrated_break_reports_verified_hit_and_stops_session(self) -> None:
+        module = tool()
+        created = []
+
+        class Frame:
+            level = 0
+            address = 0x08025FDE
+            function = "vApplicationIdleHook"
+            file = "User\\main.c"
+            fullname = "C:/fw/User/main.c"
+            line = 87
+
+        class Info:
+            gdb_endpoint = "127.0.0.1:3333"
+            tcl_endpoint = "127.0.0.1:6666"
+            tcl_version = "OpenOCD test"
+            initial_target_state = "running"
+            symbols = "C:/fw/firmware.axf"
+
+        class FakeSession:
+            def __init__(self, *args, **kwargs):
+                self.stopped = False
+                created.append(self)
+            def start(self, config):
+                return Info()
+            def break_once(self, location, timeout):
+                return SimpleNamespace(
+                    kind="hardware-breakpoint", number=1, location=location,
+                    reason="breakpoint-hit", frame=Frame(),
+                )
+            def stop(self):
+                self.stopped = True
+
+        with tempfile.TemporaryDirectory() as directory:
+            symbols = Path(directory) / "firmware.axf"
+            symbols.write_bytes(b"AXF")
+            output = io.StringIO()
+            with mock.patch.object(module, "DebugSession", FakeSession), redirect_stdout(output):
+                result = module.main([
+                    "debug", "break", "--location", "vApplicationIdleHook",
+                    "--symbols", str(symbols), "--json",
+                ])
+        self.assertEqual(result, 0)
+        record = json.loads(output.getvalue())
+        self.assertEqual(record["hit"]["kind"], "hardware-breakpoint")
+        self.assertEqual(record["hit"]["reason"], "breakpoint-hit")
+        self.assertEqual(record["hit"]["frame"]["line"], 87)
+        self.assertTrue(created[0].stopped)
+
     def test_flash_rejects_path_that_can_break_openocd_braces(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             image = Path(directory) / "bad}name.hex"

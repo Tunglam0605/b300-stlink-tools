@@ -5,6 +5,7 @@ from __future__ import annotations
 import ipaddress
 import re
 import socket
+import time
 from dataclasses import dataclass
 from typing import Callable, Optional, Tuple
 
@@ -55,6 +56,32 @@ class SafeTclClient:
 
     def targets(self) -> str:
         return self._request("targets")
+
+    def target_state(self) -> str:
+        text = self.targets()
+        for line in text.splitlines():
+            fields = line.split()
+            if len(fields) >= 2 and fields[0].endswith("*") and fields[0][:-1].isdigit():
+                state = fields[-1].strip().lower()
+                if state in {"running", "halted", "reset", "unknown"}:
+                    return state
+                raise TclClientError("OpenOCD TCL returned an unsupported target state: %s" % state)
+        raise TclClientError("OpenOCD TCL targets output did not identify the selected target state.")
+
+    def wait_target_state(self, timeout_seconds: float = 2.0, poll_interval: float = 0.05) -> str:
+        if timeout_seconds <= 0 or poll_interval <= 0:
+            raise ValueError("Target-state wait timing must be positive.")
+        deadline = time.monotonic() + timeout_seconds
+        last_state = "unknown"
+        while True:
+            last_state = self.target_state()
+            if last_state in {"running", "halted"}:
+                return last_state
+            if time.monotonic() >= deadline:
+                raise TclClientError(
+                    "OpenOCD target did not become running or halted before timeout; last state: %s" % last_state
+                )
+            time.sleep(min(poll_interval, max(0.0, deadline - time.monotonic())))
 
     def poll(self) -> str:
         return self._request("poll")

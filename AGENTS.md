@@ -110,9 +110,18 @@ cơ cấu thật.
 4. Telnet/TCL phải giữ disabled cho remote; không lách validation để mở cổng.
    Các debug port đang bật phải khác nhau; `3333`/`6666` là cặp chuẩn local.
 5. Dùng đúng AXF/ELF tương ứng để đọc symbol. Không chạy GDB `load`, `restore`
-   hoặc lệnh flash trong mode debug.
-6. Trước khi đóng, chạy `monitor reset run`, `detach`, `quit`; dừng OpenOCD và
-   xác nhận GDB port đã đóng.
+   hoặc lệnh flash trong mode debug. Integrated CLI one-shot hỗ trợ `where`,
+   `stack`, `registers`, `variable`, `read-words`, `break` và `watch`; phải giữ
+   loopback `3333/6666`.
+6. `debug break` chỉ được dùng hardware breakpoint (`-break-insert -h`).
+   `debug watch` chỉ dùng expression allow-list. Cả hai phải có timeout, xác minh
+   đúng `*stopped`/resource number, xóa resource trong `finally` và resume target
+   nếu trạng thái ban đầu là `running`. Không expose raw TCL hoặc raw GDB console.
+7. CPU run-state phải lấy từ OpenOCD `targets`, không lấy từ `poll` vì `poll` chỉ
+   phản ánh background polling/TAP. Chấp nhận `unknown` ngắn khi OpenOCD vừa READY
+   bằng bounded wait; hết timeout phải fail-closed.
+8. Trước khi đóng server thủ công, chạy `monitor reset run`, `detach`, `quit`;
+   dừng OpenOCD và xác nhận GDB/TCL port đã đóng. Integrated one-shot tự cleanup.
 
 ## 6. Ubuntu IPC và lỗi thường gặp
 

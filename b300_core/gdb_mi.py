@@ -245,6 +245,12 @@ class GdbMiBackend:
     def continue_execution(self) -> MiResult:
         return self._request("-exec-continue", ("running", "done"))
 
+    def continue_and_wait_stopped(self, timeout_seconds: Optional[float] = None) -> MiRecord:
+        with self._condition:
+            start_index = len(self._async_records)
+        self.continue_execution()
+        return self.wait_for_stopped(start_index=start_index, timeout_seconds=timeout_seconds)
+
     def interrupt(self) -> MiResult:
         return self._request("-exec-interrupt", ("done", "running"))
 
