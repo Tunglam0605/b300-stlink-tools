@@ -5,6 +5,18 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-08-29
+
+### Fixed
+
+- Tab Debug chuyển sang nội dung cuộn dọc responsive thay vì ép toàn bộ group vào chiều cao cửa sổ; loại bỏ hiện tượng hàng Breakpoint/Watch/Timeout và vùng kết quả chẩn đoán bị chồng lên nhau trên laptop hoặc Windows scaling cao.
+- Vùng kết quả Diagnostics và OpenOCD/GDB Log có minimum height riêng; khi viewport thấp GUI hiển thị scrollbar thay vì làm widget overlap.
+
+### Validation
+
+- Regression GUI viewport thấp xác nhận scrollbar được kích hoạt, Diagnostics/Log giữ minimum height và hai group không giao nhau.
+- Focused GUI regression sau fix: 48 tests PASS.
+
 ## [0.8.1] - 2026-08-29
 
 ### Added

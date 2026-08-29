@@ -252,6 +252,21 @@ class DebugTabTests(unittest.TestCase):
         tab._test_tunnel_events = tunnel_events
         return tab, service, session
 
+    def test_short_viewport_scrolls_instead_of_compressing_diagnostics(self) -> None:
+        tab, _service, _session = self.make_tab()
+        tab.resize(1180, 520)
+        tab.show()
+        self.app.processEvents()
+        self.assertGreater(tab.scroll_area.verticalScrollBar().maximum(), 0)
+        self.assertGreaterEqual(tab.diagnostic_view.height(), tab.diagnostic_view.minimumHeight())
+        self.assertGreaterEqual(tab.log_view.height(), tab.log_view.minimumHeight())
+        self.assertLess(
+            tab.diagnostics_box.geometry().bottom(),
+            tab.log_box.geometry().top(),
+            "Diagnostics and log groups must remain vertically separated.",
+        )
+        tab.close()
+
     def test_debug_profile_restore_is_atomic_and_keeps_gateway_identity(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

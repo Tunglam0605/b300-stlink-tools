@@ -7,8 +7,8 @@ from typing import Callable, Optional
 
 from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
-    QComboBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-    QPlainTextEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget,
+    QComboBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLayout, QLineEdit,
+    QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from b300_core.debug_service import DebugConfig, DebugService, DebugState
@@ -71,9 +71,26 @@ class DebugTab(QWidget):
         self._watchdog.setInterval(750)
         self._watchdog.timeout.connect(self._poll_debug_service)
 
-        layout = QVBoxLayout(self)
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        # Debug contains several vertically stacked control groups. On short
+        # laptop viewports / high-DPI scaling, allowing Qt to compress this
+        # hierarchy below its size hints makes the diagnostics rows appear
+        # overlapped. Keep a real minimum layout and scroll the whole surface
+        # instead of squeezing controls into each other.
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setObjectName("debugScrollArea")
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_content = QWidget()
+        self.scroll_content.setObjectName("debugScrollContent")
+        layout = QVBoxLayout(self.scroll_content)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        self.scroll_area.setWidget(self.scroll_content)
+        root_layout.addWidget(self.scroll_area)
 
         header_card = QGroupBox("Mục tiêu & Trạng thái Debug")
         header_layout = QHBoxLayout(header_card)
@@ -287,6 +304,7 @@ class DebugTab(QWidget):
         self.diagnostic_view.setObjectName("debugDiagnosticView")
         self.diagnostic_view.setReadOnly(True)
         self.diagnostic_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.diagnostic_view.setMinimumHeight(110)
         self.diagnostic_view.setMaximumHeight(180)
         self.diagnostic_view.setPlaceholderText(
             "Kết quả chẩn đoán sẽ hiển thị ở đây. Nếu target đang RUNNING, tool chỉ Halt tạm thời rồi tự Resume."
@@ -294,14 +312,15 @@ class DebugTab(QWidget):
         diagnostics_layout.addWidget(self.diagnostic_view)
         layout.addWidget(self.diagnostics_box)
 
-        log_box = QGroupBox("Nhật ký OpenOCD / GDB")
-        log_layout = QVBoxLayout(log_box)
+        self.log_box = QGroupBox("Nhật ký OpenOCD / GDB")
+        log_layout = QVBoxLayout(self.log_box)
         self.log_view = QPlainTextEdit()
         self.log_view.setObjectName("debugLogView")
         self.log_view.setReadOnly(True)
         self.log_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.log_view.setMinimumHeight(90)
         log_layout.addWidget(self.log_view)
-        layout.addWidget(log_box, 1)
+        layout.addWidget(self.log_box, 1)
         self.log.connect(self._append_log)
         self.mode_combo.currentIndexChanged.connect(self._mode_changed)
         self.client_host.textChanged.connect(self._save_debug_preferences)
