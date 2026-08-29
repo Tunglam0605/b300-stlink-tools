@@ -8,3 +8,6 @@ dist/
 vendor/
 .worktrees/
 /hardware-validation/
+# Local QA/release scratch workspaces; never publish or commit these.
+/.tmp-*/
+/release-*/

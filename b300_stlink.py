@@ -37,6 +37,7 @@ from b300_core.models import ProbeRef
 from b300_core.openocd import build_debug_command, resolve_openocd, validate_openocd_value
 from b300_core.debug_service import DebugConfig, DebugService, DebugState
 from b300_core.debug_session import DebugSession, DebugSessionConfig
+from b300_core.debug_selftest import run_loopback_debug_selftest
 from b300_core.elf_matcher import discover_symbol_files, find_matching_symbol_file
 from b300_core.tcl_client import SafeTclClient, TclEndpoint
 from b300_core.remote_vscode import RemoteVsCodeProfile, workspace_executable
@@ -224,6 +225,80 @@ def run_symbol_match(args: argparse.Namespace, reporter: Reporter) -> int:
         service.stop()
 
 
+
+def run_debug_selftest(args: argparse.Namespace, reporter: Reporter) -> int:
+    """Exercise the Gateway + external Client path on one machine without SSH."""
+    if args.telnet_port is not None:
+        raise ValueError("debug selftest does not enable Telnet.")
+    if not ipaddress.ip_address(args.bind_address).is_loopback:
+        raise ValueError("debug selftest is loopback-only.")
+    if args.symbols is None:
+        raise ValueError("debug selftest requires --symbols ELF_OR_AXF.")
+    if not 1 <= args.frames <= 64:
+        raise ValueError("--frames must be in range 1..64.")
+    if not 0.1 <= args.timeout <= 60.0:
+        raise ValueError("--timeout must be in range 0.1..60 seconds.")
+    tcl_port = args.tcl_port if args.tcl_port is not None else 6666
+    symbols = args.symbols.expanduser().resolve()
+    if symbols.suffix.lower() not in (".elf", ".axf") or not symbols.is_file():
+        raise ValueError("debug selftest requires an existing ELF/AXF symbol file.")
+    if args.dry_run:
+        config = DebugConfig(ProbeRef(args.probe_serial), "127.0.0.1", args.gdb_port, None, tcl_port)
+        config.validate()
+        reporter.emit(
+            "debug_selftest_plan",
+            mode="selftest",
+            symbols=str(symbols),
+            gdb_endpoint="127.0.0.1:%d" % args.gdb_port,
+            tcl_endpoint="127.0.0.1:%d" % tcl_port,
+            expression=args.expression,
+            location=args.location,
+            preserve_target_state=True,
+            ssh_exercised=False,
+            two_machine_exercised=False,
+            dry_run=True,
+        )
+        return 0
+
+    probe = _select_read_probe(args, "debug selftest")
+    if probe is None:
+        return 1
+    report = run_loopback_debug_selftest(
+        probe=probe,
+        symbol_file=symbols,
+        openocd=args.openocd,
+        gdb_port=args.gdb_port,
+        tcl_port=tcl_port,
+        frames=args.frames,
+        expression=args.expression,
+        location=args.location,
+        timeout_seconds=args.timeout,
+    )
+    record = {
+        "schema_version": 1,
+        "command": "debug selftest",
+        "status": "ok" if report.passed else "failed",
+        "conclusion": report.conclusion,
+        "passed": report.passed,
+        "initial_target_state": report.initial_target_state,
+        "final_target_state": report.final_target_state,
+        "symbols": report.symbols,
+        "gdb_endpoint": report.gdb_endpoint,
+        "tcl_endpoint": report.tcl_endpoint,
+        "ssh_exercised": report.ssh_exercised,
+        "two_machine_exercised": report.two_machine_exercised,
+        "field_acceptance_pending": True,
+        "checks": [
+            {"name": item.name, "status": item.status, "code": item.code, "message": item.message}
+            for item in report.checks
+        ],
+    }
+    text = ["B300 DEBUG SELFTEST %s" % report.conclusion]
+    text.extend("[%s] %s: %s" % (item.status, item.name, item.message) for item in report.checks)
+    text.append("SSH/two-machine transport was not exercised; field acceptance remains pending.")
+    emit_snapshot(record, args.json, "\n".join(text))
+    return 0 if report.passed else 1
+
 def run_integrated_debug(args: argparse.Namespace, reporter: Reporter) -> int:
     if args.telnet_port is not None:
         raise ValueError("Integrated debug diagnostics do not enable Telnet.")
@@ -242,8 +317,14 @@ def run_integrated_debug(args: argparse.Namespace, reporter: Reporter) -> int:
 
     tcl_port = args.tcl_port if args.tcl_port is not None else 6666
     symbols = args.symbols.expanduser().resolve() if args.symbols is not None else None
+    probe = ProbeRef(args.probe_serial)
+    if not args.dry_run:
+        selected_probe = _select_read_probe(args, "debug %s" % args.debug_mode)
+        if selected_probe is None:
+            return 1
+        probe = selected_probe
     config = DebugSessionConfig(
-        ProbeRef(args.probe_serial), symbols, args.bind_address, args.gdb_port, tcl_port
+        probe, symbols, args.bind_address, args.gdb_port, tcl_port
     )
     config.validate()
     command = build_debug_command(
@@ -387,15 +468,25 @@ def run_debug(args: argparse.Namespace, reporter: Reporter) -> int:
             message="GDB Remote Protocol is unauthenticated and unencrypted on a non-loopback bind.",
             next_action="Prefer loopback access through an SSH tunnel.",
         )
-    command = openocd_command(args)
-    reporter.emit("openocd", command=command, dry_run=args.dry_run)
     if args.dry_run:
+        command = openocd_command(args)
+        reporter.emit("openocd", command=command, dry_run=True)
         return 0
-    service = DebugService(executable=args.openocd)
+    selected_probe = _select_read_probe(args, "debug %s" % args.debug_mode)
+    if selected_probe is None:
+        return 1
+    probe = selected_probe
     config = DebugConfig(
-        ProbeRef(args.probe_serial), args.bind_address, args.gdb_port,
+        probe, args.bind_address, args.gdb_port,
         args.telnet_port, args.tcl_port,
     )
+    config.validate()
+    command = build_debug_command(
+        probe, resolve_openocd(args.openocd), args.bind_address,
+        args.gdb_port, args.telnet_port, args.tcl_port,
+    )
+    reporter.emit("openocd", command=command, dry_run=False)
+    service = DebugService(executable=args.openocd)
     guard = None
 
     def openocd_event(line: str) -> None:
@@ -843,6 +934,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 return run_vscode_profile(args)
             if args.debug_mode == "symbols":
                 return run_symbol_match(args, reporter)
+            if args.debug_mode == "selftest":
+                return run_debug_selftest(args, reporter)
             return run_integrated_debug(args, reporter)
 
         if args.command == "provision-bootloader":

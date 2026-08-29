@@ -185,6 +185,15 @@ class ReleaseWorkflowTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIn(name, text)
 
+    def test_packaged_cli_smoke_includes_single_machine_debug_selftest(self) -> None:
+        release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        development = (ROOT / ".github" / "workflows" / "release-dry-run.yml").read_text(encoding="utf-8")
+        self.assertGreaterEqual(release.count("debug selftest --symbols"), 3)
+        self.assertGreaterEqual(development.count("debug selftest --symbols"), 2)
+        for workflow in (release, development):
+            self.assertIn("--dry-run --json", workflow)
+            self.assertIn("selftest-smoke.axf", workflow)
+
     def test_linux_release_smoke_tests_detached_update_helper(self) -> None:
         for name in ("release.yml", "release-dry-run.yml"):
             with self.subTest(workflow=name):
@@ -198,6 +207,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("xauth xvfb", workflow)
         self.assertGreaterEqual(workflow.count("Smoke-test Linux GUI on X11"), 2)
         self.assertGreaterEqual(workflow.count("env -u QT_QPA_PLATFORM xvfb-run -a"), 2)
+
+    def test_release_workflows_smoke_debug_selftest_without_probe_access(self) -> None:
+        for name in ("release.yml", "release-dry-run.yml"):
+            with self.subTest(workflow=name):
+                text = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+                self.assertIn("debug selftest --symbols", text)
+                self.assertGreaterEqual(text.count("selftest-smoke.axf"), 2)
+                self.assertGreaterEqual(text.count("--dry-run --json"), 2)
 
     def test_all_native_cli_archives_are_staged_and_smoked_without_probe_access(self) -> None:
         for name in ("release.yml", "release-dry-run.yml"):

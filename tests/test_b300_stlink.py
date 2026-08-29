@@ -117,6 +117,7 @@ class B300StlinkTests(unittest.TestCase):
 
         output = io.StringIO()
         with mock.patch.object(module, "DebugService", FakeDebugService), \
+                mock.patch.object(module, "list_probes", return_value=(ProbeInfo("DEBUG123", "ST-Link", "test"),)), \
                 mock.patch.object(module.time, "sleep"), redirect_stdout(output):
             result = module.main(["debug", "server", "--probe-serial", "DEBUG123", "--json"])
 
@@ -159,20 +160,67 @@ class B300StlinkTests(unittest.TestCase):
                 return self.state
 
         output = io.StringIO()
+        probe = ProbeInfo("AUTO123", "ST-Link", "test")
         with mock.patch.object(module, "DebugService", FakeDebugService), \
                 mock.patch.object(module, "SafeTclClient", FakeTcl), \
+                mock.patch.object(module, "list_probes", return_value=(probe,)), \
                 mock.patch.object(module.time, "sleep"), redirect_stdout(output):
             result = module.main(["debug", "--json"])
 
         self.assertEqual(result, 0)
         self.assertTrue(created[0].stopped)
         self.assertEqual(created[0].config.tcl_port, 6666)
+        self.assertEqual(created[0].config.probe.serial, "AUTO123")
         records = [json.loads(line) for line in output.getvalue().splitlines()]
+        command = next(record["command"] for record in records if record["event"] == "openocd")
+        self.assertIn("adapter serial AUTO123", command)
         role = next(record for record in records if record["event"] == "debug_role")
         self.assertFalse(role["requires_local_gdb"])
         guard_events = [record.get("guard_event") for record in records if record["event"] == "remote_guard"]
         self.assertIn("armed", guard_events)
         self.assertIn("shutdown_restore", guard_events)
+
+    def test_real_debug_gateway_fails_closed_when_multiple_probes_are_connected(self) -> None:
+        module = tool()
+        probes = (
+            ProbeInfo("A", "ST-Link A", "test"),
+            ProbeInfo("B", "ST-Link B", "test"),
+        )
+        output = io.StringIO()
+        with mock.patch.object(module, "list_probes", return_value=probes), \
+                mock.patch.object(module, "DebugService") as service, redirect_stdout(output):
+            result = module.main(["debug", "gateway", "--json"])
+        self.assertEqual(result, 1)
+        self.assertFalse(service.called)
+        record = json.loads(output.getvalue().splitlines()[-1])
+        self.assertEqual(record["reason_code"], "MULTIPLE_PROBES")
+
+    def test_real_integrated_debug_fails_closed_when_multiple_probes_are_connected(self) -> None:
+        module = tool()
+        probes = (
+            ProbeInfo("A", "ST-Link A", "test"),
+            ProbeInfo("B", "ST-Link B", "test"),
+        )
+        output = io.StringIO()
+        with mock.patch.object(module, "list_probes", return_value=probes), \
+                mock.patch.object(module, "DebugSession") as session, redirect_stdout(output):
+            result = module.main(["debug", "poll", "--json"])
+        self.assertEqual(result, 1)
+        self.assertFalse(session.called)
+        record = json.loads(output.getvalue().splitlines()[-1])
+        self.assertEqual(record["reason_code"], "MULTIPLE_PROBES")
+
+    def test_real_debug_rejects_unknown_requested_probe_before_openocd(self) -> None:
+        module = tool()
+        probes = (ProbeInfo("SAFE", "ST-Link", "test"),)
+        output = io.StringIO()
+        with mock.patch.object(module, "list_probes", return_value=probes), \
+                mock.patch.object(module, "DebugService") as service, redirect_stdout(output):
+            result = module.main(["debug", "gateway", "--probe-serial", "MISSING", "--json"])
+        self.assertEqual(result, 1)
+        self.assertFalse(service.called)
+        record = json.loads(output.getvalue().splitlines()[-1])
+        self.assertEqual(record["reason_code"], "PROBE_NOT_FOUND")
 
     def test_debug_can_explicitly_listen_for_remote_gdb(self) -> None:
         output = io.StringIO()

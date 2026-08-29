@@ -128,6 +128,23 @@ từ cột `State` của `targets`; OpenOCD `poll`
 chỉ phản ánh background polling/TAP và không được dùng để kết luận CPU đang
 `running` hay `halted`.
 
+## Self-test một máy cho đường Remote Debug lõi
+
+Từ v0.8.1, khi chưa có hai máy để thử SSH thật, có thể nghiệm thu phần mềm của đường Gateway → external Client ngay trên **một máy**. Lệnh này mở Gateway OpenOCD chỉ trên loopback rồi dùng chính `DebugSession.start_external()` để attach lại qua `127.0.0.1:3333/6666`; vì vậy nó kiểm tra đúng data path GDB/Safe TCL nằm **sau lớp SSH forwarding** mà không làm yếu policy mạng.
+
+```text
+b300-stlink debug selftest \
+  --symbols firmware.axf \
+  --expression xTickCount \
+  --location vApplicationIdleHook \
+  --timeout 5 \
+  --json
+```
+
+Self-test kiểm tra: Gateway listener, trạng thái RUN/HALT ban đầu, **ELF/AXF khớp Application Flash trước attach**, external Client attach, source/stack/register inspect, đọc biến, Break Once/Watch Once nếu được yêu cầu, restore trạng thái cuối và release cổng `3333/6666`. Symbol mismatch fail-closed trước external GDB attach. Nếu target ban đầu đã `HALTED`, các thao tác one-shot cần target chạy được đánh dấu `LIMITED` thay vì tự ý Resume.
+
+Self-test **không** giả vờ đã kiểm tra SSH hoặc hai máy. JSON luôn ghi `ssh_exercised=false`, `two_machine_exercised=false` và `field_acceptance_pending=true`. Hai-device E2E vẫn là cổng nghiệm thu thực địa riêng.
+
 ## Cách B — B300 Tools Gateway + Client qua SSH
 
 Đây là workflow remote mặc định. Không mở GDB/TCL trực tiếp ra LAN/Internet.

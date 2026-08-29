@@ -547,6 +547,68 @@ class DebugTabTests(unittest.TestCase):
         self.assertIn("tunnel-stop", tab._test_tunnel_events)
         tab.close()
 
+    def test_client_tunnel_loss_cleans_session_and_releases_interlock(self) -> None:
+        from types import SimpleNamespace
+        from unittest import mock
+        tab, _service, session = self.make_tab(initial="running", probe_count=0)
+        tab.client_host.setText("gateway.local")
+        tab.client_user.setText("automation")
+        with TemporaryDirectory() as directory:
+            symbols = Path(directory) / "firmware.axf"
+            symbols.write_bytes(b"AXF")
+            tab.symbol_path.setText(str(symbols))
+            matched = SimpleNamespace(
+                path=symbols.resolve(), matched=True, matched_samples=4, total_samples=4,
+                score=1.0, reason="match",
+            )
+            with mock.patch(
+                "b300_gui.debug_tab.find_matching_symbol_file", return_value=(matched, (matched,)),
+            ):
+                tab.start_selected_mode()
+                self.wait_until(lambda: tab._worker is None)
+        self.assertTrue(tab._client_mode_active)
+        self.assertTrue(session.active)
+        tunnel = tab._client_tunnel
+        self.assertIsNotNone(tunnel)
+        tunnel.active = False
+        tab._poll_debug_service()
+        self.assertFalse(session.active)
+        self.assertFalse(tab._client_mode_active)
+        self.assertIsNone(tab._client_tunnel)
+        self.assertTrue(tab.start_button.isEnabled())
+        self.assertFalse(tab.stop_button.isEnabled())
+        self.assertIn("Mất SSH tunnel", tab.status_label.text())
+        tab.close()
+
+    def test_client_partial_start_failure_stops_tunnel_and_releases_interlock(self) -> None:
+        from types import SimpleNamespace
+        from unittest import mock
+        tab, _service, session = self.make_tab(
+            initial="running", probe_count=0, fail_start=RuntimeError("GDB attach rejected"),
+        )
+        tab.client_host.setText("gateway.local")
+        tab.client_user.setText("automation")
+        with TemporaryDirectory() as directory:
+            symbols = Path(directory) / "firmware.axf"
+            symbols.write_bytes(b"AXF")
+            tab.symbol_path.setText(str(symbols))
+            matched = SimpleNamespace(
+                path=symbols.resolve(), matched=True, matched_samples=4, total_samples=4,
+                score=1.0, reason="match",
+            )
+            with mock.patch(
+                "b300_gui.debug_tab.find_matching_symbol_file", return_value=(matched, (matched,)),
+            ):
+                tab.start_selected_mode()
+                self.wait_until(lambda: tab._worker is None)
+        self.assertFalse(session.active)
+        self.assertFalse(tab._client_mode_active)
+        self.assertIsNone(tab._client_tunnel)
+        self.assertIn("tunnel-stop", tab._test_tunnel_events)
+        self.assertTrue(tab.start_button.isEnabled())
+        self.assertIn("GDB attach rejected", tab.status_label.text())
+        tab.close()
+
     def test_client_symbol_root_is_saved_for_auto_match_without_touching_hardware(self) -> None:
         from unittest import mock
         tab, service, session = self.make_tab(probe_count=0)

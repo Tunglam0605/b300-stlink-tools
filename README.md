@@ -76,7 +76,7 @@ Windows và Ubuntu.
 | `doctor` | Kiểm tra OpenOCD đã sẵn sàng trong môi trường cài đặt. |
 | `flash` | Validate Intel HEX, read WRP, chỉ xóa Sector 3–7, program, verify, reset và post-verify. |
 | `provision-bootloader` | Factory-only: nạp Bootloader đã được trust vào Sector 0–2, sau đó restore/verify WRP. |
-| `debug` | Mở GDB server hoặc chạy integrated GDB/MI + Safe TCL: source/stack/register/variable, hardware breakpoint và watchpoint one-shot; không ghi flash. |
+| `debug` | Gateway/Local/Client debug qua GDB/MI + Safe TCL; có `debug selftest` để nghiệm thu đường Gateway→external Client trên một máy, không ghi flash. |
 | GUI PySide6 | Application provisioning, Factory Bootloader one-click có preflight tự động, Debug, updater và đọc memory/metadata. |
 | Setup offline | Cài OpenOCD từ archive xPack gốc có SHA-256 tin cậy cố định; runtime portable/user-local cũng được kiểm toàn bộ cây file. |
 | Agent Skill | Cung cấp skill `b300-ota-stlink` và playbook cho AI agent. |
@@ -172,6 +172,8 @@ b300-stlink provision-bootloader --dry-run --json
 b300-stlink-gui
 b300-stlink debug            # mặc định = debug gateway
 b300-stlink debug gateway    # cách viết tường minh
+b300-stlink debug selftest --symbols <application.axf> --expression xTickCount --location vApplicationIdleHook --json
+# selftest kiểm Gateway→external Client + AXF↔Flash trên một máy; SSH/two-machine vẫn là field acceptance riêng.
 # Gateway CLI vẫn có đầy đủ flash/provision/doctor; riêng Debug chỉ làm cầu nối ST-Link/OpenOCD.
 # GUI Debug: Auto | Local | Gateway | Client. Client giữ source + AXF/ELF và tự mở SSH tunnel.
 b300-stlink debug where --symbols <application.axf> --json   # compatibility/local diagnostics

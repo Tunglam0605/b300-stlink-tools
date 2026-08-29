@@ -69,6 +69,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\release\windows-cli-bundle\b300-stlink.exe --version --json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Set-Content -LiteralPath release\selftest-smoke.axf -Value "ELF" -NoNewline
+          .\release\windows-cli-bundle\b300-stlink.exe debug selftest --symbols release\selftest-smoke.axf --dry-run --json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Set-Content -LiteralPath release\windows-cli-bundle\selftest-smoke.axf -Value "ELF" -NoNewline
+          .\release\windows-cli-bundle\b300-stlink.exe debug selftest --symbols release\windows-cli-bundle\selftest-smoke.axf --dry-run --json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\release\windows-cli-bundle\b300-stlink.exe doctor --json
           $doctorExit = $LASTEXITCODE
           if ($doctorExit -notin 0,1) { exit $doctorExit }
@@ -157,6 +163,10 @@ jobs:
           tar -xzf release/B300-STLink-CLI-Linux-x64.tar.gz -C release/linux-cli-bundle
           ./release/linux-cli-bundle/b300-stlink --help
           ./release/linux-cli-bundle/b300-stlink --version --json
+          printf 'ELF' > release/selftest-smoke.axf
+          ./release/linux-cli-bundle/b300-stlink debug selftest --symbols release/selftest-smoke.axf --dry-run --json
+          printf 'ELF' > release/linux-cli-bundle/selftest-smoke.axf
+          ./release/linux-cli-bundle/b300-stlink debug selftest --symbols release/linux-cli-bundle/selftest-smoke.axf --dry-run --json
           doctor_code=0
           ./release/linux-cli-bundle/b300-stlink doctor --json || doctor_code=$?
           if [ "$doctor_code" -ne 0 ] && [ "$doctor_code" -ne 1 ]; then exit "$doctor_code"; fi
@@ -225,6 +235,8 @@ jobs:
           tar -xzf release/B300-STLink-CLI-Linux-arm64.tar.gz -C release/linux-cli-bundle
           ./release/linux-cli-bundle/b300-stlink --help
           ./release/linux-cli-bundle/b300-stlink --version --json
+          printf 'ELF' > release/selftest-smoke.axf
+          ./release/linux-cli-bundle/b300-stlink debug selftest --symbols release/selftest-smoke.axf --dry-run --json
           doctor_code=0
           ./release/linux-cli-bundle/b300-stlink doctor --json || doctor_code=$?
           if [ "$doctor_code" -ne 0 ] && [ "$doctor_code" -ne 1 ]; then exit "$doctor_code"; fi

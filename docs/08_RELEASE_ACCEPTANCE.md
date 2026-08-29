@@ -1,5 +1,22 @@
 # Biên bản nghiệm thu và phát hành B300 ST-Link Tools
 
+## Bản 0.8.1 - Software acceptance trước field E2E
+
+Mục tiêu của 0.8.1 là khóa chất lượng phần mềm trước khi thử nghiệm hai máy. Release có thể phát hành khi mọi cổng source/package/CI và single-machine hardware acceptance đạt; **SSH/two-machine Client↔Gateway E2E không được ghi là PASS cho tới khi chủ dự án tự nghiệm thu trên hai thiết bị thật**.
+
+Các cổng bắt buộc trước tag:
+
+- full unit/integration/GUI regression;
+- `compileall`/`py_compile` và `git diff --check`;
+- security/debug command audit: Gateway loopback-only, Telnet disabled, không flash/erase/Option Bytes trong debug path;
+- Windows x64 + Ubuntu x64 + Ubuntu ARM64 CI;
+- native package build, size budget, GUI/CLI smoke, signed updater/release metadata;
+- `debug selftest` trên một máy + STM32/ST-Link thật, bao gồm AXF↔Flash exact match trước attach, restore target và release port;
+- negative selftest với AXF sai phải fail-closed trước external GDB attach và vẫn release target/ports;
+- public release/updater verification sau publish.
+
+Deferred field gate: SSH host-key/authentication, forwarding qua LAN giữa hai máy, GUI Client reconnect/disconnect trong mạng thật và remote operator acceptance.
+
 ## Bản 0.4.0 - Engineering diagnostics + hardware acceptance
 
 - Ngày nghiệm thu phần cứng: `2026-08-28`.

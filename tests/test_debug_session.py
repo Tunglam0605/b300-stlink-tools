@@ -264,6 +264,64 @@ class DebugSessionTests(unittest.TestCase):
         self.assertNotIn("openocd-stop", events)
         self.assertEqual(service.state, DebugState.STOPPED)
 
+    def test_external_partial_attach_failure_restores_initial_running_state(self) -> None:
+        events = []
+        service = FakeService(events)
+        gdb = FakeGdb(events)
+
+        class FailingPostAttachTcl(FakeTcl):
+            def __init__(self, endpoint, events):
+                super().__init__(endpoint, events, "running")
+                self.polls = 0
+
+            def wait_target_state(self):
+                self.polls += 1
+                if self.polls == 1:
+                    self.poll_state = "running"
+                    return "running"
+                self.poll_state = "halted"
+                return "halted"
+
+            def wait_for_target_state(self, expected, timeout_seconds=2.0, poll_interval=0.05):
+                self.events.append(("wait-state", expected))
+                raise RuntimeError("post-attach state verification failed")
+
+        session = DebugSession(
+            service=service, gdb=gdb,
+            tcl_factory=lambda endpoint: FailingPostAttachTcl(endpoint, events),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            symbols = Path(directory) / "app.axf"
+            symbols.write_bytes(b"ELF")
+            with self.assertRaisesRegex(RuntimeError, "post-attach state verification failed"):
+                session.start_external(
+                    symbol_file=symbols, gdb_host="127.0.0.1", gdb_port=13333,
+                    tcl_host="127.0.0.1", tcl_port=16666,
+                )
+        self.assertGreaterEqual(events.count("continue"), 2)
+        self.assertIn(("wait-state", "running"), events)
+        self.assertFalse(gdb.running)
+        self.assertFalse(session.active)
+
+    def test_local_partial_attach_failure_restores_initial_running_state(self) -> None:
+        events = []
+        service = FakeService(events)
+        gdb = FakeGdb(events, fail_connect=True)
+        tcl = FakeTcl(SimpleNamespace(host="127.0.0.1", port=6666), events, "running")
+        # Model a probe that was RUNNING before attach but is HALTED when cleanup begins.
+        original_connect = gdb.connect
+        def fail_after_halting(host, port):
+            tcl.poll_state = "halted"
+            original_connect(host, port)
+        gdb.connect = fail_after_halting
+        session = DebugSession(service=service, gdb=gdb, tcl_factory=lambda _endpoint: tcl)
+        with self.assertRaisesRegex(RuntimeError, "connect failed"):
+            session.start(DebugSessionConfig(ProbeRef(None)))
+        self.assertIn("continue", events)
+        self.assertEqual(tcl.poll_state, "running")
+        self.assertFalse(gdb.running)
+        self.assertEqual(service.state, DebugState.STOPPED)
+
     def test_external_session_rejects_non_loopback_forward_targets(self) -> None:
         session, _service, _gdb, events = self.make_session()
         with self.assertRaisesRegex(ValueError, "loopback-only"):

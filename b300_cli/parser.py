@@ -82,9 +82,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     debug.add_argument(
         "debug_mode", nargs="?",
-        choices=("gateway", "server", "vscode", "symbols", "inspect", "where", "registers", "stack", "variable", "poll", "read-words", "break", "watch"),
+        choices=("gateway", "server", "vscode", "symbols", "selftest", "inspect", "where", "registers", "stack", "variable", "poll", "read-words", "break", "watch"),
         default="gateway", metavar="mode",
-        help="Debug mode: gateway (recommended headless role), server (legacy alias), or compatibility diagnostics.",
+        help="Debug mode: gateway, selftest (single-machine remote-path acceptance), server (legacy alias), or diagnostics.",
     )
     debug.add_argument("--openocd")
     debug.add_argument("--probe-serial", type=parse_probe_serial,

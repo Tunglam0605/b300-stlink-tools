@@ -5,6 +5,28 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-08-29
+
+### Added
+
+- `b300-stlink debug selftest` nghiệm thu đường Gateway → external Client trên một máy qua loopback GDB/Safe TCL; hỗ trợ source inspect, variable, Break Once/Watch Once tùy chọn, xác minh restore RUN/HALT và release port sau cleanup.
+- Self-test JSON phân biệt rõ software acceptance với field acceptance bằng `ssh_exercised=false`, `two_machine_exercised=false` và `field_acceptance_pending=true`.
+
+### Changed
+
+- Debug Gateway và integrated debug thật giờ fail-closed khi phát hiện nhiều ST-Link mà chưa chọn probe, thay vì để OpenOCD tự chọn không xác định; command report dùng đúng probe auto-selected mà OpenOCD thực thi.
+- `debug selftest` xác minh ELF/AXF với Application Flash bằng các sample window read-only trước khi external GDB attach; symbol mismatch dừng trước attach.
+
+### Fixed
+
+- Partial GDB attach failure ở Local/Client thực hiện best-effort restore trạng thái RUNNING ban đầu trước khi teardown, kể cả lỗi xảy ra sau khi attach đã làm Cortex-M HALT.
+- Restore helper chờ Safe TCL xác nhận target đã `RUNNING` sau lệnh Continue, giảm race giữa cleanup và đóng GDB/OpenOCD.
+
+### Validation
+
+- Single-machine hardware self-test trên STM32F407 thật: AXF đúng match `4/4`, Gateway READY, external Client CONNECTED, inspect/`xTickCount`/Break Once/Watch Once PASS, target cuối `RUNNING`, cổng `3333/6666` được release.
+- Negative hardware acceptance: AXF cũ/sai bị chặn `0/4` trước external Client attach; target vẫn `RUNNING` và hai cổng debug được release. SSH và two-machine E2E được giữ là field acceptance riêng.
+
 ## [0.8.0] - 2026-08-29
 
 ### Added

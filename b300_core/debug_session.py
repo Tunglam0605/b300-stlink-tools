@@ -133,6 +133,7 @@ class DebugSession:
                 self.tcl.wait_for_target_state("running")
         except BaseException:
             try:
+                self._restore_initial_run_state_best_effort()
                 self.gdb.stop()
             finally:
                 self.service.stop()
@@ -195,6 +196,7 @@ class DebugSession:
                 self.gdb.continue_execution()
                 self.tcl.wait_for_target_state("running")
         except BaseException:
+            self._restore_initial_run_state_best_effort()
             self.gdb.stop()
             self.tcl = None
             self.initial_target_state = None
@@ -453,6 +455,7 @@ class DebugSession:
             current = self.tcl.target_state().lower()
             if "halted" in current:
                 self.gdb.continue_execution()
+                self.tcl.wait_for_target_state("running")
         except BaseException:
             pass
 
