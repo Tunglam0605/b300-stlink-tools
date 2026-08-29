@@ -12,9 +12,12 @@ from PySide6.QtWidgets import QApplication
 
 from b300_core.debug_service import DebugState
 from b300_core.hardware_session import HardwareSessionManager
-from b300_core.models import TargetInfo
+from b300_core.metadata import decode_ota_metadata
+from b300_core.models import BootVerification, CommandResult, TargetInfo
+from b300_core.service import FlashResult
 from b300_gui.main_window import MainWindow
 from tests.test_core_hex_policy import APPLICATION_VECTOR, write_hex
+from tests.test_core_probe_memory_metadata import make_metadata
 from tests.test_gui_smoke import FakeService
 
 
@@ -113,6 +116,51 @@ class GuiHardwareInterlockTests(unittest.TestCase):
         self.assertFalse(window.busy)
         self.assertTrue(window.memory_tab.metadata_button.isEnabled())
         self.assertTrue(window.memory_tab.read_button.isEnabled())
+        window.close()
+
+    def test_flash_completion_stales_metadata_then_allows_immediate_reread(self) -> None:
+        class WorkflowService(FakeService):
+            def read_metadata(self, probe, event_sink=None, cancel_event=None):
+                return decode_ota_metadata(b"\xFF" * 44)
+
+        window = MainWindow(
+            service=WorkflowService(),
+            debug_service=FakeDebugService(DebugState.STOPPED),
+            probe_loader=lambda: (),
+        )
+        window.memory_tab.show_metadata(decode_ota_metadata(make_metadata(state=1)))
+        self.assertEqual(window.memory_tab.metadata_values["State"].text(), "IN_PROGRESS (1)")
+
+        result = FlashResult(
+            "succeeded",
+            CommandResult(("openocd",), 0, "ok"),
+            None,
+            None,
+            BootVerification(0x08010000, 0, True, "Application running"),
+        )
+        window.busy = True
+        window._update_controls()
+        window._start_worker(lambda _log, _phase, _cancel: result, window._flash_finished)
+
+        deadline = time.monotonic() + 1.0
+        while window._threads and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.01)
+        self.app.processEvents()
+        self.assertFalse(window.busy)
+        self.assertFalse(window._threads)
+        self.assertEqual(window.memory_tab.metadata_values["Classification"].text(), "STALE")
+        self.assertTrue(window.memory_tab.metadata_button.isEnabled())
+
+        window.memory_tab.read_metadata()
+        deadline = time.monotonic() + 1.0
+        while window.memory_tab.has_active_operation and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.01)
+        self.app.processEvents()
+        self.assertEqual(window.memory_tab.metadata_values["Classification"].text(), "ERASED")
+        self.assertEqual(window.memory_tab.metadata_values["State"].text(), "—")
+        self.assertTrue(window.memory_tab.metadata_button.isEnabled())
         window.close()
 
     def test_main_or_memory_activity_disables_starting_debug(self) -> None:

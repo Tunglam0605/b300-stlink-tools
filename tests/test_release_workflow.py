@@ -147,6 +147,26 @@ class ReleaseWorkflowTests(unittest.TestCase):
         verify_index = finalize_steps.index(verify)
         self.assertGreater(verify_index, publish_index)
 
+    def test_development_packages_run_on_develop_branches_without_publish_permissions(self) -> None:
+        workflow = load_workflow("release-dry-run.yml")
+        self.assertIn("workflow_dispatch", workflow["on"])
+        self.assertEqual(workflow["on"]["push"]["branches"], ["develop/**"])
+        self.assertEqual(workflow["permissions"]["contents"], "read")
+        self.assertEqual(workflow["concurrency"]["cancel-in-progress"], "true")
+        self.assertIn("development-packages-", workflow["concurrency"]["group"])
+        text = (ROOT / ".github" / "workflows" / "release-dry-run.yml").read_text(encoding="utf-8")
+        self.assertGreaterEqual(text.count("retention-days: 7"), 2)
+        self.assertNotIn("gh release create", text)
+        self.assertNotIn("contents: write", text)
+
+    def test_download_guide_separates_stable_from_development_builds(self) -> None:
+        text = (ROOT / "DOWNLOAD.md").read_text(encoding="utf-8")
+        self.assertIn("Development Build", text)
+        self.assertIn("develop/**", text)
+        self.assertIn("không", text[text.index("Development Build"):].lower())
+        self.assertIn("Latest", text)
+        self.assertIn("7 ngày", text)
+
     def test_dry_run_cannot_publish_release(self) -> None:
         workflow = load_workflow("release-dry-run.yml")
         self.assertIn("workflow_dispatch", workflow["on"])

@@ -43,6 +43,19 @@ https://github.com/Tunglam0605/b300-stlink-tools/releases/tag/v0.4.0
 
 Không thay `vX.Y.Z` bằng `latest` nếu yêu cầu là tái lập đúng một bản đã nghiệm thu.
 
+### Development Build — chỉ để kiểm thử cải tiến
+
+Các thay đổi sau Stable được phát triển trên nhánh `develop/**`. Mỗi lần push vào nhánh này, workflow **Development packages (no publishing)** tự chạy CI/package cho Windows x64, Ubuntu x64 và Ubuntu ARM64 rồi lưu artifact trong GitHub Actions trong 7 ngày.
+
+Development Build **không** tạo GitHub Release, không thay `Latest`, không ghi `latest.json`/`latest-cli.json` và không được updater Stable tự động phân phối. Vì vậy kỹ sư có thể kiểm thử cải tiến mới mà không làm thay đổi bản đang dùng trong vận hành.
+
+Quy tắc sử dụng:
+
+1. Vận hành bình thường dùng **Stable / Latest**.
+2. Chỉ tải Development Build từ run GitHub Actions được chỉ định khi cần field-test.
+3. Khi báo lỗi Development Build, ghi lại commit SHA/run ID và platform.
+4. Chỉ thay đổi đã qua regression, package smoke và hardware/workflow acceptance cần thiết mới được đưa trở lại một bản Stable mới.
+
 ## 3. Xác định kiến trúc máy
 
 ### Windows
