@@ -178,7 +178,7 @@ b300-stlink debug            # mặc định = debug gateway
 b300-stlink debug gateway    # cách viết tường minh
 b300-stlink debug client --ssh-host <gateway> --ssh-user <user> --symbols <application.axf> --client-action inspect --json
 b300-stlink debug selftest --symbols <application.axf> --expression xTickCount --location vApplicationIdleHook --json
-# selftest kiểm Gateway→external Client + AXF↔Flash trên một máy; SSH/two-machine vẫn là field acceptance riêng.
+# selftest kiểm Gateway→external Client + AXF↔Flash; SSH tunnel thật đã có loopback hardware acceptance riêng cho GUI/CLI/VS Code.
 # Gateway CLI vẫn có đầy đủ flash/provision/doctor; riêng Debug chỉ làm cầu nối ST-Link/OpenOCD.
 # GUI Debug và CLI Debug đều có Local/Gateway/Client path; Client giữ source + AXF/ELF và dùng managed SSH tunnel.
 b300-stlink debug where --symbols <application.axf> --json   # compatibility/local diagnostics
@@ -204,6 +204,7 @@ file HEX, probe trước khi chạy.
 | [GUI Windows/Ubuntu](docs/07_GUI_WINDOWS_UBUNTU.md) | Vận hành giao diện theo 7 bước. |
 | [Biên bản release/acceptance](docs/08_RELEASE_ACCEPTANCE.md) | Artifact đã build và checklist nghiệm thu phần cứng F407. |
 | [Hardware acceptance 2026-08-28](docs/09_HARDWARE_ACCEPTANCE_2026-08-28.md) | Bằng chứng Application/Factory/Debug đã PASS trên STM32F407 thật. |
+| [SSH loopback acceptance v0.9.0](docs/13_SSH_LOOPBACK_ACCEPTANCE_V0.9.0_2026-08-29.md) | GUI Client, CLI Client và VS Code/Cortex-Debug qua SSH tunnel thật trên main B300; variable/break/watch/reconnect/restore-state PASS. |
 | [Handoff GUI cho Antigravity](docs/superpowers/specs/2026-08-27-b300-stlink-gui-design.md) | Thiết kế GUI nạp code Windows/Ubuntu dùng chung lõi CLI. |
 | [AGENTS.md](AGENTS.md) | Quy tắc bắt buộc cho AI/automation. |
 
