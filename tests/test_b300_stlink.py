@@ -416,7 +416,9 @@ class B300StlinkTests(unittest.TestCase):
             symbols = Path(directory) / "firmware.elf"
             symbols.write_bytes(b"ELF")
             output = io.StringIO()
-            with mock.patch.object(module, "DebugSession", FakeSession), redirect_stdout(output):
+            with mock.patch.object(module, "DebugSession", FakeSession), \
+                    mock.patch.object(module, "list_probes", return_value=(ProbeInfo("TEST123", "ST-Link", "test"),)), \
+                    redirect_stdout(output):
                 result = module.main([
                     "debug", "where", "--symbols", str(symbols), "--json",
                 ])
@@ -504,7 +506,9 @@ class B300StlinkTests(unittest.TestCase):
             symbols = Path(directory) / "firmware.axf"
             symbols.write_bytes(b"AXF")
             output = io.StringIO()
-            with mock.patch.object(module, "DebugSession", FakeSession), redirect_stdout(output):
+            with mock.patch.object(module, "DebugSession", FakeSession), \
+                    mock.patch.object(module, "list_probes", return_value=(ProbeInfo("TEST123", "ST-Link", "test"),)), \
+                    redirect_stdout(output):
                 result = module.main([
                     "debug", "break", "--location", "vApplicationIdleHook",
                     "--symbols", str(symbols), "--json",
