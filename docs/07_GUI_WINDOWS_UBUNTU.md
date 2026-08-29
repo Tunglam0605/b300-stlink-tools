@@ -89,8 +89,10 @@ Kiểm tra target dùng `flash info` read-only; không halt, reset hoặc ghi fl
 
    ```text
    flash erase_sector 0 3 7
-   program {...} verify
-   reset run                  # transaction riêng sau exact verify
+   flash write_image {application.hex}
+   verify_image {application.hex}
+   metadata_plan: STLM + VERIFIED @ 0x0800C000 (44 bytes)
+   reset run                  # chỉ sau App + metadata verify/read-back
    ```
 
 3. Không tiếp tục nếu thấy Sector 0–2, mass erase hoặc file/probe không đúng.
@@ -104,9 +106,12 @@ Dry-run không kết nối ghi flash.
 3. Nhấn **Yes** một lần.
 4. Không rút ST-Link hoặc mất nguồn trong khi trạng thái đang chạy. Sau phase
    `erasing`, nút hủy bị khóa; đóng cửa sổ cũng bị từ chối cho tới khi worker kết thúc.
-5. Chờ GUI báo một trong ba kết quả tường minh:
+5. Chờ GUI báo kết quả tường minh:
 
-   - `Nạp thành công`: verify đạt, PC ở Application, BKP1R đã clear;
+   - `Nạp thành công`: Application verify + `STLM + VERIFIED` write/read-back đạt,
+     Bootloader consume thành `STLM + CONFIRMED`, PC ở Application, BKP1R đã clear;
+   - lỗi `metadata_programming`/`metadata_verifying`: không reset vào Application,
+     không retry tự động;
    - `Đã program nhưng Boot verification thất bại`: không tự nạp lại;
    - `Nạp/verify thất bại`: dừng, xuất log và xử lý nguyên nhân.
 
@@ -125,7 +130,9 @@ Factory service vẫn tự inspect target lần nữa ngay trước thao tác de
 2. Chọn Sector 0–7 rồi nhấn **Đọc Sector**.
 3. Xem tối đa 4096 byte preview; nhấn **Xuất binary…** để lưu toàn bộ Sector.
 4. Nhấn **Đọc OTA metadata** để xem magic, state, size, CRC, board token và
-   classification `VALID`, `ERASED` hoặc `CORRUPT`.
+   classification `VALID`, `ERASED` hoặc `CORRUPT`. Bootloader v0.6.5 chấp nhận
+   `OTAM` hoặc `STLM` hợp lệ theo state contract; `ERASED`/`CORRUPT` là fail-closed,
+   không phải điều kiện vector-only boot.
 5. Có thể nhấn **Hủy đọc**; tool sẽ kết thúc tiến trình và mở phiên recovery để
    yêu cầu CPU `resume` trước khi báo kết quả.
 

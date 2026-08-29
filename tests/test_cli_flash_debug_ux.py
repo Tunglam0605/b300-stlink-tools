@@ -131,6 +131,15 @@ class FlashCliUxTests(unittest.TestCase):
         self.assertEqual(start["start"], "0x08010000")
         self.assertEqual(start["end"], "0x08010009")
         self.assertEqual(start["size"], 10)
+        self.assertEqual(start["flash_span_size"], 10)
+        self.assertRegex(start["flash_crc32"], r"^0x[0-9A-F]{8}$")
+        self.assertEqual(start["metadata_contract"], {
+            "address": "0x0800C000",
+            "size": 44,
+            "magic": "STLM",
+            "state": "VERIFIED",
+            "condition": "after_application_verified",
+        })
         self.assertEqual(start["initial_msp"], "0x20020000")
         self.assertEqual(start["reset_vector"], "0x08010101")
         self.assertEqual(start["selected_probe"], {"serial": "FLASH123"})

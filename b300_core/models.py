@@ -54,6 +54,11 @@ class ImageInfo:
     data_record_count: int
     initial_msp: Optional[int] = None
     reset_vector: Optional[int] = None
+    # Canonical bytes that the Bootloader CRCs: APPLICATION_ADDRESS through
+    # the highest programmed address, with sparse Intel HEX gaps read as 0xFF
+    # after the S3-S7 erase transaction.
+    flash_span_size: int = 0
+    flash_crc32: Optional[int] = None
 
 
 @dataclass(frozen=True)

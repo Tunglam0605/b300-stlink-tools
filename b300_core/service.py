@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 import threading
+import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Optional
@@ -16,7 +17,14 @@ from .hardware_session import (
     HardwareSessionManager,
 )
 from .memory import read_memory
-from .metadata import OTA_META_SIZE, decode_ota_metadata
+from .metadata import (
+    OTA_META_MAGIC_STLINK,
+    OTA_META_SIZE,
+    STATE_CONFIRMED,
+    STATE_VERIFIED,
+    build_stlink_metadata,
+    decode_ota_metadata,
+)
 from .models import (
     BootVerification,
     CommandResult,
@@ -36,10 +44,12 @@ from .openocd import (
     build_factory_flash_command,
     build_factory_protect_command,
     build_flash_command,
+    build_metadata_write_command,
     build_reset_command,
     build_resume_command,
     build_target_inspect_command,
     parse_boot_verification,
+    parse_metadata_readback,
     parse_target_info,
     program_verify_succeeded,
     resolve_openocd,
@@ -51,6 +61,7 @@ from .policy import (
     build_flash_plan,
     build_flash_preview,
     sector_by_index,
+    validate_bootloader_write_protection,
     validate_target_for_provisioning,
 )
 
@@ -89,6 +100,10 @@ class FlashResult:
     reset_command: Optional[CommandResult]
     boot_command: Optional[CommandResult]
     boot_verification: Optional[BootVerification]
+    metadata_command: Optional[CommandResult] = None
+    written_metadata: Optional[OtaMetadata] = None
+    verified_metadata_bytes: Optional[bytes] = None
+    confirmed_metadata: Optional[OtaMetadata] = None
     failure_phase: Optional[str] = None
     reason: str = ""
     next_action: str = ""
@@ -101,10 +116,14 @@ class FlashResult:
 class B300Service:
     def __init__(self, runner: Optional[OpenOcdRunner] = None,
                  executable: Optional[str] = None,
-                 session_manager: Optional[HardwareSessionManager] = None) -> None:
+                 session_manager: Optional[HardwareSessionManager] = None,
+                 clock: Optional[Callable[[], float]] = None,
+                 sleeper: Optional[Callable[[float], None]] = None) -> None:
         self.runner = runner or OpenOcdRunner()
         self.executable = resolve_openocd(executable)
         self.session_manager = session_manager or DEFAULT_HARDWARE_SESSION_MANAGER
+        self.clock = clock or time.monotonic
+        self.sleeper = sleeper or time.sleep
 
     def _exclusive_hardware_operation(self, mode: HardwareMode, probe: ProbeRef):
         return self.session_manager.acquire(mode, probe)
@@ -141,6 +160,12 @@ class B300Service:
 
     def factory_protect_command(self, probe: ProbeRef, enabled: bool):
         return build_factory_protect_command(probe, self.executable, enabled)
+
+    def metadata_write_command(self, probe: ProbeRef, metadata_path: Path,
+                               readback_path: Path):
+        return build_metadata_write_command(
+            probe, metadata_path, readback_path, self.executable
+        )
 
     def reset_command(self, probe: ProbeRef):
         return build_reset_command(probe, self.executable)
@@ -262,6 +287,8 @@ class B300Service:
                     approved.end_address,
                     approved.size,
                     approved.data_record_count,
+                    approved.flash_span_size,
+                    approved.flash_crc32,
                 )
                 staged_fields = (
                     staged_image.sha256,
@@ -269,6 +296,8 @@ class B300Service:
                     staged_image.end_address,
                     staged_image.size,
                     staged_image.data_record_count,
+                    staged_image.flash_span_size,
+                    staged_image.flash_crc32,
                 )
                 if staged_fields != approved_fields:
                     emit_phase("failed", 0, "Approved image no longer matches")
@@ -278,6 +307,19 @@ class B300Service:
                         "Select the HEX again and confirm its new SHA-256.",
                     )
 
+                emit_phase("metadata_reading", 15, "Reading previous Application Metadata", True)
+                sequence = 1
+                try:
+                    previous_metadata = decode_ota_metadata(self._read_memory(
+                        plan.probe, METADATA_ADDRESS, OTA_META_SIZE, emit_log, cancel_event
+                    ))
+                    if previous_metadata.valid:
+                        sequence = (previous_metadata.sequence + 1) & 0xFFFFFFFF
+                    else:
+                        emit_log("Previous Application Metadata is invalid; STLM sequence fallback is 1.")
+                except (RuntimeError, ValueError) as error:
+                    emit_log("Previous Application Metadata is unreadable; STLM sequence fallback is 1: %s" % error)
+
                 emit_phase(
                     "target_check", 10, "Checking B300 STM32F407 target", True
                 )
@@ -286,6 +328,7 @@ class B300Service:
                         plan.probe, event_sink=emit_log, cancel_event=cancel_event
                     )
                     validate_target_for_provisioning(target)
+                    validate_bootloader_write_protection(target)
                 except (RuntimeError, ValueError) as error:
                     emit_phase("failed", 10, "Target check failed")
                     raise ProvisioningError(
@@ -341,6 +384,89 @@ class B300Service:
                     )
 
                 emit_phase("verifying", 60, "Verifying Application")
+
+                metadata_path = Path(directory) / "b300-appmeta-stlink.bin"
+                metadata_readback_path = Path(directory) / "b300-appmeta-readback.bin"
+                try:
+                    metadata_bytes = build_stlink_metadata(staged_image, sequence=sequence)
+                    metadata_path.write_bytes(metadata_bytes)
+                    written_metadata = decode_ota_metadata(metadata_bytes)
+                except (OSError, ValueError) as error:
+                    emit_phase("failed", 65, "ST-Link metadata generation failed")
+                    return FlashResult(
+                        status="metadata_failed",
+                        flash_command=flash_result,
+                        reset_command=None,
+                        boot_command=None,
+                        boot_verification=None,
+                        metadata_command=None,
+                        failure_phase="metadata_building",
+                        reason="Could not build the canonical STLM metadata: %s" % error,
+                        next_action="Inspect the Application image contract; do not reset or retry automatically.",
+                    )
+
+                emit_phase("metadata_programming", 70, "Programming STLM + VERIFIED metadata")
+                metadata_result = self.runner.run(
+                    self.metadata_write_command(plan.probe, metadata_path, metadata_readback_path),
+                    event_sink=emit_log, timeout_seconds=30.0,
+                )
+                if metadata_result.returncode != 0:
+                    emit_phase("failed", 75, "ST-Link metadata program/verify failed")
+                    return FlashResult(
+                        status="metadata_failed",
+                        flash_command=flash_result,
+                        reset_command=None,
+                        boot_command=None,
+                        boot_verification=None,
+                        metadata_command=metadata_result,
+                        written_metadata=written_metadata,
+                        verified_metadata_bytes=(readback if "readback" in locals() else None),
+                        failure_phase="metadata_programming",
+                        reason="OpenOCD could not program/verify the STLM metadata.",
+                        next_action="Keep the board in recovery-safe state; inspect the log and start a new transaction manually.",
+                    )
+
+                emit_phase("metadata_verifying", 80, "Validating STLM metadata read-back")
+                try:
+                    readback = metadata_readback_path.read_bytes()
+                    if len(readback) != OTA_META_SIZE:
+                        raise ValueError("OpenOCD metadata dump was not exactly 44 bytes.")
+                    decoded = decode_ota_metadata(readback)
+                except (OSError, ValueError) as error:
+                    emit_phase("failed", 80, "ST-Link metadata read-back incomplete")
+                    return FlashResult(
+                        status="metadata_failed",
+                        flash_command=flash_result,
+                        reset_command=None,
+                        boot_command=None,
+                        boot_verification=None,
+                        metadata_command=metadata_result,
+                        written_metadata=written_metadata,
+                        verified_metadata_bytes=(readback if "readback" in locals() else None),
+                        failure_phase="metadata_verifying",
+                        reason=str(error),
+                        next_action="Do not reset to Application; inspect Sector 3 and the OpenOCD log.",
+                    )
+                if (readback != metadata_bytes or not decoded.valid or
+                        decoded.magic != OTA_META_MAGIC_STLINK or
+                        decoded.state != STATE_VERIFIED or
+                        decoded.image_size != staged_image.flash_span_size or
+                        decoded.image_crc32 != staged_image.flash_crc32):
+                    emit_phase("failed", 80, "ST-Link metadata read-back mismatch")
+                    return FlashResult(
+                        status="metadata_failed",
+                        flash_command=flash_result,
+                        reset_command=None,
+                        boot_command=None,
+                        boot_verification=None,
+                        metadata_command=metadata_result,
+                        written_metadata=written_metadata,
+                        verified_metadata_bytes=(readback if "readback" in locals() else None),
+                        failure_phase="metadata_verifying",
+                        reason="Sector 3 does not exactly match the approved STLM + VERIFIED record.",
+                        next_action="Do not reset to Application; inspect Sector 3 and repeat only after correcting the cause.",
+                    )
+
                 emit_phase("resetting", 85, "Resetting target")
                 reset_result = self.runner.run(
                     self.reset_command(plan.probe), event_sink=emit_log,
@@ -354,26 +480,75 @@ class B300Service:
                         reset_command=reset_result,
                         boot_command=None,
                         boot_verification=None,
+                        metadata_command=metadata_result,
+                        written_metadata=written_metadata,
+                        verified_metadata_bytes=readback,
                         failure_phase="resetting",
                         reason="OpenOCD could not reset the target after verified programming.",
                         next_action="Power-cycle or reset the board, then inspect boot state; do not retry automatically.",
                     )
 
-                emit_phase("post_verifying", 90, "Verifying Application boot state")
+                emit_phase("metadata_confirming", 88, "Waiting for Bootloader STLM confirmation")
+                self.sleeper(1.0)
+                deadline = self.clock() + 5.0
+                confirmed_metadata = None
+                expected_confirmed_sequence = (written_metadata.sequence + 1) & 0xFFFFFFFF
+                while self.clock() < deadline:
+                    try:
+                        candidate = decode_ota_metadata(self._read_memory(
+                            plan.probe, METADATA_ADDRESS, OTA_META_SIZE, emit_log, cancel_event
+                        ))
+                    except (RuntimeError, ValueError):
+                        candidate = None
+                    if (candidate is not None and candidate.valid and
+                            candidate.magic == OTA_META_MAGIC_STLINK and
+                            candidate.state == STATE_CONFIRMED and
+                            candidate.image_size == written_metadata.image_size and
+                            candidate.image_crc32 == written_metadata.image_crc32 and
+                            candidate.sequence == expected_confirmed_sequence):
+                        confirmed_metadata = candidate
+                        break
+                    remaining = deadline - self.clock()
+                    if remaining <= 0:
+                        break
+                    self.sleeper(min(0.25, remaining))
+
+                if confirmed_metadata is None:
+                    emit_phase("failed", 90, "Bootloader did not confirm matching STLM metadata")
+                    return FlashResult(
+                        status="programmed_boot_failed",
+                        flash_command=flash_result,
+                        reset_command=reset_result,
+                        boot_command=None,
+                        boot_verification=None,
+                        metadata_command=metadata_result,
+                        written_metadata=written_metadata,
+                        verified_metadata_bytes=readback,
+                        confirmed_metadata=None,
+                        failure_phase="metadata_confirming",
+                        reason="Bootloader did not confirm matching STLM metadata before timeout.",
+                        next_action="Inspect Bootloader v0.6.5, Sector 3 and logs; do not retry automatically.",
+                    )
+
+                emit_phase("post_verifying", 95, "Verifying Application boot state")
                 boot_result, verification = self.verify_boot(
-                    plan.probe, event_sink=emit_log
+                    plan.probe, event_sink=emit_log, cancel_event=cancel_event
                 )
                 status = "succeeded" if verification.passed else "programmed_boot_failed"
                 if verification.passed:
-                    emit_phase("succeeded", 100, "Application is running")
+                    emit_phase("succeeded", 100, "Application is running with STLM + CONFIRMED")
                 else:
-                    emit_phase("failed", 90, verification.reason)
+                    emit_phase("failed", 95, verification.reason)
                 return FlashResult(
                     status=status,
                     flash_command=flash_result,
                     reset_command=reset_result,
                     boot_command=boot_result,
                     boot_verification=verification,
+                    metadata_command=metadata_result,
+                    written_metadata=written_metadata,
+                    verified_metadata_bytes=readback,
+                    confirmed_metadata=confirmed_metadata,
                     failure_phase=None if verification.passed else "post_verifying",
                     reason="" if verification.passed else verification.reason,
                     next_action=("" if verification.passed else

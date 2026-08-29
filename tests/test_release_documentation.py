@@ -76,6 +76,29 @@ class ReleaseDocumentationTests(unittest.TestCase):
         self.assertIn("provision-bootloader", skill)
         self.assertIn("PROVISION BOOTLOADER", skill)
 
+    def test_canonical_docs_require_v65_stlink_metadata_lifecycle(self) -> None:
+        paths = (
+            ROOT / "README.md",
+            ROOT / "AGENTS.md",
+            ROOT / "docs" / "03_FLASH_FIRMWARE.md",
+            ROOT / ".agents" / "skills" / "b300-ota-stlink" / "SKILL.md",
+        )
+        obsolete = (
+            "uses its erased-metadata fallback",
+            "dùng erased-metadata fallback",
+            "Do not create metadata",
+        )
+        for path in paths:
+            with self.subTest(path=path):
+                text = path.read_text(encoding="utf-8")
+                for phrase in obsolete:
+                    self.assertNotIn(phrase, text)
+                self.assertIn("STLM", text)
+                self.assertIn("VERIFIED", text)
+                self.assertIn("CONFIRMED", text)
+                self.assertIn("0x0800C000", text)
+
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -50,6 +50,11 @@ jobs:
           Set-Content -LiteralPath release\windows-cli-bundle\selftest-smoke.axf -Value "ELF" -NoNewline
           .\release\windows-cli-bundle\b300-stlink.exe debug selftest --symbols release\windows-cli-bundle\selftest-smoke.axf --dry-run --json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\release\windows-cli-bundle\b300-stlink.exe debug client --ssh-host gateway.example --ssh-user automation --client-action inspect --dry-run --json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\release\windows-cli-bundle\b300-stlink.exe debug vscode --ssh-host gateway.example --ssh-user automation --program-relative Objects/F407/Main_V2_F407.axf --output-dir release\windows-vscode-smoke --json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!(Test-Path release\windows-vscode-smoke\.vscode\launch.json)) { throw "VSCode remote debug kit missing" }
           .\release\windows-cli-bundle\b300-stlink.exe doctor --json
           $doctorExit = $LASTEXITCODE
           if ($doctorExit -notin 0,1) { exit $doctorExit }
@@ -128,6 +133,9 @@ jobs:
           ./release/linux-cli-bundle/b300-stlink debug selftest --symbols release/selftest-smoke.axf --dry-run --json
           printf 'ELF' > release/linux-cli-bundle/selftest-smoke.axf
           ./release/linux-cli-bundle/b300-stlink debug selftest --symbols release/linux-cli-bundle/selftest-smoke.axf --dry-run --json
+          ./release/linux-cli-bundle/b300-stlink debug client --ssh-host gateway.example --ssh-user automation --client-action inspect --dry-run --json
+          ./release/linux-cli-bundle/b300-stlink debug vscode --ssh-host gateway.example --ssh-user automation --program-relative Objects/F407/Main_V2_F407.axf --output-dir release/linux-vscode-smoke --json
+          test -f release/linux-vscode-smoke/.vscode/launch.json
           doctor_code=0
           ./release/linux-cli-bundle/b300-stlink doctor --json || doctor_code=$?
           if [ "$doctor_code" -ne 0 ] && [ "$doctor_code" -ne 1 ]; then exit "$doctor_code"; fi

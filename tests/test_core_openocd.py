@@ -20,8 +20,10 @@ from b300_core.openocd import (
     build_factory_flash_command,
     build_factory_protect_command,
     build_flash_command,
+    build_metadata_write_command,
     build_reset_command,
     parse_boot_verification,
+    parse_metadata_readback,
     build_target_inspect_command,
     parse_target_info,
     resolve_openocd,
@@ -112,13 +114,48 @@ class OpenOcdCoreTests(unittest.TestCase):
             command = build_flash_command(plan, "openocd")
 
         rendered = "\n".join(command)
-        self.assertIn("program {%s} verify" % plan.image.path, rendered)
+        self.assertIn("flash erase_sector 0 3 7", rendered)
+        self.assertIn("flash write_image {%s}" % plan.image.path, rendered)
+        self.assertIn("verify_image {%s}" % plan.image.path, rendered)
+        self.assertNotIn("flash write_image erase", rendered)
+        self.assertIn('echo "** Verified OK **"', rendered)
         self.assertNotIn("mww 0x40002860", rendered)
         self.assertIn("adapter serial SAFE123", command)
         self.assertIn("gdb port disabled", command)
         self.assertIn("telnet port disabled", command)
         self.assertIn("tcl port disabled", command)
         self.assertNotIn("mass_erase", rendered)
+
+    def test_metadata_transaction_is_hard_bounded_to_sector_three_record(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            metadata = Path(directory) / "appmeta.bin"
+            metadata.write_bytes(bytes(range(44)))
+            readback = Path(directory) / "appmeta-readback.bin"
+            command = build_metadata_write_command(
+                ProbeRef("SAFE123"), metadata, readback, "openocd"
+            )
+        rendered = "\n".join(command)
+        self.assertIn("reset halt", rendered)
+        self.assertIn("flash write_image {%s} 0x0800C000 bin" % metadata.resolve(), rendered)
+        self.assertIn("verify_image {%s} 0x0800C000 bin" % metadata.resolve(), rendered)
+        self.assertIn("dump_image {%s} 0x0800C000 44" % readback.resolve(), rendered)
+        self.assertNotIn("mww", rendered)
+        self.assertNotIn("mdw", rendered)
+        self.assertNotIn("erase_sector", rendered)
+        for forbidden in ("mass_erase", "flash protect", "erase_sector 0 0", "erase_sector 0 1",
+                          "erase_sector 0 2", "stm32f2x lock", "stm32f2x unlock"):
+            self.assertNotIn(forbidden, rendered)
+
+    def test_metadata_readback_parser_reconstructs_exact_little_endian_bytes(self) -> None:
+        output = (
+            "0x0800c000: 53544c4d 00000001 00000002 00000008\n"
+            "0x0800c010: 12345678 30303342 3034465f 00455a37\n"
+            "0x0800c020: 00000001 a1b2c3d4 00000000\n"
+        )
+        data = parse_metadata_readback(output)
+        self.assertEqual(len(data), 44)
+        self.assertEqual(int.from_bytes(data[:4], "little"), 0x53544C4D)
+        self.assertEqual(int.from_bytes(data[40:44], "little"), 0x00000000)
 
     def test_reset_is_a_separate_non_flash_transaction(self) -> None:
         reset = build_reset_command(ProbeRef("SAFE123"), "openocd")

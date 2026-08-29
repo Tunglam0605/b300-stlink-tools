@@ -44,6 +44,7 @@ class GuiMemoryTests(unittest.TestCase):
         tab = MemoryTab(service=object(), probe_provider=lambda: None)
         tab.show_metadata(decode_ota_metadata(make_metadata(state=3)))
         self.assertEqual(tab.metadata_values["Classification"].text(), "VALID")
+        self.assertEqual(tab.metadata_values["Source"].text(), "OTA (OTAM)")
         self.assertEqual(tab.metadata_values["State"].text(), "CONFIRMED (3)")
         self.assertEqual(tab.metadata_values["Board token"].text(), "B300_F407ZE")
 
@@ -55,7 +56,7 @@ class GuiMemoryTests(unittest.TestCase):
         self.assertEqual(tab.metadata_values["Classification"].text(), "STALE")
         self.assertEqual(tab.metadata_values["State"].text(), "—")
         self.assertIn("cần đọc lại", tab.status_label.text())
-        self.assertIn("Đọc OTA metadata", tab.metadata_notice.text())
+        self.assertIn("Đọc Application metadata", tab.metadata_notice.text())
 
     def test_memory_labels_pair_vietnamese_with_technical_english(self) -> None:
         tab = MemoryTab(service=object(), probe_provider=lambda: None)

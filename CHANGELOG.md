@@ -5,6 +5,44 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-29
+
+### Added
+
+- Đồng bộ normal Application provisioning với Bootloader v0.6.5 strict AppMeta: sau Application verify, tool ghi/verify/read-back chính xác 44 byte `STLM + VERIFIED` tại `0x0800C000`, reset rồi chỉ báo thành công khi Bootloader chuyển thành `STLM + CONFIRMED` với image size/CRC và sequence kế tiếp khớp.
+- Bổ sung sequence lifecycle dựa trên metadata trước đó, fallback xác định về sequence 1 khi metadata cũ invalid/unreadable, và bounded confirmation deadline trước post-verify PC/BKP1R.
+- Bổ sung phát hiện Intel HEX ghi đè xung đột cùng một địa chỉ trước khi provisioning.
+- CLI/GUI hiển thị evidence AppMeta mới: metadata đã ghi, read-back 44 byte, metadata CONFIRMED; Memory phân biệt nguồn `OTAM`/`STLM` và không còn coi `ERASED` là bootable fallback.
+- CLI Debug bổ sung first-class `client` role cho one-shot remote diagnostics qua managed SSH local forwarding, dùng cùng `DebugSession.start_external()` và symbol-match policy với GUI Client; Gateway vẫn loopback-only.
+- VS Code/Cortex-Debug remote kit tiếp tục là first-class Gateway client; SSH tunnel profile được harden đồng nhất với GUI/CLI Client bằng `BatchMode=yes`, `StrictHostKeyChecking=yes`, `ConnectTimeout=8` và chỉ forward GDB loopback.
+- Hardware debug acceptance trên main B300 thật: AXF↔Flash 4/4, source/stack/register, `xTickCount`, hardware breakpoint/watchpoint, Gateway→external Client selftest và 5 vòng stress đều PASS; VS Code external GDB transport PASS. SSH/two-machine vẫn PENDING vì máy thử chưa có `sshd`.
+
+### Changed
+
+- Factory provisioning nâng trusted Bootloader lên firmware `0x00060500`, artifact `b300_bootloader_f407ze_com3_v00060500.hex`, SHA-256 `085E44E8339D21EE2D136D11F86C2103295812CB2438807774B232647D3F75A1`, source commit `88b74f649497a5ea9c64b5394470407678795f42`.
+- Normal Application và Factory đều dùng transaction erase-once: erase domain đúng một lần, sau đó `flash write_image` không erase và `verify_image`; loại bỏ `program` helper khỏi Factory để tránh erase lặp.
+- Metadata programming dùng STM32 flash driver với staged `.bin`, `flash write_image`, `verify_image` và `dump_image` 44 byte khi CPU halt; không dùng raw memory-write cho internal Flash.
+- Canonical README, Agent Skill và operator docs được đồng bộ theo contract v0.6.5; `ERASED`/`CORRUPT` metadata fail-closed.
+
+### Safety
+
+- Normal Application vẫn không thay đổi WRP/RDP, không mass erase và re-check WRP Sector 0-2 trước destructive transaction.
+- Metadata failure hoặc read-back mismatch cấm reset; Bootloader confirmation timeout/mismatch fail-closed và không tự retry.
+- Factory chỉ chạm S0-S2, bắt buộc khôi phục/xác minh WRP trước khi kết thúc; S3-S7 không bị Factory erase/program.
+
+### Validation
+
+- Focused core/factory/AppMeta regression: **62 tests PASS**.
+- GUI Flash/Factory/Memory smoke regression sau AppMeta UX update: **21 tests PASS**.
+- Remote Debug focused regression cho GUI/CLI Client + VS Code/Cortex-Debug: **77 tests PASS**.
+- Full software regression cuối trước RC packaging: **557 tests PASS, 2 skipped, 0 failures/errors**.
+- `compileall` và `git diff --check` PASS; trusted Bootloader v0.6.5 provenance loader xác minh artifact/hash/source commit thành công.
+
+### Release gates
+
+- `0.9.0` hiện là development/release-candidate source trên `develop/v0.9.0`; không tag/publish Stable cho đến khi current-code hardware acceptance và OTA ↔ ST-Link interoperability gates hoàn thành.
+- Historical v0.6.5 hardware evidence được dùng làm reference, không được relabel thành hardware acceptance của build 0.9.0 hiện tại.
+
 ## [0.8.2] - 2026-08-29
 
 ### Fixed

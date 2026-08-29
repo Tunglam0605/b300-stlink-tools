@@ -194,6 +194,18 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertIn("--dry-run --json", workflow)
             self.assertIn("selftest-smoke.axf", workflow)
 
+    def test_packaged_cli_smoke_covers_gateway_client_and_vscode_paths(self) -> None:
+        release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        development = (ROOT / ".github" / "workflows" / "release-dry-run.yml").read_text(encoding="utf-8")
+        self.assertGreaterEqual(release.count("debug client --ssh-host gateway.example"), 3)
+        self.assertGreaterEqual(release.count("debug vscode --ssh-host gateway.example"), 3)
+        self.assertGreaterEqual(development.count("debug client --ssh-host gateway.example"), 2)
+        self.assertGreaterEqual(development.count("debug vscode --ssh-host gateway.example"), 2)
+        for workflow in (release, development):
+            self.assertIn("--client-action inspect --dry-run --json", workflow)
+            self.assertIn("Objects/F407/Main_V2_F407.axf", workflow)
+            self.assertIn(".vscode", workflow)
+
     def test_linux_release_smoke_tests_detached_update_helper(self) -> None:
         for name in ("release.yml", "release-dry-run.yml"):
             with self.subTest(workflow=name):

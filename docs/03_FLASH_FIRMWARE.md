@@ -14,14 +14,18 @@ Output phải có:
 
 ```text
 flash erase_sector 0 3 7
-program {...} verify
+flash write_image {application.hex}
+verify_image {application.hex}
+metadata_plan: 0x0800C000 / 44 bytes / STLM + VERIFIED
 reset run
 ```
 
-Hai transaction được hiển thị riêng: program/verify và reset với
-`condition=after_verified_ok`. Trước erase, normal flow phải đọc target F407
-512 KiB và xác nhận OpenOCD report rõ WRP cho S0–S2; thiếu WRP hoặc S0–S2 chưa
-protected thì fail closed, chuyển sang Factory/Bootloader workflow.
+Dry-run hiển thị rõ Application transaction, AppMeta contract và reset có điều
+kiện. `reset run` chỉ hợp lệ sau khi Application có exact `** Verified OK **`,
+44-byte `STLM + VERIFIED` đã được program/verify/read-back đúng tại `0x0800C000`.
+Trước erase, normal flow phải đọc target F407 512 KiB và xác nhận OpenOCD report
+rõ WRP cho S0–S2; service kiểm lại WRP ngay trước destructive transaction. Thiếu
+WRP hoặc S0–S2 chưa protected thì fail closed, chuyển sang Factory/Bootloader.
 
 Không tiếp tục nếu thấy `mass_erase`, Sector 0--2, hoặc lỗi HEX protected range.
 
@@ -51,9 +55,12 @@ b300-stlink flash <duong-dan-file.hex> --probe-serial <ST-LINK-SN>
 
 ## Bước 3: Xác nhận kết quả
 
-Nạp thành công khi OpenOCD báo đúng event `** Verified OK **`, reset thành công
-và post-verify xác nhận PC ở Application cùng BKP1R đã clear.
-Tool chỉ xóa Sector 3--7 và giữ Sector 0--2 Bootloader.
+Nạp thành công khi Application verify đạt, AppMeta `STLM + VERIFIED` được ghi và
+read-back đúng 44 byte, reset thành công, rồi post-verify xác nhận PC ở Application
+và BKP1R đã clear. Bootloader v0.6.5 sẽ kiểm metadata CRC, full-image CRC và vector
+rồi consume `STLM + VERIFIED` thành `STLM + CONFIRMED`; size/CRC giữ nguyên và
+sequence phải là modular successor của record vừa ghi. Tool chỉ xóa Sector 3--7
+và giữ nguyên Sector 0--2 Bootloader.
 
 Không tự retry nếu bất kỳ phase nào lỗi. Lưu `failure_phase`, `reason`,
 `next_action` trong log và xem [Xử lý lỗi](05_TROUBLESHOOTING.md).
@@ -65,11 +72,13 @@ CRC32 của Application đã được xác nhận. Nếu chỉ erase/program Sec
 ST-Link, metadata cũ vẫn còn. Bootloader sẽ thấy vector Application mới hợp lệ
 nhưng CRC/size không khớp metadata và giữ board ở recovery.
 
-`b300-stlink flash` xử lý đúng bằng cách xóa metadata và Application trong cùng
-flash domain S3–S7, rồi program/verify image mới. Bootloader thấy Sector 3 erased
-và dùng erased-metadata fallback hiện có. Không có synthetic metadata, CRC
-workaround hay provisioning marker trong production normal flow; OTA sau đó vẫn
-tiếp tục theo Bootloader contract.
+`b300-stlink flash` xử lý đúng bằng cách xóa metadata + Application trong flash
+domain S3–S7, program/verify image mới, rồi tính `imageSize` và `imageCrc32` trên
+**canonical continuous flash image** từ `0x08010000` đến byte cuối; mọi gap Intel
+HEX trong vùng này được tính là `0xFF` vì Flash vừa được erase. Tool tạo đúng
+44-byte AppMeta `STLM + VERIFIED`, ghi tại `0x0800C000`, verify và đọc lại chính
+xác trước khi reset. Bootloader v0.6.5 không có erased-metadata fallback: metadata
+erased/corrupt/foreign hoặc CRC mismatch đều fail-closed về recovery.
 
 Không dùng lệnh OpenOCD thủ công để thay thế transaction của tool trong vận
 hành thông thường.

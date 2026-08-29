@@ -119,10 +119,12 @@ release pipeline is considered healthy.
 
 Normal `flash` từ chối HEX chạm vùng được bảo vệ, không dùng mass erase, không
 ghi Option Bytes/WRP và chỉ chạy khi OpenOCD đọc được WRP Sector 0–2 đang bật.
-Luồng luôn là `erase S3–S7 → program/verify → reset → post-verify BKP1R + PC`.
-Sector 3 được xóa sạch nên Bootloader dùng erased-metadata fallback hiện có;
-không có provisioning marker. Trước khi erase, core đọc lại đúng target F407
-512 KiB, chép HEX đã duyệt vào staging riêng và kiểm tra lại SHA-256/range.
+Luồng Bootloader v0.6.5 là `erase S3–S7 → program/verify Application → ghi/verify
+đúng 44 byte STLM + VERIFIED tại 0x0800C000 → reset → Bootloader chuyển thành
+STLM + CONFIRMED → post-verify BKP1R + PC`. `ERASED`/`CORRUPT` metadata không
+chứng minh Application bootable. Trước khi erase, core đọc metadata cũ để nối
+sequence khi hợp lệ, đọc lại đúng target F407 512 KiB, chép HEX đã duyệt vào
+staging riêng và kiểm tra lại SHA-256/range/CRC.
 
 `provision-bootloader` là workflow Factory tách biệt. Nó chỉ dùng artifact
 Bootloader B300 đã bundle và kiểm hash/provenance; khi cần mới tạm tắt WRP S0–S2,
@@ -172,10 +174,11 @@ b300-stlink provision-bootloader --dry-run --json
 b300-stlink-gui
 b300-stlink debug            # mặc định = debug gateway
 b300-stlink debug gateway    # cách viết tường minh
+b300-stlink debug client --ssh-host <gateway> --ssh-user <user> --symbols <application.axf> --client-action inspect --json
 b300-stlink debug selftest --symbols <application.axf> --expression xTickCount --location vApplicationIdleHook --json
 # selftest kiểm Gateway→external Client + AXF↔Flash trên một máy; SSH/two-machine vẫn là field acceptance riêng.
 # Gateway CLI vẫn có đầy đủ flash/provision/doctor; riêng Debug chỉ làm cầu nối ST-Link/OpenOCD.
-# GUI Debug: Auto | Local | Gateway | Client. Client giữ source + AXF/ELF và tự mở SSH tunnel.
+# GUI Debug và CLI Debug đều có Local/Gateway/Client path; Client giữ source + AXF/ELF và dùng managed SSH tunnel.
 b300-stlink debug where --symbols <application.axf> --json   # compatibility/local diagnostics
 b300-stlink debug vscode --ssh-host <gateway> --ssh-user <user> \
   --program-relative Objects/F407/Main_V2_F407.axf --output-dir <workspace>

@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 from typing import Iterable, Mapping, Optional
 
+from b300_core.metadata import OTA_META_SIZE
 from b300_core.models import DiagnosticReport, OtaMetadata, ProbeInfo, TargetInfo
-from b300_core.policy import SECTORS
+from b300_core.policy import METADATA_ADDRESS, SECTORS
 
 
 class Reporter:
@@ -117,6 +118,16 @@ def flash_start_fields(plan, target: Optional[TargetInfo], *, dry_run: bool) -> 
         "end": "0x%08X" % image.end_address,
         "dry_run": dry_run,
         "size": image.size,
+        "flash_span_size": image.flash_span_size,
+        "flash_crc32": ("0x%08X" % image.flash_crc32
+                        if image.flash_crc32 is not None else None),
+        "metadata_contract": {
+            "address": "0x%08X" % METADATA_ADDRESS,
+            "size": OTA_META_SIZE,
+            "magic": "STLM",
+            "state": "VERIFIED",
+            "condition": "after_application_verified",
+        },
         "initial_msp": ("0x%08X" % image.initial_msp
                         if image.initial_msp is not None else None),
         "reset_vector": ("0x%08X" % image.reset_vector
@@ -141,6 +152,18 @@ def flash_result_fields(outcome, preflight_target: TargetInfo) -> dict:
         "bkp1r": None,
         "application_running": bool(
             outcome.boot_verification is not None and outcome.boot_verification.passed
+        ),
+        "metadata_written": (
+            metadata_record(outcome.written_metadata)
+            if getattr(outcome, "written_metadata", None) is not None else None
+        ),
+        "metadata_readback_size": (
+            len(outcome.verified_metadata_bytes)
+            if getattr(outcome, "verified_metadata_bytes", None) is not None else None
+        ),
+        "metadata_confirmed": (
+            metadata_record(outcome.confirmed_metadata)
+            if getattr(outcome, "confirmed_metadata", None) is not None else None
         ),
     }
     if outcome.boot_verification is not None:

@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from b300_core.models import ProbeRef
+from b300_core.gdb_runtime import resolve_gdb
 from b300_core.remote_vscode import RemoteVsCodeProfile, workspace_executable
 
 
@@ -42,8 +43,14 @@ class RemoteVsCodeDialog(QDialog):
         self.local_gdb_port.setValue(3333)
         self.program_edit = QLineEdit("Objects/F407/Main_V2_F407.axf")
         self.program_edit.setToolTip("Đường dẫn AXF/ELF tương đối bên trong workspace được mở trên máy VSCode.")
-        self.gdb_edit = QLineEdit("arm-none-eabi-gdb")
-        self.gdb_edit.setToolTip("GDB phải có trên máy chạy VSCode; gateway không cần GDB.")
+        try:
+            default_gdb = resolve_gdb()
+        except Exception:
+            default_gdb = "arm-none-eabi-gdb"
+        self.gdb_edit = QLineEdit(default_gdb)
+        self.gdb_edit.setToolTip(
+            "GDB trên máy chạy VSCode; tool tự tìm từ B300_GDB/STM32CubeIDE/PATH và vẫn cho phép chỉnh tay."
+        )
         form.addRow("Gateway host:", self.host_edit)
         form.addRow("SSH user:", self.user_edit)
         form.addRow("SSH port:", self.ssh_port)

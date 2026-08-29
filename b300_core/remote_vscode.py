@@ -64,7 +64,10 @@ class RemoteVsCodeProfile:
         self.validate()
         result = [
             "ssh", "-N",
+            "-o", "BatchMode=yes",
+            "-o", "StrictHostKeyChecking=yes",
             "-o", "ExitOnForwardFailure=yes",
+            "-o", "ConnectTimeout=8",
             "-o", "ServerAliveInterval=30",
             "-o", "ServerAliveCountMax=3",
             "-L", "127.0.0.1:%d:127.0.0.1:%d" %
@@ -158,6 +161,7 @@ class RemoteVsCodeProfile:
             "4. Open the matching source workspace/AXF and select "
             "'B300 STM32F407 · Remote via SSH' in Run and Debug.\n\n"
             "Safety: OpenOCD GDB/TCL stay on gateway loopback. Only GDB is forwarded through SSH.\n"
+            "SSH uses BatchMode + strict host-key checking; enroll the trusted Gateway host key and SSH key first.\n"
             "The generated VSCode profile uses request=attach and forces hardware breakpoints/watchpoints.\n"
             "Do not expose ports 3333 or 6666 directly to LAN/Internet.\n"
         ) % (self.gateway_command(), self.tunnel_command())

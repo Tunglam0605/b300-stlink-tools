@@ -4,8 +4,10 @@ import tempfile
 from pathlib import Path
 
 from b300_core.build_info import build_commit as resolve_build_commit
+from b300_core.factory_resource import load_trusted_bootloader
 
 project_root = Path(SPECPATH)
+trusted_bootloader = load_trusted_bootloader(project_root / "resources" / "firmware")
 build_commit = resolve_build_commit()
 build_commit_file = Path(tempfile.mkdtemp(prefix="b300-stlink-build-")) / "BUILD-COMMIT.txt"
 build_commit_file.parent.mkdir(parents=True, exist_ok=True)
@@ -20,8 +22,8 @@ a = Analysis(
         (str(project_root / "branding" / "b300-stlink-wordmark.png"), "branding"),
         (str(project_root / "CHANGELOG.md"), "."),
         (str(build_commit_file), "."),
-        (str(project_root / "resources" / "firmware" / "b300_bootloader_f407ze_com3_v00050001.hex"), "resources/firmware"),
-        (str(project_root / "resources" / "firmware" / "b300_bootloader_manifest.json"), "resources/firmware"),
+        (str(trusted_bootloader.image.path), "resources/firmware"),
+        (str(trusted_bootloader.manifest_path), "resources/firmware"),
     ],
     hiddenimports=[],
     hookspath=[],

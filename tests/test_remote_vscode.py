@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -40,7 +41,10 @@ class RemoteVsCodeTests(unittest.TestCase):
         self.assertIn("--probe-serial", gateway)
         self.assertIn("127.0.0.1:3333:127.0.0.1:3333", tunnel)
         self.assertNotIn("6666", tunnel)
+        self.assertIn("BatchMode=yes", tunnel)
+        self.assertIn("StrictHostKeyChecking=yes", tunnel)
         self.assertIn("ExitOnForwardFailure=yes", tunnel)
+        self.assertIn("ConnectTimeout=8", tunnel)
         self.assertIn("ServerAliveInterval=30", tunnel)
 
     def test_launch_json_is_external_attach_and_hardware_only(self) -> None:
@@ -71,7 +75,28 @@ class RemoteVsCodeTests(unittest.TestCase):
         self.assertEqual(args.ssh_user, "automation")
         self.assertEqual(args.local_gdb_port, 3333)
         self.assertEqual(args.gdb_port, 3333)
-        self.assertEqual(args.vscode_gdb_path, "arm-none-eabi-gdb")
+        self.assertIsNone(args.vscode_gdb_path)
+
+    def test_cli_vscode_auto_resolves_client_gdb_when_not_explicit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "kit"
+            stream = StringIO()
+            with patch("b300_stlink.resolve_gdb", return_value=r"C:\Toolchain\bin\arm-none-eabi-gdb.exe"):
+                with redirect_stdout(stream):
+                    code = main([
+                        "debug", "vscode",
+                        "--ssh-host", "192.168.1.50",
+                        "--ssh-user", "automation",
+                        "--program-relative", "Objects/F407/Main_V2_F407.axf",
+                        "--output-dir", str(output),
+                        "--json",
+                    ])
+            self.assertEqual(code, 0)
+            launch = json.loads((output / ".vscode" / "launch.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                launch["configurations"][0]["gdbPath"],
+                r"C:\Toolchain\bin\arm-none-eabi-gdb.exe",
+            )
 
     def test_cli_generates_portable_kit_without_hardware_access(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

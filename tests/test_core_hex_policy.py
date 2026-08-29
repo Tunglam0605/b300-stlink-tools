@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 
 from b300_core.hex_image import inspect_image
@@ -77,6 +78,8 @@ class HexImagePolicyTests(unittest.TestCase):
         self.assertEqual(info.size, 8)
         self.assertEqual(info.data_record_count, 1)
         self.assertEqual(info.sha256, expected_hash)
+        self.assertEqual(info.flash_span_size, 8)
+        self.assertEqual(info.flash_crc32, zlib.crc32(APPLICATION_VECTOR) & 0xFFFFFFFF)
 
     def test_inspect_image_rejects_protected_bootloader_range(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -128,6 +131,9 @@ class HexImagePolicyTests(unittest.TestCase):
         self.assertEqual(info.start_address, 0x08010000)
         self.assertEqual(info.end_address, 0x08010010)
         self.assertEqual(info.size, 9)
+        self.assertEqual(info.flash_span_size, 17)
+        canonical = APPLICATION_VECTOR + (b"\xFF" * 8) + b"\xBB"
+        self.assertEqual(info.flash_crc32, zlib.crc32(canonical) & 0xFFFFFFFF)
 
 
     def test_plan_rejects_readout_protected_target_without_modifying_rdp(self) -> None:
@@ -139,6 +145,20 @@ class HexImagePolicyTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "readout protection"):
                 build_flash_plan(info, ProbeRef(serial="ABC123"), target)
+
+
+    def test_conflicting_duplicate_hex_bytes_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "duplicate-conflict.hex"
+            path.write_text("\n".join([
+                hex_record(0, 4, (0x0801).to_bytes(2, "big")),
+                hex_record(0x0000, 0, APPLICATION_VECTOR),
+                hex_record(0x0000, 0, APPLICATION_VECTOR[:4] +
+                           bytes([APPLICATION_VECTOR[4] ^ 0x02]) + APPLICATION_VECTOR[5:]),
+                hex_record(0, 1, b""),
+            ]) + "\n", encoding="ascii")
+            with self.assertRaisesRegex(ValueError, r"conflicting data at 0x08010004"):
+                inspect_image(path)
 
 
 

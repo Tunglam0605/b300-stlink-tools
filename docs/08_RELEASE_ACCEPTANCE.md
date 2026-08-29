@@ -1,8 +1,8 @@
 # Biên bản nghiệm thu và phát hành B300 ST-Link Tools
 
-## Bản 0.8.1 - Software acceptance trước field E2E
+## Bản 0.9.0 - Software RC trước hardware/field E2E
 
-Mục tiêu của 0.8.1 là khóa chất lượng phần mềm trước khi thử nghiệm hai máy. Release có thể phát hành khi mọi cổng source/package/CI và single-machine hardware acceptance đạt; **SSH/two-machine Client↔Gateway E2E không được ghi là PASS cho tới khi chủ dự án tự nghiệm thu trên hai thiết bị thật**.
+Mục tiêu của 0.9.0 là hợp nhất AppMeta/Bootloader v0.6.5 và giữ đầy đủ ba đường remote-debug Client của Gateway: **GUI Client, CLI Client, VS Code/Cortex-Debug**. Source/package/CI có thể đạt release-candidate gate; **không tag/publish Stable cho tới khi current-code hardware acceptance, OTA ↔ ST-Link interoperability và SSH/two-machine Client↔Gateway E2E được chủ dự án nghiệm thu trên thiết bị thật**.
 
 Các cổng bắt buộc trước tag:
 
@@ -12,10 +12,12 @@ Các cổng bắt buộc trước tag:
 - Windows x64 + Ubuntu x64 + Ubuntu ARM64 CI;
 - native package build, size budget, GUI/CLI smoke, signed updater/release metadata;
 - `debug selftest` trên một máy + STM32/ST-Link thật, bao gồm AXF↔Flash exact match trước attach, restore target và release port;
+- hardware debug evidence v0.9.0: [Hardware Debug Acceptance 2026-08-29](11_HARDWARE_DEBUG_ACCEPTANCE_V0.9.0_2026-08-29.md);
+- GUI Client, CLI Client và VS Code/Cortex-Debug đều phải dùng Gateway loopback-only + SSH forwarding; VS Code chỉ forward GDB, không expose TCL ra LAN;
 - negative selftest với AXF sai phải fail-closed trước external GDB attach và vẫn release target/ports;
 - public release/updater verification sau publish.
 
-Deferred field gate: SSH host-key/authentication, forwarding qua LAN giữa hai máy, GUI Client reconnect/disconnect trong mạng thật và remote operator acceptance.
+Deferred field gate: SSH host-key/authentication, forwarding qua LAN giữa hai máy, GUI Client reconnect/disconnect, CLI Client one-shot diagnostics, VS Code/Cortex-Debug attach/break/watch trong mạng thật và remote operator acceptance.
 
 ## Bản 0.4.0 - Engineering diagnostics + hardware acceptance
 
@@ -89,11 +91,14 @@ coi là đạt cổng phần mềm; nghiệm thu phần cứng bên dưới vẫ
 Chỉ chạy sau khi chủ dự án xác nhận rõ board, probe và Application HEX trong
 phiên hiện tại. Không tự retry nếu một ca thất bại.
 
-- [ ] Application có metadata erased được nạp bằng GUI và boot thành công.
-- [ ] Application nạp raw khi còn metadata `CONFIRMED` cũ bị Bootloader từ chối.
-- [ ] Cùng Application đó được nạp bằng B300 ST-Link Tools và Bootloader chấp nhận.
+- [ ] Metadata `ERASED` hoặc `CORRUPT` với vector Application hợp lệ vẫn bị Bootloader v0.6.5 fail-closed.
+- [ ] Application nạp raw khi còn metadata `CONFIRMED` cũ bị Bootloader từ chối nếu CRC/size không khớp.
+- [ ] B300 ST-Link Tools erase đúng S3–S7, program/verify Application, ghi/read-back đúng 44-byte `STLM + VERIFIED` rồi mới reset.
+- [ ] Boot kế tiếp chuyển `STLM + VERIFIED` thành `STLM + CONFIRMED`; full-image CRC và vector đều hợp lệ.
+- [ ] Intel HEX sparse có gap được tính canonical CRC với gap = `0xFF`, khớp CRC Bootloader đọc từ Flash.
 - [ ] HEX chạm Sector 0–2 bị từ chối trước mọi truy cập phần cứng.
-- [ ] Verify fail không reset và không retry.
+- [ ] Application verify fail hoặc AppMeta write/read-back fail đều không reset và không retry.
+- [ ] WRP S0–S2 được re-check ngay trước erase; thiếu WRP chặn transaction trước destructive command.
 - [ ] Mất kết nối probe giữa phiên hiển thị phase, nguyên nhân, hành động tiếp theo và giữ log.
 - [ ] Sau ca thành công: PC thuộc `0x08010000..0x0807FFFF` và BKP1R = 0.
 

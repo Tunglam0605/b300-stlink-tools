@@ -44,12 +44,16 @@ release archive vào Git source repository.
 
    ```text
    flash erase_sector 0 3 7
-   program {...} verify
+   flash write_image {application.hex}
+   verify_image {application.hex}
+   metadata_plan: 0x0800C000 / 44 bytes / STLM + VERIFIED
    reset run
    ```
 
-   Đây là hai transaction nối tiếp có điều kiện. Reset chỉ chạy sau exact
-   `** Verified OK **`; normal flow không ghi backup register hay WRP.
+   Đây là chuỗi provisioning có điều kiện. Sau exact `** Verified OK **`, tool
+   phải tạo metadata từ canonical flash span (gap Intel HEX = `0xFF`), ghi/verify
+   đúng 44 byte `STLM + VERIFIED` tại `0x0800C000` và đọc lại chính xác. `reset run`
+   chỉ chạy sau khi AppMeta read-back hợp lệ; normal flow không ghi WRP/RDP.
 
 Nếu transaction khác, HEX bị từ chối, hoặc có `mass_erase`/Sector 0--2: dừng
 và báo lỗi. Không sửa transaction để ép nạp.
@@ -83,8 +87,11 @@ GUI còn yêu cầu nhập đúng `PROVISION BOOTLOADER`.
    và post-verify xác nhận PC/BKP hợp lệ.
 4. Nếu lỗi: dừng, giữ log, báo `failure_phase`, `reason`, `next_action`; không retry mù.
 
-Sector 3 được erase cùng Application nên Bootloader dùng erased-metadata
-fallback hiện có. Không tạo synthetic OTA metadata, CRC workaround hay marker.
+Sector 3 được erase cùng Application nhưng Bootloader v0.6.5 **không** boot từ
+metadata erased/corrupt. Sau Application verify, tool phải ghi canonical AppMeta
+`STLM + VERIFIED`; Bootloader kiểm metadata CRC + full-image CRC + vector, clear
+stale recovery request cho fresh STLM hợp lệ rồi chuyển record thành
+`STLM + CONFIRMED`. Không dùng CRC workaround hay backup-register marker.
 
 ## 4. Xác minh sau flash khi user yêu cầu
 
