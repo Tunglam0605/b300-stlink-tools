@@ -98,6 +98,24 @@ class RemoteVsCodeTests(unittest.TestCase):
                 r"C:\Toolchain\bin\arm-none-eabi-gdb.exe",
             )
 
+    def test_cli_vscode_falls_back_to_portable_gdb_name_when_not_installed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "kit"
+            stream = StringIO()
+            with patch("b300_stlink.resolve_gdb", side_effect=FileNotFoundError("missing")):
+                with redirect_stdout(stream):
+                    code = main([
+                        "debug", "vscode",
+                        "--ssh-host", "192.168.1.50",
+                        "--ssh-user", "automation",
+                        "--program-relative", "Objects/F407/Main_V2_F407.axf",
+                        "--output-dir", str(output),
+                        "--json",
+                    ])
+            self.assertEqual(code, 0)
+            launch = json.loads((output / ".vscode" / "launch.json").read_text(encoding="utf-8"))
+            self.assertEqual(launch["configurations"][0]["gdbPath"], "arm-none-eabi-gdb")
+
     def test_cli_generates_portable_kit_without_hardware_access(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "kit"

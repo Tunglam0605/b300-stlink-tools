@@ -15,6 +15,7 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 - CLI/GUI hiển thị evidence AppMeta mới: metadata đã ghi, read-back 44 byte, metadata CONFIRMED; Memory phân biệt nguồn `OTAM`/`STLM` và không còn coi `ERASED` là bootable fallback.
 - CLI Debug bổ sung first-class `client` role cho one-shot remote diagnostics qua managed SSH local forwarding, dùng cùng `DebugSession.start_external()` và symbol-match policy với GUI Client; Gateway vẫn loopback-only.
 - VS Code/Cortex-Debug remote kit tiếp tục là first-class Gateway client; SSH tunnel profile được harden đồng nhất với GUI/CLI Client bằng `BatchMode=yes`, `StrictHostKeyChecking=yes`, `ConnectTimeout=8` và chỉ forward GDB loopback.
+- VS Code GDB selection ưu tiên auto-resolve từ B300_GDB/STM32CubeIDE/PATH khi có; nếu Client chưa cài GDB thì kit vẫn sinh portable với `arm-none-eabi-gdb` để CI/offline profile generation không bị phụ thuộc toolchain cục bộ. Explicit `--vscode-gdb-path` vẫn fail-closed nếu path không hợp lệ.
 - Hardware debug acceptance trên main B300 thật: AXF↔Flash 4/4, source/stack/register, `xTickCount`, hardware breakpoint/watchpoint, Gateway→external Client selftest và 5 vòng stress đều PASS; VS Code external GDB transport PASS. SSH/two-machine vẫn PENDING vì máy thử chưa có `sshd`.
 
 ### Changed
@@ -34,8 +35,8 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 - Focused core/factory/AppMeta regression: **62 tests PASS**.
 - GUI Flash/Factory/Memory smoke regression sau AppMeta UX update: **21 tests PASS**.
-- Remote Debug focused regression cho GUI/CLI Client + VS Code/Cortex-Debug: **77 tests PASS**.
-- Full software regression cuối trước RC packaging: **557 tests PASS, 2 skipped, 0 failures/errors**.
+- Remote Debug focused regression cho GUI/CLI Client + VS Code/Cortex-Debug: **78 tests PASS**.
+- Full software regression cuối trước RC packaging: **558 tests PASS, 2 skipped, 0 failures/errors**.
 - `compileall` và `git diff --check` PASS; trusted Bootloader v0.6.5 provenance loader xác minh artifact/hash/source commit thành công.
 
 ### Release gates

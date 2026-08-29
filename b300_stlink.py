@@ -112,6 +112,15 @@ def _register_record(item):
     return {"number": item.number, "name": item.name, "value": item.value}
 
 
+def _resolve_vscode_gdb_path(explicit: Optional[str]) -> str:
+    if explicit:
+        return resolve_gdb(explicit)
+    try:
+        return resolve_gdb()
+    except (FileNotFoundError, RuntimeError):
+        return "arm-none-eabi-gdb"
+
+
 def run_vscode_profile(args: argparse.Namespace) -> int:
     if not args.ssh_host or not args.ssh_user:
         raise ValueError("debug vscode requires --ssh-host HOST and --ssh-user USER.")
@@ -124,7 +133,7 @@ def run_vscode_profile(args: argparse.Namespace) -> int:
         local_gdb_port=args.local_gdb_port,
         remote_gdb_port=args.gdb_port,
         executable=workspace_executable(args.program_relative),
-        gdb_path=resolve_gdb(args.vscode_gdb_path),
+        gdb_path=_resolve_vscode_gdb_path(args.vscode_gdb_path),
         probe_serial=args.probe_serial,
     )
     record = profile.record()

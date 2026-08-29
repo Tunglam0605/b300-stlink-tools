@@ -147,9 +147,9 @@ Không tự ý cài OpenSSH Server hoặc mở Windows Firewall trong phiên nà
 
 Sau các thay đổi v0.9.0 hiện tại:
 
-- full regression: **557 PASS, 2 skipped**;
+- full regression: **558 PASS, 2 skipped**;
 - GUI regression: **59/59 PASS**;
-- Remote Debug focused regression: **77/77 PASS**.
+- Remote Debug focused regression: **78/78 PASS**.
 
 ## Kết luận
 
