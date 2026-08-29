@@ -126,8 +126,7 @@ chứng minh Application bootable. Trước khi erase, core đọc metadata cũ 
 sequence khi hợp lệ, đọc lại đúng target F407 512 KiB, chép HEX đã duyệt vào
 staging riêng và kiểm tra lại SHA-256/range/CRC.
 
-`provision-bootloader` là workflow Factory tách biệt. Nó chỉ dùng artifact
-Bootloader B300 đã bundle và kiểm hash/provenance; khi cần mới tạm tắt WRP S0–S2,
+`provision-bootloader` là workflow Factory tách biệt. Bootloader là **publisher-controlled artifact**: chỉ nhà phát hành quyết định version/file nào được bundle trong từng release. Người dùng không có đường dẫn, nút Browse hay tham số để import/thay thế Bootloader bằng artifact ngoài release chính thức. Tool chỉ dùng Bootloader B300 chính thức đã bundle và kiểm hash/provenance; khi cần mới tạm tắt WRP S0–S2,
 reset/halt để reload Option Bytes rồi xác minh WRP đã OFF trước khi erase/program
 đúng S0–S2. Sau program/verify, tool bật lại WRP S0–S2, reset/halt để reload
 Option Bytes, xác minh WRP đã ON, rồi mới `reset run`. Lệnh thật yêu cầu cả

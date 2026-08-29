@@ -661,6 +661,13 @@ class B300StlinkTests(unittest.TestCase):
         self.assertNotIn("stm32f2x lock", rendered)
         self.assertNotIn("stm32f2x unlock", rendered)
 
+    def test_factory_rejects_user_supplied_bootloader_path(self) -> None:
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            tool().main([
+                "provision-bootloader", "C:\\temp\\custom-bootloader.hex",
+                "--dry-run",
+            ])
+
     def test_factory_real_run_requires_explicit_confirmation_before_hardware(self) -> None:
         output = io.StringIO()
         with redirect_stdout(output):

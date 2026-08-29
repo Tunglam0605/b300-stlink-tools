@@ -38,6 +38,8 @@ Read-only inspection before Factory provisioning:
 
 ## 2. Factory provisioning Bootloader v0.6.5
 
+Product policy: the Bootloader is publisher-controlled. Each release contains one pinned trusted Bootloader artifact selected by the publisher; end users cannot import, browse to, or replace the Bootloader with an arbitrary artifact outside the official release.
+
 Command path: CI-built `b300-stlink.exe provision-bootloader --confirm-factory-provision --json`.
 
 Observed transaction:
