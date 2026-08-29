@@ -5,6 +5,49 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-29
+
+### Added
+
+- Integrated CLI debug trên loopback dùng GDB/MI `3333` + Safe TCL `6666`: `debug inspect`, `where`, `stack`, `registers`, `variable`, `poll` và bounded `read-words`.
+- Source-aware AXF/ELF diagnostics: resolve program counter thành function/file/line, đọc stack frame, register và biến qua token-correlated GDB/MI.
+- `debug break` one-shot chỉ dùng hardware breakpoint (`-break-insert -h`), có timeout, xác minh đúng `breakpoint-hit`/breakpoint number, cleanup rồi resume.
+- `debug watch` one-shot cho expression allow-list, xác minh đúng watchpoint trigger/number, chụp frame + giá trị biến ngay tại thời điểm hit, cleanup rồi resume.
+- Safe TCL client loopback-only cho `version`, `targets`, bounded aligned memory read và register diagnostics; không expose raw TCL.
+
+### Changed
+
+- Integrated debug ghi nhận CPU state bằng OpenOCD `targets` trước GDB attach và giữ lại trạng thái ban đầu. Target ban đầu `running` được resume sau snapshot/breakpoint/watchpoint transaction.
+- OpenOCD transient `State=unknown` ngay sau listener READY được xử lý bằng bounded readiness wait; hết timeout vẫn fail-closed.
+- CLI JSON debug output được chuẩn hóa cho agent/automation, gồm endpoint, initial target state, symbol path, frame/hit và watched value khi có.
+
+### Security
+
+- Integrated mode luôn loopback-only; Telnet bị cấm và TCL không được expose ra remote. Remote debug server vẫn chỉ mở GDB theo policy hiện có.
+- Debug path không có erase/program/mass-erase, arbitrary memory write, Option Bytes, RDP hoặc WRP operations.
+- Breakpoint luôn là hardware breakpoint; watch/variable expression và breakpoint location đều bị allow-list để ngăn command injection.
+- Breakpoint/watchpoint resource được xóa trong cleanup kể cả lỗi/timeout; target ban đầu đang chạy được khôi phục về `running`.
+
+### Hardware Validation
+
+- ST-Link V2 + STM32F407 thật (~3.07 V): application vector đọc qua `debug read-words` khớp MSP `0x200185C8` và reset vector `0x08010361`.
+- Machine code tại `0x0802AA80` được đối chiếu với các AXF; chỉ `B300-Main-Custom/Objects/F407/Main_V2_F407.axf` khớp binary đang chạy.
+- `debug where` resolve `vApplicationIdleHook` tại `User/main.c:87`; `debug stack` resolve các FreeRTOS/task frames; `debug variable bRUN` trả `BSP_IO_RESET`.
+- Hardware breakpoint one-shot hit `vApplicationIdleHook` tại `0x08025FDA` và resume target thành công.
+- Hardware watchpoint one-shot trên `xTickCount` hit `xTaskIncrementTick` tại `FreeRTOS Source/tasks.c:2813`, chụp giá trị tại thời điểm hit và resume thành công.
+- Sau acceptance, target xác nhận `running` và cả port `3333`/`6666` đều đóng. Không thực hiện flash/erase/Option Bytes/WRP trong các debug test.
+
+### Compatibility
+
+- Giữ nguyên updater contract từ v0.6.1: `latest.json` chỉ chứa 5 GUI platform legacy-compatible; CLI tiếp tục dùng signed `latest-cli.json`.
+- Exact GUI 0.5.3 updater đã được dùng làm acceptance harness và phải tiếp tục nhìn thấy v0.7.0 sau khi publish.
+
+### Validation
+
+- Pre-bump full regression: **460 tests PASS, 2 skipped**.
+- Version/updater/release-contract focused regression sau bump: **82 tests PASS, 2 skipped**.
+- Full regression trên source `0.7.0`: **460 tests PASS, 2 skipped**.
+
 ## [0.6.1] - 2026-08-29
 
 ### Fixed
