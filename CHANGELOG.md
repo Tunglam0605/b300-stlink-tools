@@ -17,6 +17,7 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 - VS Code/Cortex-Debug remote kit tiếp tục là first-class Gateway client; SSH tunnel profile được harden đồng nhất với GUI/CLI Client bằng `BatchMode=yes`, `StrictHostKeyChecking=yes`, `ConnectTimeout=8` và chỉ forward GDB loopback.
 - VS Code GDB selection ưu tiên auto-resolve từ B300_GDB/STM32CubeIDE/PATH khi có; nếu Client chưa cài GDB thì kit vẫn sinh portable với `arm-none-eabi-gdb` để CI/offline profile generation không bị phụ thuộc toolchain cục bộ. Explicit `--vscode-gdb-path` vẫn fail-closed nếu path không hợp lệ.
 - Hardware debug acceptance trên main B300 thật: AXF↔Flash 4/4, source/stack/register, `xTickCount`, hardware breakpoint/watchpoint, Gateway→external Client selftest và 5 vòng stress đều PASS; VS Code external GDB transport PASS. SSH/two-machine vẫn PENDING vì máy thử chưa có `sshd`.
+- Hardware provisioning acceptance v0.9.0 trên main B300 thật bằng Windows CLI artifact do GitHub Actions build: Factory nâng Bootloader v0.5.0.1 → v0.6.5, independent S0-S2 bit-for-bit verify, strict ST-Link AppMeta `VERIFIED→CONFIRMED`, repeated sequence `2→3→4`, 3 reset persistence cycles, BOOT_REQUEST one-shot và Application update-check/no-server fallback đều PASS.
 
 ### Changed
 
@@ -38,11 +39,13 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 - Remote Debug focused regression cho GUI/CLI Client + VS Code/Cortex-Debug: **78 tests PASS**.
 - Full software regression cuối trước RC packaging: **558 tests PASS, 2 skipped, 0 failures/errors**.
 - `compileall` và `git diff --check` PASS; trusted Bootloader v0.6.5 provenance loader xác minh artifact/hash/source commit thành công.
+- Hardware provisioning acceptance: Bootloader S0-S2 trusted v0.6.5 bit-for-bit PASS; Application span bit-for-bit PASS (`CRC32 0xC99ED31F`); final metadata `STLM + CONFIRMED seq=4`; WRP S0-S2 ON; target RUNNING. Evidence: `docs/12_HARDWARE_PROVISIONING_ACCEPTANCE_V0.9.0_2026-08-29.md`.
 
 ### Release gates
 
-- `0.9.0` hiện là development/release-candidate source trên `develop/v0.9.0`; không tag/publish Stable cho đến khi current-code hardware acceptance và OTA ↔ ST-Link interoperability gates hoàn thành.
-- Historical v0.6.5 hardware evidence được dùng làm reference, không được relabel thành hardware acceptance của build 0.9.0 hiện tại.
+- `0.9.0` hiện là development/release-candidate source trên `develop/v0.9.0`; Factory v0.6.5 + strict ST-Link AppMeta current-code hardware acceptance đã PASS trên CI-built artifact.
+- Chưa tag/publish Stable cho đến khi cold power-cycle thật, full OTA image-transfer interoperability và two-machine SSH acceptance (GUI/CLI/VS Code Client) hoàn thành.
+- Historical v0.6.5 hardware evidence chỉ dùng làm reference; current v0.9.0 evidence được ghi riêng trong `docs/12_HARDWARE_PROVISIONING_ACCEPTANCE_V0.9.0_2026-08-29.md`.
 
 ## [0.8.2] - 2026-08-29
 
