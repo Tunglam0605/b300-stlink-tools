@@ -5,6 +5,10 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+### Fixed
+
+- Linux AppImage packaging tự retry tối đa 3 lần khi `appimagetool` trả lỗi process tạm thời (ví dụ runtime download HTTP 5xx), xóa AppImage dở trước lần thử tiếp theo và vẫn fail-closed sau khi hết retry; giảm việc phải rerun toàn bộ release job vì sự cố mạng nhất thời.
+
 ## [0.9.0] - 2026-08-30
 
 ### Added
