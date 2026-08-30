@@ -30,6 +30,45 @@ class SourceLocation:
     line: Optional[int]
 
 
+@dataclass(frozen=True)
+class SymbolCatalogEntry:
+    name: str
+    address: int
+    size: int
+    kind: str
+    category: str
+    watchable: bool
+    watch_block_code: Optional[str]
+    watch_block_reason: Optional[str]
+    name_unique: bool
+    ambiguous_name: bool
+    name_occurrences: int
+    distinct_address_count: int
+
+
+_F407_RAM_RANGES = ((0x10000000, 0x10010000), (0x20000000, 0x20020000))
+_FUNCTION_KINDS = frozenset(("T", "t"))
+_DATA_KINDS = frozenset(("B", "b", "C", "c", "D", "d", "G", "g",
+                         "R", "r", "S", "s", "V", "v"))
+_CATALOG_CATEGORIES = frozenset(("function", "data", "other"))
+_MAX_CATALOG_RESULTS = 1000
+
+
+def _symbol_category(kind: str) -> str:
+    if kind in _FUNCTION_KINDS:
+        return "function"
+    if kind in _DATA_KINDS:
+        return "data"
+    return "other"
+
+
+def _span_inside_f407_ram(address: int, size: int) -> bool:
+    if size <= 0:
+        return False
+    end = address + size
+    return any(start <= address and end <= limit for start, limit in _F407_RAM_RANGES)
+
+
 def _sibling_tool(gdb_path: str, stem: str) -> str:
     gdb = Path(gdb_path)
     suffix = ".exe" if gdb.suffix.lower() == ".exe" else ""
@@ -77,9 +116,71 @@ class OfflineSymbolTable:
         self._symbols = tuple(symbols)
         self._addresses = tuple(item.address for item in symbols)
         self._by_name = {name: tuple(items) for name, items in by_name.items()}
+        catalog = []
+        for symbol in symbols:
+            same_name = self._by_name[symbol.name]
+            distinct_address_count = len({item.address for item in same_name})
+            name_unique = distinct_address_count == 1
+            category = _symbol_category(symbol.kind)
+            watchable = False
+            block_code = None
+            block_reason = None
+            if not name_unique:
+                block_code = "ambiguous_name"
+                block_reason = "Symbol name is ambiguous because it resolves to multiple addresses."
+            elif category != "data":
+                block_code = "not_data_symbol"
+                block_reason = "Symbol category %s is not RAM data." % category
+            elif symbol.size <= 0:
+                block_code = "unknown_symbol_size"
+                block_reason = "Symbol size is zero, so a safe RAM byte span cannot be proven."
+            elif not _span_inside_f407_ram(symbol.address, symbol.size):
+                block_code = "outside_f407_ram"
+                block_reason = "Symbol byte span is not fully inside STM32F407 CCM/SRAM."
+            else:
+                watchable = True
+            catalog.append(SymbolCatalogEntry(
+                name=symbol.name, address=symbol.address, size=symbol.size, kind=symbol.kind,
+                category=category, watchable=watchable, watch_block_code=block_code,
+                watch_block_reason=block_reason, name_unique=name_unique,
+                ambiguous_name=not name_unique, name_occurrences=len(same_name),
+                distinct_address_count=distinct_address_count,
+            ))
+        self._catalog = tuple(sorted(
+            catalog, key=lambda item: (item.name.casefold(), item.name, item.address, item.kind, item.size)
+        ))
         self._addr2line_executable = addr2line
         self._addr2line = None
         self._source_cache: Dict[int, SourceLocation] = {}
+
+    def catalog(self) -> Tuple[SymbolCatalogEntry, ...]:
+        """Return the deterministic offline catalog without touching the target."""
+        return self._catalog
+
+    def search_catalog(
+        self, query: str = "", *, category: Optional[str] = None,
+        watchable: Optional[bool] = None, limit: int = 256,
+    ) -> Tuple[SymbolCatalogEntry, ...]:
+        """Filter the offline catalog for bounded GUI/CLI browsing."""
+        if category is not None and category not in _CATALOG_CATEGORIES:
+            raise ValueError("Symbol category must be function, data, other, or omitted.")
+        if watchable is not None and not isinstance(watchable, bool):
+            raise ValueError("watchable filter must be true, false, or omitted.")
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= _MAX_CATALOG_RESULTS:
+            raise ValueError("Symbol catalog limit must be 1..%d." % _MAX_CATALOG_RESULTS)
+        needle = str(query).strip().casefold()
+        selected = []
+        for item in self._catalog:
+            if needle and needle not in item.name.casefold():
+                continue
+            if category is not None and item.category != category:
+                continue
+            if watchable is not None and item.watchable is not watchable:
+                continue
+            selected.append(item)
+            if len(selected) >= limit:
+                break
+        return tuple(selected)
 
     def symbol(self, name: str) -> ElfSymbol:
         key = str(name).strip()
