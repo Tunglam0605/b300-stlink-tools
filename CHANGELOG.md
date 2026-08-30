@@ -7,6 +7,7 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ### Added
 
+- Bổ sung Stateful Interactive Debug Workspace trên GUI cho các primitive GDB đã có: target state + last action và các tab Current Location / Call Stack / Registers / Variables / Diagnostic. Workspace chỉ định tuyến kết quả chẩn đoán đã thu được vào đúng vùng hiển thị, giữ tương thích `diagnostic_view`, không thêm GDB command, không thay đổi breakpoint/watchpoint semantics và vẫn giữ cảnh báo Interactive Debug có thể halt MCU/ảnh hưởng realtime.
 - Bổ sung Runtime Dashboard cho Realtime Live Monitor bằng chính `LiveMonitorStore` đã có: hiển thị samples, overruns, mean SWD read time, max schedule lag, incoherent values, số biến và Min/Max/Mean của từng biến. Dashboard chỉ render analytics đã thu thập, không phát sinh thêm SWD/TCL read và lỗi presentation không được phép làm hỏng Live Monitor session.
 - Bổ sung Offline AXF/ELF Symbol Catalog + GUI Symbol Browser cho Realtime Live Monitor: phân loại function/data/other từ `arm-none-eabi-nm`, chỉ đánh dấu watchable khi toàn bộ symbol data có kích thước xác định nằm trong CCM/SRAM STM32F407 và tên resolve duy nhất. Browser mặc định chỉ hiện safe RAM symbols, có filter/search và không suy đoán C type; kiểu `u8/i8/u16/i16/u32/i32/f32/f64` vẫn do người dùng chọn rõ ràng trước khi Add Watch. Việc browse hoàn toàn offline, không mở ST-Link/OpenOCD và không halt/reset target.
 

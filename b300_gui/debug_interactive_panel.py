@@ -7,7 +7,7 @@ from typing import Optional
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-    QPlainTextEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget,
+    QPlainTextEdit, QPushButton, QSpinBox, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from .collapsible_card import CollapsibleCard
@@ -137,14 +137,92 @@ class DebugInteractivePanel(CollapsibleCard):
 
         content_layout.addLayout(stop_actions)
 
-        # Diagnostic output console
-        self.diagnostic_view = QPlainTextEdit()
-        self.diagnostic_view.setObjectName("debugDiagnosticView")
-        self.diagnostic_view.setReadOnly(True)
-        self.diagnostic_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        self.diagnostic_view.setMinimumHeight(95)
-        self.diagnostic_view.setMaximumHeight(160)
-        self.diagnostic_view.setPlaceholderText(
-            "Kết quả chẩn đoán hiển thị ở đây. Nếu target đang RUNNING, tool chỉ Halt tạm thời rồi tự Resume."
+        # Stateful Debug Workspace. This reorganizes existing GDB diagnostics only;
+        # it does not introduce any new target operation.
+        workspace_status = QFrame()
+        workspace_status.setObjectName("interactiveDebugWorkspaceStatus")
+        workspace_status_layout = QHBoxLayout(workspace_status)
+        workspace_status_layout.setContentsMargins(8, 5, 8, 5)
+        workspace_status_layout.setSpacing(16)
+        self.workspace_target_state = QLabel("Target: DISCONNECTED")
+        self.workspace_target_state.setObjectName("debugWorkspaceTargetState")
+        self.workspace_last_action = QLabel("Last action: —")
+        self.workspace_last_action.setObjectName("debugWorkspaceLastAction")
+        self.workspace_safety = QLabel("Mode: INTRUSIVE / GDB")
+        self.workspace_safety.setObjectName("debugWorkspaceSafety")
+        for label in (self.workspace_target_state, self.workspace_last_action, self.workspace_safety):
+            label.setStyleSheet("color: #334155; font-size: 11px; font-weight: 600;")
+        workspace_status_layout.addWidget(self.workspace_target_state)
+        workspace_status_layout.addWidget(self.workspace_last_action, 1)
+        workspace_status_layout.addWidget(self.workspace_safety)
+        content_layout.addWidget(workspace_status)
+
+        self.workspace_tabs = QTabWidget()
+        self.workspace_tabs.setObjectName("interactiveDebugWorkspaceTabs")
+        self.location_view = self._make_workspace_view(
+            "debugWorkspaceLocationView",
+            "Current source location will appear after Where/stop diagnostics.",
         )
-        content_layout.addWidget(self.diagnostic_view)
+        self.stack_view = self._make_workspace_view(
+            "debugWorkspaceStackView", "Call stack results will appear here."
+        )
+        self.registers_view = self._make_workspace_view(
+            "debugWorkspaceRegistersView", "Register snapshots will appear here."
+        )
+        self.variables_view = self._make_workspace_view(
+            "debugWorkspaceVariablesView", "Variable inspection results will appear here."
+        )
+        self.diagnostic_view = self._make_workspace_view(
+            "debugDiagnosticView",
+            "Other diagnostic results appear here. Interactive Debug may temporarily halt the target.",
+        )
+        self.workspace_tabs.addTab(self.location_view, "Current Location")
+        self.workspace_tabs.addTab(self.stack_view, "Call Stack")
+        self.workspace_tabs.addTab(self.registers_view, "Registers")
+        self.workspace_tabs.addTab(self.variables_view, "Variables")
+        self.workspace_tabs.addTab(self.diagnostic_view, "Diagnostic")
+        content_layout.addWidget(self.workspace_tabs)
+
+    @staticmethod
+    def _make_workspace_view(object_name: str, placeholder: str) -> QPlainTextEdit:
+        view = QPlainTextEdit()
+        view.setObjectName(object_name)
+        view.setReadOnly(True)
+        view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        view.setMinimumHeight(110)
+        view.setMaximumHeight(190)
+        view.setPlaceholderText(placeholder)
+        return view
+
+    def set_target_state(self, state: Optional[str]) -> None:
+        normalized = (state or "").strip().lower()
+        if normalized in {"running", "halted"}:
+            label = normalized.upper()
+        elif normalized == "unknown":
+            label = "UNKNOWN"
+        else:
+            label = "DISCONNECTED"
+        self.workspace_target_state.setText("Target: %s" % label)
+
+    def set_last_action(self, action: str) -> None:
+        selected = str(action).strip() or "—"
+        self.workspace_last_action.setText("Last action: %s" % selected)
+
+    def set_diagnostic_result(self, label: str, text: str, state: Optional[str] = None) -> None:
+        """Route an existing diagnostic result into the workspace without new GDB traffic."""
+        selected_label = str(label).strip() or "Diagnostic"
+        rendered = str(text)
+        mapping = {
+            "Where": (self.location_view, 0),
+            "Call Stack": (self.stack_view, 1),
+            "Registers": (self.registers_view, 2),
+            "Variable": (self.variables_view, 3),
+        }
+        view, index = mapping.get(selected_label, (self.diagnostic_view, 4))
+        view.setPlainText(rendered)
+        if view is not self.diagnostic_view:
+            self.diagnostic_view.setPlainText(rendered)
+        self.workspace_tabs.setCurrentIndex(index)
+        self.set_last_action(selected_label)
+        if state is not None:
+            self.set_target_state(state)

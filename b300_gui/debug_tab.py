@@ -560,6 +560,9 @@ class DebugTab(QWidget):
         self._update_probe_display()
         worker_busy = self._worker is not None
         active = self.session.active
+        self.interactive_panel.set_target_state(
+            self._target_state if self._target_state is not None else ("unknown" if active else None)
+        )
         server_active = self.service.state in (
             DebugState.STARTING, DebugState.READY, DebugState.CONNECTED,
         )
@@ -1044,6 +1047,7 @@ class DebugTab(QWidget):
     def _control_completed(self, label: str, state: str) -> None:
         self._status_override = None
         self._set_target_state(state)
+        self.interactive_panel.set_last_action(label)
         self.log.emit("GDB control completed: %s · target=%s" % (label, state.upper()))
         self._refresh_controls()
 
@@ -1079,7 +1083,7 @@ class DebugTab(QWidget):
         self._status_override = None
         self._set_target_state(state)
         text = formatter(result)
-        self.diagnostic_view.setPlainText(text)
+        self.interactive_panel.set_diagnostic_result(label, text, state)
         self.log.emit("Diagnostic completed: %s · target restored=%s" % (label, state.upper()))
         self._refresh_controls()
 

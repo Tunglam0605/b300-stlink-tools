@@ -241,6 +241,20 @@ Tab **Debug** có bốn lựa chọn:
 Gateway GUI muốn tự debug trực tiếp thì chuyển sang **Local** sau khi remote client
 đã ngắt. Tool không cho hai GDB controller cùng điều khiển một STM32.
 
+### Interactive Debug Workspace
+
+GUI Interactive Debug tổ chức các primitive source-level hiện có thành một workspace trạng thái. Thanh trạng thái của workspace hiển thị `Target: RUNNING/HALTED/UNKNOWN/DISCONNECTED`, thao tác gần nhất và nhắc rõ `Mode: INTRUSIVE / GDB`.
+
+Kết quả được giữ riêng theo các tab:
+
+- **Current Location** — kết quả `Where`;
+- **Call Stack** — stack frames;
+- **Registers** — register snapshot;
+- **Variables** — kết quả đọc biến theo yêu cầu;
+- **Diagnostic** — breakpoint/watchpoint one-shot và các kết quả tổng quát khác.
+
+Đây là thay đổi presentation/UX. Workspace không tạo thêm GDB request ngoài thao tác người dùng đã bấm, không thay đổi cơ chế auto-resume, không thêm breakpoint/watchpoint nền và không liên quan đến Realtime Live Monitor. Realtime Live vẫn là subsystem non-halting riêng.
+
 ### Client one-click
 
 Lần đầu Client cần Gateway host, SSH user và project/AXF. Các lần sau GUI ghi nhớ
