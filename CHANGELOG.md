@@ -25,6 +25,8 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 - Bổ sung **Diagnostic Support Bundle** read-only cho CLI (`support bundle`) và GUI menu Trợ giúp: ZIP chỉ chứa `support.json` + `README.txt`, tổng hợp version/runtime, diagnostic target/WRP, metadata và Application Health. Privacy contract loại probe serial/USB identity, username/hostname, SSH identity, source/AXF path, firmware bytes, environment variables và raw command logs; absolute paths được redact trước khi ghi.
 - Hardware smoke trên B300 thật tạo support ZIP 1776 byte, Health `BOOTABLE`, CRC `0xC99ED31F`, WRP S0-S2 và metadata `CONFIRMED`; scan bundle không phát hiện local path/user/USB identity/SSH fields.
 
+- Refactor GUI Debug: tách presentation của Live Variables/Live Plot khỏi `DebugTab` thành `LiveVariablesPanel`; GDB session/worker/interlock vẫn thuộc `DebugTab`. Giữ nguyên objectName, settings keys, sampling limits và compatibility aliases; `DebugTab` giảm từ 1570 xuống 1463 dòng để giảm coupling cho các nâng cấp telemetry/plot sau này.
+
 ## [0.9.0] - 2026-08-30
 
 ### Added

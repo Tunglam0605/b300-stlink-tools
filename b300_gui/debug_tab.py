@@ -2,22 +2,18 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Callable, Optional
 
 from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
-    QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout,
-    QHeaderView, QLabel, QLayout, QLineEdit, QPlainTextEdit, QPushButton, QScrollArea,
-    QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QComboBox, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLayout, QLineEdit,
+    QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from b300_core.debug_service import DebugConfig, DebugService, DebugState
 from b300_core.debug_session import DebugSession, DebugSessionConfig, DebugSessionInfo
-from b300_core.debug_sampling import (
-    VariableSampleBuffer, sample_variables, validate_sampling_request, write_samples,
-)
+from b300_core.debug_sampling import sample_variables
 from b300_core.elf_matcher import discover_symbol_files, find_matching_symbol_file
 from b300_core.gdb_mi import GdbMiBackend
 from b300_core.models import ProbeRef
@@ -29,7 +25,7 @@ from b300_core.tcl_client import SafeTclClient, TclEndpoint
 
 from .workers import FunctionWorker, WorkerFailure
 from .log_highlighter import format_log_html
-from .live_plot import LivePlotWidget
+from .live_variables_panel import LiveVariablesPanel
 from .remote_vscode_dialog import RemoteVsCodeDialog
 
 
@@ -72,8 +68,6 @@ class DebugTab(QWidget):
         self._settings = settings
         self._probe_count = probe_count
         self._tunnel_factory = tunnel_factory
-        self._sample_buffer = VariableSampleBuffer(max_samples=2000)
-        self._sample_rows = {}
         self._sampling_active = False
 
         self._watchdog = QTimer(self)
@@ -326,76 +320,27 @@ class DebugTab(QWidget):
         diagnostics_layout.addWidget(self.diagnostic_view)
         layout.addWidget(self.diagnostics_box)
 
-        self.live_box = QGroupBox("Live Variables · bounded sampling")
-        live_layout = QVBoxLayout(self.live_box)
-        live_controls = QGridLayout()
-        live_controls.setHorizontalSpacing(8)
-        live_controls.setVerticalSpacing(8)
-        live_controls.addWidget(QLabel("Biến:"), 0, 0)
-        self.sample_expressions = QLineEdit()
-        self.sample_expressions.setObjectName("debugSampleExpressions")
-        self.sample_expressions.setPlaceholderText("xTickCount, motorSpeed, current")
-        self.sample_expressions.setToolTip("Tối đa 16 biểu thức an toàn, phân tách bằng dấu phẩy hoặc chấm phẩy.")
-        live_controls.addWidget(self.sample_expressions, 0, 1, 1, 4)
-        live_controls.addWidget(QLabel("Chu kỳ:"), 1, 0)
-        self.sample_cycles = QSpinBox()
-        self.sample_cycles.setObjectName("debugSampleCycles")
-        self.sample_cycles.setRange(1, 1000)
-        self.sample_cycles.setValue(100)
-        live_controls.addWidget(self.sample_cycles, 1, 1)
-        live_controls.addWidget(QLabel("Khoảng:"), 1, 2)
-        self.sample_interval = QDoubleSpinBox()
-        self.sample_interval.setObjectName("debugSampleInterval")
-        self.sample_interval.setRange(0.1, 60.0)
-        self.sample_interval.setDecimals(2)
-        self.sample_interval.setSingleStep(0.1)
-        self.sample_interval.setValue(0.5)
-        self.sample_interval.setSuffix(" s")
-        live_controls.addWidget(self.sample_interval, 1, 3)
-        self.sample_start_button = QPushButton("Start Sampling")
-        self.sample_start_button.setObjectName("debugSampleStartButton")
-        self.sample_stop_button = QPushButton("Stop Sampling")
-        self.sample_stop_button.setObjectName("debugSampleStopButton")
-        self.sample_clear_button = QPushButton("Clear")
-        self.sample_clear_button.setObjectName("debugSampleClearButton")
-        self.sample_export_button = QPushButton("Export CSV/JSONL")
-        self.sample_export_button.setObjectName("debugSampleExportButton")
-        live_controls.addWidget(self.sample_start_button, 2, 0)
-        live_controls.addWidget(self.sample_stop_button, 2, 1)
-        live_controls.addWidget(self.sample_clear_button, 2, 2)
-        live_controls.addWidget(self.sample_export_button, 2, 3)
-        self.sample_status = QLabel("Chưa có mẫu · buffer tối đa 2000 điểm")
-        self.sample_status.setObjectName("debugSampleStatus")
-        self.sample_status.setStyleSheet("color: #64748B;")
-        live_controls.addWidget(self.sample_status, 2, 4)
-        live_controls.setColumnStretch(4, 1)
-        live_layout.addLayout(live_controls)
-        self.sample_impact = QLabel(
-            "Lưu ý: GDB sampling sẽ HALT target rất ngắn ở mỗi chu kỳ rồi khôi phục RUNNING. "
-            "Dùng để chẩn đoán/quan sát, không dùng làm phép đo timing hard real-time."
-        )
-        self.sample_impact.setObjectName("debugSampleImpact")
-        self.sample_impact.setWordWrap(True)
-        self.sample_impact.setStyleSheet("color: #92400E; font-size: 12px;")
-        live_layout.addWidget(self.sample_impact)
-        self.sample_table = QTableWidget(0, 5)
-        self.sample_table.setObjectName("debugSampleTable")
-        self.sample_table.setHorizontalHeaderLabels(("Variable", "Raw value", "Numeric", "Cycle", "Time (s)"))
-        self.sample_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.sample_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.sample_table.verticalHeader().setVisible(False)
-        self.sample_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for column in range(1, 5):
-            self.sample_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
-        self.sample_table.setMinimumHeight(150)
-        live_layout.addWidget(self.sample_table)
-        self.live_plot = LivePlotWidget(max_points_per_series=400)
-        live_layout.addWidget(self.live_plot)
+        self.live_panel = LiveVariablesPanel()
+        self.live_box = self.live_panel
+        # Compatibility aliases keep existing settings/tests and any extension code stable.
+        self.sample_expressions = self.live_panel.expressions
+        self.sample_cycles = self.live_panel.cycles
+        self.sample_interval = self.live_panel.interval
+        self.sample_start_button = self.live_panel.start_button
+        self.sample_stop_button = self.live_panel.stop_button
+        self.sample_clear_button = self.live_panel.clear_button
+        self.sample_export_button = self.live_panel.export_button
+        self.sample_status = self.live_panel.status
+        self.sample_impact = self.live_panel.impact
+        self.sample_table = self.live_panel.table
+        self.live_plot = self.live_panel.plot
+        self._sample_buffer = self.live_panel.buffer
+        self._sample_rows = self.live_panel.rows
         self.sample_start_button.clicked.connect(self.start_live_sampling)
         self.sample_stop_button.clicked.connect(self.stop_live_sampling)
         self.sample_clear_button.clicked.connect(self.clear_live_samples)
         self.sample_export_button.clicked.connect(self.export_live_samples)
-        layout.addWidget(self.live_box)
+        layout.addWidget(self.live_panel)
 
         self.log_box = QGroupBox("Nhật ký OpenOCD / GDB")
         log_layout = QVBoxLayout(self.log_box)
@@ -768,14 +713,12 @@ class DebugTab(QWidget):
         sample_ready = (
             not worker_busy and active and self._target_state == "running" and not self._sampling_active
         )
-        self.sample_expressions.setEnabled(sample_ready)
-        self.sample_cycles.setEnabled(sample_ready)
-        self.sample_interval.setEnabled(sample_ready)
-        self.sample_start_button.setEnabled(sample_ready)
-        self.sample_stop_button.setEnabled(worker_busy and self._sampling_active)
         sample_history_ready = len(self._sample_buffer) > 0 and not self._sampling_active
-        self.sample_clear_button.setEnabled(sample_history_ready)
-        self.sample_export_button.setEnabled(sample_history_ready)
+        self.live_panel.set_control_state(
+            start_enabled=sample_ready,
+            stop_enabled=worker_busy and self._sampling_active,
+            history_enabled=sample_history_ready,
+        )
         one_shot_enabled = diagnostic_enabled and self._target_state == "running"
         self.break_location.setEnabled(diagnostic_enabled)
         self.watch_expression.setEnabled(diagnostic_enabled)
@@ -1299,13 +1242,7 @@ class DebugTab(QWidget):
         )
 
     def _live_sampling_expressions(self):
-        raw = self.sample_expressions.text().strip()
-        expressions = tuple(
-            item.strip() for item in re.split(r"[,;\n]+", raw) if item.strip()
-        )
-        return validate_sampling_request(
-            expressions, self.sample_cycles.value(), self.sample_interval.value()
-        )
+        return self.live_panel.validated_request()
 
     def start_live_sampling(self) -> None:
         if not self.session.active:
@@ -1319,10 +1256,7 @@ class DebugTab(QWidget):
         except ValueError as error:
             self._operation_failed_message(str(error))
             return
-        self._sample_buffer.clear()
-        self._sample_rows.clear()
-        self.sample_table.setRowCount(0)
-        self.sample_status.setText("Đang lấy mẫu 0/%d chu kỳ..." % self.sample_cycles.value())
+        self.live_panel.reset_for_sampling()
         self._sampling_active = True
         cycles = self.sample_cycles.value()
         interval = self.sample_interval.value()
@@ -1344,43 +1278,18 @@ class DebugTab(QWidget):
 
     def stop_live_sampling(self) -> None:
         if self._sampling_active and self._worker is not None:
-            self.sample_status.setText("Đang dừng sampling an toàn...")
+            self.live_panel.mark_stopping()
             self._worker.cancel()
-            self.sample_stop_button.setEnabled(False)
 
     def _live_sampling_cycle(self, batch) -> None:
-        batch = tuple(batch)
-        if not batch:
-            return
-        self._sample_buffer.extend(batch)
-        self.live_plot.set_samples(self._sample_buffer.snapshot())
-        for sample in batch:
-            row = self._sample_rows.get(sample.expression)
-            if row is None:
-                row = self.sample_table.rowCount()
-                self.sample_table.insertRow(row)
-                self._sample_rows[sample.expression] = row
-                self.sample_table.setItem(row, 0, QTableWidgetItem(sample.expression))
-            self.sample_table.setItem(row, 1, QTableWidgetItem(sample.raw_value))
-            numeric = "—" if sample.numeric_value is None else "%g" % sample.numeric_value
-            self.sample_table.setItem(row, 2, QTableWidgetItem(numeric))
-            self.sample_table.setItem(row, 3, QTableWidgetItem(str(sample.cycle)))
-            self.sample_table.setItem(row, 4, QTableWidgetItem("%.3f" % sample.elapsed_seconds))
-        last_cycle = max(sample.cycle for sample in batch) + 1
-        self.sample_status.setText(
-            "%d/%d chu kỳ · %d biến · buffer %d/2000" %
-            (last_cycle, self.sample_cycles.value(), len(batch), len(self._sample_buffer))
-        )
+        self.live_panel.append_batch(tuple(batch))
 
     def _live_sampling_completed(self, result) -> None:
         samples, state = result
         self._sampling_active = False
         self._status_override = None
         self._set_target_state(state)
-        cycles = 0 if not samples else max(sample.cycle for sample in samples) + 1
-        self.sample_status.setText(
-            "Hoàn tất %d chu kỳ · %d điểm trong buffer" % (cycles, len(self._sample_buffer))
-        )
+        cycles = self.live_panel.mark_completed(samples)
         self.log.emit(
             "Live sampling completed: cycles=%d samples=%d target=%s" %
             (cycles, len(samples), str(state).upper())
@@ -1389,39 +1298,23 @@ class DebugTab(QWidget):
 
     def _live_sampling_failed(self, failure: WorkerFailure) -> None:
         self._sampling_active = False
-        self.sample_status.setText("Sampling lỗi: %s" % failure.message)
+        self.live_panel.mark_failed(failure.message)
         self._operation_failed(failure)
 
     def clear_live_samples(self) -> None:
         if self._sampling_active:
             return
-        self._sample_buffer.clear()
-        self._sample_rows.clear()
-        self.sample_table.setRowCount(0)
-        self.live_plot.clear()
-        self.sample_status.setText("Chưa có mẫu · buffer tối đa 2000 điểm")
+        self.live_panel.clear_history()
         self._refresh_controls()
 
     def export_live_samples(self) -> None:
-        samples = self._sample_buffer.snapshot()
-        if not samples:
-            self._operation_failed_message("Chưa có sample để export.")
-            return
-        path, _selected = QFileDialog.getSaveFileName(
-            self, "Export Live Variables", "b300-debug-samples.csv",
-            "CSV (*.csv);;JSON Lines (*.jsonl)",
-        )
-        if not path:
-            return
-        destination = Path(path)
-        if destination.suffix.lower() not in {".csv", ".jsonl"}:
-            destination = destination.with_suffix(".csv")
         try:
-            saved = write_samples(destination, samples)
+            saved = self.live_panel.export_samples(self)
         except Exception as error:
             self._operation_failed_message(str(error))
             return
-        self.sample_status.setText("Đã export %d điểm → %s" % (len(samples), saved.name))
+        if saved is None:
+            return
         self.log.emit("Live sampling exported: %s" % saved)
         self._refresh_controls()
 

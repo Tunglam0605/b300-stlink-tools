@@ -480,7 +480,7 @@ class DebugTabTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             output = Path(directory) / "live.csv"
             with mock.patch(
-                "b300_gui.debug_tab.QFileDialog.getSaveFileName",
+                "b300_gui.live_variables_panel.QFileDialog.getSaveFileName",
                 return_value=(str(output), "CSV (*.csv)"),
             ):
                 tab.export_live_samples()
