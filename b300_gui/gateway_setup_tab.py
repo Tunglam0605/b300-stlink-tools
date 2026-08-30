@@ -28,6 +28,7 @@ from b300_core.ssh_host_trust import (
 from b300_core.remote_profile import RemoteGatewayProfile, load_remote_profile, save_remote_profile
 from b300_core.remote_connectivity import RemoteConnectivityResult, check_remote_connectivity
 from .workers import FunctionWorker
+from .collapsible_card import CollapsibleCard
 
 
 _ACTION_TEXT = {
@@ -107,7 +108,7 @@ class GatewaySetupTab(QWidget):
         role_intro = QLabel("Chọn vai trò của máy này")
         role_intro.setObjectName("roleSectionTitle")
         header_layout.addWidget(role_intro)
-        subtitle = QLabel("Mỗi vai trò chỉ hiện đúng 3 bước cần thiết. Debug ports luôn loopback-only.")
+        subtitle = QLabel("Chọn đúng vai trò, sau đó làm theo bước được đề xuất.")
         subtitle.setObjectName("pageSubtitle")
         subtitle.setWordWrap(True)
         header_layout.addWidget(subtitle)
@@ -199,6 +200,11 @@ class GatewaySetupTab(QWidget):
         self.status.setObjectName("gatewaySetupStatus")
         self.status.setWordWrap(True)
         host_layout.addWidget(self.status)
+        self.gateway_check_details = CollapsibleCard(
+            "Chi tiết kiểm tra",
+            "OpenSSH, firewall và trạng thái cổng",
+            expanded=False,
+        )
         self.check_table = QTableWidget(0, 3)
         self.check_table.setObjectName("gatewaySetupCheckTable")
         self.check_table.setHorizontalHeaderLabels(["Kiểm tra", "Trạng thái", "Chi tiết"])
@@ -211,7 +217,7 @@ class GatewaySetupTab(QWidget):
         header.resizeSection(1, 105)
         self.check_table.setMinimumHeight(132)
         self.check_table.setMaximumHeight(180)
-        host_layout.addWidget(self.check_table)
+        self.gateway_check_details.content_layout.addWidget(self.check_table)
         host_actions = QHBoxLayout()
         self.refresh_button = QPushButton("Kiểm tra lại")
         self.refresh_button.setObjectName("gatewayRefreshButton")
@@ -227,30 +233,40 @@ class GatewaySetupTab(QWidget):
             button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
             host_actions.addWidget(button, 1)
         host_layout.addLayout(host_actions)
+        host_layout.addWidget(self.gateway_check_details)
         layout.addWidget(host_group)
 
         layout.addWidget(self._step_header(
             2, "Gửi thông tin kết nối cho Client",
             "Copy địa chỉ kết nối và fingerprint trực tiếp từ Gateway này sang laptop Client.",
         ))
-        config_group = QGroupBox("Thông tin kết nối an toàn")
+        config_group = QGroupBox("Kết nối Client")
         config_layout = QVBoxLayout(config_group)
+        self.copy_button = QPushButton("Sao chép cấu hình cho Client")
+        self.copy_button.setObjectName("gatewayCopyClientButton")
+        self.copy_button.clicked.connect(self.copy_client_configuration)
+        self.copy_button.setEnabled(False)
+        self.copy_button.setMinimumHeight(34)
+        config_layout.addWidget(self.copy_button)
+
+        self.gateway_connection_details = CollapsibleCard(
+            "Chi tiết kết nối",
+            "IP/hostname, SSH port và fingerprint",
+            expanded=False,
+        )
+        details_layout = self.gateway_connection_details.content_layout
         self.client_config = QPlainTextEdit()
         self.client_config.setObjectName("gatewayClientConfiguration")
         self.client_config.setReadOnly(True)
         self.client_config.setMinimumHeight(72)
         self.client_config.setMaximumHeight(96)
-        self.client_config.setPlaceholderText("Kiểm tra Gateway để lấy IP/hostname và SSH port.")
-        config_layout.addWidget(self.client_config)
-        self.host_key_status = QLabel("Host fingerprint: chưa đọc")
+        self.client_config.setPlaceholderText("Kiểm tra Gateway để lấy thông tin kết nối.")
+        details_layout.addWidget(self.client_config)
+        self.host_key_status = QLabel("Fingerprint: chưa đọc")
         self.host_key_status.setObjectName("gatewayHostKeyStatus")
         self.host_key_status.setWordWrap(True)
-        config_layout.addWidget(self.host_key_status)
+        details_layout.addWidget(self.host_key_status)
         config_actions = QHBoxLayout()
-        self.copy_button = QPushButton("Copy Client Config")
-        self.copy_button.setObjectName("gatewayCopyClientButton")
-        self.copy_button.clicked.connect(self.copy_client_configuration)
-        self.copy_button.setEnabled(False)
         self.show_host_key_button = QPushButton("Đọc fingerprint")
         self.show_host_key_button.setObjectName("gatewayShowHostKeyButton")
         self.show_host_key_button.clicked.connect(self.show_local_host_key)
@@ -258,11 +274,12 @@ class GatewaySetupTab(QWidget):
         self.copy_host_fingerprint_button.setObjectName("gatewayCopyHostFingerprintButton")
         self.copy_host_fingerprint_button.clicked.connect(self.copy_host_fingerprint)
         self.copy_host_fingerprint_button.setEnabled(False)
-        for button in (self.copy_button, self.show_host_key_button, self.copy_host_fingerprint_button):
+        for button in (self.show_host_key_button, self.copy_host_fingerprint_button):
             button.setMinimumHeight(34)
             button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
             config_actions.addWidget(button, 1)
-        config_layout.addLayout(config_actions)
+        details_layout.addLayout(config_actions)
+        config_layout.addWidget(self.gateway_connection_details)
         layout.addWidget(config_group)
 
         layout.addWidget(self._step_header(
@@ -283,13 +300,19 @@ class GatewaySetupTab(QWidget):
         authorize_layout.addWidget(self.authorize_key_button)
         layout.addWidget(authorize_group)
 
+        self.gateway_safety_details = CollapsibleCard(
+            "An toàn & kỹ thuật",
+            "Các giới hạn mà tool luôn giữ",
+            expanded=False,
+        )
         safety = QLabel(
-            "🔒 Safety: không sửa sshd_config, không đổi password, không tắt firewall và không tạo rule cho "
+            "Không sửa sshd_config, không đổi password, không tắt firewall và không tạo rule cho "
             "TCP 3333/4444/6666. Nếu SSH đã READY, Prepare là no-op."
         )
         safety.setObjectName("safetyNote")
         safety.setWordWrap(True)
-        layout.addWidget(safety)
+        self.gateway_safety_details.content_layout.addWidget(safety)
+        layout.addWidget(self.gateway_safety_details)
         layout.addStretch(1)
         return self._scroll_page(content)
 
@@ -402,13 +425,18 @@ class GatewaySetupTab(QWidget):
         connection_layout.addWidget(self.client_connect_button)
         layout.addWidget(connection_group)
 
+        self.client_help_details = CollapsibleCard(
+            "Chi tiết",
+            "Cách profile được dùng cho Debug",
+            expanded=False,
+        )
         client_note = QLabel(
-            "💡 Sau khi Connection PASS, tab Debug Workstation sẽ tự dùng saved Gateway profile; "
-            "không cần nhập lại host/user mỗi lần."
+            "Sau khi kết nối PASS, Theo dõi / Debug tự dùng Gateway đã lưu; không cần nhập lại host/user."
         )
         client_note.setObjectName("infoNote")
         client_note.setWordWrap(True)
-        layout.addWidget(client_note)
+        self.client_help_details.content_layout.addWidget(client_note)
+        layout.addWidget(self.client_help_details)
         layout.addStretch(1)
         return self._scroll_page(content)
 
@@ -469,7 +497,7 @@ class GatewaySetupTab(QWidget):
                 text = "Bước tiếp theo · Client: copy Public Key sang Gateway để authorize, rồi bấm “Kiểm tra SSH Connection”."
                 state = "warning"
             else:
-                text = "Client READY ✓ · Có thể mở Debug Workstation; endpoint sẽ được lấy tự động từ saved profile."
+                text = "Client READY ✓ · Có thể mở Theo dõi / Debug; endpoint sẽ được lấy tự động từ saved profile."
                 state = "success"
         self.next_action.setText(text)
         self.next_action.setProperty("state", state)

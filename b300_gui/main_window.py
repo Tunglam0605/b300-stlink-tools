@@ -73,6 +73,7 @@ from .operation_state import OperationState
 from .update_dialog import UpdateDialog
 from .update_worker import UpdateCheckWorker, UpdateDownloadWorker
 from .whats_new_dialog import WhatsNewDialog
+from .collapsible_card import CollapsibleCard
 from . import __version__
 
 
@@ -184,11 +185,7 @@ class MainWindow(QMainWindow):
         eyebrow.setObjectName("eyebrowLabel")
         brand_card_layout.addWidget(eyebrow)
 
-        channel = getattr(self.update_client, "channel", "stable")
-        channel_name = getattr(channel, "value", str(channel)).capitalize()
-        self.update_channel_label = QLabel(
-            "Đang dùng v%s · Cập nhật: %s" % (__version__, channel_name)
-        )
+        self.update_channel_label = QLabel("Phiên bản v%s" % __version__)
         self.update_channel_label.setObjectName("updateChannelLabel")
         self.update_channel_label.setCursor(Qt.CursorShape.PointingHandCursor)
         self.update_channel_label.setToolTip("Nhấn để kiểm tra cập nhật phiên bản mới")
@@ -214,21 +211,21 @@ class MainWindow(QMainWindow):
         sidebar_layout.addWidget(self.nav_flash_btn)
         self.nav_buttons.append(self.nav_flash_btn)
 
-        self.nav_memory_btn = QPushButton("🔍  Memory / Metadata")
+        self.nav_memory_btn = QPushButton("🔍  Kiểm tra thiết bị")
         self.nav_memory_btn.setObjectName("navButton")
         self.nav_memory_btn.setCheckable(True)
         self.nav_memory_btn.clicked.connect(lambda: self.tabs.setCurrentIndex(1))
         sidebar_layout.addWidget(self.nav_memory_btn)
         self.nav_buttons.append(self.nav_memory_btn)
 
-        self.nav_debug_btn = QPushButton("🐛  Debug Workstation")
+        self.nav_debug_btn = QPushButton("📈  Theo dõi / Debug")
         self.nav_debug_btn.setObjectName("navButton")
         self.nav_debug_btn.setCheckable(True)
         self.nav_debug_btn.clicked.connect(lambda: self.tabs.setCurrentIndex(2))
         sidebar_layout.addWidget(self.nav_debug_btn)
         self.nav_buttons.append(self.nav_debug_btn)
 
-        self.nav_gateway_btn = QPushButton("🔐  Remote Gateway / Client")
+        self.nav_gateway_btn = QPushButton("🔗  Kết nối từ xa")
         self.nav_gateway_btn.setObjectName("navButton")
         self.nav_gateway_btn.setCheckable(True)
         self.nav_gateway_btn.clicked.connect(lambda: self.tabs.setCurrentIndex(3))
@@ -475,10 +472,8 @@ class MainWindow(QMainWindow):
         worker.finished.connect(self._update_worker_finished)
         self._update_workers.append(worker)
         self.check_updates_action.setEnabled(False)
-        channel = getattr(self.update_client, "channel", "stable")
-        channel_name = getattr(channel, "value", str(channel)).capitalize()
         self.update_channel_label.setText(
-            "Đang dùng v%s · %s · Đang kiểm tra…" % (__version__, channel_name)
+            "v%s · Đang kiểm tra cập nhật…" % __version__
         )
         worker.start()
 
@@ -486,55 +481,50 @@ class MainWindow(QMainWindow):
             self, result: UpdateCheckResult, manual: bool = False) -> None:
         self.settings.setValue("updates/last_check_utc", self._utc_now_text())
         self._update_result = result
-        channel = getattr(self.update_client, "channel", "stable")
-        channel_name = getattr(channel, "value", str(channel)).capitalize()
         current_version = SemVer.parse(__version__)
         latest_version = result.release.version
         if result.available:
             self.update_channel_label.setText(
-                "⬆ %s v%s có sẵn · đang dùng v%s" %
-                (channel_name, latest_version, __version__)
+                "⬆ Có bản mới v%s · đang dùng v%s" % (latest_version, __version__)
             )
             self.update_channel_label.setToolTip(
-                "Có bản cập nhật mới trên kênh %s. Nhấn để xem hoặc kiểm tra lại." % channel_name
+                "Có bản cập nhật mới. Nhấn để xem và cài đặt."
             )
             if result.asset is None:
                 if manual:
                     QMessageBox.information(
                         self, "Có bản mới nhưng chưa có gói phù hợp",
-                        "%s v%s đã có, nhưng chưa có package cho nền tảng hiện tại.\n\n"
-                        "Đang dùng: v%s." % (channel_name, latest_version, __version__),
+                        "Bản v%s đã có, nhưng chưa có gói cài đặt cho nền tảng hiện tại.\n\n"
+                        "Bạn đang dùng v%s." % (latest_version, __version__),
                     )
                 return
         else:
             if current_version > latest_version:
                 self.update_channel_label.setText(
-                    "Đang dùng v%s · Preview/Dev · %s mới nhất v%s" %
-                    (__version__, channel_name, latest_version)
+                    "v%s · Chưa có bản public mới hơn" % __version__
                 )
                 self.update_channel_label.setToolTip(
-                    "Bản đang chạy mới hơn kênh %s. Updater không hạ cấp. "
-                    "Nhấn để kiểm tra lại." % channel_name
+                    "Không có bản mới hơn để cài. Updater không hạ cấp phiên bản đang chạy."
                 )
                 if manual:
                     QMessageBox.information(
-                        self, "Trạng thái cập nhật",
-                        "Bạn đang dùng v%s (Preview/Development).\n\n"
-                        "%s mới nhất hiện là v%s.\n"
-                        "Updater sẽ không hạ cấp bản đang chạy." %
-                        (__version__, channel_name, latest_version),
+                        self, "Không có bản mới hơn",
+                        "Bạn đang dùng v%s.\n\n"
+                        "Bản phát hành công khai gần nhất là v%s.\n"
+                        "Không có bản mới hơn để cài và updater sẽ không hạ cấp." %
+                        (__version__, latest_version),
                     )
                 return
             self.update_channel_label.setText(
-                "Đang dùng v%s · %s · Mới nhất" % (__version__, channel_name)
+                "v%s · Đã là bản mới nhất" % __version__
             )
             self.update_channel_label.setToolTip(
-                "Đang dùng phiên bản mới nhất trên kênh %s. Nhấn để kiểm tra lại." % channel_name
+                "Bạn đang dùng bản mới nhất. Nhấn để kiểm tra lại."
             )
             if manual:
                 QMessageBox.information(
-                    self, "Đã cập nhật",
-                    "Bạn đang dùng bản %s mới nhất (v%s)." % (channel_name, __version__),
+                    self, "Đã là bản mới nhất",
+                    "Bạn đang dùng phiên bản mới nhất (v%s)." % __version__,
                 )
             return
         if self.update_dialog is not None:
@@ -551,10 +541,8 @@ class MainWindow(QMainWindow):
     def _update_check_failed(self, error, manual: bool = False) -> None:
         self.settings.setValue("updates/last_check_utc", self._utc_now_text())
         self.append_log("Update check failed: %s" % error)
-        channel = getattr(self.update_client, "channel", "stable")
-        channel_name = getattr(channel, "value", str(channel)).capitalize()
         self.update_channel_label.setText(
-            "Đang dùng v%s · %s · Lỗi kiểm tra" % (__version__, channel_name)
+            "v%s · Không kiểm tra được cập nhật" % __version__
         )
         if manual:
             QMessageBox.warning(self, "Không thể kiểm tra cập nhật", str(error))
@@ -679,19 +667,19 @@ class MainWindow(QMainWindow):
         pages = {
             0: (
                 "Nạp firmware",
-                "Provision Application an toàn · Bootloader S0–S2 được bảo vệ · có dry-run trước khi ghi.",
+                "Chọn ST-Link, chọn file firmware và làm theo từng bước trước khi nạp.",
             ),
             1: (
-                "Memory / Metadata",
-                "Quan sát Flash map, OTA metadata và Application Health theo hướng read-only trước khi can thiệp.",
+                "Kiểm tra thiết bị",
+                "Kiểm tra Application nhanh; chỉ mở dữ liệu Memory chi tiết khi cần.",
             ),
             2: (
-                "Debug Workstation",
-                "Local / Gateway / Client · Realtime Live Monitor non-halting tách biệt với Interactive Debug.",
+                "Theo dõi / Debug",
+                "Theo dõi realtime là lựa chọn khuyến nghị; công cụ debug nâng cao được tách riêng.",
             ),
             3: (
-                "Remote Gateway / Client",
-                "Thiết lập hai máy theo vai trò, SSH strict trust và saved profile; debug ports luôn loopback-only.",
+                "Kết nối từ xa",
+                "Chọn máy có ST-Link hoặc máy điều khiển từ xa, rồi làm theo bước tiếp theo.",
             ),
         }
         title, subtitle = pages.get(index, ("B300 ST-Link Tools", ""))
@@ -707,11 +695,11 @@ class MainWindow(QMainWindow):
             else:
                 self._set_status("OpenOCD chưa sẵn sàng · dùng Thiết lập môi trường ở sidebar", "error", notify=False)
         elif index == 1:
-            self._set_status("Read-only workspace · chọn probe rồi đọc Memory / Metadata / Application Health", "normal", notify=False)
+            self._set_status("Chọn Kiểm tra Application để xem trạng thái nhanh; mở Nâng cao nếu cần đọc Memory thủ công", "normal", notify=False)
         elif index == 2:
-            self._set_status("Chọn Local / Gateway / Client; Live Monitor không halt MCU, Interactive Debug có thể halt", "normal", notify=False)
+            self._set_status("Theo dõi realtime là chế độ khuyến nghị; Debug nâng cao có thể tạm dừng MCU", "normal", notify=False)
         elif index == 3:
-            self._set_status("Chọn vai trò Gateway hoặc Client ở đầu trang và làm theo Bước tiếp theo", "normal", notify=False)
+            self._set_status("Chọn vai trò của máy này và làm theo Bước tiếp theo", "normal", notify=False)
 
     def _build_flash_tab(self) -> QWidget:
         page = QWidget()
@@ -790,6 +778,13 @@ class MainWindow(QMainWindow):
         plan_layout.setContentsMargins(8, 8, 8, 8)
         plan_layout.setSpacing(6)
 
+        self.flash_details_card = CollapsibleCard(
+            "Chi tiết kỹ thuật",
+            "Sector, địa chỉ Flash và chuỗi verify",
+            expanded=False,
+        )
+        flash_details_layout = self.flash_details_card.content_layout
+
         self.flash_plan_summary = QLabel(
             "<b>Bảo vệ:</b> Sector 0–2 (Bootloader) &nbsp;|&nbsp; "
             "<b>Xóa:</b> Sector 3–7 &nbsp;|&nbsp; "
@@ -798,7 +793,7 @@ class MainWindow(QMainWindow):
         self.flash_plan_summary.setObjectName("flashPlanSummaryCard")
         self.flash_plan_summary.setTextFormat(Qt.TextFormat.RichText)
         self.flash_plan_summary.setWordWrap(True)
-        plan_layout.addWidget(self.flash_plan_summary)
+        flash_details_layout.addWidget(self.flash_plan_summary)
 
         self.flash_plan_label = QLabel(
             "Erase Sector 3–7 → Program/Verify Application → STLM VERIFIED → "
@@ -810,7 +805,7 @@ class MainWindow(QMainWindow):
             "border-radius: 6px; padding: 4px 8px; font-weight: 600; font-size: 11px;"
         )
         self.flash_plan_label.setWordWrap(True)
-        plan_layout.addWidget(self.flash_plan_label)
+        flash_details_layout.addWidget(self.flash_plan_label)
 
         self.recommended_flow = QLabel(
             "Luồng khuyến nghị · ① Kiểm tra target  →  ② Chọn Application HEX  →  "
@@ -844,10 +839,11 @@ class MainWindow(QMainWindow):
             self.plan_table.setRowHeight(row, row_height)
         header_height = max(22, header.sizeHint().height())
         header.setFixedHeight(header_height)
-        plan_height = header_height + (row_height * self.plan_table.rowCount()) + (self.plan_table.frameWidth() * 2)
+        plan_height = header_height + (row_height * self.plan_table.rowCount()) + (self.plan_table.frameWidth() * 2) + 4
         self.plan_table.setFixedHeight(plan_height)
         self.plan_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        plan_layout.addWidget(self.plan_table)
+        flash_details_layout.addWidget(self.plan_table)
+        plan_layout.addWidget(self.flash_details_card)
 
         actions = QGridLayout()
         actions.setHorizontalSpacing(10)
@@ -877,10 +873,13 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(plan_group)
 
         # Right Column 1: Publisher-controlled Bootloader catalog
-        factory_profile_group = QGroupBox("Bootloader OTA profile · Hồ sơ bản phát hành")
-        factory_profile_layout = QVBoxLayout(factory_profile_group)
-        factory_profile_layout.setContentsMargins(10, 8, 10, 8)
-        factory_profile_layout.setSpacing(6)
+        self.factory_profile_group = CollapsibleCard(
+            "Nâng cao · Bootloader Factory",
+            "Chỉ dùng khi provisioning mainboard mới",
+            expanded=False,
+        )
+        factory_profile_group = self.factory_profile_group
+        factory_profile_layout = factory_profile_group.content_layout
 
         profile_row = QHBoxLayout()
         profile_row.setSpacing(6)
@@ -958,10 +957,13 @@ class MainWindow(QMainWindow):
 
 
         # Right Column 2: Realtime Log & Progress
-        log_group = QGroupBox("Log thời gian thực & Tiến trình")
-        log_layout = QVBoxLayout(log_group)
-        log_layout.setContentsMargins(8, 8, 8, 8)
-        log_layout.setSpacing(6)
+        self.flash_log_group = CollapsibleCard(
+            "Chi tiết tiến trình",
+            "Log OpenOCD và dữ liệu chẩn đoán",
+            expanded=False,
+        )
+        log_group = self.flash_log_group
+        log_layout = log_group.content_layout
         self.log_view = QPlainTextEdit()
         self.log_view.setObjectName("logView")
         self.log_view.setReadOnly(True)
@@ -1017,11 +1019,11 @@ class MainWindow(QMainWindow):
         if narrow:
             self.flash_splitter.setStretchFactor(0, 3)
             self.flash_splitter.setStretchFactor(1, 2)
-            self.flash_scroll_content.setMinimumHeight(1050)
+            self.flash_scroll_content.setMinimumHeight(720)
         else:
             self.flash_splitter.setStretchFactor(0, 3)
             self.flash_splitter.setStretchFactor(1, 2)
-            self.flash_scroll_content.setMinimumHeight(650)
+            self.flash_scroll_content.setMinimumHeight(560)
 
     def _factory_profile_changed(self, index: int) -> None:
         if index < 0 or not getattr(self, "factory_profiles", ()):

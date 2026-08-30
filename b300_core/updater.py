@@ -20,10 +20,10 @@ from .release_manifest import (
     parse_latest_manifest,
 )
 from .versioning import SemVer
-from .update_channel import UpdateChannel, channel_endpoints
+from .update_channel import UpdateChannel, channel_endpoints, normalize_update_channel
 
 
-DEFAULT_MANIFEST_URL, DEFAULT_SIGNATURE_URL = channel_endpoints(UpdateChannel.STABLE)
+DEFAULT_MANIFEST_URL, DEFAULT_SIGNATURE_URL = channel_endpoints(UpdateChannel.RELEASE)
 USER_AGENT = "B300-STLink-Tools-Updater/0.3"
 
 
@@ -62,12 +62,12 @@ class UpdateClient:
             self, public_key: str, platform_name: str,
             manifest_url: Optional[str] = None,
             signature_url: Optional[str] = None,
-            channel: UpdateChannel = UpdateChannel.STABLE,
+            channel: UpdateChannel = UpdateChannel.RELEASE,
             open_url: Callable = urllib.request.urlopen,
             timeout_seconds: float = 8.0) -> None:
         self.public_key = public_key
         self.platform_name = platform_name
-        self.channel = UpdateChannel(channel)
+        self.channel = normalize_update_channel(channel)
         default_manifest, default_signature = channel_endpoints(self.channel)
         self.manifest_url = manifest_url or default_manifest
         self.signature_url = signature_url or default_signature

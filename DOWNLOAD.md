@@ -2,11 +2,11 @@
 
 Tài liệu này là **nguồn chuẩn để chọn đúng phiên bản và đúng file tải** cho người dùng, kỹ sư vận hành và AI agent.
 
-> **Quy tắc mặc định:** nếu người dùng không yêu cầu khác, chọn **Stable / Latest Release**, chọn **GUI**, sau đó chọn artifact đúng theo hệ điều hành và kiến trúc CPU. Không chọn `Source code (zip)` hoặc `Source code (tar.gz)` để cài tool.
+> **Quy tắc mặc định:** nếu người dùng không yêu cầu khác, chọn **bản phát hành mới nhất**, chọn **GUI**, sau đó chọn artifact đúng theo hệ điều hành và kiến trúc CPU. Không chọn `Source code (zip)` hoặc `Source code (tar.gz)` để cài tool.
 
 ## 1. Chọn nhanh
 
-| Thiết bị / hệ điều hành | Bản khuyến nghị | Link luôn trỏ tới Stable mới nhất |
+| Thiết bị / hệ điều hành | Bản khuyến nghị | Link luôn trỏ tới bản mới nhất |
 |---|---|---|
 | Windows 10/11 64-bit | **GUI Installer `.exe`** | [B300-STLink-GUI-Windows-x64.exe](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-GUI-Windows-x64.exe) |
 | Windows 10/11 64-bit, không muốn cài | GUI Portable `.zip` | [B300-STLink-GUI-Windows-x64.zip](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/B300-STLink-GUI-Windows-x64.zip) |
@@ -17,15 +17,15 @@ Tài liệu này là **nguồn chuẩn để chọn đúng phiên bản và đú
 
 Nếu chỉ cần terminal, script hoặc automation, xem mục **5. CLI** bên dưới.
 
-## 2. Stable, Latest và version cố định
+## 2. Bản mới nhất và version cố định
 
-### Stable / Latest — mặc định cho người dùng
+### Bản mới nhất — mặc định cho người dùng
 
-Trang Stable mới nhất:
+Trang phát hành mới nhất:
 
 - https://github.com/Tunglam0605/b300-stlink-tools/releases/latest
 
-Các link `releases/latest/download/...` trong tài liệu này luôn tự chuyển tới bản Stable mới nhất, vì vậy README không cần sửa lại mỗi lần tăng version.
+Các link `releases/latest/download/...` trong tài liệu này luôn tự chuyển tới bản phát hành mới nhất, vì vậy README không cần sửa lại mỗi lần tăng version.
 
 ### Version cố định — khi cần tái lập môi trường
 
@@ -45,16 +45,16 @@ Không thay `vX.Y.Z` bằng `latest` nếu yêu cầu là tái lập đúng mộ
 
 ### Development Build — chỉ để kiểm thử cải tiến
 
-Các thay đổi sau Stable được phát triển trên nhánh `develop/**`. Mỗi lần push vào nhánh này, workflow **Development packages (no publishing)** tự chạy CI/package cho Windows x64, Ubuntu x64 và Ubuntu ARM64 rồi lưu artifact trong GitHub Actions trong 7 ngày.
+Các thay đổi chưa phát hành được phát triển trên nhánh `develop/**`. Mỗi lần push vào nhánh này, workflow **Development packages (no publishing)** tự chạy CI/package cho Windows x64, Ubuntu x64 và Ubuntu ARM64 rồi lưu artifact trong GitHub Actions trong 7 ngày.
 
-Development Build **không** tạo GitHub Release, không thay `Latest`, không ghi `latest.json`/`latest-cli.json` và không được updater Stable tự động phân phối. Vì vậy kỹ sư có thể kiểm thử cải tiến mới mà không làm thay đổi bản đang dùng trong vận hành.
+Development Build **không** tạo GitHub Release, không thay `Latest`, không ghi `latest.json`/`latest-cli.json` và không được updater phân phối. Vì vậy kỹ sư có thể kiểm thử cải tiến mới mà không làm thay đổi bản đang dùng trong vận hành.
 
 Quy tắc sử dụng:
 
-1. Vận hành bình thường dùng **Stable / Latest**.
+1. Vận hành bình thường dùng **bản phát hành mới nhất**.
 2. Chỉ tải Development Build từ run GitHub Actions được chỉ định khi cần field-test.
 3. Khi báo lỗi Development Build, ghi lại commit SHA/run ID và platform.
-4. Chỉ thay đổi đã qua regression, package smoke và hardware/workflow acceptance cần thiết mới được đưa trở lại một bản Stable mới.
+4. Chỉ thay đổi đã qua regression, package smoke và hardware/workflow acceptance cần thiết mới được đưa vào bản phát hành mới.
 
 ## 3. Xác định kiến trúc máy
 
@@ -100,7 +100,7 @@ B300-STLink-GUI-Windows-x64.exe
 
 Cách dùng:
 
-1. Tải file `.exe` từ link Stable ở đầu tài liệu.
+1. Tải file `.exe` từ link bản mới nhất ở đầu tài liệu.
 2. Chạy installer.
 3. Mở **B300 ST-Link Tools** từ Start Menu/Desktop shortcut nếu có.
 4. Kết nối ST-Link và board.
@@ -191,7 +191,7 @@ Trên trang GitHub Release có thêm các asset phục vụ kiểm chứng hoặ
 | `SHA256SUMS.txt` | Danh sách SHA-256 của release assets. |
 | `release-manifest.json` | Manifest phát hành deterministic. |
 | `release-manifest.json.minisig` | Chữ ký Minisign của release manifest. |
-| `latest.json` | Manifest updater của Stable channel. |
+| `latest.json` | Manifest updater GUI của bản phát hành mới nhất. |
 | `latest.json.minisig` | Chữ ký Minisign của updater manifest. |
 | `Source code (zip)` | Source GitHub tự tạo — **không phải bộ cài**. |
 | `Source code (tar.gz)` | Source GitHub tự tạo — **không phải bộ cài**. |
@@ -228,9 +228,9 @@ AI/automation phải dùng các bước sau theo đúng thứ tự.
 
 ```yaml
 channel:
-  default: stable
-  stable_release: https://github.com/Tunglam0605/b300-stlink-tools/releases/latest
-  stable_manifest: https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/latest.json
+  default: latest
+  latest_release: https://github.com/Tunglam0605/b300-stlink-tools/releases/latest
+  latest_manifest: https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/latest.json
 
 interface:
   default: gui
@@ -265,13 +265,13 @@ never_select_as_installer:
 
 ### Agent algorithm
 
-1. Xác định người dùng cần **Stable mới nhất** hay **exact version**.
-2. Nếu không nói rõ → Stable mới nhất.
+1. Xác định người dùng cần **bản mới nhất** hay **exact version**.
+2. Nếu không nói rõ → bản mới nhất.
 3. Xác định OS.
 4. Với Linux, đọc `uname -m` hoặc platform metadata.
 5. Nếu không nói CLI/headless/automation → chọn GUI.
 6. Chọn artifact theo bảng mapping ở trên.
-7. Nếu tải Stable bằng automation, ưu tiên đọc `latest.json` để lấy metadata/version/package thay vì scrape HTML của trang Release.
+7. Nếu tải bản mới nhất bằng automation, ưu tiên đọc `latest.json` để lấy metadata/version/package thay vì scrape HTML của trang Release.
 8. Không chọn `Source code` làm installer.
 9. Nếu exact version được yêu cầu, pin URL/tag version đó; không tự nâng lên Latest.
 10. Sau download, verify SHA-256/signature nếu workflow yêu cầu integrity verification.
@@ -298,8 +298,8 @@ never_select_as_installer:
 
 Thứ tự ưu tiên khi cần xác định phiên bản:
 
-1. Stable current version cho automation: `latest.json` đã ký.
-2. Stable current release cho người dùng: GitHub `/releases/latest`.
+1. Current version cho automation: `latest.json` đã ký.
+2. Bản phát hành hiện tại cho người dùng: GitHub `/releases/latest`.
 3. Exact version: GitHub `/releases/tag/vX.Y.Z`.
 4. Source version trong repository: `b300_version.py` — chỉ dùng khi đang làm việc với source checkout.
 

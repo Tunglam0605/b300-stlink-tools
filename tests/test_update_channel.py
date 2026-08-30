@@ -7,23 +7,26 @@ from b300_core.updater import UpdateClient
 
 
 class UpdateChannelTests(unittest.TestCase):
-    def test_stable_is_default_release_channel(self) -> None:
+    def test_release_is_the_single_public_update_stream(self) -> None:
         client = UpdateClient("public-key", "windows-x64")
-        self.assertEqual(client.channel, UpdateChannel.STABLE)
+        self.assertEqual(client.channel, UpdateChannel.RELEASE)
         self.assertTrue(client.manifest_url.endswith("/latest.json"))
+        self.assertNotIn("beta", client.manifest_url.lower())
 
-    def test_cli_stable_uses_separate_signed_manifest_endpoint(self) -> None:
-        manifest, signature = cli_channel_endpoints(UpdateChannel.STABLE)
+    def test_cli_uses_single_signed_latest_manifest(self) -> None:
+        manifest, signature = cli_channel_endpoints(UpdateChannel.RELEASE)
         self.assertTrue(manifest.endswith("/latest-cli.json"))
         self.assertEqual(signature, manifest + ".minisig")
 
-    def test_beta_uses_its_own_signed_manifest_endpoint(self) -> None:
-        manifest, signature = channel_endpoints(UpdateChannel.BETA)
-        client = UpdateClient("public-key", "linux-x64", channel=UpdateChannel.BETA)
-        self.assertEqual(client.channel, UpdateChannel.BETA)
-        self.assertEqual(client.manifest_url, manifest)
-        self.assertEqual(client.signature_url, signature)
-        self.assertTrue(manifest.endswith("/latest-beta.json"))
+    def test_legacy_channel_aliases_cannot_select_a_different_feed(self) -> None:
+        release = channel_endpoints(UpdateChannel.RELEASE)
+        self.assertEqual(channel_endpoints(UpdateChannel.STABLE), release)
+        self.assertEqual(channel_endpoints(UpdateChannel.BETA), release)
+        self.assertEqual(channel_endpoints("stable"), release)
+        self.assertEqual(channel_endpoints("beta"), release)
+        client = UpdateClient("public-key", "linux-x64", channel="beta")
+        self.assertEqual(client.channel, UpdateChannel.RELEASE)
+        self.assertEqual((client.manifest_url, client.signature_url), release)
 
 
 if __name__ == "__main__":

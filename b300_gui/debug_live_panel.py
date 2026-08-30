@@ -30,7 +30,7 @@ class DebugLivePanel(QGroupBox):
     VARIABLES_CAPACITY = 2000
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__("Realtime Live Monitor", parent)
+        super().__init__("Theo dõi realtime", parent)
         self.buffer = VariableSampleBuffer(max_samples=self.VARIABLES_CAPACITY)
         self.rows: Dict[str, int] = {}
         self._timeline_samples: List[dict] = []
@@ -48,7 +48,7 @@ class DebugLivePanel(QGroupBox):
 
         sub_info = QVBoxLayout()
         sub_info.setSpacing(2)
-        subtitle = QLabel("Zero-halt SWD monitoring — target keeps running")
+        subtitle = QLabel("MCU tiếp tục chạy trong khi theo dõi")
         subtitle.setStyleSheet("color: #059669; font-weight: 700; font-size: 12px;")
         sub_info.addWidget(subtitle)
 
@@ -66,7 +66,7 @@ class DebugLivePanel(QGroupBox):
         toolbar = QHBoxLayout()
         toolbar.setSpacing(8)
 
-        toolbar.addWidget(QLabel("Interval:"))
+        toolbar.addWidget(QLabel("Tốc độ:"))
         self.interval_preset_combo = QComboBox()
         self.interval_preset_combo.addItem("0.1 s", 0.1)
         self.interval_preset_combo.addItem("0.2 s", 0.2)
@@ -89,14 +89,14 @@ class DebugLivePanel(QGroupBox):
         self.interval.valueChanged.connect(self._on_custom_interval_changed)
         toolbar.addWidget(self.interval)
 
-        toolbar.addWidget(QLabel("Cycles:"))
+        toolbar.addWidget(QLabel("Số mẫu:"))
         self.cycles = QSpinBox()
         self.cycles.setObjectName("debugSampleCycles")
         self.cycles.setRange(1, 100000)
         self.cycles.setValue(100)
         toolbar.addWidget(self.cycles)
 
-        self.start_button = QPushButton("▶ Start Live")
+        self.start_button = QPushButton("▶ Bắt đầu")
         self.start_button.setObjectName("debugSampleStartButton")
         self.start_button.setStyleSheet(
             "QPushButton { min-height: 28px; font-weight: 700; color: #FFFFFF; background-color: #059669; border: 1px solid #047857; border-radius: 6px; padding: 2px 14px; }"
@@ -105,16 +105,16 @@ class DebugLivePanel(QGroupBox):
         )
         toolbar.addWidget(self.start_button)
 
-        self.stop_button = QPushButton("⏹ Stop")
+        self.stop_button = QPushButton("⏹ Dừng")
         self.stop_button.setObjectName("debugSampleStopButton")
         self.stop_button.setEnabled(False)
         toolbar.addWidget(self.stop_button)
 
-        self.clear_button = QPushButton("Clear")
+        self.clear_button = QPushButton("Xóa")
         self.clear_button.setObjectName("debugSampleClearButton")
         toolbar.addWidget(self.clear_button)
 
-        self.export_button = QPushButton("Export…")
+        self.export_button = QPushButton("Xuất…")
         self.export_button.setObjectName("debugSampleExportButton")
         toolbar.addWidget(self.export_button)
 
@@ -162,7 +162,7 @@ class DebugLivePanel(QGroupBox):
         timeline_layout.setSpacing(4)
 
         timeline_header = QHBoxLayout()
-        timeline_title = QLabel("Execution Timeline (DWT PC)")
+        timeline_title = QLabel("Luồng thực thi")
         timeline_title.setStyleSheet("font-weight: 700; color: #0F172A; font-size: 12px;")
         timeline_header.addWidget(timeline_title)
 
@@ -202,7 +202,7 @@ class DebugLivePanel(QGroupBox):
         variables_layout.setSpacing(4)
 
         var_header = QHBoxLayout()
-        var_title = QLabel("Live Variables (RAM Watch)")
+        var_title = QLabel("Biến đang theo dõi")
         var_title.setStyleSheet("font-weight: 700; color: #0F172A; font-size: 12px;")
         var_header.addWidget(var_title)
         var_header.addStretch(1)

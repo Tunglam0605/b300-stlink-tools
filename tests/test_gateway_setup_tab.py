@@ -76,6 +76,9 @@ class GatewaySetupTabTests(unittest.TestCase):
         self.assertEqual(tab.check_table.rowCount(), 2)
         self.assertIn("192.168.1.109", tab.client_config.toPlainText())
         self.assertTrue(tab.copy_button.isEnabled())
+        self.assertFalse(tab.gateway_check_details.is_expanded())
+        self.assertFalse(tab.gateway_connection_details.is_expanded())
+        self.assertFalse(tab.gateway_safety_details.is_expanded())
         tab.close()
 
     def test_lazy_refresh_does_not_inspect_until_requested(self):
@@ -321,8 +324,11 @@ class GatewaySetupTabTests(unittest.TestCase):
         self.assertLessEqual(abs(tab.gateway_role_button.width() - tab.client_role_button.width()), 2)
         host_widths = [tab.refresh_button.width(), tab.prepare_button.width(), tab.selftest_button.width()]
         self.assertLessEqual(max(host_widths) - min(host_widths), 2)
-        config_widths = [tab.copy_button.width(), tab.show_host_key_button.width(), tab.copy_host_fingerprint_button.width()]
-        self.assertLessEqual(max(config_widths) - min(config_widths), 2)
+        tab.gateway_connection_details.set_expanded(True)
+        self.app.processEvents()
+        detail_widths = [tab.show_host_key_button.width(), tab.copy_host_fingerprint_button.width()]
+        self.assertLessEqual(max(detail_widths) - min(detail_widths), 2)
+        self.assertGreater(tab.copy_button.width(), 200)
         self.assertFalse(tab.progress.isVisible())
         gateway_scroll = tab.role_stack.widget(0)
         self.assertEqual(gateway_scroll.horizontalScrollBar().maximum(), 0)

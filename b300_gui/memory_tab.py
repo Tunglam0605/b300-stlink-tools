@@ -32,6 +32,7 @@ from b300_core.metadata import OTA_META_MAGIC_OTA, OTA_META_MAGIC_STLINK
 from b300_core.models import ApplicationHealth, OtaMetadata, ProbeRef
 from b300_core.policy import SECTORS
 from .workers import FunctionWorker
+from .collapsible_card import CollapsibleCard
 
 
 def format_hex_preview(data: bytes, limit: int = 4096, base_address: int = 0) -> str:
@@ -91,9 +92,36 @@ class MemoryTab(QWidget):
         display_layout.setContentsMargins(12, 8, 12, 8)
         display_layout.setSpacing(6)
 
+        quick_row = QHBoxLayout()
+        quick_row.setSpacing(8)
+
+        self.health_button = QPushButton("Kiểm tra Application")
+        self.health_button.setObjectName("memoryHealthPrimaryButton")
+        self.health_button.setToolTip("Read-only: đối chiếu metadata, vector và CRC32 của Application.")
+        self.health_button.clicked.connect(self.read_application_health)
+        quick_row.addWidget(self.health_button, 1)
+
+        self.metadata_button = QPushButton("Đọc Metadata")
+        self.metadata_button.clicked.connect(self.read_metadata)
+        quick_row.addWidget(self.metadata_button, 1)
+
+        self.cancel_button = QPushButton("Hủy")
+        self.cancel_button.setObjectName("memoryCancelButton")
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.setVisible(False)
+        self.cancel_button.clicked.connect(self.cancel_current)
+        quick_row.addWidget(self.cancel_button)
+        display_layout.addLayout(quick_row)
+
+        self.manual_memory_card = CollapsibleCard(
+            "Đọc Memory thủ công · Nâng cao",
+            "Chọn Sector, độ rộng dữ liệu và xuất binary",
+            expanded=False,
+        )
+        manual_layout = self.manual_memory_card.content_layout
+
         param_row = QHBoxLayout()
         param_row.setSpacing(8)
-
         param_row.addWidget(QLabel("Sector:"))
         self.sector_combo = QComboBox()
         self.sector_combo.setAccessibleName("Chọn Sector để đọc")
@@ -124,46 +152,27 @@ class MemoryTab(QWidget):
         self.size_combo.setCurrentIndex(2)
         self.size_combo.currentIndexChanged.connect(self._render_memory_table)
         param_row.addWidget(self.size_combo, 1)
-        display_layout.addLayout(param_row)
+        manual_layout.addLayout(param_row)
 
-        action_row = QHBoxLayout()
-        action_row.setSpacing(6)
-
-        self.read_button = QPushButton("▶ Đọc Sector")
-        self.read_button.setToolTip("CPU tạm dừng khi đọc và tự động tiếp tục chạy (resume) trước khi ngắt kết nối.")
+        manual_actions = QHBoxLayout()
+        self.read_button = QPushButton("Đọc Sector")
+        self.read_button.setToolTip("CPU tạm dừng khi đọc và tool yêu cầu resume trước khi ngắt kết nối.")
         self.read_button.clicked.connect(self.read_selected_sector)
-        action_row.addWidget(self.read_button)
+        manual_actions.addWidget(self.read_button)
 
-        self.metadata_button = QPushButton("⟳ Đọc Application metadata")
-        self.metadata_button.clicked.connect(self.read_metadata)
-        action_row.addWidget(self.metadata_button)
-
-        self.health_button = QPushButton("🛡 Kiểm tra Application Health")
-        self.health_button.setToolTip("Read-only: đọc AppMeta + đúng image_size để đối chiếu CRC32/vector; không reset hoặc ghi Flash.")
-        self.health_button.clicked.connect(self.read_application_health)
-        action_row.addWidget(self.health_button)
-
-        self.export_button = QPushButton("💾 Xuất binary…")
+        self.export_button = QPushButton("Xuất binary…")
         self.export_button.setEnabled(False)
         self.export_button.clicked.connect(self.export_sector)
-        action_row.addWidget(self.export_button)
-
-        self.cancel_button = QPushButton("⏹ Hủy đọc")
-        self.cancel_button.setObjectName("memoryCancelButton")
-        self.cancel_button.setEnabled(False)
-        self.cancel_button.setVisible(False)
-        self.cancel_button.clicked.connect(self.cancel_current)
-        action_row.addWidget(self.cancel_button)
-
-        action_row.addStretch(1)
-        display_layout.addLayout(action_row)
+        manual_actions.addWidget(self.export_button)
+        manual_actions.addStretch(1)
+        manual_layout.addLayout(manual_actions)
+        display_layout.addWidget(self.manual_memory_card)
 
         root.addWidget(display_group)
 
         # Hidden labels preserved for status & test assertions
         self.read_only_notice = QLabel(
-            "CHỈ ĐỌC (READ-ONLY) · CPU tạm dừng khi đọc qua ST-Link và tool luôn yêu cầu resume "
-            "trước khi ngắt kết nối. Với quan sát realtime không halt, dùng Live Monitor ở Debug Workstation."
+            "CHỈ ĐỌC (READ-ONLY) · CPU tạm dừng khi đọc Memory thủ công và tool luôn resume trước khi ngắt kết nối. Realtime không halt: dùng Live Monitor."
         )
         self.read_only_notice.setObjectName("memoryReadOnlyNotice")
         self.read_only_notice.setWordWrap(True)
@@ -312,7 +321,13 @@ class MemoryTab(QWidget):
         splitter.addWidget(sidebar)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
-        root.addWidget(splitter, 1)
+        self.memory_results_card = CollapsibleCard(
+            "Kết quả chi tiết",
+            "Bảng Memory, Application Health và Metadata",
+            expanded=False,
+        )
+        self.memory_results_card.content_layout.addWidget(splitter)
+        root.addWidget(self.memory_results_card, 1)
 
         self._init_empty_table()
 
@@ -460,6 +475,7 @@ class MemoryTab(QWidget):
         self.range_info_label.setText("Đang hủy thao tác đọc…")
 
     def show_sector(self, sector_index: int, data: bytes) -> None:
+        self.memory_results_card.set_expanded(True)
         self.current_sector = sector_index
         self.current_data = bytes(data)
         base_address = 0
@@ -633,6 +649,7 @@ class MemoryTab(QWidget):
         header.setSectionResizeMode(cols - 1, QHeaderView.ResizeMode.ResizeToContents)
 
     def show_application_health(self, health: ApplicationHealth) -> None:
+        self.memory_results_card.set_expanded(True)
         expected_crc = (
             "0x%08X" % health.metadata.image_crc32 if health.metadata.valid else "—"
         )
@@ -691,6 +708,7 @@ class MemoryTab(QWidget):
         self._set_busy(False)
 
     def show_metadata(self, metadata: OtaMetadata) -> None:
+        self.memory_results_card.set_expanded(True)
         if metadata.classification == "ERASED":
             values = {
                 "Classification": "ERASED",

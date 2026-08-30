@@ -17,7 +17,7 @@ class DebugConnectionPanel(QGroupBox):
     """Clean engineering connection bar with mode selection, probe info, symbols, and collapsible settings."""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__("Connection & Target Environment", parent)
+        super().__init__("Kết nối thiết bị", parent)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -32,24 +32,24 @@ class DebugConnectionPanel(QGroupBox):
         # Mode selector
         mode_box = QHBoxLayout()
         mode_box.setSpacing(6)
-        mode_box.addWidget(QLabel("Mode:"))
+        mode_box.addWidget(QLabel("Kết nối:"))
         self.mode_combo = QComboBox()
         self.mode_combo.setObjectName("debugModeSelector")
         for label, value in (
-            ("Auto", "auto"),
-            ("Local · Direct ST-Link", "local"),
-            ("Gateway · Host with Probe", "gateway"),
-            ("Client · Remote via SSH", "client"),
+            ("Tự động · Khuyến nghị", "auto"),
+            ("Máy này · ST-Link", "local"),
+            ("Máy Gateway · ST-Link", "gateway"),
+            ("Máy Client · Từ xa", "client"),
         ):
             self.mode_combo.addItem(label, value)
         self.mode_combo.setToolTip(
-            "Auto: connects locally if ST-Link is plugged in; otherwise connects to saved Gateway."
+            "Tự động: dùng ST-Link trên máy này nếu có; nếu không sẽ dùng Gateway đã lưu."
         )
         mode_box.addWidget(self.mode_combo)
         top_row.addLayout(mode_box)
 
         # Probe info display
-        self.probe_display = QLabel("ST-Link: Auto-detect")
+        self.probe_display = QLabel("ST-Link: Tự động")
         self.probe_display.setStyleSheet("font-weight: 700; color: #0F172A; font-size: 12px;")
         top_row.addWidget(self.probe_display)
         top_row.addStretch(1)
@@ -73,10 +73,10 @@ class DebugConnectionPanel(QGroupBox):
         symbols_layout = QHBoxLayout(self.symbols_box)
         symbols_layout.setContentsMargins(0, 0, 0, 0)
         symbols_layout.setSpacing(6)
-        symbols_layout.addWidget(QLabel("Symbols:"))
+        symbols_layout.addWidget(QLabel("File chương trình:"))
         self.symbol_path = QLineEdit()
         self.symbol_path.setObjectName("debugSymbolPath")
-        self.symbol_path.setPlaceholderText("Optional: firmware.elf or firmware.axf")
+        self.symbol_path.setPlaceholderText("Không bắt buộc · file .AXF/.ELF")
         symbols_layout.addWidget(self.symbol_path, 1)
 
         self.symbol_browse_button = QPushButton("Chọn ELF/AXF")
@@ -155,7 +155,7 @@ class DebugConnectionPanel(QGroupBox):
         main_layout.addLayout(action_row)
 
         # Advanced Settings (Collapsible)
-        self.advanced_card = CollapsibleCard("Advanced Settings & Endpoints", "Ports, loopback binding, and runtime info", expanded=False)
+        self.advanced_card = CollapsibleCard("Chi tiết kết nối", "Port, loopback và thông tin runtime", expanded=False)
         advanced_layout = QGridLayout()
         advanced_layout.setContentsMargins(4, 4, 4, 4)
         advanced_layout.setHorizontalSpacing(10)

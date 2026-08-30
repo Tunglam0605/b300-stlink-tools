@@ -26,7 +26,7 @@ class UpdateDialog(QDialog):
         self.asset = asset
         self.ready_package = None
         self.setWindowTitle("Cập nhật B300 ST-Link Tools")
-        self.setMinimumSize(560, 440)
+        self.setMinimumSize(520, 300)
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 20, 20, 20)
         root.setSpacing(12)
@@ -61,15 +61,24 @@ class UpdateDialog(QDialog):
         card_layout.addWidget(subtitle)
         root.addWidget(version_card)
 
-        # Changelog Header & Markdown Browser
-        notes_label = QLabel("Tính năng & Thay đổi mới:")
+        # Release details stay hidden until the user asks for them.
+        self.details_button = QPushButton("Xem thay đổi")
+        self.details_button.setObjectName("updateDetailsButton")
+        root.addWidget(self.details_button)
+
+        notes_label = QLabel("Thay đổi trong bản mới")
         notes_label.setStyleSheet("font-weight: 700; color: #334155; font-size: 13px; margin-top: 4px;")
+        notes_label.setVisible(False)
         root.addWidget(notes_label)
+        self.notes_label = notes_label
 
         self.notes_view = QTextBrowser()
         self.notes_view.setOpenExternalLinks(True)
         self.notes_view.setMarkdown(release.notes)
+        self.notes_view.setVisible(False)
+        self.notes_view.setMinimumHeight(180)
         root.addWidget(self.notes_view, 1)
+        self.details_button.clicked.connect(self._toggle_details)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
@@ -87,7 +96,7 @@ class UpdateDialog(QDialog):
         actions.setSpacing(10)
         self.later_button = QPushButton("Để sau")
         self.later_button.clicked.connect(self.close)
-        self.release_button = QPushButton("🌐 Xem Release")
+        self.release_button = QPushButton("Trang phát hành")
         self.release_button.clicked.connect(
             lambda: self.release_requested.emit(self.release.release_page)
         )
@@ -95,10 +104,20 @@ class UpdateDialog(QDialog):
         self.action_button.setObjectName("updateActionButton")
         self.action_button.clicked.connect(self._request_action)
         actions.addWidget(self.later_button)
+        self.release_button.setVisible(False)
         actions.addWidget(self.release_button)
         actions.addStretch(1)
         actions.addWidget(self.action_button)
         root.addLayout(actions)
+
+
+    def _toggle_details(self) -> None:
+        visible = not self.notes_view.isVisible()
+        self.notes_label.setVisible(visible)
+        self.notes_view.setVisible(visible)
+        self.release_button.setVisible(visible)
+        self.details_button.setText("Ẩn thay đổi" if visible else "Xem thay đổi")
+        self.adjustSize()
 
     def _request_action(self) -> None:
         if self.ready_package is None:

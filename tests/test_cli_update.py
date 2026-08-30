@@ -26,7 +26,7 @@ WINDOWS_FILE = "B300-STLink-CLI-Windows-x64.zip"
 LINUX_X64_KEY = "linux-x64-cli"
 LINUX_X64_FILE = "B300-STLink-CLI-Linux-x64.tar.gz"
 
-CLI_MANIFEST_URL, CLI_SIGNATURE_URL = cli_channel_endpoints(UpdateChannel.STABLE)
+CLI_MANIFEST_URL, CLI_SIGNATURE_URL = cli_channel_endpoints(UpdateChannel.RELEASE)
 
 
 def _next_patch(version: str) -> str:

@@ -58,9 +58,9 @@ uname -m
 
 **Lưu ý:** `Source code (zip)` và `Source code (tar.gz)` trên GitHub Release là mã nguồn, **không phải bộ cài**.
 
-Các link ở trên luôn trỏ tới [Stable Release mới nhất](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest). Nếu cần đúng một phiên bản đã nghiệm thu, hãy mở release theo tag `vX.Y.Z` thay vì dùng `latest`.
+Các link ở trên luôn trỏ tới [bản phát hành mới nhất](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest). Nếu cần đúng một phiên bản cụ thể, hãy mở release theo tag `vX.Y.Z` thay vì dùng `latest`.
 
-**Hướng dẫn tải và cài đặt đầy đủ cho người dùng và AI agent:** [DOWNLOAD.md](DOWNLOAD.md). Tài liệu này mô tả cách chọn Stable hoặc exact version, xác định kiến trúc CPU, chọn GUI/CLI và mapping chính xác từ platform sang artifact.
+**Hướng dẫn tải và cài đặt đầy đủ cho người dùng và AI agent:** [DOWNLOAD.md](DOWNLOAD.md). Tài liệu này dùng một luồng phát hành duy nhất: chọn bản mới nhất hoặc exact version, xác định kiến trúc CPU, chọn GUI/CLI và mapping chính xác từ platform sang artifact.
 
 Các file kiểm chứng release: [SHA256SUMS.txt](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/SHA256SUMS.txt), [release-manifest.json](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/release-manifest.json), [latest.json](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/latest.json) cho GUI và [latest-cli.json](https://github.com/Tunglam0605/b300-stlink-tools/releases/latest/download/latest-cli.json) cho CLI.
 
@@ -102,12 +102,12 @@ and target-memory reads are disabled in the GUI instead of merely failing after
 the operator presses a button. Debug contains no flash programming, arbitrary
 memory write, or Option-Byte controls.
 
-Update checks use the Stable channel by default. A separately signed Beta
-manifest endpoint is supported for configured prerelease users; manifest
-signature and package SHA-256 validation are unchanged for both channels. The
-release workflow also re-downloads the published `latest.json` + Minisign
-signature and probes every signed platform asset after publication before the
-release pipeline is considered healthy.
+GUI và CLI dùng **một luồng cập nhật công khai duy nhất**. Mỗi release `vX.Y.Z`
+phát hành `latest.json` / `latest-cli.json` có chữ ký Minisign; updater chỉ đề
+nghị nâng lên phiên bản mới hơn và không hạ cấp. Development build chỉ là artifact
+CI để kiểm thử, không có update channel riêng và không được phân phối cho người
+dùng. Release workflow tải lại manifest đã ký và probe mọi platform asset sau khi
+publish trước khi pipeline được coi là healthy.
 
 ## Ranh giới an toàn
 

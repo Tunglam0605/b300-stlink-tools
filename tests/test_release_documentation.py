@@ -25,7 +25,7 @@ class ReleaseDocumentationTests(unittest.TestCase):
             with self.subTest(filename=filename):
                 self.assertIn(LATEST + filename, guide)
 
-        self.assertIn("default: stable", guide)
+        self.assertIn("default: latest", guide)
         self.assertIn("default: gui", guide)
         self.assertIn("windows_x64:", guide)
         self.assertIn("linux_x86_64:", guide)

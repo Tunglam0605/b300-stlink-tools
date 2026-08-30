@@ -35,6 +35,13 @@ class GuiMemoryTests(unittest.TestCase):
         self.assertNotIn("Option Bytes", labels)
         self.assertFalse(tab.export_button.isEnabled())
 
+    def test_technical_memory_sections_are_hidden_by_default(self) -> None:
+        tab = MemoryTab(service=object(), probe_provider=lambda: None)
+        self.assertFalse(tab.manual_memory_card.is_expanded())
+        self.assertFalse(tab.memory_results_card.is_expanded())
+        self.assertEqual(tab.health_button.text(), "Kiểm tra Application")
+        self.assertEqual(tab.metadata_button.text(), "Đọc Metadata")
+
     def test_hex_preview_is_bounded_and_marks_omitted_bytes(self) -> None:
         preview = format_hex_preview(bytes(range(256)) * 20, limit=64)
         self.assertIn("00000000", preview)
@@ -44,6 +51,7 @@ class GuiMemoryTests(unittest.TestCase):
     def test_metadata_fields_render_valid_confirmed_record(self) -> None:
         tab = MemoryTab(service=object(), probe_provider=lambda: None)
         tab.show_metadata(decode_ota_metadata(make_metadata(state=3)))
+        self.assertTrue(tab.memory_results_card.is_expanded())
         self.assertEqual(tab.metadata_values["Classification"].text(), "VALID")
         self.assertEqual(tab.metadata_values["Source"].text(), "OTA (OTAM)")
         self.assertEqual(tab.metadata_values["State"].text(), "CONFIRMED (3)")

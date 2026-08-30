@@ -85,21 +85,20 @@ class GuiUpdaterTests(unittest.TestCase):
         window.about_dialog.close()
         window.close()
 
-    def test_running_preview_newer_than_stable_is_not_reported_as_v010_current_or_downgrade(self) -> None:
+    def test_running_build_newer_than_public_release_is_not_reported_as_downgrade(self) -> None:
         stable = replace(RELEASE, version=SemVer.parse("0.10.0"))
         result = UpdateCheckResult(False, stable, None)
         window = self.make_window(FakeUpdateClient(result=result))
-        self.assertIn("Đang dùng v%s" % CURRENT_VERSION, window.update_channel_label.text())
+        self.assertIn("Phiên bản v%s" % CURRENT_VERSION, window.update_channel_label.text())
         with mock.patch.object(QMessageBox, "information") as info:
             window._update_check_finished(result, manual=True)
         text = window.update_channel_label.text()
-        self.assertIn("Đang dùng v%s" % CURRENT_VERSION, text)
-        self.assertIn("Preview/Dev", text)
-        self.assertIn("Stable mới nhất v0.10.0", text)
-        self.assertNotIn("Đang dùng v0.10.0", text)
+        self.assertIn("v%s" % CURRENT_VERSION, text)
+        self.assertIn("Chưa có bản public mới hơn", text)
+        self.assertNotIn("Stable", text)
+        self.assertNotIn("Preview", text)
         message = info.call_args.args[2]
-        self.assertIn("Preview/Development", message)
-        self.assertIn("Stable mới nhất hiện là v0.10.0", message)
+        self.assertIn("Bản phát hành công khai gần nhất là v0.10.0", message)
         self.assertIn("không hạ cấp", message)
         window.close()
 
@@ -110,6 +109,9 @@ class GuiUpdaterTests(unittest.TestCase):
         dialog = window.update_dialog
         self.assertEqual(dialog.new_version_value.text(), "0.3.1")
         self.assertIn("Safe update", dialog.notes_view.toPlainText())
+        self.assertFalse(dialog.notes_view.isVisible())
+        dialog.details_button.click()
+        self.assertTrue(dialog.notes_view.isVisible())
         self.assertEqual(dialog.action_button.text(), "Tải bản cập nhật")
         self.assertTrue(dialog.action_button.isEnabled())
         dialog.close()
@@ -238,7 +240,7 @@ class GuiUpdaterTests(unittest.TestCase):
         result = UpdateCheckResult(True, RELEASE, RELEASE.platforms["windows-x64"])
         window = self.make_window(FakeUpdateClient(result=result))
         window._update_check_finished(result, manual=False)
-        self.assertIn("có sẵn", window.update_channel_label.text())
+        self.assertIn("Có bản mới", window.update_channel_label.text())
         self.assertIn(str(RELEASE.version), window.update_channel_label.text())
         self.assertIsNotNone(window.update_dialog)
         self.assertTrue(window.update_dialog.isVisible())
