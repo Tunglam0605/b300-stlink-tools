@@ -787,7 +787,6 @@ class MainWindow(QMainWindow):
         self.plan_table.setHorizontalHeaderLabels(["Sector", "Vai trò", "Thao tác"])
         self.plan_table.verticalHeader().setVisible(False)
         self.plan_table.verticalHeader().setDefaultSectionSize(22)
-        self.plan_table.setMinimumHeight(135)
         self.plan_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.plan_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         for row, sector in enumerate(SECTORS[3:]):
@@ -800,6 +799,17 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        # The flash plan is a fixed five-row safety summary, not a scrollable data grid.
+        # Size it from the active Qt style so Windows/Linux and DPI scaling never produce
+        # the confusing one-notch vertical scrollbar seen with a hard-coded pixel height.
+        row_height = 22
+        for row in range(self.plan_table.rowCount()):
+            self.plan_table.setRowHeight(row, row_height)
+        header_height = max(22, header.sizeHint().height())
+        header.setFixedHeight(header_height)
+        plan_height = header_height + (row_height * self.plan_table.rowCount()) + (self.plan_table.frameWidth() * 2)
+        self.plan_table.setFixedHeight(plan_height)
+        self.plan_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         plan_layout.addWidget(self.plan_table)
 
         actions = QGridLayout()
