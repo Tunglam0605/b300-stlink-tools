@@ -85,6 +85,9 @@ class GuiUpdaterTests(unittest.TestCase):
         window.about_dialog.close()
         window.close()
 
+    def test_public_version_breaks_0120_rc_collision(self) -> None:
+        self.assertGreater(SemVer.parse(CURRENT_VERSION), SemVer.parse("0.12.0"))
+
     def test_running_build_newer_than_public_release_is_not_reported_as_downgrade(self) -> None:
         stable = replace(RELEASE, version=SemVer.parse("0.10.0"))
         result = UpdateCheckResult(False, stable, None)

@@ -144,9 +144,9 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertIn("Phiên bản", window.update_channel_label.text())
         self.assertNotIn("Stable", window.update_channel_label.text())
         self.assertNotIn("Preview", window.update_channel_label.text())
-        self.assertFalse(window.flash_details_card.is_expanded())
-        self.assertFalse(window.factory_profile_group.is_expanded())
-        self.assertFalse(window.flash_log_group.is_expanded())
+        self.assertFalse(window.flash_details_dialog.isVisible())
+        self.assertFalse(window.factory_dialog.isVisible())
+        self.assertFalse(window.flash_log_dialog.isVisible())
         self.assertIn("Sector 3–7", window.flash_plan_label.text())
         window.flash_details_card.set_expanded(True)
         self.app.processEvents()
@@ -159,7 +159,8 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertIn("Dry-run", window.recommended_flow.text())
         self.assertEqual(window.dry_run_button.objectName(), "dryRunButton")
         self.assertTrue(window.factory_provision_button.text().startswith("Nạp Bootloader"))
-        self.assertIsNotNone(window.findChild(QLabel, "factoryWarningNote"))
+        self.assertTrue(window.factory_window_button.isVisible())
+        self.assertIsNotNone(window.factory_dialog.findChild(QLabel, "factoryWarningNote"))
         window.tabs.setCurrentIndex(3)
         self.app.processEvents()
         self.assertEqual(window.page_title.text(), "Kết nối từ xa")
@@ -340,7 +341,8 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertFalse(hasattr(window, "factory_inspect_button"))
         self.assertFalse(hasattr(window, "factory_dry_run_button"))
 
-        window.factory_provision_button.click()
+        with mock.patch("b300_gui.main_window.SafetyActionDialog.confirm", return_value=True):
+            window.factory_provision_button.click()
         deadline = time.monotonic() + 2.0
         while (window.busy or window._threads) and time.monotonic() < deadline:
             self.app.processEvents()
@@ -360,7 +362,8 @@ class GuiSmokeTests(unittest.TestCase):
         window = MainWindow(service=service, probe_loader=lambda: probes)
         self.assertTrue(window.factory_provision_button.isEnabled())
 
-        window.factory_provision_button.click()
+        with mock.patch("b300_gui.main_window.SafetyActionDialog.confirm", return_value=True):
+            window.factory_provision_button.click()
         deadline = time.monotonic() + 2.0
         while (window.busy or window._threads) and time.monotonic() < deadline:
             self.app.processEvents()
@@ -377,7 +380,8 @@ class GuiSmokeTests(unittest.TestCase):
             0x101F6413, 512, 3.09, "Sector 0-2 protected", (0, 1, 2), True, True
         ))
         window = MainWindow(service=service, probe_loader=lambda: probes)
-        window.factory_provision_button.click()
+        with mock.patch("b300_gui.main_window.SafetyActionDialog.confirm", return_value=True):
+            window.factory_provision_button.click()
         deadline = time.monotonic() + 2.0
         while (window.busy or window._threads) and time.monotonic() < deadline:
             self.app.processEvents()

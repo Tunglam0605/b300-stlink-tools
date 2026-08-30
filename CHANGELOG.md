@@ -5,6 +5,9 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-08-31
+
+- Khắc phục collision version của chuỗi RC 0.12.0: bản public mới dùng version 0.12.1 để mọi installation 0.12.0 cũ bắt buộc nhận ra bản cập nhật mới thay vì báo nhầm “đã mới nhất”.
 - Ẩn toàn bộ PowerShell backend khỏi UX desktop trên Windows: dò ST-Link lúc startup/refresh dùng hidden child-process policy; các thao tác OpenSSH/Gateway cần quyền Admin vẫn giữ UAC bắt buộc nhưng PowerShell elevated sau UAC chạy `WindowStyle Hidden` + `NonInteractive`, nên không còn terminal xanh che GUI.
 - Hợp nhất updater về **một luồng phát hành công khai duy nhất**: GUI/CLI chỉ dùng signed `latest.json` / `latest-cli.json`; không còn Stable/Preview/Beta trong giao diện người dùng. GUI chỉ hiển thị `Phiên bản hiện tại`, `Đã là bản mới nhất` hoặc `Có bản mới`; development build không có update feed riêng và updater không downgrade.
 - Đơn giản hóa frontend theo progressive disclosure: Flash chỉ ưu tiên `Kiểm tra target → Chọn HEX → Dry-run → Nạp Application`; sector map/verify chain, Bootloader Factory và OpenOCD log mặc định thu gọn dưới `Chi tiết kỹ thuật` / `Nâng cao`. Gateway/Client ẩn bảng OpenSSH/firewall/fingerprint/safety dưới `Chi tiết`, còn Memory ưu tiên `Kiểm tra Application` / `Đọc Metadata` và chỉ hiện raw Sector/Width/Size/bảng Memory khi người dùng mở `Nâng cao` hoặc có kết quả cần xem.

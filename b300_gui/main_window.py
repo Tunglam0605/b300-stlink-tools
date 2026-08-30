@@ -74,6 +74,7 @@ from .update_dialog import UpdateDialog
 from .update_worker import UpdateCheckWorker, UpdateDownloadWorker
 from .whats_new_dialog import WhatsNewDialog
 from .collapsible_card import CollapsibleCard
+from .operator_dialogs import SafetyActionDialog, TechnicalDetailsDialog
 from . import __version__
 
 
@@ -843,7 +844,6 @@ class MainWindow(QMainWindow):
         self.plan_table.setFixedHeight(plan_height)
         self.plan_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         flash_details_layout.addWidget(self.plan_table)
-        plan_layout.addWidget(self.flash_details_card)
 
         actions = QGridLayout()
         actions.setHorizontalSpacing(10)
@@ -914,6 +914,7 @@ class MainWindow(QMainWindow):
         factory_warning.setObjectName("factoryWarningNote")
         factory_warning.setWordWrap(True)
         factory_profile_layout.addWidget(factory_warning)
+        self.factory_warning = factory_warning
 
         self.factory_provision_button = QPushButton("Nạp Bootloader · Factory Provisioning")
         self.factory_provision_button.setObjectName("factoryProvisionButton")
@@ -953,7 +954,6 @@ class MainWindow(QMainWindow):
             )
             self.factory_summary_chip.setText("Lỗi catalog: %s" % error)
         self.factory_profile_combo.currentIndexChanged.connect(self._factory_profile_changed)
-        right_layout.addWidget(factory_profile_group)
 
 
         # Right Column 2: Realtime Log & Progress
@@ -979,7 +979,8 @@ class MainWindow(QMainWindow):
         self.progress.setValue(0)
         self.progress.setTextVisible(True)
         self.progress.setFormat("Chưa chạy")
-        log_layout.addWidget(self.progress)
+        self.progress.setVisible(False)
+        plan_layout.addWidget(self.progress)
 
         log_actions = QHBoxLayout()
         self.clear_log_button = QPushButton("Xóa hiển thị")
@@ -990,18 +991,57 @@ class MainWindow(QMainWindow):
         log_actions.addWidget(self.export_log_button)
         log_actions.addStretch(1)
         log_layout.addLayout(log_actions)
-        right_layout.addWidget(log_group, 1)
 
         self.factory_probe_combo = self.probe_combo
         self.factory_log_view = self.log_view
         self.factory_progress = self.progress
 
-        splitter.addWidget(left)
-        splitter.addWidget(right)
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
-        content_layout.addWidget(splitter)
-        self.flash_scroll_content.setMinimumHeight(520)
+        # Keep the operator workspace single-column. Technical information and
+        # factory-only controls live in focused windows instead of competing
+        # with the normal Application workflow.
+        self.flash_details_dialog = TechnicalDetailsDialog(
+            "Chi tiết nạp Application", "Chi tiết kỹ thuật nạp Application",
+            "Sector map, địa chỉ Flash và chuỗi verify. Chỉ cần mở khi chẩn đoán hoặc audit.",
+            self, minimum_size=(680, 440),
+        )
+        self.flash_details_card.set_expanded(True)
+        self.flash_details_dialog.body_layout.addWidget(self.flash_details_card)
+
+        self.factory_dialog = TechnicalDetailsDialog(
+            "Bootloader Factory", "Bootloader Factory · Nâng cao",
+            "Chỉ dùng khi provisioning mainboard mới. Luồng nạp Application thông thường không cần mở cửa sổ này.",
+            self, minimum_size=(700, 470),
+        )
+        self.factory_profile_group.set_expanded(True)
+        self.factory_dialog.body_layout.addWidget(self.factory_profile_group)
+
+        self.flash_log_dialog = TechnicalDetailsDialog(
+            "Nhật ký & tiến trình", "Nhật ký kỹ thuật",
+            "OpenOCD log và dữ liệu chẩn đoán. Có thể để đóng trong vận hành bình thường.",
+            self, minimum_size=(760, 500),
+        )
+        self.flash_log_group.set_expanded(True)
+        self.flash_log_dialog.body_layout.addWidget(self.flash_log_group)
+
+        tools = QHBoxLayout()
+        tools.setSpacing(8)
+        self.flash_details_button = QPushButton("Chi tiết nạp…")
+        self.flash_details_button.setObjectName("flashDetailsButton")
+        self.flash_details_button.clicked.connect(self.flash_details_dialog.open_window)
+        tools.addWidget(self.flash_details_button)
+        self.factory_window_button = QPushButton("Bootloader Factory…")
+        self.factory_window_button.setObjectName("factoryWindowButton")
+        self.factory_window_button.clicked.connect(self.factory_dialog.open_window)
+        tools.addWidget(self.factory_window_button)
+        self.flash_log_button = QPushButton("Nhật ký…")
+        self.flash_log_button.setObjectName("flashLogButton")
+        self.flash_log_button.clicked.connect(self.flash_log_dialog.open_window)
+        tools.addWidget(self.flash_log_button)
+        tools.addStretch(1)
+        left_layout.addLayout(tools)
+        left_layout.addStretch(1)
+        content_layout.addWidget(left)
+        self.flash_scroll_content.setMinimumHeight(440)
         self._update_controls()
         QTimer.singleShot(0, self._update_flash_layout)
         return page
@@ -1019,11 +1059,11 @@ class MainWindow(QMainWindow):
         if narrow:
             self.flash_splitter.setStretchFactor(0, 3)
             self.flash_splitter.setStretchFactor(1, 2)
-            self.flash_scroll_content.setMinimumHeight(720)
+            self.flash_scroll_content.setMinimumHeight(520)
         else:
             self.flash_splitter.setStretchFactor(0, 3)
             self.flash_splitter.setStretchFactor(1, 2)
-            self.flash_scroll_content.setMinimumHeight(560)
+            self.flash_scroll_content.setMinimumHeight(440)
 
     def _factory_profile_changed(self, index: int) -> None:
         if index < 0 or not getattr(self, "factory_profiles", ()):
@@ -1151,6 +1191,24 @@ class MainWindow(QMainWindow):
             probe = self._selected_factory_probe()
         except ValueError as error:
             self._set_status(str(error), "error")
+            return
+
+        trusted = self.factory_trusted
+        profile_name = trusted.profile.display_name if trusted is not None else "Bootloader đã xác thực"
+        if not SafetyActionDialog.confirm(
+            self,
+            "Xác nhận Bootloader Factory",
+            "Đây là thao tác Factory, không phải nạp Application thông thường",
+            "Tool sẽ kiểm tra target/WRP trước. Chỉ khi preflight đạt mới cho phép ghi Bootloader đã được nhà phát hành xác thực.",
+            details=(
+                "Profile: %s\n"
+                "Vùng tác động: Bootloader Sector 0–2\n"
+                "Protection: WRP phải được khôi phục và verify sau khi ghi\n"
+                "Không rút ST-Link hoặc làm mất nguồn trong khi thao tác." % profile_name
+            ),
+            confirm_text="Tôi hiểu · Bắt đầu preflight",
+            severity="danger",
+        ):
             return
 
         self.busy = True
@@ -1587,6 +1645,7 @@ class MainWindow(QMainWindow):
             self.openocd_ready and probe_selected and not main_locked
         )
         self.probe_combo.setEnabled(not main_locked)
+        self.progress.setVisible(self.busy)
         self.setup_button.setVisible(not self.openocd_ready)
         self.setup_button.setEnabled(not operation.is_hardware_busy)
         if hasattr(self, "support_bundle_action"):
