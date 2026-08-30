@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 from b300_core.debug_sampling import (
     VariableSample, VariableSampleBuffer, validate_sampling_request, write_samples,
 )
+from b300_core.live_monitor import LiveSample, validate_live_watch_specs
 
 
 class DebugLivePanel(QGroupBox):
@@ -280,6 +281,73 @@ class DebugLivePanel(QGroupBox):
             item = self.table.item(r, 0)
             if item:
                 self.rows[item.text()] = r
+
+    def watch_specs(self) -> Tuple[str, ...]:
+        specs = []
+        for row in range(self.table.rowCount()):
+            name_item = self.table.item(row, 0)
+            type_item = self.table.item(row, 2)
+            if name_item is None or not name_item.text().strip():
+                continue
+            name = name_item.text().strip()
+            value_type = type_item.text().strip() if type_item and type_item.text().strip() else self.type_combo.currentText()
+            specs.append("%s:%s" % (name, value_type))
+        if not specs:
+            raw = self.expressions.text().strip()
+            if raw:
+                import re
+                for item in (part.strip() for part in re.split(r"[,;\n]+", raw) if part.strip()):
+                    specs.append(item if ":" in item else "%s:%s" % (item, self.type_combo.currentText()))
+        validate_live_watch_specs(specs)
+        return tuple(specs)
+
+    def append_live_sample(self, sample: LiveSample) -> Tuple[VariableSample, ...]:
+        self.append_timeline_sample(
+            sample.captured_elapsed_seconds, sample.pc, sample.source.function or "??",
+            sample.source.file or "??", sample.source.line,
+        )
+        converted = []
+        for value in sample.values:
+            row = self.rows.get(value.name)
+            if row is None:
+                row = self.table.rowCount()
+                self.table.insertRow(row)
+                self.rows[value.name] = row
+                self.table.setItem(row, 0, QTableWidgetItem(value.name))
+                check_item = QTableWidgetItem()
+                check_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+                check_item.setCheckState(Qt.CheckState.Checked)
+                self.table.setItem(row, 5, check_item)
+            raw_value = str(value.value) if value.coherent else "<incoherent>"
+            numeric = None
+            if value.coherent and isinstance(value.value, (int, float)) and not isinstance(value.value, bool):
+                numeric = float(value.value)
+            self.table.setItem(row, 1, QTableWidgetItem(raw_value))
+            self.table.setItem(row, 2, QTableWidgetItem(value.value_type))
+            self.table.setItem(row, 3, QTableWidgetItem("0x%08X" % value.address))
+            self.table.setItem(row, 4, QTableWidgetItem("%.3f" % sample.captured_elapsed_seconds))
+            converted.append(VariableSample(
+                cycle=sample.cycle, elapsed_seconds=sample.captured_elapsed_seconds,
+                captured_at_unix_ms=0, expression=value.name, raw_value=raw_value,
+                numeric_value=numeric,
+            ))
+        self.buffer.extend(converted)
+        coherence_failures = sum(1 for value in sample.values if not value.coherent)
+        suffix = " · incoherent %d" % coherence_failures if coherence_failures else ""
+        self.status.setText(
+            "%d/%d samples · %d vars · read %.1f ms%s" % (
+                sample.cycle + 1, self.cycles.value(), len(sample.values),
+                sample.read_duration_seconds * 1000.0, suffix,
+            )
+        )
+        return tuple(converted)
+
+    def mark_live_completed(self, summary) -> None:
+        self.status.setText(
+            "Completed %d samples · overruns %d · target %s" % (
+                summary.samples, summary.overruns, str(summary.final_target_state).upper(),
+            )
+        )
 
     def validated_request(self) -> Tuple[str, ...]:
         raw = self.expressions.text().strip()

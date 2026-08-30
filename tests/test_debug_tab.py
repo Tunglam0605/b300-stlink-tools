@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 import time
+import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from tempfile import TemporaryDirectory
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -13,6 +15,8 @@ from PySide6.QtWidgets import QApplication
 from b300_core.debug_service import DebugState
 from b300_core.debug_session import DebugSessionInfo
 from b300_core.models import ProbeRef
+from b300_core.live_monitor import LiveSample, LiveSummary, LiveValue
+from b300_core.offline_symbols import SourceLocation
 from b300_gui.debug_tab import DebugTab
 
 
@@ -42,6 +46,7 @@ class FakeDebugService:
         self.state = state
         self.events = []
         self.tcl = FakeTcl()
+        self.executable = "openocd"
 
     def start(self, config, event_sink=None):
         self.events.append(("start", config))
@@ -53,6 +58,66 @@ class FakeDebugService:
     def stop(self):
         self.events.append("stop")
         self.state = DebugState.STOPPED
+
+
+class FakeLiveMonitorSession:
+    def __init__(self, openocd_executable=None):
+        self.openocd_executable = openocd_executable
+        self.active = False
+        self._cancel = threading.Event()
+        self.config = None
+        self.samples = []
+
+    def start_local(self, config):
+        self.active = True
+        self._cancel.clear()
+        self.config = config
+        return SimpleNamespace(role="local", transport="swd-tcl-loopback", tcl_endpoint="127.0.0.1:6666", initial_target_state="running")
+
+    def start_client(self, config):
+        self.active = True
+        self._cancel.clear()
+        self.config = config
+        return SimpleNamespace(role="client", transport="ssh-tcl-local-forwarding", tcl_endpoint="127.0.0.1:16666", initial_target_state="running")
+
+    def run(self, on_sample=None):
+        watches = tuple(self.config.watch_specs)
+        limit = int(self.config.sample_limit or 100)
+        interval = min(float(self.config.interval_seconds), 0.05)
+        self.samples = []
+        for cycle in range(limit):
+            if self._cancel.is_set():
+                break
+            values = []
+            for index, spec in enumerate(watches, start=1):
+                name, value_type = spec.split(":", 1)
+                value = (cycle + 1) * index
+                values.append(LiveValue(name, value_type, 0x20000030 + index * 4, value, int(value).to_bytes(4, "little").hex().upper()))
+            sample = LiveSample(
+                cycle, cycle * float(self.config.interval_seconds),
+                cycle * float(self.config.interval_seconds) + 0.01, 0.01, False,
+                0x08025FDA, SourceLocation(0x08025FDA, "vApplicationIdleHook", "main.c", 87),
+                tuple(values),
+            )
+            self.samples.append(sample)
+            if on_sample is not None:
+                on_sample(sample)
+            if self._cancel.wait(interval):
+                break
+        return LiveSummary(len(self.samples), float(self.config.interval_seconds),
+                           max(0.0, len(self.samples) * interval), 0, self._cancel.is_set(), "running")
+
+    def analytics_snapshot(self):
+        return SimpleNamespace(
+            timing=SimpleNamespace(mean_read_duration_seconds=0.01, max_schedule_lag_seconds=0.0),
+            functions=(SimpleNamespace(function="vApplicationIdleHook", samples=len(self.samples), share=1.0),),
+        )
+
+    def cancel(self):
+        self._cancel.set()
+
+    def close(self):
+        self.active = False
 
 
 class FakeGdb:
@@ -259,6 +324,7 @@ class DebugTabTests(unittest.TestCase):
             service, lambda: ProbeRef("DEBUG123"), debug_session=session,
             tcl_factory=lambda _endpoint: service.tcl, probe_count=lambda: probe_count,
             tunnel_factory=lambda config: FakeTunnel(config, tunnel_events), settings=settings,
+            live_session_factory=FakeLiveMonitorSession,
         )
         tab._test_tunnel_events = tunnel_events
         return tab, service, session
@@ -423,101 +489,100 @@ class DebugTabTests(unittest.TestCase):
         self.wait_until(lambda: tab._worker is None)
         tab.close()
 
-    def test_live_variables_stream_into_table_and_preserve_running_target(self) -> None:
+    def test_live_variables_stream_into_table_without_gdb_sampling(self) -> None:
         tab, _service, session = self.make_tab(initial="running", attach_state="halted")
-        tab.start_debug()
-        self.wait_until(lambda: tab._worker is None)
-        self.assertEqual(tab._target_state, "running")
-        self.assertTrue(tab.sample_start_button.isEnabled())
-        self.assertFalse(tab.sample_stop_button.isEnabled())
-
-        tab.sample_expressions.setText("xTickCount, motorSpeed")
-        tab.sample_cycles.setValue(3)
-        tab.sample_interval.setValue(0.1)
-        tab.start_live_sampling()
-        self.wait_until(lambda: tab._worker is None, timeout=3.0)
+        with TemporaryDirectory() as directory:
+            symbols = Path(directory) / "firmware.axf"
+            symbols.write_bytes(b"fake")
+            tab.symbol_path.setText(str(symbols))
+            tab._refresh_controls()
+            self.assertTrue(tab.sample_start_button.isEnabled())
+            self.assertFalse(tab.session.active)
+            tab.sample_expressions.setText("xTickCount, motorSpeed")
+            tab.sample_cycles.setValue(3)
+            tab.sample_interval.setValue(0.1)
+            tab.start_live_sampling()
+            self.wait_until(lambda: tab._worker is None, timeout=3.0)
 
         self.assertFalse(tab._sampling_active)
-        self.assertEqual(tab._target_state, "running")
+        self.assertIsNone(tab._target_state)
         self.assertEqual(tab.sample_table.rowCount(), 2)
         self.assertEqual(len(tab._sample_buffer), 6)
         self.assertEqual(tab.sample_table.item(0, 0).text(), "xTickCount")
         self.assertEqual(tab.sample_table.item(0, 1).text(), "3")
         self.assertEqual(tab.sample_table.item(1, 1).text(), "6")
         self.assertEqual(
-            [item for item in session.events if isinstance(item, tuple) and item[0] == "variables"],
-            [
-                ("variables", ("xTickCount", "motorSpeed"), 1),
-                ("variables", ("xTickCount", "motorSpeed"), 2),
-                ("variables", ("xTickCount", "motorSpeed"), 3),
-            ],
+            [item for item in session.events if isinstance(item, tuple) and item[0] == "variables"], []
         )
+        self.assertEqual(tab.live_panel.timeline_table.rowCount(), 3)
         self.assertTrue(tab.sample_export_button.isEnabled())
         self.assertTrue(tab.sample_clear_button.isEnabled())
-        tab.stop_debug()
-        self.wait_until(lambda: tab._worker is None)
         tab.close()
 
     def test_live_sampling_stop_is_cooperative_and_export_uses_ring_buffer(self) -> None:
         from unittest import mock
 
         tab, _service, session = self.make_tab(initial="running", attach_state="halted")
-        tab.start_debug()
-        self.wait_until(lambda: tab._worker is None)
-        tab.sample_expressions.setText("xTickCount")
-        tab.sample_cycles.setValue(100)
-        tab.sample_interval.setValue(1.0)
-        tab.start_live_sampling()
-        self.wait_until(lambda: len(tab._sample_buffer) >= 1, timeout=2.0)
-        self.assertTrue(tab.sample_stop_button.isEnabled())
-        tab.stop_live_sampling()
-        self.wait_until(lambda: tab._worker is None, timeout=2.0)
-        self.assertFalse(tab._sampling_active)
-        self.assertGreaterEqual(len(tab._sample_buffer), 1)
-        self.assertLess(len(tab._sample_buffer), 100)
-        self.assertEqual(tab._target_state, "running")
-
         with TemporaryDirectory() as directory:
+            symbols = Path(directory) / "firmware.axf"
+            symbols.write_bytes(b"fake")
+            tab.symbol_path.setText(str(symbols))
+            tab.sample_expressions.setText("xTickCount")
+            tab.sample_cycles.setValue(100)
+            tab.sample_interval.setValue(1.0)
+            tab.start_live_sampling()
+            self.wait_until(lambda: len(tab._sample_buffer) >= 1, timeout=2.0)
+            self.assertTrue(tab.sample_stop_button.isEnabled())
+            tab.stop_live_sampling()
+            self.wait_until(lambda: tab._worker is None, timeout=2.0)
+            self.assertFalse(tab._sampling_active)
+            self.assertGreaterEqual(len(tab._sample_buffer), 1)
+            self.assertLess(len(tab._sample_buffer), 100)
             output = Path(directory) / "live.csv"
             with mock.patch(
-                "b300_gui.live_variables_panel.QFileDialog.getSaveFileName",
+                "b300_gui.debug_live_panel.QFileDialog.getSaveFileName",
                 return_value=(str(output), "CSV (*.csv)"),
             ):
                 tab.export_live_samples()
             text = output.read_text(encoding="utf-8")
         self.assertIn("xTickCount", text)
-        self.assertIn("numeric_value", text)
-
+        self.assertIn("TIMELINE", text)
+        self.assertEqual(
+            [item for item in session.events if isinstance(item, tuple) and item[0] == "variables"], []
+        )
         tab.clear_live_samples()
         self.assertEqual(len(tab._sample_buffer), 0)
         self.assertEqual(tab.sample_table.rowCount(), 0)
         self.assertFalse(tab.sample_export_button.isEnabled())
-        self.assertTrue(any(
-            isinstance(item, tuple) and item[0] == "variables" for item in session.events
-        ))
-        tab.stop_debug()
-        self.wait_until(lambda: tab._worker is None)
         tab.close()
 
-    def test_live_sampling_requires_running_connected_target_and_valid_expression_list(self) -> None:
+    def test_live_sampling_is_independent_from_interactive_debug_and_requires_symbols(self) -> None:
         tab, _service, _session = self.make_tab(initial="running", attach_state="halted")
-        tab.start_live_sampling()
-        self.assertIn("CONNECTED", tab.status_label.text())
-
-        tab.start_debug()
-        self.wait_until(lambda: tab._worker is None)
-        tab.sample_expressions.setText("")
-        tab.start_live_sampling()
-        self.assertFalse(tab._sampling_active)
-        self.assertIn("At least one", tab.status_label.text())
-        tab.halt_target()
-        self.wait_until(lambda: tab._worker is None)
         tab.sample_expressions.setText("xTickCount")
         tab.start_live_sampling()
         self.assertFalse(tab._sampling_active)
-        self.assertIn("RUNNING", tab.status_label.text())
-        tab.stop_debug()
-        self.wait_until(lambda: tab._worker is None)
+        self.assertIn("AXF/ELF", tab.status_label.text())
+
+        with TemporaryDirectory() as directory:
+            symbols = Path(directory) / "firmware.axf"
+            symbols.write_bytes(b"fake")
+            tab.symbol_path.setText(str(symbols))
+            tab.sample_expressions.setText("")  # timeline-only is valid
+            tab.sample_cycles.setValue(1)
+            tab.start_live_sampling()
+            self.wait_until(lambda: tab._worker is None, timeout=2.0)
+            self.assertEqual(tab.live_panel.timeline_table.rowCount(), 1)
+            self.assertEqual(tab.sample_table.rowCount(), 0)
+
+            tab.symbol_path.clear()  # fake AXF is only for the fake Live session
+            tab.start_debug()
+            self.wait_until(lambda: tab._worker is None)
+            tab.sample_expressions.setText("xTickCount")
+            tab.start_live_sampling()
+            self.assertFalse(tab._sampling_active)
+            self.assertIn("Interactive Debug", tab.status_label.text())
+            tab.stop_debug()
+            self.wait_until(lambda: tab._worker is None)
         tab.close()
 
     def test_break_and_watch_once_are_exposed_and_restore_running_state(self) -> None:

@@ -13,10 +13,13 @@ from PySide6.QtWidgets import (
 
 from b300_core.debug_service import DebugConfig, DebugService, DebugState
 from b300_core.debug_session import DebugSession, DebugSessionConfig, DebugSessionInfo
-from b300_core.debug_sampling import sample_variables
 from b300_core.elf_matcher import discover_symbol_files, find_matching_symbol_file
 from b300_core.gdb_mi import GdbMiBackend
 from b300_core.models import ProbeRef
+from b300_core.live_monitor import LiveSample
+from b300_core.live_session import (
+    ClientLiveMonitorConfig, LiveMonitorSession, LocalLiveMonitorConfig,
+)
 from b300_core.remote_debug_guard import RemoteDebugGuard
 from b300_core.ssh_debug_tunnel import (
     SshDebugTunnel, SshDebugTunnelConfig, find_available_loopback_port,
@@ -45,7 +48,7 @@ class DebugTab(QWidget):
                  debug_session: Optional[DebugSession] = None,
                  tcl_factory=SafeTclClient, settings=None,
                  probe_count: Optional[Callable[[], int]] = None,
-                 tunnel_factory=SshDebugTunnel) -> None:
+                 tunnel_factory=SshDebugTunnel, live_session_factory=LiveMonitorSession) -> None:
         super().__init__(parent)
         self.service = service
         self.selected_probe = selected_probe
@@ -72,7 +75,9 @@ class DebugTab(QWidget):
         self._settings = settings
         self._probe_count = probe_count
         self._tunnel_factory = tunnel_factory
+        self._live_session_factory = live_session_factory
         self._sampling_active = False
+        self._live_session: Optional[LiveMonitorSession] = None
 
         self._watchdog = QTimer(self)
         self._watchdog.setInterval(750)
@@ -342,7 +347,8 @@ class DebugTab(QWidget):
     @property
     def has_active_operation(self) -> bool:
         tunnel_active = self._client_tunnel is not None and self._client_tunnel.active
-        return self._worker is not None or self.session.active or tunnel_active or self.service.state in (
+        live_active = self._live_session is not None and self._live_session.active
+        return self._worker is not None or self.session.active or tunnel_active or live_active or self.service.state in (
             DebugState.STARTING, DebugState.READY, DebugState.CONNECTED,
         )
 
@@ -526,15 +532,17 @@ class DebugTab(QWidget):
             DebugState.STARTING, DebugState.READY, DebugState.CONNECTED,
         )
         tunnel_active = self._client_tunnel is not None and self._client_tunnel.active
+        live_active = self._live_session is not None and self._live_session.active
         can_start = (
-            not worker_busy and not self._external_blocked and not server_active and not active and not tunnel_active
+            not worker_busy and not self._external_blocked and not server_active and not active
+            and not tunnel_active and not live_active
         )
         self.start_button.setEnabled(can_start)
         self.remote_server_button.setEnabled(can_start)
         self.remote_kit_button.setEnabled(not worker_busy)
         self.stop_button.setEnabled(not worker_busy and (server_active or active or tunnel_active))
-        self.mode_combo.setEnabled(not worker_busy and not server_active and not active and not tunnel_active)
-        client_editable = not worker_busy and not active and not tunnel_active
+        self.mode_combo.setEnabled(not worker_busy and not server_active and not active and not tunnel_active and not live_active)
+        client_editable = not worker_busy and not active and not tunnel_active and not live_active
         self.client_host.setEnabled(client_editable)
         self.client_user.setEnabled(client_editable)
         self.client_ssh_port.setEnabled(client_editable)
@@ -551,7 +559,9 @@ class DebugTab(QWidget):
         self.variable_expression.setEnabled(diagnostic_enabled)
         self.variable_button.setEnabled(diagnostic_enabled)
         sample_ready = (
-            not worker_busy and active and self._target_state == "running" and not self._sampling_active
+            not worker_busy and not self._external_blocked and not self._sampling_active
+            and not active and not server_active and not tunnel_active and not live_active
+            and self._resolved_role() in {"local", "client"}
         )
         sample_history_ready = len(self._sample_buffer) > 0 and not self._sampling_active
         self.live_panel.set_control_state(
@@ -566,8 +576,8 @@ class DebugTab(QWidget):
         self.break_once_button.setEnabled(one_shot_enabled)
         self.watch_once_button.setEnabled(one_shot_enabled)
         self.gdb_port.setEnabled(False)
-        self.symbol_path.setEnabled(not worker_busy and not server_active and not active)
-        self.symbol_browse_button.setEnabled(not worker_busy and not server_active and not active)
+        self.symbol_path.setEnabled(not worker_busy and not server_active and not active and not live_active)
+        self.symbol_browse_button.setEnabled(not worker_busy and not server_active and not active and not live_active)
         self.symbol_auto_button.setEnabled(
             not worker_busy and not self._external_blocked and (active or not server_active)
         )
@@ -1077,67 +1087,134 @@ class DebugTab(QWidget):
         )
 
     def _live_sampling_expressions(self):
-        return self.live_panel.validated_request()
+        return self.live_panel.watch_specs()
+
+    def _build_live_monitor_config(self, watch_specs):
+        role = self._resolved_role()
+        if role == "gateway":
+            raise ValueError("Realtime Live Monitor uses Local or Client mode; switch from Gateway first.")
+        interval = float(self.sample_interval.value())
+        samples = int(self.sample_cycles.value())
+        symbol_text = self.symbol_path.text().strip()
+        symbols = Path(symbol_text).expanduser().resolve() if symbol_text else None
+        if role == "local":
+            if symbols is None or not symbols.is_file():
+                raise ValueError("Local Live Monitor requires a verified AXF/ELF symbol file.")
+            return role, LocalLiveMonitorConfig(
+                probe=self.selected_probe(), symbols=symbols, interval_seconds=interval,
+                sample_limit=samples, watch_specs=tuple(watch_specs), tcl_port=6666,
+            )
+        host = self.client_host.text().strip()
+        user = self.client_user.text().strip()
+        if not host or not user:
+            raise ValueError("Client Live Monitor requires Gateway host and SSH user.")
+        if symbols is not None and not symbols.is_file():
+            symbols = None
+        roots = ()
+        if symbols is None and self._symbol_root is not None and self._symbol_root.is_dir():
+            roots = (self._symbol_root,)
+        if symbols is None and not roots:
+            raise ValueError("Client Live Monitor requires AXF/ELF or a saved project symbol root.")
+        return role, ClientLiveMonitorConfig(
+            host=host, user=user, symbols=symbols, interval_seconds=interval,
+            sample_limit=samples, watch_specs=tuple(watch_specs),
+            ssh_port=self.client_ssh_port.value(), symbol_roots=roots,
+        )
 
     def start_live_sampling(self) -> None:
-        if not self.session.active:
-            self._operation_failed_message("Debug session chưa CONNECTED.")
+        if self._worker is not None or self.session.active or self.service.state in (
+            DebugState.STARTING, DebugState.READY, DebugState.CONNECTED,
+        ):
+            self._operation_failed_message(
+                "Stop Interactive Debug/Gateway before starting non-halting Live Monitor."
+            )
             return
-        if self._target_state != "running":
-            self._operation_failed_message("Live sampling chỉ bắt đầu khi target đang RUNNING.")
+        if self._client_tunnel is not None and self._client_tunnel.active:
+            self._operation_failed_message("Disconnect Interactive Client before starting Live Monitor.")
             return
         try:
-            expressions = self._live_sampling_expressions()
-        except ValueError as error:
+            watch_specs = self._live_sampling_expressions()
+            role, config = self._build_live_monitor_config(watch_specs)
+        except (ValueError, RuntimeError) as error:
             self._operation_failed_message(str(error))
             return
         self.live_panel.reset_for_sampling()
         self.plot_panel.clear()
         self._sampling_active = True
-        cycles = self.sample_cycles.value()
-        interval = self.sample_interval.value()
+        live = self._live_session_factory(openocd_executable=str(self.service.executable))
+        self._live_session = live
 
-        def execute(_log, phase, cancel_event):
-            samples = sample_variables(
-                self.session.capture_variables, expressions, cycles, interval,
-                cancelled=cancel_event.is_set, waiter=cancel_event.wait, on_cycle=phase,
-            )
-            return samples, self.session.target_poll()
+        def execute(log, phase, _cancel_event):
+            try:
+                info = live.start_local(config) if role == "local" else live.start_client(config)
+                log(
+                    "LIVE MONITOR CONNECTED: role=%s transport=%s TCL=%s target=%s" %
+                    (info.role, info.transport, info.tcl_endpoint, info.initial_target_state.upper())
+                )
+                summary = live.run(phase)
+                analytics = live.analytics_snapshot()
+                return summary, analytics, info
+            finally:
+                live.close()
 
         worker = self._begin_worker(
-            execute, self._live_sampling_completed, "SAMPLING...",
+            execute, self._live_sampling_completed, "LIVE MONITOR · NON-HALTING...",
             failed=self._live_sampling_failed, phase_handler=self._live_sampling_cycle,
         )
         if worker is None:
             self._sampling_active = False
+            self._live_session = None
+            live.close()
             self._refresh_controls()
 
     def stop_live_sampling(self) -> None:
-        if self._sampling_active and self._worker is not None:
-            self.live_panel.mark_stopping()
+        if not self._sampling_active:
+            return
+        self.live_panel.mark_stopping()
+        if self._live_session is not None:
+            self._live_session.cancel()
+        if self._worker is not None:
             self._worker.cancel()
 
-    def _live_sampling_cycle(self, batch) -> None:
-        self.live_panel.append_batch(tuple(batch))
+    def _live_sampling_cycle(self, sample) -> None:
+        if not isinstance(sample, LiveSample):
+            return
+        self.live_panel.append_live_sample(sample)
         self.plot_panel.set_samples(self._sample_buffer.snapshot())
 
     def _live_sampling_completed(self, result) -> None:
-        samples, state = result
+        summary, analytics, info = result
         self._sampling_active = False
-        self._status_override = None
-        self._set_target_state(state)
-        cycles = self.live_panel.mark_completed(samples)
+        self._live_session = None
+        self._target_state = None
+        self._status_override = (
+            "LIVE COMPLETE · TARGET %s" % str(summary.final_target_state).upper(), "ready",
+        )
+        self.live_panel.mark_live_completed(summary)
         self.plot_panel.set_samples(self._sample_buffer.snapshot())
+        top = analytics.functions[:5]
+        if top:
+            self.log.emit(
+                "Live execution hits: " + ", ".join(
+                    "%s=%d(%.0f%%)" % (item.function, item.samples, item.share * 100.0) for item in top
+                )
+            )
         self.log.emit(
-            "Live sampling completed: cycles=%d samples=%d target=%s" %
-            (cycles, len(samples), str(state).upper())
+            "Live Monitor completed: role=%s samples=%d overruns=%d target=%s read_mean=%.1fms lag_max=%.1fms" %
+            (info.role, summary.samples, summary.overruns, summary.final_target_state.upper(),
+             analytics.timing.mean_read_duration_seconds * 1000.0,
+             analytics.timing.max_schedule_lag_seconds * 1000.0)
         )
         self._refresh_controls()
 
     def _live_sampling_failed(self, failure: WorkerFailure) -> None:
         self._sampling_active = False
+        self._live_session = None
+        self._target_state = None
         self.live_panel.mark_failed(failure.message)
-        self._operation_failed(failure)
+        self.log.emit("Live Monitor failed: %s" % failure.message)
+        self._status_override = ("LIVE MONITOR FAILED · %s" % failure.message, "failed")
+        self._refresh_controls()
 
     def clear_live_samples(self) -> None:
         if self._sampling_active:
@@ -1285,11 +1362,20 @@ class DebugTab(QWidget):
     def prepare_shutdown(self) -> bool:
         """Stop GUI-owned timers/workers on the GUI thread before Qt destroys children."""
         self._watchdog.stop()
+        if self._live_session is not None:
+            self._live_session.cancel()
         worker = self._worker
         if worker is not None and worker.isRunning():
             worker.cancel()
             if not worker.wait(3000):
                 return False
+        if self._live_session is not None:
+            try:
+                self._live_session.close()
+            except Exception:
+                pass
+        self._live_session = None
+        self._sampling_active = False
         self._worker = None
         self._retired_workers.clear()
         return True

@@ -17,6 +17,8 @@ from PySide6.QtWidgets import QApplication, QLabel
 
 from b300_core.debug_service import DebugState
 from b300_core.debug_sampling import VariableSample
+from b300_core.live_monitor import LiveSample, LiveValue
+from b300_core.offline_symbols import SourceLocation
 from b300_core.debug_session import DebugSessionInfo
 from b300_core.metadata import decode_ota_metadata
 from b300_core.models import ProbeRef
@@ -30,7 +32,7 @@ from b300_gui.debug_tab import DebugTab
 from b300_gui.main_window import MainWindow
 from b300_gui.memory_tab import MemoryTab
 from tests.test_core_probe_memory_metadata import make_metadata
-from tests.test_debug_tab import FakeDebugService, FakeSession, FakeSettings, FakeTunnel
+from tests.test_debug_tab import FakeDebugService, FakeSession, FakeSettings, FakeTunnel, FakeLiveMonitorSession
 
 
 def make_sample(cycle: int, elapsed: float, expr: str, raw: str, num) -> VariableSample:
@@ -62,6 +64,7 @@ class GuiRedesignTests(unittest.TestCase):
             service, lambda: ProbeRef("TEST_PROBE"), debug_session=session,
             tcl_factory=lambda _endpoint: service.tcl, probe_count=lambda: probe_count,
             tunnel_factory=lambda config: FakeTunnel(config, tunnel_events), settings=settings,
+            live_session_factory=FakeLiveMonitorSession,
         )
         tab._test_tunnel_events = tunnel_events
         return tab, service, session
@@ -97,6 +100,30 @@ class GuiRedesignTests(unittest.TestCase):
         self.assertFalse(tab.interactive_panel.isHidden())
         self.assertFalse(tab.log_panel.isHidden())
         tab.close()
+
+    def test_live_panel_adapts_typed_zero_halt_sample_and_watch_specs(self) -> None:
+        panel = DebugLivePanel()
+        panel.expressions.setText("xTickCount")
+        panel.type_combo.setCurrentText("u32")
+        self.assertEqual(panel.watch_specs(), ("xTickCount:u32",))
+        sample = LiveSample(
+            0, 0.0, 0.01, 0.01, False, 0x08025FDA,
+            SourceLocation(0x08025FDA, "vApplicationIdleHook", "main.c", 87),
+            (
+                LiveValue("xTickCount", "u32", 0x20000030, 123, "7B000000"),
+                LiveValue("v_current", "f64", 0x20000648, None, "0102030405060708", coherent=False),
+            ),
+        )
+        converted = panel.append_live_sample(sample)
+        self.assertEqual(panel.timeline_table.rowCount(), 1)
+        self.assertEqual(panel.timeline_table.item(0, 2).text(), "vApplicationIdleHook")
+        self.assertEqual(panel.table.rowCount(), 2)
+        self.assertEqual(panel.table.item(0, 2).text(), "u32")
+        self.assertEqual(panel.table.item(0, 3).text(), "0x20000030")
+        self.assertEqual(panel.table.item(1, 1).text(), "<incoherent>")
+        self.assertEqual(converted[0].numeric_value, 123.0)
+        self.assertIsNone(converted[1].numeric_value)
+        panel.close()
 
     def test_live_monitor_timeline_update_and_follow_latest(self) -> None:
         panel = DebugLivePanel()
@@ -239,19 +266,23 @@ class GuiRedesignTests(unittest.TestCase):
 
     def test_clean_shutdown_while_live_monitor_running(self) -> None:
         tab, _service, session = self.make_debug_tab(initial="running", attach_state="halted")
-        tab.start_debug()
-        self.wait_until(lambda: tab._worker is None)
+        with tempfile.TemporaryDirectory() as directory:
+            symbols = Path(directory) / "firmware.axf"
+            symbols.write_bytes(b"fake")
+            tab.symbol_path.setText(str(symbols))
+            tab.sample_expressions.setText("xTickCount")
+            tab.sample_cycles.setValue(100)
+            tab.sample_interval.setValue(1.0)
+            tab.start_live_sampling()
+            self.wait_until(lambda: tab._worker is not None, timeout=2.0)
 
-        tab.sample_expressions.setText("xTickCount")
-        tab.sample_cycles.setValue(100)
-        tab.sample_interval.setValue(1.0)
-        tab.start_live_sampling()
-        self.wait_until(lambda: tab._worker is not None, timeout=2.0)
-
-        # Prepare shutdown while worker is running
-        self.assertTrue(tab.prepare_shutdown())
+            # Prepare shutdown while non-halting worker is running.
+            self.assertTrue(tab.prepare_shutdown())
         self.assertIsNone(tab._worker)
+        self.assertIsNone(tab._live_session)
+        self.assertFalse(tab._sampling_active)
         self.assertFalse(tab._watchdog.isActive())
+        self.assertFalse(session.active)
         tab.close()
 
     def test_memory_application_health_rendering(self) -> None:
