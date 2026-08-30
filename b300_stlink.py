@@ -27,6 +27,7 @@ from b300_cli.reporting import (
     metadata_snapshot, probe_record,
 )
 from b300_cli.update_commands import run_update_command
+from b300_cli.output_paths import validated_output_path
 from b300_cli.live_commands import run_live_client, run_live_local, validate_live_options
 from b300_core.diagnostics import DiagnosticsService
 from b300_core.gateway_readiness import inspect_gateway_readiness
@@ -787,15 +788,6 @@ def _select_write_probe(args: argparse.Namespace, reporter: Reporter) -> Optiona
         return None
 
 
-def _validated_output_path(path: Path, force: bool) -> Path:
-    output = path.expanduser().resolve()
-    if not output.parent.is_dir() or output.is_dir():
-        raise ValueError("Output path must name a file in an existing directory.")
-    if output.exists() and not force:
-        raise FileExistsError("Output file already exists; use --force to replace it.")
-    return output
-
-
 def _atomic_write_snapshot(output: Path, data: bytes, force: bool) -> None:
     """Atomically replace a host snapshot only after its complete read succeeded."""
     temporary = None
@@ -1130,7 +1122,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             output = None
             if args.memory_command == "dump":
                 try:
-                    output = _validated_output_path(args.output, args.force)
+                    output = validated_output_path(args.output, args.force)
                 except FileExistsError as error:
                     return _read_only_error(args, command, "OUTPUT_EXISTS", str(error))
                 except (OSError, RuntimeError, ValueError) as error:

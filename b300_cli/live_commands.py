@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from b300_cli.reporting import Reporter
+from b300_cli.output_paths import validated_output_path
 from b300_core.live_monitor import validate_live_request, validate_live_watch_specs
 from b300_core.live_service import LiveMonitorService
 from b300_core.live_session import (
@@ -21,15 +22,6 @@ from b300_core.live_session import (
 from b300_core.models import ProbeRef
 from b300_core.ssh_debug_tunnel import find_available_loopback_port
 from b300_core.ssh_live_tunnel import SshLiveTunnelConfig
-
-
-def _validated_output_path(path: Path, force: bool) -> Path:
-    output = path.expanduser().resolve()
-    if not output.parent.is_dir() or output.is_dir():
-        raise ValueError("Output path must name a file in an existing directory.")
-    if output.exists() and not force:
-        raise FileExistsError("Output file already exists; use --force to replace it.")
-    return output
 
 
 def validate_live_output(path) -> None:
@@ -47,7 +39,7 @@ def validate_live_options(args) -> None:
 def _open_live_output(path, watch_specs, force=False):
     if path is None:
         return None, None
-    target = _validated_output_path(Path(path), bool(force))
+    target = validated_output_path(Path(path), bool(force))
     handle = target.open("w", encoding="utf-8", newline="")
     if target.suffix.lower() == ".csv":
         fieldnames = [
