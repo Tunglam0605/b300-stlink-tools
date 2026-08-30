@@ -16,6 +16,7 @@ from .live_service import LiveMonitorService
 from .models import ProbeRef
 from .offline_symbols import OfflineSymbolTable
 from .ssh_debug_tunnel import find_available_loopback_port
+from .ssh_identity import managed_identity_file
 from .ssh_live_tunnel import SshLiveTunnel, SshLiveTunnelConfig
 from .tcl_client import SafeTclClient, TclEndpoint
 
@@ -196,6 +197,7 @@ class LiveMonitorSession:
         tunnel_config = SshLiveTunnelConfig(
             host=config.host, user=config.user, ssh_port=config.ssh_port,
             local_tcl_port=local_tcl, gateway_tcl_port=config.gateway_tcl_port,
+            identity_file=managed_identity_file(),
         )
         tunnel = self._tunnel_factory(tunnel_config)
         try:

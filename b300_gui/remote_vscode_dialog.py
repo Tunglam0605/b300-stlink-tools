@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 from b300_core.models import ProbeRef
 from b300_core.gdb_runtime import resolve_gdb
 from b300_core.remote_vscode import RemoteVsCodeProfile, workspace_executable
+from b300_core.ssh_identity import managed_identity_file
 
 
 class RemoteVsCodeDialog(QDialog):
@@ -95,6 +96,7 @@ class RemoteVsCodeDialog(QDialog):
             executable=workspace_executable(self.program_edit.text().strip()),
             gdb_path=self.gdb_edit.text().strip(),
             probe_serial=probe_serial,
+            identity_file=managed_identity_file(),
         )
 
     def refresh_preview(self) -> None:

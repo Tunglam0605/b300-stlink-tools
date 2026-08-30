@@ -728,6 +728,8 @@ class DebugTabTests(unittest.TestCase):
             with mock.patch(
                 "b300_gui.debug_tab.find_matching_symbol_file",
                 return_value=(matched, (matched,)),
+            ), mock.patch(
+                "b300_gui.debug_tab.managed_identity_file", return_value=symbols,
             ):
                 tab.start_selected_mode()
                 self.wait_until(lambda: tab._worker is None)
@@ -743,6 +745,8 @@ class DebugTabTests(unittest.TestCase):
         self.assertEqual(external[4], "127.0.0.1")
         self.assertNotEqual(external[3], external[5])
         self.assertTrue(any(isinstance(item, tuple) and item[0] == "tunnel-start" for item in tab._test_tunnel_events))
+        tunnel_start = next(item for item in tab._test_tunnel_events if isinstance(item, tuple) and item[0] == "tunnel-start")
+        self.assertEqual(tunnel_start[1].identity_file, symbols)
 
         tab.stop_debug()
         self.wait_until(lambda: tab._worker is None)

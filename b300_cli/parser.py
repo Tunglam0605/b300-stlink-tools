@@ -184,8 +184,8 @@ def build_parser() -> argparse.ArgumentParser:
         "gateway", help="Inspect remote Debug Gateway host readiness.", parents=[json_parent],
     )
     gateway.add_argument(
-        "gateway_action", nargs="?", choices=("doctor", "plan", "prepare"), default="doctor",
-        help="doctor=full readiness, plan=host SSH changes, prepare=apply confirmed host SSH setup.",
+        "gateway_action", nargs="?", choices=("doctor", "plan", "prepare", "client-key", "authorize-key"), default="doctor",
+        help="doctor=readiness, plan/prepare=host SSH setup, client-key=generate/reuse B300 key, authorize-key=install a Client public key.",
     )
     gateway.add_argument("--openocd")
     gateway.add_argument("--probe-serial", type=parse_probe_serial,
@@ -199,6 +199,14 @@ def build_parser() -> argparse.ArgumentParser:
     gateway.add_argument(
         "--confirm-system-change", action="store_true",
         help="Confirm privileged OpenSSH/service/firewall changes for gateway prepare.",
+    )
+    gateway.add_argument(
+        "--identity-file", type=Path,
+        help="Optional B300 Client private-key path; default is ~/.ssh/b300_gateway_ed25519.",
+    )
+    gateway.add_argument(
+        "--public-key-file", type=Path,
+        help="ssh-ed25519 public-key file for gateway authorize-key.",
     )
 
     doctor = commands.add_parser(

@@ -6,7 +6,7 @@ from typing import Callable, Optional
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QApplication, QGroupBox, QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit,
+    QApplication, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QMessageBox, QPlainTextEdit,
     QProgressBar, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -14,6 +14,11 @@ from b300_core.gateway_readiness import inspect_gateway_readiness
 from b300_core.gateway_setup import (
     GatewayHostReport, GatewayPrepareResult, build_gateway_prepare_plan,
     client_connection_text, inspect_gateway_host, prepare_gateway_host,
+)
+from b300_core.ssh_identity import (
+    AuthorizedKeyResult, SshClientPrepareResult, SshClientPrerequisiteReport, SshIdentityReport,
+    ensure_ssh_identity, inspect_ssh_client_prerequisites, inspect_ssh_identity,
+    install_gateway_public_key, prepare_ssh_client_prerequisites, validate_public_key,
 )
 from .workers import FunctionWorker
 
@@ -36,16 +41,28 @@ class GatewaySetupTab(QWidget):
             inspector: Callable[..., GatewayHostReport] = inspect_gateway_host,
             preparer: Callable[..., GatewayPrepareResult] = prepare_gateway_host,
             full_inspector: Callable[..., object] = inspect_gateway_readiness,
+            identity_inspector: Callable[..., SshIdentityReport] = inspect_ssh_identity,
+            identity_ensurer: Callable[..., SshIdentityReport] = ensure_ssh_identity,
+            client_prereq_inspector: Callable[..., SshClientPrerequisiteReport] = inspect_ssh_client_prerequisites,
+            client_prereq_preparer: Callable[..., SshClientPrepareResult] = prepare_ssh_client_prerequisites,
+            key_authorizer: Callable[..., AuthorizedKeyResult] = install_gateway_public_key,
             auto_refresh: bool = True,
     ) -> None:
         super().__init__(parent)
         self.inspector = inspector
         self.preparer = preparer
         self.full_inspector = full_inspector
+        self.identity_inspector = identity_inspector
+        self.identity_ensurer = identity_ensurer
+        self.client_prereq_inspector = client_prereq_inspector
+        self.client_prereq_preparer = client_prereq_preparer
+        self.key_authorizer = key_authorizer
+        self._identity: Optional[SshIdentityReport] = None
         self._worker: Optional[FunctionWorker] = None
         self._retired_workers = []
         self._report: Optional[GatewayHostReport] = None
         self._build_ui()
+        self._render_identity(self.identity_inspector())
         if auto_refresh:
             self.refresh_host()
 
@@ -95,6 +112,35 @@ class GatewaySetupTab(QWidget):
         config_layout.addWidget(self.client_config)
         root.addWidget(config_group)
 
+        identity_group = QGroupBox("SSH key bootstrap")
+        identity_layout = QVBoxLayout(identity_group)
+        self.identity_status = QLabel("B300 Client key: not checked")
+        self.identity_status.setObjectName("gatewayIdentityStatus")
+        identity_layout.addWidget(self.identity_status)
+        identity_actions = QHBoxLayout()
+        self.identity_prepare_button = QPushButton("Generate / Reuse Client Key")
+        self.identity_prepare_button.setObjectName("gatewayIdentityPrepareButton")
+        self.identity_prepare_button.clicked.connect(self.prepare_client_identity)
+        self.identity_copy_button = QPushButton("Copy Public Key")
+        self.identity_copy_button.setObjectName("gatewayIdentityCopyButton")
+        self.identity_copy_button.clicked.connect(self.copy_public_key)
+        self.authorize_key_button = QPushButton("Authorize Client Public Key")
+        self.authorize_key_button.setObjectName("gatewayAuthorizeKeyButton")
+        self.authorize_key_button.clicked.connect(self.authorize_client_key)
+        identity_actions.addWidget(self.identity_prepare_button)
+        identity_actions.addWidget(self.identity_copy_button)
+        identity_actions.addWidget(self.authorize_key_button)
+        identity_actions.addStretch(1)
+        identity_layout.addLayout(identity_actions)
+        key_note = QLabel(
+            "Client creates/reuses one B300 ed25519 key. Only the public key is copied to the Gateway; "
+            "the private key never leaves the Client or enters logs."
+        )
+        key_note.setWordWrap(True)
+        key_note.setStyleSheet("color: #64748B; font-size: 11px;")
+        identity_layout.addWidget(key_note)
+        root.addWidget(identity_group)
+
         self.progress = QProgressBar()
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
@@ -133,9 +179,13 @@ class GatewaySetupTab(QWidget):
         if not busy:
             self.progress.setValue(1 if self._report and self._report.ready else 0)
         self.progress.setFormat(text or ("READY" if self._report and self._report.ready else "Idle"))
-        for button in (self.refresh_button, self.prepare_button, self.selftest_button):
+        for button in (
+            self.refresh_button, self.prepare_button, self.selftest_button,
+            self.identity_prepare_button, self.authorize_key_button,
+        ):
             button.setEnabled(not busy)
         self.copy_button.setEnabled(not busy and self._report is not None)
+        self.identity_copy_button.setEnabled(not busy and self._identity is not None and self._identity.ready)
         self.operation_state_changed.emit()
 
     def _start(self, operation, completed, busy_text: str) -> None:
@@ -237,6 +287,98 @@ class GatewaySetupTab(QWidget):
         else:
             self.log.emit("Gateway Prepare BLOCKED")
             QMessageBox.warning(self, "Gateway not ready", "Gateway vẫn chưa đạt readiness. Xem bảng check và log để xử lý nguyên nhân.")
+
+    def _render_identity(self, report: SshIdentityReport) -> None:
+        self._identity = report
+        if report.ready:
+            self.identity_status.setText(
+                "B300 Client key READY · %s · private key stays local" % report.fingerprint
+            )
+            self.identity_copy_button.setEnabled(True)
+            self.identity_prepare_button.setText("Client Key Ready · Verify")
+        else:
+            self.identity_status.setText(
+                "B300 Client key NOT READY · Generate/Re-use before passwordless Client connection"
+            )
+            self.identity_copy_button.setEnabled(False)
+            self.identity_prepare_button.setText("Generate / Reuse Client Key")
+
+    def prepare_client_identity(self) -> None:
+        try:
+            prereq = self.client_prereq_inspector()
+        except Exception as error:
+            QMessageBox.critical(self, "OpenSSH Client check failed", str(error))
+            return
+        if prereq.ready:
+            self._start(self.identity_ensurer, self._identity_prepared, "Preparing Client SSH key…")
+            return
+        answer = QMessageBox.question(
+            self, "Prepare OpenSSH Client",
+            "OpenSSH Client/ssh-keygen is not ready on this PC. Install the missing OS component now?\n\n"
+            "Windows uses UAC. Ubuntu uses root/pkexec. No firewall rule is added for Client setup.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._start(self._prepare_client_identity_with_prerequisites, self._identity_prepared, "Preparing OpenSSH Client + key…")
+
+    def _prepare_client_identity_with_prerequisites(self) -> SshIdentityReport:
+        prepared = self.client_prereq_preparer()
+        if not prepared.succeeded or not prepared.after.ready:
+            raise RuntimeError("OpenSSH Client setup did not reach READY state.")
+        return self.identity_ensurer()
+
+    def _identity_prepared(self, report: SshIdentityReport) -> None:
+        self._render_identity(report)
+        self.log.emit("B300 Client SSH key READY; fingerprint=%s; private key content not exported." % report.fingerprint)
+        QMessageBox.information(
+            self, "Client SSH Key Ready",
+            "B300 ed25519 Client key is ready. Copy ONLY the public key and authorize it on the Gateway."
+        )
+
+    def copy_public_key(self) -> None:
+        if self._identity is None or not self._identity.ready or not self._identity.public_key_text:
+            return
+        QApplication.clipboard().setText(self._identity.public_key_text)
+        self.log.emit("B300 Client public key copied; private key remains local and was not read/exported.")
+
+    def authorize_client_key(self) -> None:
+        value, accepted = QInputDialog.getMultiLineText(
+            self, "Authorize Client Public Key",
+            "Paste ONE ssh-ed25519 public key from the Client. Never paste a private key:", ""
+        )
+        if not accepted:
+            return
+        try:
+            public_key = validate_public_key(value)
+        except ValueError as error:
+            QMessageBox.critical(self, "Invalid public key", str(error))
+            return
+        answer = QMessageBox.question(
+            self, "Authorize Client Key",
+            "Append this validated public key to the correct authorized_keys target?\n\n"
+            "Only public-key material is written. Existing matching keys are left unchanged.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._start(
+            lambda: self.key_authorizer(public_key), self._key_authorized,
+            "Authorizing Client public key…",
+        )
+
+    def _key_authorized(self, result: AuthorizedKeyResult) -> None:
+        self.log.emit(
+            "Gateway Client public key authorized; fingerprint=%s changed=%s target=%s" %
+            (result.fingerprint, result.changed, result.target)
+        )
+        QMessageBox.information(
+            self, "Client Key Authorized",
+            "Public key authorized%s.\nFingerprint: %s\nTarget: %s" %
+            ("" if result.changed else " (already present)", result.fingerprint, result.target),
+        )
 
     def run_selftest(self) -> None:
         def operation():

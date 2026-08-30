@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
 from b300_core.ssh_debug_tunnel import SshDebugTunnel, SshDebugTunnelConfig
 
@@ -45,6 +47,22 @@ class SshDebugTunnelTests(unittest.TestCase):
         self.assertIn("127.0.0.1:16666:127.0.0.1:6666", rendered)
         self.assertTrue(rendered.endswith("automation@gateway.local"))
         self.assertNotIn("0.0.0.0", rendered)
+
+    def test_verified_identity_is_added_without_changing_loopback_forwarding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            identity = Path(directory) / "id_ed25519"
+            identity.write_text("private-placeholder", encoding="utf-8")
+            config = SshDebugTunnelConfig(
+                "gateway.local", "automation", local_gdb_port=13333, local_tcl_port=16666,
+                identity_file=identity,
+            )
+            argv = config.argv("ssh")
+            rendered = " ".join(argv)
+            self.assertIn("IdentitiesOnly=yes", rendered)
+            self.assertIn("-i", argv)
+            self.assertIn(str(identity), argv)
+            self.assertIn("127.0.0.1:13333:127.0.0.1:3333", rendered)
+            self.assertNotIn("0.0.0.0", rendered)
 
     def test_start_waits_for_forwarded_tcl_and_stop_owns_ssh_process(self):
         captured = {}

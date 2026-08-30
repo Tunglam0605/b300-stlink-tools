@@ -92,3 +92,23 @@ Gateway doctor vẫn có thể kiểm tra SSH port tùy chọn. Managed Prepare 
 - GUI/CLI dùng chung backend.
 - Packaged Windows/Linux CLI và GUI phải chứa feature.
 - Two-machine acceptance cuối cùng vẫn phải xác minh kết nối thật từ Client qua SSH.
+## SSH Client + Key Bootstrap
+
+Máy Client mới hoàn toàn không cần tự chạy `ssh-keygen` bằng Terminal. Trong tab **Gateway Setup**:
+
+1. **Generate / Reuse Client Key** kiểm tra OpenSSH Client.
+2. Nếu thiếu OpenSSH Client, GUI hỏi xác nhận trước khi dùng UAC (Windows) hoặc root/`pkexec` (Ubuntu) để cài component/package.
+3. Tool tạo hoặc reuse `~/.ssh/b300_gateway_ed25519` bằng `ssh-ed25519`. Nếu chỉ một nửa key pair tồn tại hoặc public key hỏng, tool fail-closed và không overwrite.
+4. **Copy Public Key** chỉ copy dòng `ssh-ed25519 ...`; private key không được đọc để export và không vào log/report.
+5. Trên Gateway, **Authorize Client Public Key** validate canonical ed25519 rồi append idempotent. Windows account thuộc Administrators dùng `%ProgramData%\ssh\administrators_authorized_keys`; user thường/Linux dùng `~/.ssh/authorized_keys`.
+6. Debug Client và Realtime Live Monitor tự nhận identity đã verify và thêm `IdentitiesOnly=yes` + `-i <B300 identity>` vào SSH tunnel.
+
+CLI tương đương:
+
+```bash
+b300-stlink gateway client-key --json
+b300-stlink gateway client-key --confirm-system-change --json
+b300-stlink gateway authorize-key --public-key-file client.pub --confirm-system-change --json
+```
+
+`client-key` chỉ cài OpenSSH Client khi thiếu và khi có `--confirm-system-change`. `authorize-key` không nhận private key.

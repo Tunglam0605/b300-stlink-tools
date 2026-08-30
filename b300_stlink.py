@@ -54,6 +54,10 @@ from b300_core.debug_selftest import run_loopback_debug_selftest
 from b300_core.debug_sampling import sample_variables, validate_sampling_request, write_samples
 from b300_core.elf_matcher import discover_symbol_files, find_matching_symbol_file
 from b300_core.tcl_client import SafeTclClient, TclEndpoint
+from b300_core.ssh_identity import (
+    ensure_ssh_identity, inspect_ssh_client_prerequisites, install_gateway_public_key,
+    managed_identity_file, prepare_ssh_client_prerequisites, validate_public_key,
+)
 from b300_core.ssh_debug_tunnel import (
     SshDebugTunnel, SshDebugTunnelConfig, find_available_loopback_port,
 )
@@ -145,6 +149,7 @@ def run_vscode_profile(args: argparse.Namespace) -> int:
         executable=workspace_executable(args.program_relative),
         gdb_path=_resolve_vscode_gdb_path(args.vscode_gdb_path),
         probe_serial=args.probe_serial,
+        identity_file=managed_identity_file(),
     )
     record = profile.record()
     if args.output_dir is not None:
@@ -587,6 +592,7 @@ def run_debug_client(args, reporter: Reporter) -> int:
         host=args.ssh_host, user=args.ssh_user, ssh_port=args.ssh_port,
         local_gdb_port=local_gdb, local_tcl_port=local_tcl,
         gateway_gdb_port=3333, gateway_tcl_port=6666,
+        identity_file=managed_identity_file(),
     )
     tunnel_config.validate()
 
@@ -1009,6 +1015,85 @@ def main(argv: Optional[List[str]] = None) -> int:
                 },
                 args.json,
                 format_probes_text(probes),
+            )
+            return 0
+
+        if args.command == "gateway" and args.gateway_action == "client-key":
+            prereq = inspect_ssh_client_prerequisites()
+            if not prereq.ready:
+                if not args.confirm_system_change:
+                    record = {
+                        "schema_version": 1,
+                        "command": "gateway client-key",
+                        "status": "confirmation_required",
+                        "reason_code": "SYSTEM_CHANGE_CONFIRMATION_REQUIRED",
+                        "actions": list(prereq.actions),
+                        "private_key_exported": False,
+                        "next_action": "Re-run with --confirm-system-change to install OpenSSH Client before generating the B300 key.",
+                    }
+                    emit_snapshot(
+                        record, args.json,
+                        "SYSTEM_CHANGE_CONFIRMATION_REQUIRED: OpenSSH Client/ssh-keygen is missing; no key or OS change made.",
+                    )
+                    return 1
+                prepared = prepare_ssh_client_prerequisites()
+                if not prepared.succeeded or not prepared.after.ready:
+                    raise RuntimeError("OpenSSH Client setup did not reach READY state.")
+            identity = ensure_ssh_identity(args.identity_file)
+            record = {
+                "schema_version": 1,
+                "command": "gateway client-key",
+                "status": "ok",
+                "ready": identity.ready,
+                "private_key_path": str(identity.private_key),
+                "public_key_path": str(identity.public_key),
+                "public_key": identity.public_key_text,
+                "fingerprint": identity.fingerprint,
+                "private_key_exported": False,
+                "next_action": "Authorize this public key on the Gateway, then connect with GUI/CLI Client.",
+            }
+            text = (
+                "B300 Client SSH key READY\nFingerprint: %s\nPublic key: %s\n"
+                "Private key stays local: %s" %
+                (identity.fingerprint, identity.public_key_text, identity.private_key)
+            )
+            emit_snapshot(record, args.json, text)
+            return 0
+
+        if args.command == "gateway" and args.gateway_action == "authorize-key":
+            if args.public_key_file is None:
+                raise ValueError("gateway authorize-key requires --public-key-file PATH.")
+            key_path = args.public_key_file.expanduser().resolve()
+            if not key_path.is_file():
+                raise ValueError("Gateway public-key file does not exist: %s" % key_path)
+            public_key = validate_public_key(key_path.read_text(encoding="utf-8"))
+            if not args.confirm_system_change:
+                record = {
+                    "schema_version": 1,
+                    "command": "gateway authorize-key",
+                    "status": "confirmation_required",
+                    "reason_code": "SYSTEM_CHANGE_CONFIRMATION_REQUIRED",
+                    "public_key_file": str(key_path),
+                    "private_key_received": False,
+                    "next_action": "Re-run with --confirm-system-change to append this public key idempotently.",
+                }
+                emit_snapshot(record, args.json, "SYSTEM_CHANGE_CONFIRMATION_REQUIRED: public key validated; no authorized_keys change made.")
+                return 1
+            result = install_gateway_public_key(public_key)
+            record = {
+                "schema_version": 1,
+                "command": "gateway authorize-key",
+                "status": "ok",
+                "changed": result.changed,
+                "target": str(result.target),
+                "fingerprint": result.fingerprint,
+                "administrator_target": result.administrator_target,
+                "private_key_received": False,
+            }
+            emit_snapshot(
+                record, args.json,
+                "Gateway public key authorized%s. Fingerprint=%s" %
+                ("" if result.changed else " (already present)", result.fingerprint),
             )
             return 0
 

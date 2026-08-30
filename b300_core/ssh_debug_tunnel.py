@@ -9,9 +9,11 @@ import socket
 import subprocess
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Optional, Protocol, Tuple
 
 from .process_startup import child_process_kwargs
+from .ssh_identity import resolve_ssh_client_executable
 from .tcl_client import SafeTclClient, TclEndpoint
 
 _SAFE_HOST = re.compile(r"^[A-Za-z0-9._:-]+$")
@@ -64,6 +66,7 @@ class SshDebugTunnelConfig:
     local_tcl_port: int = 6666
     gateway_gdb_port: int = 3333
     gateway_tcl_port: int = 6666
+    identity_file: Optional[Path] = None
 
     def validate(self) -> None:
         if not self.host or not _SAFE_HOST.fullmatch(self.host):
@@ -81,6 +84,8 @@ class SshDebugTunnelConfig:
                 raise ValueError("%s port must be in range 1..65535." % label)
         if self.local_gdb_port == self.local_tcl_port:
             raise ValueError("Local GDB and TCL forwarded ports must be distinct.")
+        if self.identity_file is not None and not Path(self.identity_file).is_file():
+            raise ValueError("SSH identity file does not exist: %s" % self.identity_file)
 
     @property
     def destination(self) -> str:
@@ -102,6 +107,8 @@ class SshDebugTunnelConfig:
             "-L", "127.0.0.1:%d:127.0.0.1:%d" %
                   (self.local_tcl_port, self.gateway_tcl_port),
         ]
+        if self.identity_file is not None:
+            command.extend(("-o", "IdentitiesOnly=yes", "-i", str(Path(self.identity_file))))
         if self.ssh_port != 22:
             command.extend(("-p", str(self.ssh_port)))
         command.append(self.destination)
@@ -140,9 +147,10 @@ class SshDebugTunnel:
             raise RuntimeError("SSH debug tunnel is already active.")
         if timeout_seconds <= 0:
             raise ValueError("SSH tunnel readiness timeout must be positive.")
-        executable = self.ssh_executable or shutil.which("ssh")
+        resolved = resolve_ssh_client_executable("ssh")
+        executable = self.ssh_executable or (str(resolved) if resolved is not None else None)
         if not executable:
-            raise RuntimeError("SSH client was not found. Install/configure OpenSSH client first.")
+            raise RuntimeError("SSH client was not found. Prepare OpenSSH Client first.")
         process = self._process_factory(
             list(self.config.argv(executable)),
             stdin=subprocess.DEVNULL,

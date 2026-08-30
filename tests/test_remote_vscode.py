@@ -47,6 +47,22 @@ class RemoteVsCodeTests(unittest.TestCase):
         self.assertIn("ConnectTimeout=8", tunnel)
         self.assertIn("ServerAliveInterval=30", tunnel)
 
+    def test_vscode_tunnel_uses_managed_identity_when_available(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            identity = Path(directory) / "b300_gateway_ed25519"
+            identity.write_text("private-placeholder", encoding="utf-8")
+            profile = RemoteVsCodeProfile(
+                ssh_host="gateway.example", ssh_user="automation",
+                executable=workspace_executable("Objects/F407/Main_V2_F407.axf"),
+                identity_file=identity,
+            )
+            tunnel = profile.tunnel_argv()
+            rendered = " ".join(tunnel)
+            self.assertIn("IdentitiesOnly=yes", rendered)
+            self.assertIn(str(identity), tunnel)
+            self.assertIn("StrictHostKeyChecking=yes", rendered)
+            self.assertNotIn("6666", tunnel)
+
     def test_launch_json_is_external_attach_and_hardware_only(self) -> None:
         config = self.make_profile().cortex_debug_configuration()
         self.assertEqual(config["type"], "cortex-debug")
@@ -115,6 +131,25 @@ class RemoteVsCodeTests(unittest.TestCase):
             self.assertEqual(code, 0)
             launch = json.loads((output / ".vscode" / "launch.json").read_text(encoding="utf-8"))
             self.assertEqual(launch["configurations"][0]["gdbPath"], "arm-none-eabi-gdb")
+
+    def test_cli_vscode_kit_auto_uses_verified_b300_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            identity = root / "b300_gateway_ed25519"
+            identity.write_text("private-placeholder", encoding="utf-8")
+            output = root / "kit"
+            stream = StringIO()
+            with patch("b300_stlink.managed_identity_file", return_value=identity), \
+                 redirect_stdout(stream):
+                code = main([
+                    "debug", "vscode", "--ssh-host", "192.168.1.50",
+                    "--ssh-user", "automation", "--program-relative",
+                    "Objects/F407/Main_V2_F407.axf", "--output-dir", str(output), "--json",
+                ])
+            self.assertEqual(code, 0)
+            tunnel = (output / "b300-ssh-tunnel.txt").read_text(encoding="utf-8")
+            self.assertIn("IdentitiesOnly=yes", tunnel)
+            self.assertIn(str(identity), tunnel)
 
     def test_cli_generates_portable_kit_without_hardware_access(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

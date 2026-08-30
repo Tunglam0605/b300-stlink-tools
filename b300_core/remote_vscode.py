@@ -35,6 +35,7 @@ class RemoteVsCodeProfile:
     gdb_path: str = "arm-none-eabi-gdb"
     rtos: Optional[str] = "FreeRTOS"
     probe_serial: Optional[str] = None
+    identity_file: Optional[Path] = None
 
     def validate(self) -> None:
         if not self.ssh_host or not _SAFE_HOST.fullmatch(self.ssh_host):
@@ -54,6 +55,8 @@ class RemoteVsCodeProfile:
             raise ValueError("VSCode GDB path must not be empty.")
         if self.probe_serial is not None and not _SAFE_PROBE.fullmatch(self.probe_serial):
             raise ValueError("ST-Link probe serial contains unsupported characters.")
+        if self.identity_file is not None and not Path(self.identity_file).is_file():
+            raise ValueError("SSH identity file does not exist: %s" % self.identity_file)
 
     @property
     def ssh_target(self) -> str:
@@ -73,6 +76,8 @@ class RemoteVsCodeProfile:
             "-L", "127.0.0.1:%d:127.0.0.1:%d" %
                   (self.local_gdb_port, self.remote_gdb_port),
         ]
+        if self.identity_file is not None:
+            result.extend(("-o", "IdentitiesOnly=yes", "-i", str(Path(self.identity_file))))
         if self.ssh_port != 22:
             result.extend(("-p", str(self.ssh_port)))
         result.append(self.ssh_target)

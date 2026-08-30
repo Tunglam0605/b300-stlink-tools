@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
 from b300_core.ssh_live_tunnel import SshLiveTunnel, SshLiveTunnelConfig
 
@@ -48,6 +50,20 @@ class SshLiveTunnelTests(unittest.TestCase):
         self.assertNotIn(":3333", rendered)
         self.assertEqual(argv.count("-L"), 1)
         self.assertNotIn("0.0.0.0", rendered)
+
+    def test_verified_identity_is_added_to_live_tunnel(self):
+        with tempfile.TemporaryDirectory() as directory:
+            identity = Path(directory) / "id_ed25519"
+            identity.write_text("private-placeholder", encoding="utf-8")
+            config = SshLiveTunnelConfig(
+                "gateway.local", "automation", local_tcl_port=16666, identity_file=identity
+            )
+            argv = config.argv("ssh")
+            rendered = " ".join(argv)
+            self.assertIn("IdentitiesOnly=yes", rendered)
+            self.assertIn(str(identity), argv)
+            self.assertEqual(argv.count("-L"), 1)
+            self.assertNotIn(":3333", rendered)
 
     def test_start_checks_forwarded_tcl_and_stop_owns_process(self):
         captured = {}
