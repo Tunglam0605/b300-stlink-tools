@@ -52,7 +52,8 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the public parser while retaining legacy command spellings."""
     parser = argparse.ArgumentParser(description=DESCRIPTION)
     parser.add_argument("--version", action="store_true", help="Report CLI version information.")
-    parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON output.")
+    parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
+                        help="Emit machine-readable JSON output.")
     json_parent = _json_option_parent()
     commands = parser.add_subparsers(dest="command")
 
@@ -330,4 +331,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def parse_args(argv: List[str]) -> argparse.Namespace:
-    return build_parser().parse_args(argv)
+    args = build_parser().parse_args(argv)
+    if not hasattr(args, "json"):
+        args.json = False
+    return args
