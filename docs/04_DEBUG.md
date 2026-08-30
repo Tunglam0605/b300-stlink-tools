@@ -16,8 +16,8 @@ thể bị halt/reset nên chỉ dùng khi board và cơ cấu đang ở trạng
   `PATH`; Ubuntu có thể dùng `gdb-multiarch` khi phù hợp.
 - **Gateway** không cần GDB, source hay AXF/ELF. Gateway chỉ cần ST-Link, OpenOCD
   và SSH server; `b300-stlink debug gateway` giữ GDB/TCL ở loopback.
-- **Client** giữ source + AXF/ELF. GUI Client tự tạo SSH local forwarding, xác minh
-  AXF/ELF với Application Flash rồi mới attach GDB.
+- **Client** giữ source + AXF/ELF. GUI Client và `b300-stlink debug client` đều tạo
+  managed SSH local forwarding, xác minh AXF/ELF với Application Flash rồi mới attach GDB.
 
 Nếu Gateway không có GDB local thì Flash, Factory provisioning và Debug Gateway vẫn
 hoạt động bình thường.
@@ -193,6 +193,20 @@ CLI vẫn giữ đầy đủ các chức năng khác như nạp Application, fac
 Bootloader, doctor, memory/metadata read-only. Chỉ riêng vai trò **Debug Gateway**
 không cần source-level debugger trên máy cổng. `debug server` được giữ làm alias
 legacy; workflow mới dùng `debug gateway`.
+
+### CLI Client headless
+
+Máy kỹ sư không có ST-Link có thể chạy one-shot diagnostics qua Gateway mà không cần GUI:
+
+```text
+b300-stlink debug client --ssh-host <gateway> --ssh-user <user> \
+  --symbols <application.axf> --client-action inspect --json
+```
+
+`--client-action` hỗ trợ `inspect`, `where`, `registers`, `stack`, `variable`, `poll`,
+`read-words`, `break`, `watch`. Client chỉ forward loopback GDB/TCL bằng SSH; không
+expose raw OpenOCD ra LAN và không có flash/erase/WRP surface. Hai máy thật qua SSH
+vẫn là field acceptance riêng.
 
 ### B300 GUI: Auto / Local / Gateway / Client
 

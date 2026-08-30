@@ -92,6 +92,8 @@ class GuiPackagingTests(unittest.TestCase):
                       gui_spec)
         self.assertIn('project_root / "CHANGELOG.md"', gui_spec)
         self.assertIn('"BUILD-COMMIT.txt"', gui_spec)
+        self.assertIn("load_trusted_bootloader", gui_spec)
+        self.assertNotIn("v00050001.hex", gui_spec)
         self.assertNotIn("Path(WORKPATH)", gui_spec)
         self.assertIn("from b300_core.build_info import build_commit", gui_spec)
         self.assertIn('"--icon", str(ROOT / "branding" / "b300-stlink-icon.ico")',
@@ -111,6 +113,8 @@ class GuiPackagingTests(unittest.TestCase):
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
         self.assertIn("exclude_binaries=True", windows_spec)
         self.assertIn("COLLECT(", windows_spec)
+        self.assertIn("load_trusted_bootloader", windows_spec)
+        self.assertNotIn("v00050001.hex", windows_spec)
         self.assertIn('ROOT / "b300_gui_windows.spec"', native_builder)
         self.assertIn('"--application-root"', native_builder)
         self.assertIn("Verify packaged Windows onedir runtime", workflow)
@@ -206,7 +210,7 @@ class GuiPackagingTests(unittest.TestCase):
             xpack.write_bytes(b"trusted archive")
             firmware = root / "resources" / "firmware"
             firmware.mkdir(parents=True)
-            bootloader = firmware / "b300_bootloader_f407ze_com3_v00050001.hex"
+            bootloader = firmware / "b300_bootloader_f407ze_com3_v00060500.hex"
             manifest_resource = firmware / "b300_bootloader_manifest.json"
             bootloader.write_bytes(b":00000001FF\n")
             manifest_resource.write_text("{}", encoding="utf-8")
@@ -261,7 +265,7 @@ class GuiPackagingTests(unittest.TestCase):
         )
         self.assertIn("openocd_sha256=%s" % openocd_sha256, metadata)
         self.assertIn("flavor=gui", metadata)
-        self.assertIn("resources/firmware/b300_bootloader_f407ze_com3_v00050001.hex", names)
+        self.assertIn("resources/firmware/b300_bootloader_f407ze_com3_v00060500.hex", names)
         self.assertIn("resources/firmware/b300_bootloader_manifest.json", names)
 
     def test_internal_cli_zip_excludes_gui(self) -> None:

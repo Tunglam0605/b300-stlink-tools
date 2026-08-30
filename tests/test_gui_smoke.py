@@ -298,7 +298,15 @@ class GuiSmokeTests(unittest.TestCase):
         tab_names = [window.tabs.tabText(index) for index in range(window.tabs.count())]
         self.assertIn("Nạp firmware", tab_names)
         self.assertIsNotNone(window.factory_trusted)
-        self.assertIn("657F7160", window.factory_artifact_label.text())
+        self.assertEqual(window.factory_profile_combo.count(), 1)
+        self.assertEqual(window.factory_profile_combo.currentData(), "b300-f407ze-com3-v00060500")
+        profile_text = window.factory_artifact_label.text()
+        for token in ("085E44E8", "COM3", "USART1", "230400", "PB6", "PB7", "PC13",
+                      "DMA2 Stream5 Channel 4", "0x00030000", "0x0800C000", "0x08010000"):
+            self.assertIn(token, profile_text)
+        self.assertIn("cổng logic", profile_text)
+        self.assertFalse(hasattr(window, "factory_import_button"))
+        self.assertFalse(hasattr(window, "factory_custom_hex_button"))
         self.assertEqual(window.factory_probe_combo.currentData(), "FACTORY123")
         self.assertTrue(window.factory_provision_button.isEnabled())
         self.assertFalse(hasattr(window, "factory_ack"))

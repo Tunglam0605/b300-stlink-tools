@@ -14,7 +14,7 @@ from typing import Callable, List, Optional, Sequence
 
 from .models import BootVerification, CommandResult, FactoryPlan, FlashPlan, ProbeRef, TargetInfo
 from .offline_setup import installed_openocd_path, verify_openocd_tree
-from .policy import APPLICATION_ADDRESS, FLASH_END_ADDRESS
+from .policy import APPLICATION_ADDRESS, FLASH_END_ADDRESS, METADATA_ADDRESS
 from .process_startup import child_process_kwargs
 
 
@@ -109,13 +109,68 @@ def build_flash_command(plan: FlashPlan, executable: str) -> List[str]:
     validate_openocd_value(plan.image.path, "Application path")
     if plan.erase_sectors != (3, 4, 5, 6, 7):
         raise ValueError("Unsafe flash plan: erase sectors must be exactly 3..7.")
+    image = "{%s}" % plan.image.path
     return _base_command(plan.probe, executable) + [
         "-c", "init",
         "-c", "reset init",
+        # Erase the replaceable domain exactly once. OpenOCD's high-level
+        # `program` helper always performs another erase, so do not use it here.
         "-c", "flash erase_sector 0 3 7",
-        "-c", "program {%s} verify" % plan.image.path,
+        "-c", 'echo "** Programming Started **"',
+        "-c", ('if {[catch {flash write_image %s} err]} '
+               '{echo "** Programming Failed **"; shutdown error}' % image),
+        "-c", 'echo "** Programming Finished **"',
+        "-c", 'echo "** Verify Started **"',
+        "-c", ('if {[catch {verify_image %s} err]} '
+               '{echo "** Verify Failed **"; shutdown error}' % image),
+        # Preserve the stable verified-success sentinel consumed by the service.
+        "-c", 'echo "** Verified OK **"',
         "-c", "shutdown",
     ]
+
+
+def build_metadata_write_command(probe: ProbeRef, metadata_path: Path,
+                                 readback_path: Path, executable: str) -> List[str]:
+    """Program and independently dump the canonical 44-byte AppMeta record."""
+    metadata_path = Path(metadata_path).resolve()
+    readback_path = Path(readback_path).resolve()
+    validate_openocd_value(metadata_path, "ST-Link metadata path")
+    validate_openocd_value(readback_path, "ST-Link metadata read-back path")
+    if not metadata_path.is_file():
+        raise ValueError("ST-Link metadata file does not exist.")
+    if metadata_path.stat().st_size != 44:
+        raise ValueError("ST-Link metadata file must be exactly 44 bytes.")
+    if metadata_path.suffix.lower() != ".bin" or readback_path.suffix.lower() != ".bin":
+        raise ValueError("ST-Link metadata staging/read-back files must use .bin suffixes.")
+    return _base_command(probe, executable) + [
+        "-c", "init",
+        "-c", "reset halt",
+        # Sector 3 was erased exactly once by the S3-S7 Application transaction.
+        # Use the STM32 flash driver here; never use raw `mww` for internal Flash.
+        "-c", "flash write_image {%s} 0x%08X bin" % (metadata_path, METADATA_ADDRESS),
+        "-c", "verify_image {%s} 0x%08X bin" % (metadata_path, METADATA_ADDRESS),
+        "-c", "dump_image {%s} 0x%08X 44" % (readback_path, METADATA_ADDRESS),
+        "-c", "shutdown",
+    ]
+
+
+def parse_metadata_readback(output: str) -> bytes:
+    """Parse the 11 little-endian words emitted by the bounded AppMeta read-back."""
+    words = {}
+    end = METADATA_ADDRESS + 44
+    for line in output.splitlines():
+        match = re.search(r"0x([0-9A-Fa-f]{8}):\s*(.*)", line)
+        if match is None:
+            continue
+        address = int(match.group(1), 16)
+        for token in re.findall(r"\b[0-9A-Fa-f]{8}\b", match.group(2)):
+            if METADATA_ADDRESS <= address < end and (address - METADATA_ADDRESS) % 4 == 0:
+                words[address] = int(token, 16)
+            address += 4
+    expected = [METADATA_ADDRESS + offset for offset in range(0, 44, 4)]
+    if any(address not in words for address in expected):
+        raise ValueError("OpenOCD did not report the complete 44-byte ST-Link metadata read-back.")
+    return b"".join(words[address].to_bytes(4, "little") for address in expected)
 
 
 def build_factory_protect_command(probe: ProbeRef, executable: str, enabled: bool) -> List[str]:
@@ -137,11 +192,21 @@ def build_factory_flash_command(plan: FactoryPlan, executable: str) -> List[str]
     validate_openocd_value(plan.image.path, "Bootloader path")
     if plan.erase_sectors != (0, 1, 2):
         raise ValueError("Unsafe factory plan: erase sectors must be exactly 0..2.")
+    image = "{%s}" % plan.image.path
     return _base_command(plan.probe, executable) + [
         "-c", "init",
         "-c", "reset init",
+        # Erase the Bootloader domain exactly once; do not use OpenOCD `program`,
+        # whose helper performs another erase internally.
         "-c", "flash erase_sector 0 0 2",
-        "-c", "program {%s} verify" % plan.image.path,
+        "-c", 'echo "** Programming Started **"',
+        "-c", ('if {[catch {flash write_image %s} err]} '
+               '{echo "** Programming Failed **"; shutdown error}' % image),
+        "-c", 'echo "** Programming Finished **"',
+        "-c", 'echo "** Verify Started **"',
+        "-c", ('if {[catch {verify_image %s} err]} '
+               '{echo "** Verify Failed **"; shutdown error}' % image),
+        "-c", 'echo "** Verified OK **"',
         "-c", "shutdown",
     ]
 

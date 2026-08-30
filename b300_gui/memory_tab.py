@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -26,6 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from b300_core.metadata import OTA_META_MAGIC_OTA, OTA_META_MAGIC_STLINK
 from b300_core.models import OtaMetadata, ProbeRef
 from b300_core.policy import SECTORS
 from .workers import FunctionWorker
@@ -67,9 +70,20 @@ class MemoryTab(QWidget):
         self._build_ui()
 
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setObjectName("memoryScrollArea")
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_content = QWidget()
+        self.scroll_content.setObjectName("memoryScrollContent")
+        root = QVBoxLayout(self.scroll_content)
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(8)
+        self.scroll_area.setWidget(self.scroll_content)
+        root_layout.addWidget(self.scroll_area)
 
         # ST-Link Utility style Memory Display Parameters Toolbar
         display_group = QGroupBox("Khảo sát bộ nhớ Flash (Memory Display)")
@@ -77,8 +91,10 @@ class MemoryTab(QWidget):
         display_layout.setContentsMargins(10, 10, 10, 10)
         display_layout.setSpacing(8)
 
-        param_row = QHBoxLayout()
-        param_row.addWidget(QLabel("Address / Sector:"))
+        param_grid = QGridLayout()
+        param_grid.setHorizontalSpacing(10)
+        param_grid.setVerticalSpacing(4)
+        param_grid.addWidget(QLabel("Address / Sector:"), 0, 0)
         self.sector_combo = QComboBox()
         self.sector_combo.setAccessibleName("Chọn Sector để đọc")
         for sector in SECTORS:
@@ -89,17 +105,17 @@ class MemoryTab(QWidget):
                 sector.index,
             )
         self.sector_combo.currentIndexChanged.connect(self._on_display_param_changed)
-        param_row.addWidget(self.sector_combo, 2)
+        param_grid.addWidget(self.sector_combo, 1, 0)
 
-        param_row.addWidget(QLabel("Data Width:"))
+        param_grid.addWidget(QLabel("Data Width:"), 0, 1)
         self.data_width_combo = QComboBox()
         self.data_width_combo.addItem("32 bits (Word)", 32)
         self.data_width_combo.addItem("16 bits (Half-word)", 16)
         self.data_width_combo.addItem("8 bits (Byte)", 8)
         self.data_width_combo.currentIndexChanged.connect(self._render_memory_table)
-        param_row.addWidget(self.data_width_combo, 1)
+        param_grid.addWidget(self.data_width_combo, 1, 1)
 
-        param_row.addWidget(QLabel("Size:"))
+        param_grid.addWidget(QLabel("Size:"), 0, 2)
         self.size_combo = QComboBox()
         self.size_combo.addItem("0x100 (256 B)", 256)
         self.size_combo.addItem("0x400 (1 KiB)", 1024)
@@ -107,28 +123,34 @@ class MemoryTab(QWidget):
         self.size_combo.addItem("Toàn bộ Sector (Full)", 0)
         self.size_combo.setCurrentIndex(2)  # Default 4KB preview
         self.size_combo.currentIndexChanged.connect(self._render_memory_table)
-        param_row.addWidget(self.size_combo, 1)
-        display_layout.addLayout(param_row)
+        param_grid.addWidget(self.size_combo, 1, 2)
+        param_grid.setColumnStretch(0, 3)
+        param_grid.setColumnStretch(1, 1)
+        param_grid.setColumnStretch(2, 1)
+        display_layout.addLayout(param_grid)
 
-        action_row = QHBoxLayout()
+        action_grid = QGridLayout()
+        action_grid.setHorizontalSpacing(8)
+        action_grid.setVerticalSpacing(8)
         self.read_button = QPushButton("Đọc Sector")
         self.read_button.setToolTip("CPU tạm dừng khi đọc và tự động tiếp tục chạy (resume) trước khi ngắt kết nối.")
         self.read_button.clicked.connect(self.read_selected_sector)
         self.export_button = QPushButton("Xuất binary…")
         self.export_button.setEnabled(False)
         self.export_button.clicked.connect(self.export_sector)
-        self.metadata_button = QPushButton("Đọc OTA metadata")
+        self.metadata_button = QPushButton("Đọc Application metadata")
         self.metadata_button.clicked.connect(self.read_metadata)
         self.cancel_button = QPushButton("Hủy đọc")
         self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self.cancel_current)
 
-        action_row.addWidget(self.read_button)
-        action_row.addWidget(self.export_button)
-        action_row.addWidget(self.metadata_button)
-        action_row.addWidget(self.cancel_button)
-        action_row.addStretch(1)
-        display_layout.addLayout(action_row)
+        action_grid.addWidget(self.read_button, 0, 0)
+        action_grid.addWidget(self.metadata_button, 0, 1)
+        action_grid.addWidget(self.export_button, 1, 0)
+        action_grid.addWidget(self.cancel_button, 1, 1)
+        action_grid.setColumnStretch(0, 1)
+        action_grid.setColumnStretch(1, 1)
+        display_layout.addLayout(action_grid)
         root.addWidget(display_group)
 
         # Hidden labels preserved for status & test assertions
@@ -148,6 +170,7 @@ class MemoryTab(QWidget):
         root.addWidget(self.status_label)
 
         splitter = QSplitter()
+        splitter.setMinimumHeight(300)
 
         # Left Panel: STM32 ST-LINK Utility Style Memory Table
         self.table_group = QGroupBox("Bảng nhớ thiết bị (Device Memory)")
@@ -173,11 +196,11 @@ class MemoryTab(QWidget):
         table_layout.addWidget(self.hex_view)
 
         # Right Panel: OTA Metadata Form
-        metadata_group = QGroupBox("OTA metadata · 0x0800C000")
+        metadata_group = QGroupBox("Application metadata · 0x0800C000")
         metadata_layout = QVBoxLayout(metadata_group)
         metadata_layout.setContentsMargins(10, 10, 10, 10)
 
-        self.metadata_notice = QLabel("Nhấn 'Đọc OTA metadata' để kiểm tra bản ghi Sector 3.")
+        self.metadata_notice = QLabel("Nhấn 'Đọc Application metadata' để kiểm tra bản ghi Sector 3.")
         self.metadata_notice.setObjectName("metadataNotice")
         self.metadata_notice.setWordWrap(True)
         metadata_layout.addWidget(self.metadata_notice)
@@ -186,6 +209,7 @@ class MemoryTab(QWidget):
         self.metadata_values = {}
         fields = (
             ("Classification", "Phân loại (Classification)"),
+            ("Source", "Nguồn metadata (Source)"),
             ("Magic", "Giá trị nhận dạng (Magic)"),
             ("Format", "Phiên bản định dạng (Format)"),
             ("State", "Trạng thái (State)"),
@@ -217,6 +241,7 @@ class MemoryTab(QWidget):
         splitter.setStretchFactor(1, 2)
         root.addWidget(splitter, 1)
 
+        self.scroll_content.setMinimumHeight(500)
         self._init_empty_table()
 
     def _init_empty_table(self) -> None:
@@ -255,7 +280,7 @@ class MemoryTab(QWidget):
         return bool(self._threads)
 
     def invalidate_metadata_view(self, reason: str = "Target Flash đã thay đổi.") -> None:
-        """Mark the displayed OTA metadata snapshot stale after a write transaction."""
+        """Mark the displayed Application metadata snapshot stale after a write transaction."""
         for value in self.metadata_values.values():
             value.setText("—")
         self.metadata_values["Classification"].setText("STALE")
@@ -266,13 +291,13 @@ class MemoryTab(QWidget):
         )
         self.metadata_notice.setText(
             "⚠ Snapshot metadata trước đó đã hết hiệu lực. %s\n"
-            "Nhấn 'Đọc OTA metadata' để lấy trạng thái thật hiện tại từ Sector 3." % reason
+            "Nhấn 'Đọc Application metadata' để lấy trạng thái thật hiện tại từ Sector 3." % reason
         )
         self.metadata_notice.setStyleSheet(
             "background-color: #FFFBEB; color: #92400E; border: 1px solid #FDE68A; "
             "border-radius: 6px; padding: 8px 12px; font-size: 12px; font-weight: 500;"
         )
-        self.status_label.setText("OTA metadata: STALE · cần đọc lại")
+        self.status_label.setText("Application metadata: STALE · cần đọc lại")
         self.range_info_label.setText(
             "Target memory đã thay đổi · snapshot Sector 3 trước đó không còn hợp lệ"
         )
@@ -509,6 +534,7 @@ class MemoryTab(QWidget):
         if metadata.classification == "ERASED":
             values = {
                 "Classification": "ERASED",
+                "Source": "—",
                 "Magic": "0xFFFFFFFF (Erased)",
                 "Format": "—",
                 "State": "—",
@@ -520,17 +546,20 @@ class MemoryTab(QWidget):
                 "Calculated CRC32": "— (Flash trống)",
             }
             self.metadata_notice.setText(
-                "✓ Vùng OTA metadata đang ở trạng thái Erased (trống).\n"
-                "Đây là trạng thái hợp lệ khi nạp qua ST-Link. Bootloader sẽ kích hoạt "
-                "chế độ fallback an toàn nếu vector Application hợp lệ."
+                "⚠ Sector 3 đang ERASED. Với Bootloader v0.6.5, trạng thái này không "
+                "chứng minh Application bootable; cần một transaction OTA/ST-Link tạo "
+                "metadata hợp lệ trước khi boot Application."
             )
             self.metadata_notice.setStyleSheet(
-                "background-color: #F0FDF4; color: #166534; border: 1px solid #BBF7D0; "
+                "background-color: #FFF7ED; color: #9A3412; border: 1px solid #FED7AA; "
                 "border-radius: 6px; padding: 8px 12px; font-size: 12px; font-weight: 500;"
             )
         elif metadata.valid:
+            source = ("ST-Link (STLM)" if metadata.magic == OTA_META_MAGIC_STLINK else
+                      "OTA (OTAM)" if metadata.magic == OTA_META_MAGIC_OTA else "Unknown")
             values = {
                 "Classification": metadata.classification,
+                "Source": source,
                 "Magic": "0x%08X" % metadata.magic,
                 "Format": str(metadata.format_version),
                 "State": "%s (%d)" % (metadata.state_name, metadata.state),
@@ -541,14 +570,17 @@ class MemoryTab(QWidget):
                 "Metadata CRC32": "0x%08X" % metadata.meta_crc32,
                 "Calculated CRC32": "0x%08X" % metadata.calculated_meta_crc32,
             }
-            self.metadata_notice.setText("✓ OTA metadata hợp lệ và đã qua xác thực CRC32.")
+            self.metadata_notice.setText("✓ %s · %s · metadata CRC32 hợp lệ." % (source, metadata.state_name))
             self.metadata_notice.setStyleSheet(
                 "background-color: #F0FDF4; color: #166534; border: 1px solid #BBF7D0; "
                 "border-radius: 6px; padding: 8px 12px; font-size: 12px; font-weight: 500;"
             )
         else:
+            source = ("ST-Link (STLM)" if metadata.magic == OTA_META_MAGIC_STLINK else
+                      "OTA (OTAM)" if metadata.magic == OTA_META_MAGIC_OTA else "Unknown")
             values = {
                 "Classification": metadata.classification,
+                "Source": source,
                 "Magic": "0x%08X" % metadata.magic,
                 "Format": str(metadata.format_version),
                 "State": "%s (%d)" % (metadata.state_name, metadata.state),
@@ -559,7 +591,7 @@ class MemoryTab(QWidget):
                 "Metadata CRC32": "0x%08X" % metadata.meta_crc32,
                 "Calculated CRC32": "0x%08X" % metadata.calculated_meta_crc32,
             }
-            self.metadata_notice.setText("⚠ OTA metadata không hợp lệ hoặc sai lệch kiểm tra CRC32.")
+            self.metadata_notice.setText("⚠ Application metadata không hợp lệ hoặc sai lệch kiểm tra CRC32.")
             self.metadata_notice.setStyleSheet(
                 "background-color: #FEF2F2; color: #991B1B; border: 1px solid #FECACA; "
                 "border-radius: 6px; padding: 8px 12px; font-size: 12px; font-weight: 500;"
@@ -578,9 +610,9 @@ class MemoryTab(QWidget):
                 color, bg_color, border_color
             )
         )
-        self.status_label.setText("OTA metadata: %s" % metadata.classification)
+        self.status_label.setText("Application metadata: %s" % metadata.classification)
         self.range_info_label.setText(
-            "Target memory, Sector 3 (0x0800C000) · OTA Metadata: %s" % metadata.classification
+            "Target memory, Sector 3 (0x0800C000) · AppMeta: %s" % metadata.classification
         )
         self._set_busy(False)
 

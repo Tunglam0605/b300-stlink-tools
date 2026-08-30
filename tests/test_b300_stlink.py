@@ -39,23 +39,43 @@ class B300StlinkTests(unittest.TestCase):
         records = [json.loads(line) for line in output.getvalue().splitlines()]
         transactions = [record for record in records if record["event"] == "openocd"]
         self.assertEqual([item["phase"] for item in transactions], [
-            "program_verify", "reset",
+            "program_verify", "metadata_write_verify", "reset",
         ])
         program = " ".join(transactions[0]["command"])
-        reset = " ".join(transactions[1]["command"])
+        metadata = " ".join(transactions[1]["command"])
+        reset = " ".join(transactions[2]["command"])
         self.assertIn("flash erase_sector 0 3 7", program)
-        self.assertIn("program", program)
-        self.assertIn("verify", program)
+        self.assertIn("flash write_image", program)
+        self.assertIn("verify_image", program)
+        self.assertNotIn("flash write_image erase", program)
         self.assertNotIn("mww 0x40002860", program)
+        self.assertIn("flash write_image", metadata)
+        self.assertIn("verify_image", metadata)
+        self.assertIn("dump_image", metadata)
+        self.assertIn("0x0800C000", metadata)
+        self.assertNotIn("erase_sector", metadata)
+        self.assertNotIn("mww", metadata)
         self.assertIn("reset run", reset)
         self.assertEqual(transactions[0]["condition"], "always")
-        self.assertEqual(transactions[1]["condition"], "after_verified_ok")
+        self.assertEqual(transactions[1]["condition"], "after_application_verified")
+        self.assertEqual(transactions[2]["condition"], "after_exact_stlm_verified_readback")
+        metadata_plan = next(record for record in records if record["event"] == "metadata_plan")
+        self.assertEqual(metadata_plan["address"], "0x0800C000")
+        self.assertEqual(metadata_plan["size"], 44)
+        self.assertEqual(metadata_plan["magic"], "STLM")
+        self.assertEqual(metadata_plan["state"], "VERIFIED")
+        self.assertEqual(metadata_plan["condition"], "after_application_verified")
         self.assertIn("gdb port disabled", program)
         self.assertIn("telnet port disabled", program)
         self.assertIn("tcl port disabled", program)
-        self.assertNotIn("mass_erase", program + reset)
-        self.assertNotIn("flash protect", program + reset)
-        self.assertNotIn("53544C4B", program + reset)
+        confirmation = next(record for record in records if record["event"] == "confirmation_plan")
+        self.assertEqual(confirmation["required_magic"], "STLM")
+        self.assertEqual(confirmation["required_state"], "CONFIRMED")
+        self.assertEqual(confirmation["sequence_policy"], "written_sequence_plus_1_mod_2^32")
+        self.assertEqual(confirmation["final_gate"], "application_pc_and_bkp1r_zero")
+        self.assertNotIn("mass_erase", program + metadata + reset)
+        self.assertNotIn("flash protect", program + metadata + reset)
+        self.assertNotIn("53544C4B", program + metadata + reset)
 
     def test_flash_rejects_bootloader_hex(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -341,6 +361,35 @@ class B300StlinkTests(unittest.TestCase):
             self.assertEqual(result, 1)
             self.assertIn(expected, output.getvalue())
 
+    def test_debug_client_dry_run_uses_managed_ssh_loopback_forwarding(self) -> None:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            result = tool().main([
+                "debug", "client", "--ssh-host", "192.168.1.109",
+                "--ssh-user", "automation", "--client-action", "inspect",
+                "--dry-run", "--json",
+            ])
+        self.assertEqual(result, 0)
+        record = json.loads(output.getvalue())
+        self.assertEqual(record["event"], "debug_client_plan")
+        self.assertEqual(record["role"], "client")
+        self.assertEqual(record["action"], "inspect")
+        self.assertEqual(record["remote_transport"], "ssh-local-forwarding")
+        rendered = " ".join(record["ssh_command"])
+        self.assertIn("StrictHostKeyChecking=yes", rendered)
+        self.assertIn("127.0.0.1:3333", rendered)
+        self.assertIn("127.0.0.1:6666", rendered)
+        for forbidden in ("flash erase_sector", "mass_erase", "flash protect", "mww "):
+            self.assertNotIn(forbidden, rendered)
+
+    def test_debug_client_requires_explicit_ssh_identity(self) -> None:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            result = tool().main(["debug", "client", "--dry-run", "--json"])
+        self.assertEqual(result, 1)
+        record = json.loads(output.getvalue())
+        self.assertIn("--ssh-host", record["message"])
+
     def test_integrated_debug_inspect_dry_run_uses_safe_local_ports(self) -> None:
         output = io.StringIO()
         with redirect_stdout(output):
@@ -596,7 +645,7 @@ class B300StlinkTests(unittest.TestCase):
         artifact = next(item for item in records if item["event"] == "factory_artifact")
         self.assertEqual(
             artifact["sha256"],
-            "657F71605E00795BEA3C5601AAF569104E74D9DEE8D5B6E602514C4D72264F05",
+            "085E44E8339D21EE2D136D11F86C2103295812CB2438807774B232647D3F75A1",
         )
         transactions = [item for item in records if item["event"] == "openocd"]
         self.assertEqual([item["phase"] for item in transactions], [
@@ -611,6 +660,13 @@ class B300StlinkTests(unittest.TestCase):
         self.assertNotIn("mass_erase", rendered)
         self.assertNotIn("stm32f2x lock", rendered)
         self.assertNotIn("stm32f2x unlock", rendered)
+
+    def test_factory_rejects_user_supplied_bootloader_path(self) -> None:
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            tool().main([
+                "provision-bootloader", "C:\\temp\\custom-bootloader.hex",
+                "--dry-run",
+            ])
 
     def test_factory_real_run_requires_explicit_confirmation_before_hardware(self) -> None:
         output = io.StringIO()

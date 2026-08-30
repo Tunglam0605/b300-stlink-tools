@@ -35,8 +35,12 @@ not retry automatically on any phase failure. Success requires the exact
 `** Verified OK **` event, successful reset, and post-verify PC/BKP1R state.
 On failure, report `failure_phase`, `reason`, and `next_action` from JSON.
 
-Sector 3 is erased with Application so the Bootloader uses its erased-metadata
-fallback. Do not create metadata, CRC workarounds, or backup-register markers.
+Sector 3 is erased with the Application domain, but Bootloader v0.6.5 is strict:
+`ERASED`/`CORRUPT` metadata is not bootable. After exact Application verification,
+the tool must write and independently read back exactly 44 bytes of `STLM + VERIFIED`
+at `0x0800C000`, then reset. Success additionally requires Bootloader consumption to
+`STLM + CONFIRMED` with matching image size/CRC, the expected sequence successor,
+Application PC, and BKP1R = 0. Do not use CRC workarounds or backup-register markers.
 
 ## Factory / Bootloader
 

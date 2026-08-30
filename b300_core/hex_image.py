@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import zlib
 from dataclasses import replace
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -69,7 +70,14 @@ def _inspect_hex(path: Path, *, label: str, allowed_start: int,
             data_record_count += 1
             data_byte_count += length
             for index, value in enumerate(payload):
-                memory[start + index] = value
+                address = start + index
+                previous = memory.get(address)
+                if previous is not None and previous != value:
+                    raise ValueError(
+                        "HEX contains conflicting data at 0x%08X (line %d)." %
+                        (address, line_number)
+                    )
+                memory[address] = value
         elif record_type == 0x01:
             if length != 0:
                 raise ValueError("HEX line %d has an invalid EOF record." % line_number)
@@ -125,10 +133,22 @@ def inspect_image(path: Path) -> ImageInfo:
     vector = inspect_application_vector(vector_data)
     if not vector.valid:
         raise ValueError("Application vector table is invalid: %s" % vector.reason)
+
+    # The Bootloader validates one continuous range starting at APPLICATION_ADDRESS.
+    # Intel HEX may be sparse, but the normal provisioning transaction erases S3-S7
+    # first, so every hole inside that range is deterministically 0xFF in Flash.
+    flash_span_size = image.end_address - APPLICATION_ADDRESS + 1
+    canonical = bytearray(b"\xFF" * flash_span_size)
+    for address, value in memory.items():
+        canonical[address - APPLICATION_ADDRESS] = value
+    flash_crc32 = zlib.crc32(canonical) & 0xFFFFFFFF
+
     return replace(
         image,
         initial_msp=vector.initial_msp,
         reset_vector=vector.reset_vector,
+        flash_span_size=flash_span_size,
+        flash_crc32=flash_crc32,
     )
 
 

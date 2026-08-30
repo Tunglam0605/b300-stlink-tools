@@ -89,8 +89,10 @@ Kiểm tra target dùng `flash info` read-only; không halt, reset hoặc ghi fl
 
    ```text
    flash erase_sector 0 3 7
-   program {...} verify
-   reset run                  # transaction riêng sau exact verify
+   flash write_image {application.hex}
+   verify_image {application.hex}
+   metadata_plan: STLM + VERIFIED @ 0x0800C000 (44 bytes)
+   reset run                  # chỉ sau App + metadata verify/read-back
    ```
 
 3. Không tiếp tục nếu thấy Sector 0–2, mass erase hoặc file/probe không đúng.
@@ -104,9 +106,12 @@ Dry-run không kết nối ghi flash.
 3. Nhấn **Yes** một lần.
 4. Không rút ST-Link hoặc mất nguồn trong khi trạng thái đang chạy. Sau phase
    `erasing`, nút hủy bị khóa; đóng cửa sổ cũng bị từ chối cho tới khi worker kết thúc.
-5. Chờ GUI báo một trong ba kết quả tường minh:
+5. Chờ GUI báo kết quả tường minh:
 
-   - `Nạp thành công`: verify đạt, PC ở Application, BKP1R đã clear;
+   - `Nạp thành công`: Application verify + `STLM + VERIFIED` write/read-back đạt,
+     Bootloader consume thành `STLM + CONFIRMED`, PC ở Application, BKP1R đã clear;
+   - lỗi `metadata_programming`/`metadata_verifying`: không reset vào Application,
+     không retry tự động;
    - `Đã program nhưng Boot verification thất bại`: không tự nạp lại;
    - `Nạp/verify thất bại`: dừng, xuất log và xử lý nguyên nhân.
 
@@ -117,6 +122,10 @@ nguyên nhân và hành động tiếp theo.
 
 Tab **Factory / Bootloader** tách hoàn toàn khỏi tab Application. GUI chỉ còn một thao tác chính: **NẠP BOOTLOADER**. Khi bấm nút, tool tự chạy preflight read-only để xác minh đúng STM32F407 512 KiB, RDP, trạng thái WRP và trusted bundled Bootloader; chỉ khi preflight đạt mới tạo Factory plan và chuyển sang provisioning.
 
+Trước khi nạp, GUI hiển thị **Bootloader OTA profile** do nhà phát hành đóng gói. Người dùng chỉ được chọn profile có trong trusted catalog của release hiện tại; không có nút Import/Browse Bootloader HEX. Profile mặc định hiện tại hiển thị rõ: `B300 F407 · COM3 OTA · Bootloader v0.6.5`, STM32F407ZET6/512 KiB, board token `B300_F407ZE`, COM3 logic → USART1 vật lý, 230400 baud, TX PB6, RX PB7, DIR/RE PC13 (TX=LOW/RX=HIGH), DMA2 Stream5 Channel 4, OTA protocol `0x00030000`, Bootloader S0–S2, metadata S3 `0x0800C000`, Application từ `0x08010000`, cùng SHA-256/source commit. **COM3 là tên cổng logic B300, không phải USART3.**
+
+Khi về sau có B300 F407 dùng cổng OTA khác hoặc B300 H7, nhà phát hành sẽ thêm artifact + profile tương ứng vào release mới của tool. Chỉ profile đã được release, xác thực và có backend tương thích mới xuất hiện/chọn được trong GUI.
+
 Factory service vẫn tự inspect target lần nữa ngay trước thao tác destructive, chỉ erase/program Sector 0-2, verify Bootloader, bật lại WRP S0-S2, reload Option Bytes và xác minh WRP đã ON trước `reset run`. Nếu có nhiều ST-Link, người dùng vẫn phải chọn đúng serial; nếu chỉ có một probe thì GUI tự chọn. RDP/security đang bật hoặc OpenOCD không report WRP sẽ chặn trước erase. Normal Application flow không có quyền thay đổi WRP/RDP.
 
 ## Bước 6 — Đọc Sector hoặc metadata
@@ -125,7 +134,9 @@ Factory service vẫn tự inspect target lần nữa ngay trước thao tác de
 2. Chọn Sector 0–7 rồi nhấn **Đọc Sector**.
 3. Xem tối đa 4096 byte preview; nhấn **Xuất binary…** để lưu toàn bộ Sector.
 4. Nhấn **Đọc OTA metadata** để xem magic, state, size, CRC, board token và
-   classification `VALID`, `ERASED` hoặc `CORRUPT`.
+   classification `VALID`, `ERASED` hoặc `CORRUPT`. Bootloader v0.6.5 chấp nhận
+   `OTAM` hoặc `STLM` hợp lệ theo state contract; `ERASED`/`CORRUPT` là fail-closed,
+   không phải điều kiện vector-only boot.
 5. Có thể nhấn **Hủy đọc**; tool sẽ kết thúc tiến trình và mở phiên recovery để
    yêu cầu CPU `resume` trước khi báo kết quả.
 

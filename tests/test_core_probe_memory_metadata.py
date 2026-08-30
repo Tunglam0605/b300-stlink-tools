@@ -9,18 +9,26 @@ import zlib
 from pathlib import Path
 
 from b300_core.memory import build_read_memory_command, read_memory
-from b300_core.metadata import decode_ota_metadata
-from b300_core.models import CommandResult, ProbeRef
+from b300_core.metadata import (
+    OTA_META_MAGIC_OTA,
+    OTA_META_MAGIC_STLINK,
+    STATE_CONFIRMED,
+    STATE_VERIFIED,
+    build_stlink_metadata,
+    decode_ota_metadata,
+)
+from b300_core.models import CommandResult, ImageInfo, ProbeRef
 from b300_core.policy import validate_read_range
 from b300_core.probe import parse_linux_sysfs, parse_windows_pnp_output
 
 
 def make_metadata(state: int = 3, image_size: int = 130008,
-                  image_crc32: int = 0x9F1E2EB3, sequence: int = 1) -> bytes:
+                  image_crc32: int = 0x9F1E2EB3, sequence: int = 1,
+                  magic: int = OTA_META_MAGIC_OTA) -> bytes:
     token = b"B300_F407ZE\0".ljust(16, b"\0")
     head = struct.pack(
         "<IIIII16sI",
-        0x4F54414D,
+        magic,
         1,
         state,
         image_size,
@@ -104,6 +112,39 @@ class ProbeMemoryMetadataTests(unittest.TestCase):
         self.assertTrue(metadata.valid)
         self.assertEqual(metadata.classification, "VALID")
 
+    def test_metadata_decoder_accepts_stlink_verified_and_confirmed(self) -> None:
+        for state in (STATE_VERIFIED, STATE_CONFIRMED):
+            with self.subTest(state=state):
+                metadata = decode_ota_metadata(make_metadata(state=state, magic=OTA_META_MAGIC_STLINK))
+                self.assertTrue(metadata.valid)
+                self.assertEqual(metadata.magic, OTA_META_MAGIC_STLINK)
+
+    def test_metadata_decoder_rejects_invalid_stlink_state(self) -> None:
+        metadata = decode_ota_metadata(make_metadata(state=1, magic=OTA_META_MAGIC_STLINK))
+        self.assertFalse(metadata.valid)
+        self.assertEqual(metadata.classification, "CORRUPT")
+
+    def test_build_stlink_metadata_roundtrips_exact_44_byte_contract(self) -> None:
+        image = ImageInfo(
+            path=Path("application.hex"),
+            sha256="0" * 64,
+            start_address=0x08010000,
+            end_address=0x0801000F,
+            size=12,
+            data_record_count=2,
+            flash_span_size=16,
+            flash_crc32=0x12345678,
+        )
+        record = build_stlink_metadata(image, sequence=7)
+        decoded = decode_ota_metadata(record)
+        self.assertEqual(len(record), 44)
+        self.assertTrue(decoded.valid)
+        self.assertEqual(decoded.magic, OTA_META_MAGIC_STLINK)
+        self.assertEqual(decoded.state, STATE_VERIFIED)
+        self.assertEqual(decoded.image_size, 16)
+        self.assertEqual(decoded.image_crc32, 0x12345678)
+        self.assertEqual(decoded.sequence, 7)
+
     def test_metadata_decoder_distinguishes_erased_and_corrupt(self) -> None:
         erased = decode_ota_metadata(b"\xFF" * 44)
         corrupt = decode_ota_metadata(b"\x00" * 44)
@@ -160,6 +201,19 @@ class ProbeMemoryMetadataTests(unittest.TestCase):
         recovery = " ".join(runner.commands[1])
         self.assertIn("resume", recovery)
         self.assertNotIn("halt", recovery)
+
+    def test_legacy_and_canonical_appmeta_constants_cannot_drift(self) -> None:
+        from b300_core import app_metadata
+        from b300_core import metadata
+
+        self.assertEqual(app_metadata.APP_METADATA_ADDRESS, 0x0800C000)
+        self.assertEqual(app_metadata.APP_METADATA_SIZE, metadata.OTA_META_SIZE)
+        self.assertEqual(app_metadata.APP_METADATA_FORMAT_VERSION, metadata.OTA_META_FORMAT_VERSION)
+        self.assertEqual(app_metadata.APP_METADATA_MAGIC_OTA, metadata.OTA_META_MAGIC_OTA)
+        self.assertEqual(app_metadata.APP_METADATA_MAGIC_STLINK, metadata.OTA_META_MAGIC_STLINK)
+        self.assertEqual(app_metadata.APP_METADATA_BOARD_TOKEN.rstrip(b"\x00").decode("ascii"),
+                         metadata.OTA_BOARD_TOKEN)
+
 
 
 if __name__ == "__main__":

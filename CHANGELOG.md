@@ -5,6 +5,49 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-30
+
+### Added
+
+- Bổ sung trusted Bootloader catalog do nhà phát hành kiểm soát và thẻ `Bootloader OTA profile` trong GUI. Người dùng chỉ chọn profile được bundle/xác thực, không thể import Bootloader HEX tùy ý. CLI Factory có `--profile <trusted-id>` và cũng fail-closed với profile không nằm trong release. Profile v0.6.5 hiện hiển thị đầy đủ COM3 logic → USART1 vật lý, 230400 baud, TX PB6, RX PB7, DIR/RE PC13, DMA2 Stream5 Channel 4, protocol/Flash map/capabilities và provenance; kiến trúc sẵn sàng cho profile F407/H7/OTA transport khác qua release mới.
+- Đồng bộ normal Application provisioning với Bootloader v0.6.5 strict AppMeta: sau Application verify, tool ghi/verify/read-back chính xác 44 byte `STLM + VERIFIED` tại `0x0800C000`, reset rồi chỉ báo thành công khi Bootloader chuyển thành `STLM + CONFIRMED` với image size/CRC và sequence kế tiếp khớp.
+- Bổ sung sequence lifecycle dựa trên metadata trước đó, fallback xác định về sequence 1 khi metadata cũ invalid/unreadable, và bounded confirmation deadline trước post-verify PC/BKP1R.
+- Bổ sung phát hiện Intel HEX ghi đè xung đột cùng một địa chỉ trước khi provisioning.
+- CLI/GUI hiển thị evidence AppMeta mới: metadata đã ghi, read-back 44 byte, metadata CONFIRMED; Memory phân biệt nguồn `OTAM`/`STLM` và không còn coi `ERASED` là bootable fallback.
+- CLI Debug bổ sung first-class `client` role cho one-shot remote diagnostics qua managed SSH local forwarding, dùng cùng `DebugSession.start_external()` và symbol-match policy với GUI Client; Gateway vẫn loopback-only.
+- VS Code/Cortex-Debug remote kit tiếp tục là first-class Gateway client; SSH tunnel profile được harden đồng nhất với GUI/CLI Client bằng `BatchMode=yes`, `StrictHostKeyChecking=yes`, `ConnectTimeout=8` và chỉ forward GDB loopback.
+- VS Code GDB selection ưu tiên auto-resolve từ B300_GDB/STM32CubeIDE/PATH khi có; nếu Client chưa cài GDB thì kit vẫn sinh portable với `arm-none-eabi-gdb` để CI/offline profile generation không bị phụ thuộc toolchain cục bộ. Explicit `--vscode-gdb-path` vẫn fail-closed nếu path không hợp lệ.
+- Hardware debug acceptance trên main B300 thật: AXF↔Flash 4/4, source/stack/register, `xTickCount`, hardware breakpoint/watchpoint, Gateway→external Client selftest và 5 vòng stress đều PASS; GUI Client, CLI Client và VS Code/Cortex-Debug đều PASS qua SSH loopback thật (`127.0.0.1:2222`) với public-key auth, strict host-key checking, breakpoint/watchpoint và 5/5 reconnect. Two-machine LAN/Wi-Fi vẫn hữu ích để kiểm latency/firewall nhưng không còn là blocker cho correctness của SSH implementation.
+- Hardware provisioning acceptance v0.9.0 trên main B300 thật bằng Windows CLI artifact do GitHub Actions build: Factory nâng Bootloader v0.5.0.1 → v0.6.5, independent S0-S2 bit-for-bit verify, strict ST-Link AppMeta `VERIFIED→CONFIRMED`, repeated sequence `2→3→4`, 3 reset persistence cycles, BOOT_REQUEST one-shot và Application update-check/no-server fallback đều PASS.
+
+### Changed
+
+- Factory provisioning nâng trusted Bootloader lên firmware `0x00060500`, artifact `b300_bootloader_f407ze_com3_v00060500.hex`, SHA-256 `085E44E8339D21EE2D136D11F86C2103295812CB2438807774B232647D3F75A1`, source commit `88b74f649497a5ea9c64b5394470407678795f42`.
+- Normal Application và Factory đều dùng transaction erase-once: erase domain đúng một lần, sau đó `flash write_image` không erase và `verify_image`; loại bỏ `program` helper khỏi Factory để tránh erase lặp.
+- Metadata programming dùng STM32 flash driver với staged `.bin`, `flash write_image`, `verify_image` và `dump_image` 44 byte khi CPU halt; không dùng raw memory-write cho internal Flash.
+- Canonical README, Agent Skill và operator docs được đồng bộ theo contract v0.6.5; `ERASED`/`CORRUPT` metadata fail-closed.
+
+### Safety
+
+- Normal Application vẫn không thay đổi WRP/RDP, không mass erase và re-check WRP Sector 0-2 trước destructive transaction.
+- Metadata failure hoặc read-back mismatch cấm reset; Bootloader confirmation timeout/mismatch fail-closed và không tự retry.
+- Factory chỉ chạm S0-S2, bắt buộc khôi phục/xác minh WRP trước khi kết thúc; S3-S7 không bị Factory erase/program.
+
+### Validation
+
+- Focused core/factory/AppMeta regression: **62 tests PASS**.
+- GUI Flash/Factory/Memory smoke regression sau AppMeta UX update: **21 tests PASS**.
+- Remote Debug focused regression cho GUI/CLI Client + VS Code/Cortex-Debug: **78 tests PASS**.
+- Full software regression sau trusted Bootloader catalog/profile integration: **563 tests PASS, 2 skipped, 0 failures/errors**.
+- `compileall` và `git diff --check` PASS; trusted Bootloader v0.6.5 provenance loader xác minh artifact/hash/source commit thành công.
+- Hardware provisioning acceptance: Bootloader S0-S2 trusted v0.6.5 bit-for-bit PASS; Application span bit-for-bit PASS (`CRC32 0xC99ED31F`); final metadata `STLM + CONFIRMED seq=4`; WRP S0-S2 ON; target RUNNING. Evidence: `docs/12_HARDWARE_PROVISIONING_ACCEPTANCE_V0.9.0_2026-08-29.md`.
+
+### Release gates
+
+- `0.9.0` được chốt phát hành Stable sau khi software/packaging, Factory v0.6.5, strict ST-Link AppMeta và real debug/SSH acceptance đã PASS trên artifact đóng gói/CI-built.
+- **Cold power-cycle thật** và **full OTA image-transfer interoperability (OTA → ST-Link → OTA)** vẫn **chưa được thực thi** do phiên nghiệm thu hiện tại thực hiện từ xa; chúng được ghi là **deferred field acceptance**, không được tuyên bố PASS và sẽ được chạy bổ sung khi có điều kiện thao tác trực tiếp phần cứng. SSH correctness đã PASS bằng real loopback tunnel acceptance cho GUI/CLI/VS Code.
+- Historical v0.6.5 hardware evidence chỉ dùng làm reference; current v0.9.0 evidence được ghi riêng trong `docs/12_HARDWARE_PROVISIONING_ACCEPTANCE_V0.9.0_2026-08-29.md`.
+
 ## [0.8.2] - 2026-08-29
 
 ### Fixed

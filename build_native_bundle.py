@@ -20,6 +20,7 @@ from pathlib import PurePosixPath
 from typing import Optional
 
 from b300_version import __version__ as TOOL_VERSION
+from b300_core.factory_resource import load_trusted_bootloader
 from b300_core.offline_setup import (
     TRUSTED_OPENOCD_PACKAGES,
     extract_trusted_openocd_package,
@@ -112,10 +113,8 @@ def gui_resources(platform_name: str):
 def runtime_resources(platform_name: str):
     """Immutable resources required by both frozen entry points."""
     del platform_name
-    return [
-        ROOT / "resources" / "firmware" / "b300_bootloader_f407ze_com3_v00050001.hex",
-        ROOT / "resources" / "firmware" / "b300_bootloader_manifest.json",
-    ]
+    trusted = load_trusted_bootloader(ROOT / "resources" / "firmware")
+    return [trusted.image.path, trusted.manifest_path, trusted.catalog_path]
 
 
 def pyinstaller_data_argument(source: Path) -> str:

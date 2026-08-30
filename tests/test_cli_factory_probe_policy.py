@@ -41,8 +41,8 @@ class FakeFactoryService:
         self.calls = []
         type(self).created.append(self)
 
-    def trusted_bootloader(self):
-        return load_trusted_bootloader()
+    def trusted_bootloader(self, profile_id=None):
+        return load_trusted_bootloader(profile_id=profile_id)
 
     def factory_preview(self, image, selected_probe):
         return build_factory_preview(image, selected_probe)
@@ -120,6 +120,46 @@ class FactoryCliProbePolicyTests(unittest.TestCase):
         self.assertEqual(result, 0)
         discovery.assert_not_called()
         self.assertFalse(any(call[0] == "inspect" for call in FakeFactoryService.created[-1].calls))
+
+    def test_factory_dry_run_accepts_only_publisher_bundled_profile_id(self) -> None:
+        module = tool()
+        output = io.StringIO()
+        with mock.patch.object(module, "B300Service", FakeFactoryService), \
+                mock.patch.object(
+                    module, "list_probes", side_effect=AssertionError("discovery must not run")
+                ) as discovery, redirect_stdout(output):
+            result = module.main([
+                "provision-bootloader", "--dry-run", "--json",
+                "--profile", "b300-f407ze-com3-v00060500",
+            ])
+        self.assertEqual(result, 0)
+        discovery.assert_not_called()
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        artifact = next(record for record in records if record["event"] == "factory_artifact")
+        self.assertEqual(artifact["profile_id"], "b300-f407ze-com3-v00060500")
+        self.assertEqual(artifact["ota_logical_port"], "COM3")
+        self.assertEqual(artifact["ota_peripheral"], "USART1")
+        self.assertEqual(artifact["ota_tx_pin"], "PB6")
+        self.assertEqual(artifact["ota_rx_pin"], "PB7")
+        self.assertEqual(artifact["ota_direction_pin"], "PC13")
+
+    def test_factory_rejects_unpublished_profile_before_probe_or_target_access(self) -> None:
+        module = tool()
+        output = io.StringIO()
+        with mock.patch.object(module, "B300Service", FakeFactoryService), \
+                mock.patch.object(
+                    module, "list_probes", side_effect=AssertionError("discovery must not run")
+                ) as discovery, redirect_stdout(output):
+            result = module.main([
+                "provision-bootloader", "--dry-run", "--json",
+                "--profile", "user-custom-hex",
+            ])
+        self.assertEqual(result, 1)
+        discovery.assert_not_called()
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        error = next(record for record in records if record["event"] == "error")
+        self.assertEqual(error["phase"], "bootloader_profile")
+        self.assertIn("shipped", error["next_action"].lower())
 
     def test_zero_probes_is_blocked_with_stable_reason_before_target_access(self) -> None:
         result, records, service = self.run_factory(())

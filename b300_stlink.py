@@ -27,19 +27,27 @@ from b300_cli.reporting import (
 from b300_cli.update_commands import run_update_command
 from b300_core.diagnostics import DiagnosticsService
 from b300_core.gateway_readiness import inspect_gateway_readiness
+from b300_core.gdb_runtime import resolve_gdb
 from b300_core.hex_image import inspect_image
 from b300_core.linux_usb import (
     LinuxUsbSetupReport,
     SystemChangeConfirmationRequired,
     perform_linux_usb_setup,
 )
+from b300_core.metadata import build_stlink_metadata
 from b300_core.models import ProbeRef
-from b300_core.openocd import build_debug_command, resolve_openocd, validate_openocd_value
+from b300_core.openocd import (
+    build_debug_command, build_metadata_write_command, resolve_openocd,
+    validate_openocd_value,
+)
 from b300_core.debug_service import DebugConfig, DebugService, DebugState
 from b300_core.debug_session import DebugSession, DebugSessionConfig
 from b300_core.debug_selftest import run_loopback_debug_selftest
 from b300_core.elf_matcher import discover_symbol_files, find_matching_symbol_file
 from b300_core.tcl_client import SafeTclClient, TclEndpoint
+from b300_core.ssh_debug_tunnel import (
+    SshDebugTunnel, SshDebugTunnelConfig, find_available_loopback_port,
+)
 from b300_core.remote_vscode import RemoteVsCodeProfile, workspace_executable
 from b300_core.remote_debug_guard import RemoteDebugGuard
 from b300_core.offline_setup import OPENOCD_VERSION, current_platform_name
@@ -104,6 +112,15 @@ def _register_record(item):
     return {"number": item.number, "name": item.name, "value": item.value}
 
 
+def _resolve_vscode_gdb_path(explicit: Optional[str]) -> str:
+    if explicit:
+        return resolve_gdb(explicit)
+    try:
+        return resolve_gdb()
+    except (FileNotFoundError, RuntimeError):
+        return "arm-none-eabi-gdb"
+
+
 def run_vscode_profile(args: argparse.Namespace) -> int:
     if not args.ssh_host or not args.ssh_user:
         raise ValueError("debug vscode requires --ssh-host HOST and --ssh-user USER.")
@@ -116,7 +133,7 @@ def run_vscode_profile(args: argparse.Namespace) -> int:
         local_gdb_port=args.local_gdb_port,
         remote_gdb_port=args.gdb_port,
         executable=workspace_executable(args.program_relative),
-        gdb_path=args.vscode_gdb_path,
+        gdb_path=_resolve_vscode_gdb_path(args.vscode_gdb_path),
         probe_serial=args.probe_serial,
     )
     record = profile.record()
@@ -299,6 +316,90 @@ def run_debug_selftest(args: argparse.Namespace, reporter: Reporter) -> int:
     emit_snapshot(record, args.json, "\n".join(text))
     return 0 if report.passed else 1
 
+def _execute_debug_operation(session: DebugSession, mode: str, args, base: dict) -> str:
+    """Execute one bounded read/debug action on an already-connected session."""
+    if mode == "poll":
+        base["target_state"] = session.target_poll()
+        text = base["target_state"]
+    elif mode == "read-words":
+        values = session.read_words(args.address, args.count)
+        base.update({
+            "address": "0x%08X" % args.address,
+            "count": args.count,
+            "words": ["0x%08X" % value for value in values],
+        })
+        text = "%s: %s" % (base["address"], " ".join(base["words"]))
+    elif mode == "where":
+        frame = session.capture_where()
+        base["frame"] = _frame_record(frame)
+        text = "%s %s:%s" % (
+            base["frame"]["function"] or "?",
+            base["frame"]["file"] or "?",
+            base["frame"]["line"] if base["frame"]["line"] is not None else "?",
+        )
+    elif mode == "stack":
+        frames = session.capture_stack(args.frames)
+        base["frames"] = [_frame_record(frame) for frame in frames]
+        text = "\n".join(
+            "#%d %s %s:%s" % (
+                item["level"], item["function"] or "?", item["file"] or "?",
+                item["line"] if item["line"] is not None else "?",
+            ) for item in base["frames"]
+        ) or "No stack frames reported."
+    elif mode == "registers":
+        registers = session.capture_registers()
+        base["registers"] = [_register_record(item) for item in registers]
+        text = "\n".join("%s=%s" % (item["name"], item["value"]) for item in base["registers"])
+    elif mode == "variable":
+        value = session.capture_variable(args.expression)
+        base["variable"] = {"expression": value.expression, "value": value.value}
+        text = "%s=%s" % (value.expression, value.value)
+    elif mode == "break":
+        hit = session.break_once(args.location, args.timeout)
+        base["hit"] = {
+            "kind": hit.kind, "number": hit.number, "location": hit.location,
+            "reason": hit.reason, "frame": _frame_record(hit.frame),
+        }
+        frame = base["hit"]["frame"]
+        text = "breakpoint #%d hit: %s %s:%s" % (
+            hit.number, frame["function"] or "?", frame["file"] or "?",
+            frame["line"] if frame["line"] is not None else "?",
+        )
+    elif mode == "watch":
+        hit = session.watch_once(args.expression, args.timeout)
+        base["hit"] = {
+            "kind": hit.kind, "number": hit.number, "location": hit.location,
+            "reason": hit.reason, "frame": _frame_record(hit.frame),
+        }
+        if hit.value is None:
+            raise RuntimeError("Watchpoint hit did not capture the watched value.")
+        base["variable"] = {
+            "expression": hit.value.expression, "value": hit.value.value,
+        }
+        frame = base["hit"]["frame"]
+        text = "watchpoint #%d hit: %s=%s at %s %s:%s" % (
+            hit.number, hit.value.expression, hit.value.value, frame["function"] or "?",
+            frame["file"] or "?", frame["line"] if frame["line"] is not None else "?",
+        )
+    elif mode == "inspect":
+        snapshot = session.inspect(args.frames)
+        base.update({
+            "target_state_before": snapshot.target_state_before,
+            "resumed_to_initial_state": snapshot.resumed,
+            "frame": _frame_record(snapshot.frame),
+            "frames": [_frame_record(frame) for frame in snapshot.stack],
+            "registers": [_register_record(item) for item in snapshot.registers],
+        })
+        frame = base["frame"]
+        text = "state=%s\nPC=%s\n%s %s:%s" % (
+            snapshot.target_state_before,
+            frame["address"] or "?", frame["function"] or "?",
+            frame["file"] or "?", frame["line"] if frame["line"] is not None else "?",
+        )
+    else:
+        raise ValueError("Unsupported integrated debug mode: %s" % mode)
+
+
 def run_integrated_debug(args: argparse.Namespace, reporter: Reporter) -> int:
     if args.telnet_port is not None:
         raise ValueError("Integrated debug diagnostics do not enable Telnet.")
@@ -354,90 +455,112 @@ def run_integrated_debug(args: argparse.Namespace, reporter: Reporter) -> int:
             "initial_target_state": info.initial_target_state,
             "symbols": info.symbols,
         }
-        if args.debug_mode == "poll":
-            base["target_state"] = session.target_poll()
-            text = base["target_state"]
-        elif args.debug_mode == "read-words":
-            values = session.read_words(args.address, args.count)
-            base.update({
-                "address": "0x%08X" % args.address,
-                "count": args.count,
-                "words": ["0x%08X" % value for value in values],
-            })
-            text = "%s: %s" % (base["address"], " ".join(base["words"]))
-        elif args.debug_mode == "where":
-            frame = session.capture_where()
-            base["frame"] = _frame_record(frame)
-            text = "%s %s:%s" % (
-                base["frame"]["function"] or "?",
-                base["frame"]["file"] or "?",
-                base["frame"]["line"] if base["frame"]["line"] is not None else "?",
-            )
-        elif args.debug_mode == "stack":
-            frames = session.capture_stack(args.frames)
-            base["frames"] = [_frame_record(frame) for frame in frames]
-            text = "\n".join(
-                "#%d %s %s:%s" % (
-                    item["level"], item["function"] or "?", item["file"] or "?",
-                    item["line"] if item["line"] is not None else "?",
-                ) for item in base["frames"]
-            ) or "No stack frames reported."
-        elif args.debug_mode == "registers":
-            registers = session.capture_registers()
-            base["registers"] = [_register_record(item) for item in registers]
-            text = "\n".join("%s=%s" % (item["name"], item["value"]) for item in base["registers"])
-        elif args.debug_mode == "variable":
-            value = session.capture_variable(args.expression)
-            base["variable"] = {"expression": value.expression, "value": value.value}
-            text = "%s=%s" % (value.expression, value.value)
-        elif args.debug_mode == "break":
-            hit = session.break_once(args.location, args.timeout)
-            base["hit"] = {
-                "kind": hit.kind, "number": hit.number, "location": hit.location,
-                "reason": hit.reason, "frame": _frame_record(hit.frame),
-            }
-            frame = base["hit"]["frame"]
-            text = "breakpoint #%d hit: %s %s:%s" % (
-                hit.number, frame["function"] or "?", frame["file"] or "?",
-                frame["line"] if frame["line"] is not None else "?",
-            )
-        elif args.debug_mode == "watch":
-            hit = session.watch_once(args.expression, args.timeout)
-            base["hit"] = {
-                "kind": hit.kind, "number": hit.number, "location": hit.location,
-                "reason": hit.reason, "frame": _frame_record(hit.frame),
-            }
-            if hit.value is None:
-                raise RuntimeError("Watchpoint hit did not capture the watched value.")
-            base["variable"] = {
-                "expression": hit.value.expression, "value": hit.value.value,
-            }
-            frame = base["hit"]["frame"]
-            text = "watchpoint #%d hit: %s=%s at %s %s:%s" % (
-                hit.number, hit.value.expression, hit.value.value, frame["function"] or "?",
-                frame["file"] or "?", frame["line"] if frame["line"] is not None else "?",
-            )
-        elif args.debug_mode == "inspect":
-            snapshot = session.inspect(args.frames)
-            base.update({
-                "target_state_before": snapshot.target_state_before,
-                "resumed_to_initial_state": snapshot.resumed,
-                "frame": _frame_record(snapshot.frame),
-                "frames": [_frame_record(frame) for frame in snapshot.stack],
-                "registers": [_register_record(item) for item in snapshot.registers],
-            })
-            frame = base["frame"]
-            text = "state=%s\nPC=%s\n%s %s:%s" % (
-                snapshot.target_state_before,
-                frame["address"] or "?", frame["function"] or "?",
-                frame["file"] or "?", frame["line"] if frame["line"] is not None else "?",
-            )
-        else:
-            raise ValueError("Unsupported integrated debug mode: %s" % args.debug_mode)
+        text = _execute_debug_operation(session, args.debug_mode, args, base)
         emit_snapshot(base, args.json, text)
         return 0
     finally:
         session.stop()
+
+
+def run_debug_client(args, reporter: Reporter) -> int:
+    """Run one bounded debug action through the canonical SSH Gateway tunnel."""
+    action = args.client_action
+    if args.telnet_port is not None:
+        raise ValueError("debug client does not enable Telnet.")
+    if not args.ssh_host or not args.ssh_user:
+        raise ValueError("debug client requires --ssh-host HOST and --ssh-user USER.")
+    if not 1 <= args.frames <= 64:
+        raise ValueError("--frames must be in range 1..64.")
+    if action in {"variable", "watch"} and not args.expression:
+        raise ValueError("debug client %s requires --expression NAME." % action)
+    if action == "break" and not args.location:
+        raise ValueError("debug client break requires --location FUNCTION_OR_FILE_LINE.")
+    if action in {"break", "watch"} and args.symbols is None:
+        raise ValueError("debug client %s requires --symbols ELF_OR_AXF." % action)
+    if action == "read-words" and args.address is None:
+        raise ValueError("debug client read-words requires --address ADDRESS.")
+    if not 0.1 <= args.timeout <= 60.0:
+        raise ValueError("--timeout must be in range 0.1..60 seconds.")
+
+    symbols = args.symbols.expanduser().resolve() if args.symbols is not None else None
+    if symbols is not None and (symbols.suffix.lower() not in {".elf", ".axf"} or not symbols.is_file()):
+        raise ValueError("debug client --symbols must reference an existing ELF/AXF file.")
+
+    local_gdb = find_available_loopback_port(args.local_gdb_port)
+    local_tcl = find_available_loopback_port(args.local_tcl_port, avoid=(local_gdb,))
+    tunnel_config = SshDebugTunnelConfig(
+        host=args.ssh_host, user=args.ssh_user, ssh_port=args.ssh_port,
+        local_gdb_port=local_gdb, local_tcl_port=local_tcl,
+        gateway_gdb_port=3333, gateway_tcl_port=6666,
+    )
+    tunnel_config.validate()
+
+    if args.dry_run:
+        reporter.emit(
+            "debug_client_plan", role="client", action=action,
+            gateway="%s@%s:%d" % (args.ssh_user, args.ssh_host, args.ssh_port),
+            ssh_command=tunnel_config.argv("ssh"),
+            gdb_endpoint="127.0.0.1:%d" % local_gdb,
+            tcl_endpoint="127.0.0.1:%d" % local_tcl,
+            symbols=str(symbols) if symbols else None,
+            preserve_target_state=True,
+            gateway_ports={"gdb": 3333, "tcl": 6666},
+            remote_transport="ssh-local-forwarding", dry_run=True,
+        )
+        return 0
+
+    tunnel = SshDebugTunnel(tunnel_config)
+    session = DebugSession(service=DebugService(executable=args.openocd))
+    try:
+        tunnel_version = tunnel.start()
+        tcl = SafeTclClient(TclEndpoint("127.0.0.1", local_tcl))
+        selected_symbols = symbols
+        if selected_symbols is not None:
+            selected, results = find_matching_symbol_file((selected_symbols,), tcl.read_words)
+            if selected is None:
+                detail = results[0].reason if results else "ELF/AXF could not be sampled"
+                raise RuntimeError("Client AXF/ELF does not match Gateway firmware: %s" % detail)
+            selected_symbols = selected.path
+        elif args.symbol_root:
+            candidates = discover_symbol_files(
+                [path.expanduser().resolve() for path in args.symbol_root],
+                max_files=args.symbol_max_files, max_depth=8,
+            )
+            selected, results = find_matching_symbol_file(candidates, tcl.read_words)
+            if selected is None:
+                exact_count = sum(1 for item in results if item.matched)
+                if exact_count > 1:
+                    raise RuntimeError("Multiple AXF/ELF files match remote firmware; select --symbols explicitly.")
+                raise RuntimeError("No AXF/ELF under --symbol-root matches remote firmware.")
+            selected_symbols = selected.path
+
+        info = session.start_external(
+            symbol_file=selected_symbols,
+            gdb_host="127.0.0.1", gdb_port=local_gdb,
+            tcl_host="127.0.0.1", tcl_port=local_tcl,
+        )
+        base = {
+            "schema_version": 1,
+            "command": "debug client",
+            "role": "client",
+            "action": action,
+            "status": "ok",
+            "gateway": "%s@%s:%d" % (args.ssh_user, args.ssh_host, args.ssh_port),
+            "remote_transport": "ssh-local-forwarding",
+            "gdb_endpoint": info.gdb_endpoint,
+            "tcl_endpoint": info.tcl_endpoint,
+            "tcl_version": info.tcl_version or tunnel_version,
+            "initial_target_state": info.initial_target_state,
+            "symbols": info.symbols,
+        }
+        text = _execute_debug_operation(session, action, args, base)
+        emit_snapshot(base, args.json, text)
+        return 0
+    finally:
+        try:
+            session.stop()
+        finally:
+            tunnel.stop()
 
 
 def run_debug_gateway(args: argparse.Namespace, reporter: Reporter) -> int:
@@ -927,6 +1050,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.command == "debug":
             if args.debug_mode == "gateway":
                 return run_debug_gateway(args, reporter)
+            if args.debug_mode == "client":
+                return run_debug_client(args, reporter)
             if args.debug_mode == "server":
                 validate_debug_args(args)
                 return run_debug(args, reporter)
@@ -946,7 +1071,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "Run --dry-run first, then repeat with explicit factory confirmation for the intended board.",
                 )
             service = B300Service(executable=args.openocd)
-            trusted = service.trusted_bootloader()
+            try:
+                trusted = (service.trusted_bootloader(args.bootloader_profile)
+                           if args.bootloader_profile else service.trusted_bootloader())
+            except ValueError as error:
+                raise ProvisioningError(
+                    "bootloader_profile", str(error),
+                    "Use only a Bootloader profile shipped by this B300 ST-Link Tools release.",
+                ) from error
             if args.dry_run:
                 probe = ProbeRef(args.probe_serial)
             else:
@@ -959,8 +1091,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                 bootloader=str(trusted.image.path),
                 sha256=trusted.image.sha256,
                 source_commit=trusted.source_commit,
+                profile_id=trusted.profile.profile_id,
+                profile_name=trusted.profile.display_name,
                 firmware_version=trusted.firmware_version,
                 board_token=trusted.board_token,
+                ota_logical_port=trusted.profile.logical_port,
+                ota_peripheral=trusted.profile.peripheral,
+                ota_baudrate=trusted.profile.baudrate,
+                ota_tx_pin=trusted.profile.tx_pin,
+                ota_rx_pin=trusted.profile.rx_pin,
+                ota_direction_pin=trusted.profile.direction_pin,
                 start="0x%08X" % trusted.image.start_address,
                 end="0x%08X" % trusted.image.end_address,
             )
@@ -1052,18 +1192,52 @@ def main(argv: Optional[List[str]] = None) -> int:
                 protection=target.protection_summary,
             )
         reporter.emit("flash_start", **flash_start_fields(plan, target, dry_run=args.dry_run))
-        transactions = (
-            ("program_verify", service.flash_command(plan)),
-            ("reset", service.reset_command(plan.probe)),
+        reporter.emit(
+            "metadata_plan",
+            address="0x0800C000",
+            size=44,
+            magic="STLM",
+            state="VERIFIED",
+            image_size=image.flash_span_size,
+            image_crc32=("0x%08X" % image.flash_crc32
+                         if image.flash_crc32 is not None else None),
+            condition="after_application_verified",
+            dry_run=args.dry_run,
         )
-        for phase, command in transactions:
-            reporter.emit(
-                "openocd",
-                phase=phase,
-                command=command,
-                dry_run=args.dry_run,
-                condition=("after_verified_ok" if phase == "reset" else "always"),
+        with tempfile.TemporaryDirectory(prefix="b300-stlink-preview-") as preview_dir:
+            preview_metadata = Path(preview_dir) / "stlm-verified.bin"
+            preview_readback = Path(preview_dir) / "stlm-readback.bin"
+            preview_metadata.write_bytes(build_stlink_metadata(image, sequence=1))
+            transactions = (
+                ("program_verify", service.flash_command(plan), "always"),
+                ("metadata_write_verify",
+                 build_metadata_write_command(
+                     plan.probe, preview_metadata, preview_readback, resolve_openocd(args.openocd)
+                 ),
+                 "after_application_verified"),
+                ("reset", service.reset_command(plan.probe), "after_exact_stlm_verified_readback"),
             )
+            for phase, command, condition in transactions:
+                reporter.emit(
+                    "openocd",
+                    phase=phase,
+                    command=command,
+                    dry_run=args.dry_run,
+                    condition=condition,
+                )
+        reporter.emit(
+            "confirmation_plan",
+            condition="after_reset",
+            required_magic="STLM",
+            required_state="CONFIRMED",
+            image_size=image.flash_span_size,
+            image_crc32=("0x%08X" % image.flash_crc32
+                         if image.flash_crc32 is not None else None),
+            sequence_policy="written_sequence_plus_1_mod_2^32",
+            timeout_seconds=5.0,
+            final_gate="application_pc_and_bkp1r_zero",
+            dry_run=args.dry_run,
+        )
         if args.dry_run:
             return 0
 

@@ -74,6 +74,11 @@ def build_parser() -> argparse.ArgumentParser:
     factory.add_argument("--probe-serial", type=parse_probe_serial,
                          help="Select one ST-Link when multiple probes are connected.")
     factory.add_argument("--dry-run", action="store_true")
+    factory.add_argument(
+        "--profile", dest="bootloader_profile",
+        help=("Select a publisher-bundled trusted Bootloader profile ID. "
+              "Arbitrary Bootloader paths/HEX files are not accepted."),
+    )
     factory.add_argument("--confirm-factory-provision", action="store_true",
                          help="Required for real S0-S2 Bootloader/WRP modification.")
 
@@ -82,9 +87,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     debug.add_argument(
         "debug_mode", nargs="?",
-        choices=("gateway", "server", "vscode", "symbols", "selftest", "inspect", "where", "registers", "stack", "variable", "poll", "read-words", "break", "watch"),
+        choices=("gateway", "client", "server", "vscode", "symbols", "selftest", "inspect", "where", "registers", "stack", "variable", "poll", "read-words", "break", "watch"),
         default="gateway", metavar="mode",
-        help="Debug mode: gateway, selftest (single-machine remote-path acceptance), server (legacy alias), or diagnostics.",
+        help="Debug mode: gateway, client, selftest, server (legacy alias), or diagnostics.",
     )
     debug.add_argument("--openocd")
     debug.add_argument("--probe-serial", type=parse_probe_serial,
@@ -108,13 +113,22 @@ def build_parser() -> argparse.ArgumentParser:
     debug.add_argument("--ssh-user",
                        help="Optional SSH username for debug vscode.")
     debug.add_argument("--ssh-port", type=parse_tcp_port, default=22,
-                       help="SSH port for debug vscode (default: 22).")
+                       help="SSH port for remote Client/VSCode (default: 22).")
+    debug.add_argument(
+        "--client-action",
+        choices=("inspect", "where", "registers", "stack", "variable", "poll",
+                 "read-words", "break", "watch"),
+        default="inspect",
+        help="One-shot operation for debug client (default: inspect).",
+    )
+    debug.add_argument("--local-tcl-port", type=parse_tcp_port, default=16666,
+                       help="Preferred Client-side forwarded TCL port (default: 16666; auto-fallback if busy).")
     debug.add_argument("--local-gdb-port", type=parse_tcp_port, default=3333,
                        help="VSCode-side forwarded GDB port (default: 3333).")
     debug.add_argument("--program-relative",
                        help="Workspace-relative AXF/ELF path used in generated launch.json.")
-    debug.add_argument("--vscode-gdb-path", default="arm-none-eabi-gdb",
-                       help="GDB executable/path used by Cortex-Debug on the VSCode machine.")
+    debug.add_argument("--vscode-gdb-path",
+                       help="Explicit GDB path for Cortex-Debug; default: auto-resolve on this Client.")
     debug.add_argument("--output-dir", type=Path,
                        help="Directory where debug vscode writes the .vscode kit.")
     debug.add_argument("--force", action="store_true",

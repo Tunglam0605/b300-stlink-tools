@@ -48,7 +48,7 @@ from b300_core.offline_setup import (
 from b300_core import __version__ as CORE_VERSION
 from b300_core.policy import SECTORS
 from b300_core.probe import list_probes
-from b300_core.factory_resource import load_trusted_bootloader
+from b300_core.factory_resource import load_trusted_bootloader, list_trusted_bootloaders
 from b300_core.service import B300Service, FactoryResult, FlashResult
 from b300_core.updater import UpdateCheckResult, should_auto_check
 from b300_core.update_install import launch_install_plan, prepare_install
@@ -520,17 +520,34 @@ class MainWindow(QMainWindow):
 
     def _build_flash_tab(self) -> QWidget:
         page = QWidget()
+        page.setObjectName("flashTabPage")
         page_layout = QVBoxLayout(page)
-        page_layout.setContentsMargins(12, 12, 12, 12)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.setSpacing(0)
+        self.flash_scroll = QScrollArea()
+        self.flash_scroll.setObjectName("flashScrollArea")
+        self.flash_scroll.setWidgetResizable(True)
+        self.flash_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.flash_scroll_content = QWidget()
+        self.flash_scroll_content.setObjectName("flashScrollContent")
+        content_layout = QVBoxLayout(self.flash_scroll_content)
+        content_layout.setContentsMargins(12, 12, 12, 12)
+        content_layout.setSpacing(8)
+        self.flash_scroll.setWidget(self.flash_scroll_content)
+        page_layout.addWidget(self.flash_scroll)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setObjectName("flashResponsiveSplitter")
+        self.flash_splitter = splitter
         left = QWidget()
         left_layout = QVBoxLayout(left)
         right = QWidget()
         right_layout = QVBoxLayout(right)
 
         device_group = QGroupBox("1. ST-Link probe")
-        device_row = QHBoxLayout(device_group)
+        device_row = QGridLayout(device_group)
+        device_row.setHorizontalSpacing(8)
+        device_row.setVerticalSpacing(6)
         self.probe_combo = QComboBox()
         self.probe_combo.setObjectName("probeSelector")
         self.probe_combo.setAccessibleName("Chọn ST-Link probe")
@@ -539,13 +556,14 @@ class MainWindow(QMainWindow):
         self.refresh_button.clicked.connect(self.refresh_probes)
         self.inspect_target_button = QPushButton("Kiểm tra target")
         self.inspect_target_button.clicked.connect(self.inspect_target)
-        device_row.addWidget(self.probe_combo, 1)
-        device_row.addWidget(self.refresh_button)
-        device_row.addWidget(self.inspect_target_button)
+        device_row.addWidget(self.probe_combo, 0, 0)
+        device_row.addWidget(self.refresh_button, 0, 1)
+        device_row.addWidget(self.inspect_target_button, 0, 2)
+        device_row.setColumnStretch(0, 1)
         self.target_summary = QLabel("Chưa kiểm tra chip/điện áp/flash/WRP")
         self.target_summary.setObjectName("targetSummaryBox")
         self.target_summary.setWordWrap(True)
-        device_row.addWidget(self.target_summary, 2)
+        device_row.addWidget(self.target_summary, 1, 0, 1, 3)
         left_layout.addWidget(device_group)
 
         firmware_group = QGroupBox("2. Application HEX")
@@ -576,10 +594,12 @@ class MainWindow(QMainWindow):
         )
         self.flash_plan_summary.setObjectName("flashPlanSummaryCard")
         self.flash_plan_summary.setTextFormat(Qt.TextFormat.RichText)
+        self.flash_plan_summary.setWordWrap(True)
         plan_layout.addWidget(self.flash_plan_summary)
 
         self.flash_plan_label = QLabel(
-            "Erase Sector 3–7 → Program/Verify Application → Reset → Post-verify"
+            "Erase Sector 3–7 → Program/Verify Application → STLM VERIFIED → "
+            "Bootloader CONFIRMED → Post-verify"
         )
         self.flash_plan_label.setObjectName("flashPlanBadge")
         self.flash_plan_label.setStyleSheet(
@@ -597,7 +617,8 @@ class MainWindow(QMainWindow):
         self.plan_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.plan_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         for row, sector in enumerate(SECTORS[3:]):
-            action = "Erase metadata" if sector.index == 3 else "Erase + Program"
+            action = ("Erase + ghi STLM sau App verify"
+                      if sector.index == 3 else "Erase + Program Application")
             self.plan_table.setItem(row, 0, QTableWidgetItem(str(sector.index)))
             self.plan_table.setItem(row, 1, QTableWidgetItem(sector.role))
             self.plan_table.setItem(row, 2, QTableWidgetItem(action))
@@ -608,16 +629,16 @@ class MainWindow(QMainWindow):
         plan_layout.addWidget(self.plan_table, 1)
         left_layout.addWidget(plan_group, 1)
 
-        actions = QHBoxLayout()
-        actions.setSpacing(10)
+        actions = QGridLayout()
+        actions.setHorizontalSpacing(10)
+        actions.setVerticalSpacing(8)
         self.dry_run_button = QPushButton("Kiểm tra dry-run")
         self.dry_run_button.clicked.connect(self.show_dry_run)
         self.cancel_button = QPushButton("Hủy thao tác an toàn")
         self.cancel_button.clicked.connect(self.cancel_operation)
         self.cancel_button.setEnabled(False)
-        actions.addWidget(self.dry_run_button)
-        actions.addWidget(self.cancel_button)
-        actions.addStretch(1)
+        actions.addWidget(self.dry_run_button, 0, 0)
+        actions.addWidget(self.cancel_button, 0, 1)
 
         self.factory_provision_button = QPushButton("Nạp Bootloader")
         self.factory_provision_button.setObjectName("factoryProvisionButton")
@@ -631,8 +652,10 @@ class MainWindow(QMainWindow):
         self.flash_button.setObjectName("flashButton")
         self.flash_button.clicked.connect(self.confirm_flash)
 
-        actions.addWidget(self.factory_provision_button)
-        actions.addWidget(self.flash_button)
+        actions.addWidget(self.factory_provision_button, 1, 0)
+        actions.addWidget(self.flash_button, 1, 1)
+        actions.setColumnStretch(0, 1)
+        actions.setColumnStretch(1, 1)
         left_layout.addLayout(actions)
 
         log_group = QGroupBox("Log thời gian thực")
@@ -661,22 +684,49 @@ class MainWindow(QMainWindow):
         self.progress.setFormat("Chưa chạy")
         right_layout.addWidget(self.progress)
 
-        # Factory Aliases for unified single-tab workflow
+        # Publisher-controlled Bootloader catalog. End users may only select
+        # trusted profiles bundled with this software release; there is no arbitrary
+        # Bootloader/HEX import path in the GUI.
+        factory_profile_group = QGroupBox("Bootloader OTA profile · Hồ sơ bản phát hành")
+        factory_profile_layout = QVBoxLayout(factory_profile_group)
+        profile_form = QFormLayout()
+        self.factory_profile_combo = QComboBox()
+        self.factory_profile_combo.setObjectName("factoryBootloaderProfileCombo")
+        self.factory_profile_combo.setToolTip(
+            "Chỉ hiển thị Bootloader profile do nhà phát hành đóng gói và xác thực. "
+            "Người dùng không thể import Bootloader HEX tùy ý."
+        )
+        profile_form.addRow("Bootloader profile", self.factory_profile_combo)
+        factory_profile_layout.addLayout(profile_form)
+        self.factory_artifact_label = QLabel()
+        self.factory_artifact_label.setObjectName("factoryBootloaderProfileInfo")
+        self.factory_artifact_label.setWordWrap(True)
+        self.factory_artifact_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        factory_profile_layout.addWidget(self.factory_artifact_label)
+        self.factory_profiles = ()
+        self.factory_trusted = None
         try:
-            self.factory_trusted = load_trusted_bootloader()
-            image = self.factory_trusted.image
-            self.factory_artifact_label = QLabel(
-                "Phiên bản: FW %s · Mục tiêu: B300_F407ZE · Toàn vẹn: ĐÃ XÁC THỰC ✓\n"
-                "Vùng nhớ: 0x%08X..0x%08X (Sector 0–2)\n"
-                "SHA-256: %s\n"
-                "Source commit: %s" % (
-                    self.factory_trusted.firmware_version, image.start_address,
-                    image.end_address, image.sha256, self.factory_trusted.source_commit,
+            self.factory_profiles = list_trusted_bootloaders()
+            for trusted in self.factory_profiles:
+                self.factory_profile_combo.addItem(
+                    trusted.profile.display_name, trusted.profile.profile_id
                 )
-            )
+            if self.factory_profiles:
+                self.factory_profile_combo.setCurrentIndex(0)
+                self.factory_trusted = self.factory_profiles[0]
+                self._render_factory_profile_info()
+            else:
+                self.factory_artifact_label.setText(
+                    "Không có Bootloader profile được nhà phát hành cho phép trong bản này."
+                )
         except Exception as error:
+            self.factory_profiles = ()
             self.factory_trusted = None
-            self.factory_artifact_label = QLabel("Bootloader tin cậy không khả dụng: %s" % error)
+            self.factory_artifact_label.setText(
+                "Bootloader catalog tin cậy không khả dụng: %s" % error
+            )
+        self.factory_profile_combo.currentIndexChanged.connect(self._factory_profile_changed)
+        left_layout.addWidget(factory_profile_group)
 
         self.factory_probe_combo = self.probe_combo
         self.factory_log_view = self.log_view
@@ -686,9 +736,77 @@ class MainWindow(QMainWindow):
         splitter.addWidget(right)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
-        page_layout.addWidget(splitter)
+        content_layout.addWidget(splitter)
+        self.flash_scroll_content.setMinimumHeight(650)
         self._update_controls()
+        QTimer.singleShot(0, self._update_flash_layout)
         return page
+
+    def _update_flash_layout(self) -> None:
+        """Stack Flash controls/log on narrow viewports and preserve vertical space."""
+        if not hasattr(self, "flash_splitter") or not hasattr(self, "flash_scroll"):
+            return
+        width = self.flash_scroll.viewport().width()
+        narrow = width > 0 and width < 1050
+        orientation = Qt.Orientation.Vertical if narrow else Qt.Orientation.Horizontal
+        if self.flash_splitter.orientation() != orientation:
+            self.flash_splitter.setOrientation(orientation)
+        if narrow:
+            self.flash_splitter.setStretchFactor(0, 3)
+            self.flash_splitter.setStretchFactor(1, 2)
+            self.flash_scroll_content.setMinimumHeight(1050)
+        else:
+            self.flash_splitter.setStretchFactor(0, 3)
+            self.flash_splitter.setStretchFactor(1, 2)
+            self.flash_scroll_content.setMinimumHeight(650)
+
+    def _factory_profile_changed(self, index: int) -> None:
+        if index < 0 or not getattr(self, "factory_profiles", ()):
+            self.factory_trusted = None
+            self._update_controls()
+            return
+        profile_id = self.factory_profile_combo.itemData(index)
+        selected = next(
+            (item for item in self.factory_profiles
+             if item.profile.profile_id == profile_id),
+            None,
+        )
+        self.factory_trusted = selected
+        self._render_factory_profile_info()
+        if hasattr(self, "factory_target_summary"):
+            self.factory_target_summary.setText(
+                "Bootloader profile đã thay đổi; target/WRP sẽ được kiểm tra lại trước khi nạp"
+            )
+        self._update_controls()
+
+    def _render_factory_profile_info(self) -> None:
+        if self.factory_trusted is None:
+            self.factory_artifact_label.setText("Không có Bootloader profile khả dụng.")
+            return
+        trusted = self.factory_trusted
+        profile = trusted.profile
+        image = trusted.image
+        capabilities = " · ".join(profile.capabilities)
+        self.factory_artifact_label.setText(
+            "%s\n"
+            "Trạng thái: %s · FW %s · ĐÃ XÁC THỰC ✓\n"
+            "Target: %s · %d KiB Flash · board token %s\n"
+            "OTA: %s (cổng logic B300) → %s · %s · %d baud\n"
+            "GPIO MCU: TX %s · RX %s · DIR/RE %s (TX=%s / RX=%s)\n"
+            "RX DMA: %s · OTA protocol %s\n"
+            "Flash map: %s · %s · %s\n"
+            "Chức năng: %s\n"
+            "Lưu ý: COM3 là cổng logic của B300; peripheral MCU vật lý của profile này là USART1.\n"
+            "SHA-256: %s\nSource commit: %s" % (
+                profile.display_name, profile.support_status, trusted.firmware_version,
+                profile.mcu, profile.flash_kib, profile.board_token,
+                profile.logical_port, profile.peripheral, profile.physical_interface,
+                profile.baudrate, profile.tx_pin, profile.rx_pin, profile.direction_pin,
+                profile.direction_tx_level, profile.direction_rx_level, profile.dma_rx,
+                profile.protocol_version, profile.bootloader_memory, profile.metadata_memory,
+                profile.application_memory, capabilities, image.sha256, trusted.source_commit,
+            )
+        )
 
     def show_factory_dry_run(self) -> None:
         if self.factory_trusted is None or self.busy:
@@ -1167,6 +1285,8 @@ class MainWindow(QMainWindow):
                 factory_probe_ok and not main_locked
             )
             self.factory_probe_combo.setEnabled(not main_locked)
+            if hasattr(self, "factory_profile_combo"):
+                self.factory_profile_combo.setEnabled(not main_locked and self.factory_profile_combo.count() > 0)
         if hasattr(self, "memory_tab"):
             self.memory_tab.set_external_blocked(operation.memory_blocked_by_other)
         if hasattr(self, "debug_tab"):
@@ -1294,10 +1414,13 @@ class MainWindow(QMainWindow):
         self.progress.setValue(1 if result.succeeded else 0)
         if result.succeeded:
             verification = result.boot_verification
-            self.progress.setFormat("Hoàn tất")
+            confirmed = result.confirmed_metadata
+            self.progress.setFormat("Hoàn tất · STLM CONFIRMED")
             self._set_status(
-                "Nạp thành công · Application PC=%s · BKP1R đã clear" %
-                ("0x%08X" % verification.pc if verification and verification.pc else "N/A"),
+                "Nạp thành công · STLM CONFIRMED seq=%s · Application PC=%s · BKP1R=0" % (
+                    confirmed.sequence if confirmed is not None else "N/A",
+                    "0x%08X" % verification.pc if verification and verification.pc else "N/A",
+                ),
                 "success",
             )
             self.memory_tab.invalidate_metadata_view(
@@ -1402,6 +1525,7 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
+        self._update_flash_layout()
         if (
             hasattr(self, "_current_toast") and
             self._current_toast is not None and

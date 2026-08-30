@@ -119,13 +119,16 @@ release pipeline is considered healthy.
 
 Normal `flash` từ chối HEX chạm vùng được bảo vệ, không dùng mass erase, không
 ghi Option Bytes/WRP và chỉ chạy khi OpenOCD đọc được WRP Sector 0–2 đang bật.
-Luồng luôn là `erase S3–S7 → program/verify → reset → post-verify BKP1R + PC`.
-Sector 3 được xóa sạch nên Bootloader dùng erased-metadata fallback hiện có;
-không có provisioning marker. Trước khi erase, core đọc lại đúng target F407
-512 KiB, chép HEX đã duyệt vào staging riêng và kiểm tra lại SHA-256/range.
+Luồng Bootloader v0.6.5 là `erase S3–S7 → program/verify Application → ghi/verify
+đúng 44 byte STLM + VERIFIED tại 0x0800C000 → reset → Bootloader chuyển thành
+STLM + CONFIRMED → post-verify BKP1R + PC`. `ERASED`/`CORRUPT` metadata không
+chứng minh Application bootable. Trước khi erase, core đọc metadata cũ để nối
+sequence khi hợp lệ, đọc lại đúng target F407 512 KiB, chép HEX đã duyệt vào
+staging riêng và kiểm tra lại SHA-256/range/CRC.
 
-`provision-bootloader` là workflow Factory tách biệt. Nó chỉ dùng artifact
-Bootloader B300 đã bundle và kiểm hash/provenance; khi cần mới tạm tắt WRP S0–S2,
+`provision-bootloader` là workflow Factory tách biệt. Bootloader là **publisher-controlled artifact**: chỉ nhà phát hành quyết định version/file nào được bundle trong từng release. Người dùng không có đường dẫn, nút Browse hay tham số để import/thay thế Bootloader bằng artifact ngoài release chính thức. Tool chỉ dùng Bootloader B300 chính thức đã bundle và kiểm hash/provenance; khi cần mới tạm tắt WRP S0–S2,
+Danh sách bản được phép dùng nằm trong **trusted Bootloader catalog** đóng gói cùng release và được pin SHA-256. GUI chỉ cho chọn các profile do nhà phát hành phát hành; thêm F407/H7 hoặc đổi cổng OTA phải đi qua release mới của B300 ST-Link Tools, không phải thao tác của người dùng. Profile hiện tại là `B300 F407 · COM3 OTA · Bootloader v0.6.5`: COM3 là tên cổng logic B300, phần cứng STM32 dùng USART1, TX PB6, RX PB7, DIR/RE PC13, 230400 baud, DMA2 Stream5 Channel 4.
+
 reset/halt để reload Option Bytes rồi xác minh WRP đã OFF trước khi erase/program
 đúng S0–S2. Sau program/verify, tool bật lại WRP S0–S2, reset/halt để reload
 Option Bytes, xác minh WRP đã ON, rồi mới `reset run`. Lệnh thật yêu cầu cả
@@ -169,13 +172,15 @@ b300-stlink gateway doctor   # preflight cho máy Gateway: SSH/ST-Link/OpenOCD/p
 b300-stlink flash <application.hex> --dry-run --json
 b300-stlink flash <application.hex>
 b300-stlink provision-bootloader --dry-run --json
+b300-stlink provision-bootloader --profile b300-f407ze-com3-v00060500 --dry-run --json
 b300-stlink-gui
 b300-stlink debug            # mặc định = debug gateway
 b300-stlink debug gateway    # cách viết tường minh
+b300-stlink debug client --ssh-host <gateway> --ssh-user <user> --symbols <application.axf> --client-action inspect --json
 b300-stlink debug selftest --symbols <application.axf> --expression xTickCount --location vApplicationIdleHook --json
-# selftest kiểm Gateway→external Client + AXF↔Flash trên một máy; SSH/two-machine vẫn là field acceptance riêng.
+# selftest kiểm Gateway→external Client + AXF↔Flash; SSH tunnel thật đã có loopback hardware acceptance riêng cho GUI/CLI/VS Code.
 # Gateway CLI vẫn có đầy đủ flash/provision/doctor; riêng Debug chỉ làm cầu nối ST-Link/OpenOCD.
-# GUI Debug: Auto | Local | Gateway | Client. Client giữ source + AXF/ELF và tự mở SSH tunnel.
+# GUI Debug và CLI Debug đều có Local/Gateway/Client path; Client giữ source + AXF/ELF và dùng managed SSH tunnel.
 b300-stlink debug where --symbols <application.axf> --json   # compatibility/local diagnostics
 b300-stlink debug vscode --ssh-host <gateway> --ssh-user <user> \
   --program-relative Objects/F407/Main_V2_F407.axf --output-dir <workspace>
@@ -199,6 +204,7 @@ file HEX, probe trước khi chạy.
 | [GUI Windows/Ubuntu](docs/07_GUI_WINDOWS_UBUNTU.md) | Vận hành giao diện theo 7 bước. |
 | [Biên bản release/acceptance](docs/08_RELEASE_ACCEPTANCE.md) | Artifact đã build và checklist nghiệm thu phần cứng F407. |
 | [Hardware acceptance 2026-08-28](docs/09_HARDWARE_ACCEPTANCE_2026-08-28.md) | Bằng chứng Application/Factory/Debug đã PASS trên STM32F407 thật. |
+| [SSH loopback acceptance v0.9.0](docs/13_SSH_LOOPBACK_ACCEPTANCE_V0.9.0_2026-08-29.md) | GUI Client, CLI Client và VS Code/Cortex-Debug qua SSH tunnel thật trên main B300; variable/break/watch/reconnect/restore-state PASS. |
 | [Handoff GUI cho Antigravity](docs/superpowers/specs/2026-08-27-b300-stlink-gui-design.md) | Thiết kế GUI nạp code Windows/Ubuntu dùng chung lõi CLI. |
 | [AGENTS.md](AGENTS.md) | Quy tắc bắt buộc cho AI/automation. |
 
