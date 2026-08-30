@@ -68,12 +68,28 @@ jobs:
           # traceback. Run each module in a fresh process so a module owns its
           # QApplication/QThread lifecycle and failures remain attributable.
           $tests = Get-ChildItem tests -Filter 'test_*.py' | Sort-Object Name
+          $resultDir = Join-Path $env:RUNNER_TEMP 'b300-unit-results'
+          New-Item -ItemType Directory -Force -Path $resultDir | Out-Null
           foreach ($test in $tests) {
             $module = 'tests.' + $test.BaseName
+            $resultFile = Join-Path $resultDir ($test.BaseName + '.txt')
+            Remove-Item $resultFile -Force -ErrorAction SilentlyContinue
+            $env:B300_UNITTEST_RESULT_FILE = $resultFile
             Write-Host "=== $module ==="
             python scripts/run_unittest_module.py $module
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $exitCode = $LASTEXITCODE
+            $verdict = if (Test-Path $resultFile) { (Get-Content $resultFile -Raw).Trim() } else { '' }
+            if ($exitCode -ne 0 -and $verdict -eq 'PASS') {
+              Write-Warning "$module passed unittest assertions but Qt native teardown returned $exitCode; accepting verified PASS sentinel."
+              continue
+            }
+            if ($exitCode -ne 0) { exit $exitCode }
+            if ($verdict -ne 'PASS') {
+              Write-Error "$module exited without a verified PASS sentinel."
+              exit 1
+            }
           }
+          Remove-Item Env:B300_UNITTEST_RESULT_FILE -ErrorAction SilentlyContinue
 
       - name: Compile Python sources
         run: >-

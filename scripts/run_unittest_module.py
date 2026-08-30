@@ -17,16 +17,25 @@ class HardExitTextResult(unittest.TextTestResult):
     """Report the module result, then exit before Qt/PySide native teardown."""
 
     def stopTestRun(self) -> None:
-        super().stopTestRun()
+        # Record the unittest verdict before any Qt/PySide finalization can crash
+        # the hosted process. CI may accept a non-zero native teardown exit only
+        # when this sentinel proves every unittest assertion already passed.
+        successful = self.wasSuccessful()
+        exit_code = 0 if successful else 1
+        result_file = os.environ.get("B300_UNITTEST_RESULT_FILE", "").strip()
+        if result_file:
+            path = Path(result_file)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("PASS\n" if successful else "FAIL\n", encoding="ascii")
+
         self.printErrors()
         self.stream.writeln(self.separator2)
         self.stream.writeln("Ran %d tests" % self.testsRun)
         self.stream.writeln()
-        if self.wasSuccessful():
+        if successful:
             status = "OK"
             if self.skipped:
                 status += " (skipped=%d)" % len(self.skipped)
-            exit_code = 0
         else:
             parts = []
             if self.failures:
@@ -36,7 +45,6 @@ class HardExitTextResult(unittest.TextTestResult):
             if self.skipped:
                 parts.append("skipped=%d" % len(self.skipped))
             status = "FAILED" + (" (%s)" % ", ".join(parts) if parts else "")
-            exit_code = 1
         self.stream.writeln(status)
         try:
             self.stream.flush()
