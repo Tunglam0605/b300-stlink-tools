@@ -149,11 +149,23 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         central = QWidget()
-        root = QVBoxLayout(central)
-        root.setContentsMargins(14, 10, 14, 10)
-        root.setSpacing(8)
+        main_h_layout = QHBoxLayout(central)
+        main_h_layout.setContentsMargins(0, 0, 0, 0)
+        main_h_layout.setSpacing(0)
 
-        brand_row = QHBoxLayout()
+        # Left Vertical Navigation Sidebar
+        self.sidebar = QFrame()
+        self.sidebar.setObjectName("sidebarPanel")
+        sidebar_layout = QVBoxLayout(self.sidebar)
+        sidebar_layout.setContentsMargins(8, 12, 8, 12)
+        sidebar_layout.setSpacing(4)
+
+        # Brand header at top of sidebar
+        brand_card = QWidget()
+        brand_card_layout = QVBoxLayout(brand_card)
+        brand_card_layout.setContentsMargins(4, 4, 4, 6)
+        brand_card_layout.setSpacing(4)
+
         self.brand_logo = QLabel()
         self.brand_logo.setObjectName("brandLogo")
         self.brand_logo.setAccessibleName("B300 ST-Link Tools")
@@ -161,23 +173,16 @@ class MainWindow(QMainWindow):
         self.brand_logo.setCursor(Qt.CursorShape.PointingHandCursor)
         self.brand_logo.setPixmap(
             QPixmap(str(asset_path("b300-stlink-wordmark.png"))).scaledToHeight(
-                63, Qt.TransformationMode.SmoothTransformation
+                40, Qt.TransformationMode.SmoothTransformation
             )
         )
         self.brand_logo.mousePressEvent = self._brand_logo_clicked
-        brand_row.addWidget(self.brand_logo)
-        brand_row.addStretch(1)
+        brand_card_layout.addWidget(self.brand_logo)
 
-        brand_info = QVBoxLayout()
-        brand_info.setSpacing(4)
-        brand_info.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-
-        top_meta_row = QHBoxLayout()
-        top_meta_row.setSpacing(8)
-        top_meta_row.addStretch(1)
-        eyebrow = QLabel("INDUSTRIAL PROVISIONING SYSTEM · STM32F407")
+        eyebrow = QLabel("STM32F407 PROVISIONING")
         eyebrow.setObjectName("eyebrowLabel")
-        top_meta_row.addWidget(eyebrow)
+        eyebrow.setStyleSheet("font-size: 10px; font-weight: 700; color: #0284C7; padding-left: 2px;")
+        brand_card_layout.addWidget(eyebrow)
 
         channel = getattr(self.update_client, "channel", "stable")
         channel_name = getattr(channel, "value", str(channel)).capitalize()
@@ -186,38 +191,74 @@ class MainWindow(QMainWindow):
         self.update_channel_label.setCursor(Qt.CursorShape.PointingHandCursor)
         self.update_channel_label.setToolTip("Nhấn để kiểm tra cập nhật phiên bản mới")
         self.update_channel_label.mousePressEvent = lambda _event: self.check_for_updates(manual=True)
-        top_meta_row.addWidget(self.update_channel_label)
-        brand_info.addLayout(top_meta_row)
+        brand_card_layout.addWidget(self.update_channel_label)
+        sidebar_layout.addWidget(brand_card)
 
-        subtitle = QLabel("Nạp Application STM32F407 an toàn · Giữ nguyên Bootloader và đường OTA")
-        subtitle.setObjectName("subtitleLabel")
-        subtitle.setAlignment(Qt.AlignmentFlag.AlignRight)
-        brand_info.addWidget(subtitle)
-        brand_row.addLayout(brand_info)
-        root.addLayout(brand_row)
+        sidebar_layout.addSpacing(6)
 
-        self.status_banner = QLabel("Sẵn sàng kiểm tra ST-Link")
-        self.status_banner.setObjectName("statusBanner")
-        self.status_banner.setAccessibleName("Trạng thái phiên nạp")
-        self.status_banner.setVisible(False)
-        status_row = QHBoxLayout()
-        status_row.setSpacing(8)
-        status_row.addWidget(self.status_banner, 1)
+        # Navigation Section Title
+        nav_title = QLabel("CHỨC NĂNG")
+        nav_title.setStyleSheet("font-size: 10px; font-weight: 700; color: #94A3B8; padding: 4px 6px 2px 6px; letter-spacing: 0.5px;")
+        sidebar_layout.addWidget(nav_title)
+
+        # Navigation Buttons (Grouped closely with 4px gap)
+        self.nav_buttons = []
+
+        self.nav_flash_btn = QPushButton("⚡  Nạp firmware")
+        self.nav_flash_btn.setObjectName("navButton")
+        self.nav_flash_btn.setCheckable(True)
+        self.nav_flash_btn.setChecked(True)
+        self.nav_flash_btn.clicked.connect(lambda: self.tabs.setCurrentIndex(0))
+        sidebar_layout.addWidget(self.nav_flash_btn)
+        self.nav_buttons.append(self.nav_flash_btn)
+
+        self.nav_memory_btn = QPushButton("🔍  Memory / Metadata")
+        self.nav_memory_btn.setObjectName("navButton")
+        self.nav_memory_btn.setCheckable(True)
+        self.nav_memory_btn.clicked.connect(lambda: self.tabs.setCurrentIndex(1))
+        sidebar_layout.addWidget(self.nav_memory_btn)
+        self.nav_buttons.append(self.nav_memory_btn)
+
+        self.nav_debug_btn = QPushButton("🐛  Debug Workstation")
+        self.nav_debug_btn.setObjectName("navButton")
+        self.nav_debug_btn.setCheckable(True)
+        self.nav_debug_btn.clicked.connect(lambda: self.tabs.setCurrentIndex(2))
+        sidebar_layout.addWidget(self.nav_debug_btn)
+        self.nav_buttons.append(self.nav_debug_btn)
+
+        sidebar_layout.addStretch(1)
+
+        # Setup Button (when OpenOCD missing)
         self.setup_button = QPushButton("Thiết lập môi trường")
         self.setup_button.setObjectName("setupButton")
         self.setup_button.setAccessibleName("Thiết lập OpenOCD offline")
         self.setup_button.setAccessibleDescription(
             "Cài OpenOCD từ gói B300 offline đã kiểm tra checksum; không cần Internet."
         )
-        self.setup_button.setToolTip(
-            "Cài OpenOCD 0.12.0-7 từ ZIP/tar.gz offline đầy đủ"
-        )
+        self.setup_button.setToolTip("Cài OpenOCD 0.12.0-7 từ ZIP/tar.gz offline đầy đủ")
         self.setup_button.clicked.connect(self.setup_environment)
         self.setup_button.setVisible(False)
-        status_row.addWidget(self.setup_button)
-        root.addLayout(status_row)
+        sidebar_layout.addWidget(self.setup_button)
 
+        main_h_layout.addWidget(self.sidebar)
+
+
+        # Right Content Area
+        content_area = QWidget()
+        content_v_layout = QVBoxLayout(content_area)
+        content_v_layout.setContentsMargins(10, 8, 10, 8)
+        content_v_layout.setSpacing(6)
+
+        # Status Banner
+        self.status_banner = QLabel("Sẵn sàng kiểm tra ST-Link")
+        self.status_banner.setObjectName("statusBanner")
+        self.status_banner.setAccessibleName("Trạng thái phiên nạp")
+        self.status_banner.setVisible(False)
+        content_v_layout.addWidget(self.status_banner)
+
+        # Workstation Tab Widget (Native top tab bar hidden in favor of vertical sidebar)
         self.tabs = QTabWidget()
+        self.tabs.tabBar().setVisible(False)
         self.tabs.addTab(self._build_flash_tab(), "Nạp firmware")
         self.memory_tab = MemoryTab(
             self.service, self._selected_probe, log_sink=self.append_log
@@ -232,8 +273,11 @@ class MainWindow(QMainWindow):
         self.debug_tab.operation_state_changed.connect(self._hardware_activity_changed)
         self.tabs.addTab(self.debug_tab, "Debug")
         self.tabs.currentChanged.connect(self._tab_changed)
-        root.addWidget(self.tabs, 1)
+        content_v_layout.addWidget(self.tabs, 1)
+
+        main_h_layout.addWidget(content_area, 1)
         self.setCentralWidget(central)
+
 
     def _build_menu(self) -> None:
         self.help_menu = self.menuBar().addMenu("Trợ giúp")
@@ -612,9 +656,15 @@ class MainWindow(QMainWindow):
         self.flash_splitter = splitter
         left = QWidget()
         left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(6, 6, 6, 6)
+        left_layout.setSpacing(10)
+
         right = QWidget()
         right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(6, 6, 6, 6)
+        right_layout.setSpacing(10)
 
+        # 1. ST-Link Probe Card
         device_group = QGroupBox("1. ST-Link probe")
         device_row = QGridLayout(device_group)
         device_row.setHorizontalSpacing(8)
@@ -637,6 +687,7 @@ class MainWindow(QMainWindow):
         device_row.addWidget(self.target_summary, 1, 0, 1, 3)
         left_layout.addWidget(device_group)
 
+        # 2. Application HEX Card
         firmware_group = QGroupBox("2. Application HEX")
         firmware_layout = QGridLayout(firmware_group)
         self.file_path = QLineEdit()
@@ -653,10 +704,11 @@ class MainWindow(QMainWindow):
         firmware_layout.addWidget(self.image_summary, 1, 0, 1, 2)
         left_layout.addWidget(firmware_group)
 
+        # 3. Flash Plan & Action Execution Card
         plan_group = QGroupBox("3. Flash plan cố định")
         plan_layout = QVBoxLayout(plan_group)
-        plan_layout.setContentsMargins(8, 6, 8, 6)
-        plan_layout.setSpacing(4)
+        plan_layout.setContentsMargins(8, 8, 8, 8)
+        plan_layout.setSpacing(6)
 
         self.flash_plan_summary = QLabel(
             "<b>Bảo vệ:</b> Sector 0–2 (Bootloader) &nbsp;|&nbsp; "
@@ -675,7 +727,7 @@ class MainWindow(QMainWindow):
         self.flash_plan_label.setObjectName("flashPlanBadge")
         self.flash_plan_label.setStyleSheet(
             "background-color: #F8FAFC; color: #475569; border: 1px solid #E2E8F0; "
-            "border-radius: 6px; padding: 3px 8px; font-weight: 600;"
+            "border-radius: 6px; padding: 4px 8px; font-weight: 600; font-size: 11px;"
         )
         self.flash_plan_label.setWordWrap(True)
         plan_layout.addWidget(self.flash_plan_label)
@@ -683,8 +735,8 @@ class MainWindow(QMainWindow):
         self.plan_table = QTableWidget(5, 3)
         self.plan_table.setHorizontalHeaderLabels(["Sector", "Vai trò", "Thao tác"])
         self.plan_table.verticalHeader().setVisible(False)
-        self.plan_table.verticalHeader().setDefaultSectionSize(24)
-        self.plan_table.setMinimumHeight(160)
+        self.plan_table.verticalHeader().setDefaultSectionSize(22)
+        self.plan_table.setMinimumHeight(135)
         self.plan_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.plan_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         for row, sector in enumerate(SECTORS[3:]):
@@ -697,8 +749,7 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        plan_layout.addWidget(self.plan_table, 1)
-        left_layout.addWidget(plan_group, 1)
+        plan_layout.addWidget(self.plan_table)
 
         actions = QGridLayout()
         actions.setHorizontalSpacing(10)
@@ -727,52 +778,45 @@ class MainWindow(QMainWindow):
         actions.addWidget(self.flash_button, 1, 1)
         actions.setColumnStretch(0, 1)
         actions.setColumnStretch(1, 1)
-        left_layout.addLayout(actions)
+        plan_layout.addLayout(actions)
+        left_layout.addWidget(plan_group)
 
-        log_group = QGroupBox("Log thời gian thực")
-        log_layout = QVBoxLayout(log_group)
-        self.log_view = QPlainTextEdit()
-        self.log_view.setObjectName("logView")
-        self.log_view.setReadOnly(True)
-        self.log_view.setAccessibleName("Log OpenOCD")
-        self.log_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        log_layout.addWidget(self.log_view, 1)
-        log_actions = QHBoxLayout()
-        self.clear_log_button = QPushButton("Xóa hiển thị")
-        self.clear_log_button.clicked.connect(self.log_view.clear)
-        self.export_log_button = QPushButton("Xuất log…")
-        self.export_log_button.clicked.connect(self.export_log)
-        log_actions.addWidget(self.clear_log_button)
-        log_actions.addWidget(self.export_log_button)
-        log_actions.addStretch(1)
-        log_layout.addLayout(log_actions)
-        right_layout.addWidget(log_group, 1)
-
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 1)
-        self.progress.setValue(0)
-        self.progress.setTextVisible(True)
-        self.progress.setFormat("Chưa chạy")
-        right_layout.addWidget(self.progress)
-
-        # Publisher-controlled Bootloader catalog. End users may only select
-        # trusted profiles bundled with this software release; there is no arbitrary
-        # Bootloader/HEX import path in the GUI.
+        # Right Column 1: Publisher-controlled Bootloader catalog
         factory_profile_group = QGroupBox("Bootloader OTA profile · Hồ sơ bản phát hành")
         factory_profile_layout = QVBoxLayout(factory_profile_group)
-        profile_form = QFormLayout()
+        factory_profile_layout.setContentsMargins(10, 8, 10, 8)
+        factory_profile_layout.setSpacing(6)
+
+        profile_row = QHBoxLayout()
+        profile_row.setSpacing(6)
+        profile_row.addWidget(QLabel("Profile:"))
         self.factory_profile_combo = QComboBox()
         self.factory_profile_combo.setObjectName("factoryBootloaderProfileCombo")
         self.factory_profile_combo.setToolTip(
             "Chỉ hiển thị Bootloader profile do nhà phát hành đóng gói và xác thực. "
             "Người dùng không thể import Bootloader HEX tùy ý."
         )
-        profile_form.addRow("Bootloader profile", self.factory_profile_combo)
-        factory_profile_layout.addLayout(profile_form)
+        profile_row.addWidget(self.factory_profile_combo, 1)
+        factory_profile_layout.addLayout(profile_row)
+
+        self.factory_summary_chip = QLabel("Chưa chọn profile")
+        self.factory_summary_chip.setStyleSheet(
+            "background-color: #F0FDF4; color: #166534; border: 1px solid #BBF7D0; "
+            "border-radius: 6px; padding: 6px 10px; font-weight: 600; font-size: 11px;"
+        )
+        self.factory_summary_chip.setWordWrap(True)
+        factory_profile_layout.addWidget(self.factory_summary_chip)
+
+        self.factory_detail_btn = QPushButton("ℹ Chi tiết thông số kỹ thuật…")
+        self.factory_detail_btn.setObjectName("factoryDetailBtn")
+        self.factory_detail_btn.setToolTip("Mở cửa sổ xem đầy đủ cấu hình UART, DMA, GPIO pins, Flash map và SHA-256.")
+        self.factory_detail_btn.clicked.connect(self.show_factory_profile_dialog)
+        factory_profile_layout.addWidget(self.factory_detail_btn)
+
+        # Hidden text fallback for test/compatibility
         self.factory_artifact_label = QLabel()
         self.factory_artifact_label.setObjectName("factoryBootloaderProfileInfo")
-        self.factory_artifact_label.setWordWrap(True)
-        self.factory_artifact_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.factory_artifact_label.setVisible(False)
         factory_profile_layout.addWidget(self.factory_artifact_label)
         self.factory_profiles = ()
         self.factory_trusted = None
@@ -790,14 +834,48 @@ class MainWindow(QMainWindow):
                 self.factory_artifact_label.setText(
                     "Không có Bootloader profile được nhà phát hành cho phép trong bản này."
                 )
+                self.factory_summary_chip.setText("Không có Bootloader profile khả dụng.")
         except Exception as error:
             self.factory_profiles = ()
             self.factory_trusted = None
             self.factory_artifact_label.setText(
                 "Bootloader catalog tin cậy không khả dụng: %s" % error
             )
+            self.factory_summary_chip.setText("Lỗi catalog: %s" % error)
         self.factory_profile_combo.currentIndexChanged.connect(self._factory_profile_changed)
-        left_layout.addWidget(factory_profile_group)
+        right_layout.addWidget(factory_profile_group)
+
+
+        # Right Column 2: Realtime Log & Progress
+        log_group = QGroupBox("Log thời gian thực & Tiến trình")
+        log_layout = QVBoxLayout(log_group)
+        log_layout.setContentsMargins(8, 8, 8, 8)
+        log_layout.setSpacing(6)
+        self.log_view = QPlainTextEdit()
+        self.log_view.setObjectName("logView")
+        self.log_view.setReadOnly(True)
+        self.log_view.setAccessibleName("Log OpenOCD")
+        self.log_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.log_view.setMinimumHeight(140)
+        log_layout.addWidget(self.log_view, 1)
+
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        self.progress.setTextVisible(True)
+        self.progress.setFormat("Chưa chạy")
+        log_layout.addWidget(self.progress)
+
+        log_actions = QHBoxLayout()
+        self.clear_log_button = QPushButton("Xóa hiển thị")
+        self.clear_log_button.clicked.connect(self.log_view.clear)
+        self.export_log_button = QPushButton("Xuất log…")
+        self.export_log_button.clicked.connect(self.export_log)
+        log_actions.addWidget(self.clear_log_button)
+        log_actions.addWidget(self.export_log_button)
+        log_actions.addStretch(1)
+        log_layout.addLayout(log_actions)
+        right_layout.addWidget(log_group, 1)
 
         self.factory_probe_combo = self.probe_combo
         self.factory_log_view = self.log_view
@@ -808,10 +886,11 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
         content_layout.addWidget(splitter)
-        self.flash_scroll_content.setMinimumHeight(650)
+        self.flash_scroll_content.setMinimumHeight(520)
         self._update_controls()
         QTimer.singleShot(0, self._update_flash_layout)
         return page
+
 
     def _update_flash_layout(self) -> None:
         """Stack Flash controls/log on narrow viewports and preserve vertical space."""
@@ -850,15 +929,22 @@ class MainWindow(QMainWindow):
             )
         self._update_controls()
 
+    def _tab_changed(self, index: int) -> None:
+        if hasattr(self, "nav_buttons"):
+            for i, btn in enumerate(self.nav_buttons):
+                btn.setChecked(i == index)
+
     def _render_factory_profile_info(self) -> None:
         if self.factory_trusted is None:
             self.factory_artifact_label.setText("Không có Bootloader profile khả dụng.")
+            if hasattr(self, "factory_summary_chip"):
+                self.factory_summary_chip.setText("Không có Bootloader profile.")
             return
         trusted = self.factory_trusted
         profile = trusted.profile
         image = trusted.image
         capabilities = " · ".join(profile.capabilities)
-        self.factory_artifact_label.setText(
+        info_text = (
             "%s\n"
             "Trạng thái: %s · FW %s · ĐÃ XÁC THỰC ✓\n"
             "Target: %s · %d KiB Flash · board token %s\n"
@@ -878,8 +964,46 @@ class MainWindow(QMainWindow):
                 profile.application_memory, capabilities, image.sha256, trusted.source_commit,
             )
         )
+        self.factory_artifact_label.setText(info_text)
+        if hasattr(self, "factory_summary_chip"):
+            self.factory_summary_chip.setText(
+                "✓ ĐÃ XÁC THỰC · Target: %s (%d KiB) · FW %s · OTA: %s (%s, %d baud)" %
+                (profile.mcu, profile.flash_kib, trusted.firmware_version, profile.logical_port, profile.peripheral, profile.baudrate)
+            )
+
+    def show_factory_profile_dialog(self) -> None:
+        if self.factory_trusted is None:
+            QMessageBox.information(self, "Hồ sơ Bootloader", "Chưa có Bootloader profile nào được chọn.")
+            return
+        trusted = self.factory_trusted
+        profile = trusted.profile
+        dialog = QDialog(self)
+        dialog.setObjectName("detailDialog")
+        dialog.setWindowTitle("Chi tiết Hồ sơ Bootloader — %s" % profile.display_name)
+        dialog.setMinimumSize(560, 380)
+        dlg_layout = QVBoxLayout(dialog)
+        dlg_layout.setContentsMargins(14, 12, 14, 12)
+        dlg_layout.setSpacing(8)
+
+        title = QLabel("Thông số kỹ thuật Bootloader OTA")
+        title.setStyleSheet("font-size: 14px; font-weight: 700; color: #0F172A;")
+        dlg_layout.addWidget(title)
+
+        browser = QTextBrowser()
+        browser.setObjectName("detailBrowser")
+        browser.setPlainText(self.factory_artifact_label.text())
+        dlg_layout.addWidget(browser, 1)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        close_btn = QPushButton("Đóng")
+        close_btn.clicked.connect(dialog.accept)
+        btn_row.addWidget(close_btn)
+        dlg_layout.addLayout(btn_row)
+        dialog.exec()
 
     def show_factory_dry_run(self) -> None:
+
         if self.factory_trusted is None or self.busy:
             return
         try:

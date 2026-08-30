@@ -1,4 +1,4 @@
-"""Integrated, state-aware GUI debug surface for B300 STM32F407."""
+"""Integrated, state-aware GUI debug workstation surface for B300 STM32F407."""
 
 from __future__ import annotations
 
@@ -25,12 +25,16 @@ from b300_core.tcl_client import SafeTclClient, TclEndpoint
 
 from .workers import FunctionWorker, WorkerFailure
 from .log_highlighter import format_log_html
-from .live_variables_panel import LiveVariablesPanel
+from .debug_connection_panel import DebugConnectionPanel
+from .debug_live_panel import DebugLivePanel
+from .debug_plot_panel import DebugPlotPanel
+from .debug_interactive_panel import DebugInteractivePanel
+from .debug_log_panel import DebugLogPanel
 from .remote_vscode_dialog import RemoteVsCodeDialog
 
 
 class DebugTab(QWidget):
-    """One owner for OpenOCD + TCL + GDB, with verified target-state transitions."""
+    """Integrated Engineering Workstation for OpenOCD + TCL + GDB debug & zero-halt monitoring."""
 
     operation_state_changed = Signal(bool)
     log = Signal(str)
@@ -78,251 +82,58 @@ class DebugTab(QWidget):
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
 
-        # Debug contains several vertically stacked control groups. On short
-        # laptop viewports / high-DPI scaling, allowing Qt to compress this
-        # hierarchy below its size hints makes the diagnostics rows appear
-        # overlapped. Keep a real minimum layout and scroll the whole surface
-        # instead of squeezing controls into each other.
+        # Responsive workstation scroll area
         self.scroll_area = QScrollArea()
         self.scroll_area.setObjectName("debugScrollArea")
         self.scroll_area.setWidgetResizable(True)
         self.scroll_content = QWidget()
         self.scroll_content.setObjectName("debugScrollContent")
         layout = QVBoxLayout(self.scroll_content)
-        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setContentsMargins(12, 10, 12, 12)
         layout.setSpacing(10)
         layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         self.scroll_area.setWidget(self.scroll_content)
         root_layout.addWidget(self.scroll_area)
 
-        header_card = QGroupBox("Mục tiêu & Trạng thái Debug")
-        header_layout = QHBoxLayout(header_card)
-        probe_info_layout = QVBoxLayout()
-        self.probe_display = QLabel("ST-Link Probe: Tự động chọn")
-        self.probe_display.setStyleSheet("font-weight: 700; color: #0F172A;")
-        safety = QLabel(
-            "Debug tích hợp chỉ dùng OpenOCD/TCL/GDB · Không xóa flash, không nạp firmware "
-            "và không sửa Option Bytes. Trạng thái RUN/HALT được xác nhận trước khi hiển thị."
-        )
-        safety.setStyleSheet("color: #64748B; font-size: 12px;")
-        safety.setWordWrap(True)
-        probe_info_layout.addWidget(self.probe_display)
-        probe_info_layout.addWidget(safety)
-        header_layout.addLayout(probe_info_layout, 1)
+        # 1. Top Section: Connection & Environment Panel
+        self.conn_panel = DebugConnectionPanel(self.scroll_content)
+        layout.addWidget(self.conn_panel)
 
-        self.status_label = QLabel("ĐÃ DỪNG")
-        self.status_label.setObjectName("debugStateBadge")
-        self.status_label.setProperty("state", "stopped")
-        header_layout.addWidget(self.status_label)
-        layout.addWidget(header_card)
+        # Compatibility aliases for Connection Panel
+        self.probe_display = self.conn_panel.probe_display
+        self.status_label = self.conn_panel.status_label
+        self.mode_combo = self.conn_panel.mode_combo
+        self.role_summary = self.conn_panel.role_summary
+        self.symbols_box = self.conn_panel.symbols_box
+        self.symbol_path = self.conn_panel.symbol_path
+        self.symbol_browse_button = self.conn_panel.symbol_browse_button
+        self.symbol_auto_button = self.conn_panel.symbol_auto_button
+        self.client_box = self.conn_panel.client_box
+        self.client_host = self.conn_panel.client_host
+        self.client_user = self.conn_panel.client_user
+        self.client_ssh_port = self.conn_panel.client_ssh_port
+        self.connection_box = self.conn_panel.connection_box
+        self.bind_address = self.conn_panel.bind_address
+        self.gdb_port = self.conn_panel.gdb_port
+        self.tcl_display = self.conn_panel.tcl_display
+        self.start_button = self.conn_panel.start_button
+        self.remote_server_button = self.conn_panel.remote_server_button
+        self.remote_kit_button = self.conn_panel.remote_kit_button
+        self.stop_button = self.conn_panel.stop_button
 
-        role_box = QGroupBox("Chế độ Debug")
-        role_layout = QHBoxLayout(role_box)
-        self.mode_combo = QComboBox()
-        self.mode_combo.setObjectName("debugModeSelector")
-        for label, value in (
-            ("Tự động", "auto"),
-            ("Local · Debug trực tiếp", "local"),
-            ("Gateway · Máy cắm ST-Link", "gateway"),
-            ("Client · Debug qua Gateway", "client"),
-        ):
-            self.mode_combo.addItem(label, value)
-        self.mode_combo.setToolTip(
-            "Auto: có ST-Link local thì debug trực tiếp; không có thì dùng Gateway đã lưu."
-        )
-        self.role_summary = QLabel("")
-        self.role_summary.setStyleSheet("color: #64748B;")
-        self.role_summary.setWordWrap(True)
-        role_layout.addWidget(QLabel("Vai trò:"))
-        role_layout.addWidget(self.mode_combo)
-        role_layout.addWidget(self.role_summary, 1)
-        layout.addWidget(role_box)
-
-        self.client_box = QGroupBox("Gateway từ xa · chỉ cần cấu hình một lần")
-        client_layout = QHBoxLayout(self.client_box)
-        self.client_host = QLineEdit()
-        self.client_host.setObjectName("debugClientHost")
-        self.client_host.setPlaceholderText("IP/hostname Gateway")
-        self.client_user = QLineEdit()
-        self.client_user.setObjectName("debugClientUser")
-        self.client_user.setPlaceholderText("SSH user")
-        self.client_ssh_port = QSpinBox()
-        self.client_ssh_port.setObjectName("debugClientSshPort")
-        self.client_ssh_port.setRange(1, 65535)
-        self.client_ssh_port.setValue(22)
-        client_layout.addWidget(QLabel("Gateway:"))
-        client_layout.addWidget(self.client_host, 2)
-        client_layout.addWidget(QLabel("SSH user:"))
-        client_layout.addWidget(self.client_user, 1)
-        client_layout.addWidget(QLabel("SSH:"))
-        client_layout.addWidget(self.client_ssh_port)
-        layout.addWidget(self.client_box)
-
-        config_grid = QHBoxLayout()
-        self.symbols_box = QGroupBox("Debug symbols (.elf / .axf)")
-        symbols_layout = QHBoxLayout(self.symbols_box)
-        self.symbol_path = QLineEdit()
-        self.symbol_path.setObjectName("debugSymbolPath")
-        self.symbol_path.setPlaceholderText("Tùy chọn: firmware.elf hoặc firmware.axf")
-        self.symbol_browse_button = QPushButton("Chọn ELF/AXF")
-        self.symbol_browse_button.setObjectName("debugSymbolBrowseButton")
         self.symbol_browse_button.clicked.connect(self.choose_symbol_file)
-        self.symbol_auto_button = QPushButton("Tự tìm đúng AXF/ELF")
-        self.symbol_auto_button.setObjectName("debugSymbolAutoButton")
-        self.symbol_auto_button.setToolTip(
-            "Chọn thư mục project; tool so các mẫu Application Flash để tìm duy nhất AXF/ELF khớp."
-        )
         self.symbol_auto_button.clicked.connect(self.auto_match_symbols)
-        symbols_layout.addWidget(self.symbol_path, 1)
-        symbols_layout.addWidget(self.symbol_browse_button)
-        symbols_layout.addWidget(self.symbol_auto_button)
-        config_grid.addWidget(self.symbols_box, 3)
-
-        self.connection_box = QGroupBox("Kết nối nội bộ an toàn")
-        connection_layout = QHBoxLayout(self.connection_box)
-        self.bind_address = QLineEdit("127.0.0.1")
-        self.bind_address.setObjectName("debugBindAddress")
-        self.bind_address.setReadOnly(True)
-        self.bind_address.setToolTip("Integrated debug luôn bind loopback để không lộ TCL/GDB ra mạng.")
-        self.gdb_port = QLineEdit("3333")
-        self.gdb_port.setObjectName("debugGdbPort")
-        self.gdb_port.setReadOnly(True)
-        self.gdb_port.setToolTip("Tool tự chọn cổng loopback cho Local; Gateway luôn dùng GDB 3333.")
-        self.tcl_display = QLabel("TCL: 6666 · loopback only")
-        self.tcl_display.setStyleSheet("color: #64748B;")
-        connection_layout.addWidget(QLabel("Host:"))
-        connection_layout.addWidget(self.bind_address)
-        connection_layout.addWidget(QLabel("GDB:"))
-        connection_layout.addWidget(self.gdb_port)
-        connection_layout.addWidget(self.tcl_display)
-        config_grid.addWidget(self.connection_box, 2)
-        layout.addLayout(config_grid)
-
-        actions_box = QGroupBox("Điều khiển phiên Debug")
-        actions_layout = QGridLayout(actions_box)
-        actions_layout.setHorizontalSpacing(8)
-        actions_layout.setVerticalSpacing(8)
-        self.start_button = QPushButton("BẮT ĐẦU")
-        self.start_button.setObjectName("debugStartButton")
-        self.start_button.setToolTip("Tự khởi động Local, Gateway hoặc Client theo chế độ đã chọn.")
-        self.remote_server_button = QPushButton("Gateway nhanh")
-        self.remote_server_button.setObjectName("debugRemoteServerButton")
-        self.remote_server_button.setVisible(False)
-        self.remote_kit_button = QPushButton("Xuất VS Code Kit…")
-        self.remote_kit_button.setObjectName("debugRemoteKitButton")
-        self.remote_kit_button.setToolTip(
-            "Sinh launch.json, Cortex-Debug recommendation, SSH tunnel và checklist remote debug."
-        )
-        self.stop_button = QPushButton("Dừng Debug")
-        self.stop_button.setObjectName("debugStopButton")
         self.start_button.clicked.connect(self.start_selected_mode)
         self.remote_server_button.clicked.connect(self.start_remote_server)
         self.remote_kit_button.clicked.connect(self.show_remote_vscode_dialog)
         self.stop_button.clicked.connect(self.stop_debug)
-        actions_layout.addWidget(self.start_button, 0, 0)
-        actions_layout.addWidget(self.remote_kit_button, 0, 1)
-        actions_layout.addWidget(self.stop_button, 0, 2)
-        actions_layout.setColumnStretch(3, 1)
 
-        self.halt_button = QPushButton("Tạm dừng (Halt)")
-        self.halt_button.setObjectName("debugHaltButton")
-        self.continue_button = QPushButton("Tiếp tục (Run)")
-        self.continue_button.setObjectName("debugContinueButton")
-        self.reset_button = QPushButton("Reset + Halt")
-        self.reset_button.setObjectName("debugResetButton")
-        self.step_into_button = QPushButton("Step Into")
-        self.step_into_button.setObjectName("debugStepIntoButton")
-        self.step_over_button = QPushButton("Step Over")
-        self.step_over_button.setObjectName("debugStepOverButton")
-        self.halt_button.clicked.connect(self.halt_target)
-        self.continue_button.clicked.connect(self.continue_target)
-        self.reset_button.clicked.connect(self.reset_halt_target)
-        self.step_into_button.clicked.connect(self.step_into_target)
-        self.step_over_button.clicked.connect(self.step_over_target)
-        actions_layout.addWidget(self.halt_button, 1, 0)
-        actions_layout.addWidget(self.continue_button, 1, 1)
-        actions_layout.addWidget(self.reset_button, 1, 2)
-        actions_layout.addWidget(self.step_into_button, 1, 3)
-        actions_layout.addWidget(self.step_over_button, 1, 4)
-        layout.addWidget(actions_box)
-
-        self.diagnostics_box = QGroupBox("Chẩn đoán source-level · tự giữ nguyên trạng thái RUN/HALT")
-        diagnostics_layout = QVBoxLayout(self.diagnostics_box)
-        diagnostic_actions = QGridLayout()
-        diagnostic_actions.setHorizontalSpacing(8)
-        diagnostic_actions.setVerticalSpacing(8)
-        self.where_button = QPushButton("Vị trí hiện tại")
-        self.where_button.setObjectName("debugWhereButton")
-        self.stack_button = QPushButton("Call Stack")
-        self.stack_button.setObjectName("debugStackButton")
-        self.registers_button = QPushButton("Registers")
-        self.registers_button.setObjectName("debugRegistersButton")
-        self.where_button.clicked.connect(self.inspect_where)
-        self.stack_button.clicked.connect(self.inspect_stack)
-        self.registers_button.clicked.connect(self.inspect_registers)
-        diagnostic_actions.addWidget(self.where_button, 0, 0)
-        diagnostic_actions.addWidget(self.stack_button, 0, 1)
-        diagnostic_actions.addWidget(self.registers_button, 0, 2)
-        diagnostic_actions.setColumnStretch(3, 1)
-        diagnostic_actions.addWidget(QLabel("Biến:"), 1, 0)
-        self.variable_expression = QLineEdit()
-        self.variable_expression.setObjectName("debugVariableExpression")
-        self.variable_expression.setPlaceholderText("Ví dụ: bRUN, xTickCount, motor_state")
-        self.variable_button = QPushButton("Đọc biến")
-        self.variable_button.setObjectName("debugVariableButton")
-        self.variable_button.clicked.connect(self.inspect_variable)
-        diagnostic_actions.addWidget(self.variable_expression, 1, 1, 1, 3)
-        diagnostic_actions.addWidget(self.variable_button, 1, 4)
-        diagnostics_layout.addLayout(diagnostic_actions)
-
-        stop_actions = QGridLayout()
-        stop_actions.setHorizontalSpacing(8)
-        stop_actions.setVerticalSpacing(8)
-        stop_actions.addWidget(QLabel("Breakpoint:"), 0, 0)
-        self.break_location = QLineEdit()
-        self.break_location.setObjectName("debugBreakLocation")
-        self.break_location.setPlaceholderText("Hàm hoặc file.c:line")
-        self.break_once_button = QPushButton("Break Once")
-        self.break_once_button.setObjectName("debugBreakOnceButton")
-        self.break_once_button.setToolTip("Đặt hardware breakpoint một lần, chờ hit rồi tự xóa và Resume.")
-        stop_actions.addWidget(self.break_location, 0, 1)
-        stop_actions.addWidget(self.break_once_button, 0, 2)
-        stop_actions.addWidget(QLabel("Watch:"), 1, 0)
-        self.watch_expression = QLineEdit()
-        self.watch_expression.setObjectName("debugWatchExpression")
-        self.watch_expression.setPlaceholderText("Ví dụ: xTickCount")
-        self.watch_once_button = QPushButton("Watch Once")
-        self.watch_once_button.setObjectName("debugWatchOnceButton")
-        self.watch_once_button.setToolTip("Đặt hardware watchpoint một lần, chờ trigger rồi tự xóa và Resume.")
-        stop_actions.addWidget(self.watch_expression, 1, 1)
-        stop_actions.addWidget(self.watch_once_button, 1, 2)
-        stop_actions.addWidget(QLabel("Timeout:"), 0, 3)
-        self.stop_timeout = QSpinBox()
-        self.stop_timeout.setObjectName("debugStopTimeout")
-        self.stop_timeout.setRange(1, 60)
-        self.stop_timeout.setValue(5)
-        self.stop_timeout.setSuffix(" s")
-        stop_actions.addWidget(self.stop_timeout, 0, 4)
-        stop_actions.setColumnStretch(1, 1)
-        diagnostics_layout.addLayout(stop_actions)
-        self.break_once_button.clicked.connect(self.break_once)
-        self.watch_once_button.clicked.connect(self.watch_once)
-
-        self.diagnostic_view = QPlainTextEdit()
-        self.diagnostic_view.setObjectName("debugDiagnosticView")
-        self.diagnostic_view.setReadOnly(True)
-        self.diagnostic_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        self.diagnostic_view.setMinimumHeight(110)
-        self.diagnostic_view.setMaximumHeight(180)
-        self.diagnostic_view.setPlaceholderText(
-            "Kết quả chẩn đoán sẽ hiển thị ở đây. Nếu target đang RUNNING, tool chỉ Halt tạm thời rồi tự Resume."
-        )
-        diagnostics_layout.addWidget(self.diagnostic_view)
-        layout.addWidget(self.diagnostics_box)
-
-        self.live_panel = LiveVariablesPanel()
+        # 2. Realtime Live Monitor Section (Zero-Halt SWD)
+        self.live_panel = DebugLivePanel(self.scroll_content)
         self.live_box = self.live_panel
-        # Compatibility aliases keep existing settings/tests and any extension code stable.
+        layout.addWidget(self.live_panel)
+
+        # Compatibility aliases for Live Panel
         self.sample_expressions = self.live_panel.expressions
         self.sample_cycles = self.live_panel.cycles
         self.sample_interval = self.live_panel.interval
@@ -333,24 +144,60 @@ class DebugTab(QWidget):
         self.sample_status = self.live_panel.status
         self.sample_impact = self.live_panel.impact
         self.sample_table = self.live_panel.table
-        self.live_plot = self.live_panel.plot
         self._sample_buffer = self.live_panel.buffer
         self._sample_rows = self.live_panel.rows
+
         self.sample_start_button.clicked.connect(self.start_live_sampling)
         self.sample_stop_button.clicked.connect(self.stop_live_sampling)
         self.sample_clear_button.clicked.connect(self.clear_live_samples)
         self.sample_export_button.clicked.connect(self.export_live_samples)
-        layout.addWidget(self.live_panel)
 
-        self.log_box = QGroupBox("Nhật ký OpenOCD / GDB")
-        log_layout = QVBoxLayout(self.log_box)
-        self.log_view = QPlainTextEdit()
-        self.log_view.setObjectName("debugLogView")
-        self.log_view.setReadOnly(True)
-        self.log_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        self.log_view.setMinimumHeight(90)
-        log_layout.addWidget(self.log_view)
-        layout.addWidget(self.log_box, 1)
+        # 3. Live Waveform Plot Section (Collapsible)
+        self.plot_panel = DebugPlotPanel(self.scroll_content)
+        self.live_plot = self.plot_panel.plot_widget
+        layout.addWidget(self.plot_panel)
+
+        # 4. Interactive Debug Section (Intrusive / Collapsible)
+        self.interactive_panel = DebugInteractivePanel(self.scroll_content)
+        self.diagnostics_box = self.interactive_panel
+        layout.addWidget(self.interactive_panel)
+
+        # Compatibility aliases for Interactive Panel
+        self.halt_button = self.interactive_panel.halt_button
+        self.continue_button = self.interactive_panel.continue_button
+        self.reset_button = self.interactive_panel.reset_button
+        self.step_into_button = self.interactive_panel.step_into_button
+        self.step_over_button = self.interactive_panel.step_over_button
+        self.where_button = self.interactive_panel.where_button
+        self.stack_button = self.interactive_panel.stack_button
+        self.registers_button = self.interactive_panel.registers_button
+        self.variable_expression = self.interactive_panel.variable_expression
+        self.variable_button = self.interactive_panel.variable_button
+        self.break_location = self.interactive_panel.break_location
+        self.break_once_button = self.interactive_panel.break_once_button
+        self.watch_expression = self.interactive_panel.watch_expression
+        self.watch_once_button = self.interactive_panel.watch_once_button
+        self.stop_timeout = self.interactive_panel.stop_timeout
+        self.diagnostic_view = self.interactive_panel.diagnostic_view
+
+        self.halt_button.clicked.connect(self.halt_target)
+        self.continue_button.clicked.connect(self.continue_target)
+        self.reset_button.clicked.connect(self.reset_halt_target)
+        self.step_into_button.clicked.connect(self.step_into_target)
+        self.step_over_button.clicked.connect(self.step_over_target)
+        self.where_button.clicked.connect(self.inspect_where)
+        self.stack_button.clicked.connect(self.inspect_stack)
+        self.registers_button.clicked.connect(self.inspect_registers)
+        self.variable_button.clicked.connect(self.inspect_variable)
+        self.break_once_button.clicked.connect(self.break_once)
+        self.watch_once_button.clicked.connect(self.watch_once)
+
+        # 5. Technical Log Section (Collapsible)
+        self.log_panel = DebugLogPanel(self.scroll_content)
+        self.log_box = self.log_panel
+        self.log_view = self.log_panel.log_view
+        layout.addWidget(self.log_panel)
+
         self.log.connect(self._append_log)
         self.mode_combo.currentIndexChanged.connect(self._mode_changed)
         self.client_host.textChanged.connect(self._save_debug_preferences)
@@ -372,9 +219,6 @@ class DebugTab(QWidget):
             return default
 
     def _restore_debug_preferences(self) -> None:
-        # Read the complete snapshot before touching widgets: their change signals
-        # persist values, so incremental reads could otherwise overwrite fields that
-        # have not been restored yet.
         mode = str(self._setting_value("debug/mode", "auto") or "auto")
         host = str(self._setting_value("debug/gateway_host", "") or "")
         user = str(self._setting_value("debug/gateway_user", "") or "")
@@ -406,7 +250,7 @@ class DebugTab(QWidget):
             self.client_user.setText(user)
             self.client_ssh_port.setValue(max(1, min(65535, ssh_port)))
             self.sample_expressions.setText(sample_expressions)
-            self.sample_cycles.setValue(max(1, min(1000, sample_cycles)))
+            self.sample_cycles.setValue(max(1, min(100000, sample_cycles)))
             self.sample_interval.setValue(max(0.1, min(60.0, sample_interval)))
             if last_symbols and Path(last_symbols).is_file():
                 self.symbol_path.setText(last_symbols)
@@ -438,8 +282,6 @@ class DebugTab(QWidget):
 
     def _local_probe_count(self) -> int:
         if self._probe_count is None:
-            # Standalone/embed callers historically represent a local debug surface.
-            # MainWindow provides the real probe count for Auto role resolution.
             return 1
         try:
             return max(0, int(self._probe_count()))
@@ -495,9 +337,7 @@ class DebugTab(QWidget):
         self._refresh_controls()
 
     def _append_log(self, line: str) -> None:
-        self.log_view.appendHtml(format_log_html(str(line)))
-        self.log_view.verticalScrollBar().setValue(self.log_view.verticalScrollBar().maximum())
-        self.log_view.horizontalScrollBar().setValue(0)
+        self.log_panel.append_log(line)
 
     @property
     def has_active_operation(self) -> bool:
@@ -624,9 +464,9 @@ class DebugTab(QWidget):
         try:
             probe = self.selected_probe()
             serial = getattr(probe, "serial", str(probe)) if probe else "Chưa chọn probe"
-            self.probe_display.setText("ST-Link Probe: %s" % (serial or "Tự động chọn"))
+            self.probe_display.setText("ST-Link: %s" % (serial or "Tự động chọn"))
         except Exception:
-            self.probe_display.setText("ST-Link Probe: Tự động chọn")
+            self.probe_display.setText("ST-Link: Tự động chọn")
 
     def _set_target_state(self, state: Optional[str]) -> None:
         normalized = (state or "").strip().lower()
@@ -896,10 +736,7 @@ class DebugTab(QWidget):
         self._remote_vscode_dialog.activateWindow()
 
     def start_remote_server(self) -> None:
-        """Start the generic headless-safe Gateway role without launching local GDB."""
         try:
-            # B300 GUI Client uses the canonical Gateway endpoints. Keep Gateway
-            # one-click and deterministic even if the Local advanced field was edited.
             port = 3333
             self.gdb_port.setText(str(port))
             config = DebugConfig(
@@ -1068,8 +905,6 @@ class DebugTab(QWidget):
 
     def _operation_failed(self, failure: WorkerFailure) -> None:
         self.log.emit("GDB operation failed: %s" % failure.message)
-        # Do not guess RUN/HALT after a failed control command. Query through the
-        # read-only TCL channel if the integrated session is still alive.
         try:
             self._target_state = self.session.target_poll() if self.session.active else None
         except Exception as error:
@@ -1257,6 +1092,7 @@ class DebugTab(QWidget):
             self._operation_failed_message(str(error))
             return
         self.live_panel.reset_for_sampling()
+        self.plot_panel.clear()
         self._sampling_active = True
         cycles = self.sample_cycles.value()
         interval = self.sample_interval.value()
@@ -1283,6 +1119,7 @@ class DebugTab(QWidget):
 
     def _live_sampling_cycle(self, batch) -> None:
         self.live_panel.append_batch(tuple(batch))
+        self.plot_panel.set_samples(self._sample_buffer.snapshot())
 
     def _live_sampling_completed(self, result) -> None:
         samples, state = result
@@ -1290,6 +1127,7 @@ class DebugTab(QWidget):
         self._status_override = None
         self._set_target_state(state)
         cycles = self.live_panel.mark_completed(samples)
+        self.plot_panel.set_samples(self._sample_buffer.snapshot())
         self.log.emit(
             "Live sampling completed: cycles=%d samples=%d target=%s" %
             (cycles, len(samples), str(state).upper())
@@ -1305,6 +1143,7 @@ class DebugTab(QWidget):
         if self._sampling_active:
             return
         self.live_panel.clear_history()
+        self.plot_panel.clear()
         self._refresh_controls()
 
     def export_live_samples(self) -> None:
@@ -1399,7 +1238,6 @@ class DebugTab(QWidget):
                         before = self.session.target_poll()
                     except Exception:
                         pass
-                # Restore target while the SSH tunnel still exists, then close the tunnel.
                 self.session.stop()
                 if self._client_tunnel is not None:
                     self._client_tunnel.stop()
