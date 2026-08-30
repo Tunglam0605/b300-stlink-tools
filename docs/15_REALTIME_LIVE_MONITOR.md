@@ -109,3 +109,24 @@ Live Monitor không được thêm các primitive sau vào đường realtime:
 - Option Bytes/WRP/RDP change.
 
 Interactive Debug vẫn được giữ riêng cho các thao tác cần halt CPU và GUI phải cảnh báo rõ rằng chế độ đó có thể ảnh hưởng realtime control.
+
+## Backend facade cho GUI/Client
+
+Frontend không nên tự ghép OpenOCD/TCL/SSH/symbol matcher. Dùng `b300_core.live_session.LiveMonitorSession`:
+
+```python
+from b300_core.live_session import LiveMonitorSession, LocalLiveMonitorConfig
+
+session = LiveMonitorSession()
+info = session.start_local(config)
+try:
+    summary = session.run(on_sample)
+finally:
+    session.close()
+```
+
+Nút **Stop Live** chỉ gọi `session.cancel()`. Cancellation dùng `threading.Event`; nếu interval đang là 60 s thì worker vẫn thức dậy ngay thay vì đợi hết interval. `cancel()` không gọi halt/resume/reset và không kill OpenOCD trong normal stop path.
+
+`ClientLiveMonitorConfig` hỗ trợ cả AXF/ELF cụ thể và bounded `symbol_roots`; backend chỉ nhận unique exact Flash match. Hardware interlock dùng mode riêng `MONITORING`, tách khỏi `DEBUGGING`, nhưng vẫn khóa độc quyền ST-Link để Flash/Factory/Interactive Debug không thể chạy đồng thời.
+
+Hardware acceptance của facade: 20 samples @ 10 Hz trên B300 F407 thật, 0 overrun, final target `RUNNING`, `f64` coherent 20/20; `xTickCount` tăng 3622787 -> 3624688 trong ~1.937 s.

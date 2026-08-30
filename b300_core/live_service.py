@@ -34,7 +34,7 @@ class LiveMonitorService:
               event_sink: Optional[Callable[[str], None]] = None) -> None:
         if self._process is not None:
             raise RuntimeError("Live Monitor OpenOCD is already running.")
-        lease = self.session_manager.acquire_debugging(probe)
+        lease = self.session_manager.acquire_monitoring(probe)
         command = self.command(probe, tcl_port)
         try:
             process = self._process_factory(

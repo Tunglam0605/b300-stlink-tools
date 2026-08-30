@@ -17,7 +17,7 @@ class FakeSessionManager:
     def __init__(self):
         self.lease = FakeLease()
         self.probe = None
-    def acquire_debugging(self, probe):
+    def acquire_monitoring(self, probe):
         self.probe = probe
         return self.lease
 
