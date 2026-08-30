@@ -16,6 +16,8 @@ from b300_core.ssh_identity import (
     AuthorizedKeyResult, SshClientPrepareResult, SshClientPrerequisiteReport, SshIdentityReport,
 )
 from b300_core.ssh_host_trust import GatewayHostKey, HostTrustResult
+from b300_core.remote_profile import RemoteGatewayProfile
+from b300_core.remote_connectivity import RemoteConnectivityResult
 from tests.test_ssh_identity import key_line
 from b300_gui.gateway_setup_tab import GatewaySetupTab
 
@@ -68,7 +70,7 @@ class GatewaySetupTabTests(unittest.TestCase):
         self.fail("condition not reached")
 
     def test_render_ready_host_and_client_configuration(self):
-        tab = GatewaySetupTab(identity_inspector=lambda: identity_report(False), auto_refresh=False)
+        tab = GatewaySetupTab(identity_inspector=lambda: identity_report(False), profile_loader=lambda: None, auto_refresh=False)
         tab._render(report(True))
         self.assertIn("GATEWAY SSH READY", tab.status.text())
         self.assertEqual(tab.check_table.rowCount(), 2)
@@ -78,7 +80,7 @@ class GatewaySetupTabTests(unittest.TestCase):
 
     def test_lazy_refresh_does_not_inspect_until_requested(self):
         inspector = mock.Mock(return_value=report(True))
-        tab = GatewaySetupTab(inspector=inspector, identity_inspector=lambda: identity_report(False), auto_refresh=False)
+        tab = GatewaySetupTab(inspector=inspector, identity_inspector=lambda: identity_report(False), profile_loader=lambda: None, auto_refresh=False)
         inspector.assert_not_called()
         tab.refresh_host()
         self.wait_until(lambda: not tab.has_active_operation)
@@ -89,7 +91,7 @@ class GatewaySetupTabTests(unittest.TestCase):
     def test_debug_exposure_blocks_prepare_without_calling_preparer(self):
         unsafe = report(False, private=False)
         preparer = mock.Mock()
-        tab = GatewaySetupTab(preparer=preparer, identity_inspector=lambda: identity_report(False), auto_refresh=False)
+        tab = GatewaySetupTab(preparer=preparer, identity_inspector=lambda: identity_report(False), profile_loader=lambda: None, auto_refresh=False)
         tab._render(unsafe)
         with mock.patch("b300_gui.gateway_setup_tab.QMessageBox.critical") as dialog:
             tab.prepare_host()
@@ -103,7 +105,7 @@ class GatewaySetupTabTests(unittest.TestCase):
         )
         tab = GatewaySetupTab(
             identity_inspector=lambda: identity_report(False),
-            host_key_reader=lambda: host_key, auto_refresh=False,
+            host_key_reader=lambda: host_key, profile_loader=lambda: None, auto_refresh=False,
         )
         tab.show_local_host_key()
         self.wait_until(lambda: not tab.has_active_operation)
@@ -120,7 +122,7 @@ class GatewaySetupTabTests(unittest.TestCase):
         tab = GatewaySetupTab(
             identity_inspector=lambda: identity_report(False),
             host_key_scanner=lambda host, port: scanned, host_truster=truster,
-            auto_refresh=False,
+            profile_loader=lambda: None, auto_refresh=False,
         )
         with self.assertRaisesRegex(RuntimeError, "HOST_KEY_FINGERPRINT_MISMATCH"):
             tab._scan_verify_trust_host("gateway.local", 22, "SHA256:EXPECTED")
@@ -139,7 +141,7 @@ class GatewaySetupTabTests(unittest.TestCase):
         tab = GatewaySetupTab(
             identity_inspector=lambda: identity_report(False),
             host_key_scanner=lambda host, port: scanned, host_truster=truster,
-            auto_refresh=False,
+            profile_loader=lambda: None, auto_refresh=False,
         )
         result = tab._scan_verify_trust_host("gateway.local", 22, "SHA256:MATCH")
         self.assertEqual(result, trusted)
@@ -162,12 +164,90 @@ class GatewaySetupTabTests(unittest.TestCase):
         tab.close()
 
 
+    def test_role_selector_separates_gateway_and_client_workflows(self):
+        tab = GatewaySetupTab(
+            identity_inspector=lambda: identity_report(False),
+            profile_loader=lambda: None, auto_refresh=False,
+        )
+        self.assertEqual(tab.role_stack.currentIndex(), 0)
+        self.assertTrue(tab.gateway_role_button.isChecked())
+        self.assertIn("Gateway", tab.next_action.text())
+        tab._select_role(1)
+        self.assertEqual(tab.role_stack.currentIndex(), 1)
+        self.assertTrue(tab.client_role_button.isChecked())
+        self.assertIn("Client", tab.next_action.text())
+        tab.close()
+
+    def test_verified_remote_gateway_saves_nonsecret_profile(self):
+        scanned = GatewayHostKey(
+            "192.168.1.95", 22, "192.168.1.95", key_line(94), "SHA256:MATCH"
+        )
+        trusted = HostTrustResult(
+            Path("C:/Users/test/.ssh/b300_known_hosts"), "192.168.1.95", "SHA256:MATCH", True,
+        )
+        saved = []
+        tab = GatewaySetupTab(
+            identity_inspector=lambda: identity_report(True),
+            host_key_scanner=lambda host, port: scanned,
+            host_truster=lambda key: trusted,
+            profile_loader=lambda: None,
+            profile_saver=lambda profile: saved.append(profile) or Path("C:/profile.json"),
+            auto_refresh=False,
+        )
+        payload = tab._trust_and_save_profile("192.168.1.95", "automation", 22, "SHA256:MATCH")
+        result, profile, path = payload
+        self.assertEqual(result, trusted)
+        self.assertEqual(profile, RemoteGatewayProfile("192.168.1.95", "automation", 22))
+        self.assertEqual(saved, [profile])
+        self.assertEqual(path, Path("C:/profile.json"))
+        with mock.patch("b300_gui.gateway_setup_tab.QMessageBox.information"):
+            tab._remote_host_trusted(payload)
+        self.assertIn("Profile READY", tab.client_profile_status.text())
+        self.assertNotIn("private", str(profile.record()).lower())
+        tab.close()
+
+    def test_fingerprint_mismatch_never_saves_profile(self):
+        scanned = GatewayHostKey(
+            "gateway.local", 22, "gateway.local", key_line(95), "SHA256:SCANNED"
+        )
+        saver = mock.Mock()
+        tab = GatewaySetupTab(
+            identity_inspector=lambda: identity_report(True),
+            host_key_scanner=lambda host, port: scanned,
+            host_truster=mock.Mock(), profile_loader=lambda: None,
+            profile_saver=saver, auto_refresh=False,
+        )
+        with self.assertRaisesRegex(RuntimeError, "HOST_KEY_FINGERPRINT_MISMATCH"):
+            tab._trust_and_save_profile("gateway.local", "automation", 22, "SHA256:EXPECTED")
+        saver.assert_not_called()
+        tab.close()
+
+    def test_client_connect_check_promotes_workflow_to_ready(self):
+        profile = RemoteGatewayProfile("gateway.local", "automation", 22)
+        result = RemoteConnectivityResult(
+            True, 0, "automation@gateway.local:22", "SSH_READY",
+            "Managed SSH key + strict host trust connection succeeded.",
+        )
+        checker = mock.Mock(return_value=result)
+        tab = GatewaySetupTab(
+            identity_inspector=lambda: identity_report(True),
+            profile_loader=lambda: profile, connectivity_checker=checker,
+            auto_refresh=False,
+        )
+        tab._select_role(1)
+        tab.check_client_connection()
+        self.wait_until(lambda: not tab.has_active_operation)
+        checker.assert_called_once_with(profile)
+        self.assertIn("SSH READY", tab.client_connection_status.text())
+        self.assertIn("Client READY", tab.next_action.text())
+        tab.close()
+
     def test_generate_client_identity_updates_public_only_status(self):
         ready = identity_report(True)
         ensurer = mock.Mock(return_value=ready)
         tab = GatewaySetupTab(
             identity_inspector=lambda: identity_report(False), identity_ensurer=ensurer,
-            client_prereq_inspector=lambda: prereq_report(True), auto_refresh=False,
+            client_prereq_inspector=lambda: prereq_report(True), profile_loader=lambda: None, auto_refresh=False,
         )
         with mock.patch("b300_gui.gateway_setup_tab.QMessageBox.information"):
             tab.prepare_client_identity()
@@ -189,7 +269,7 @@ class GatewaySetupTabTests(unittest.TestCase):
         tab = GatewaySetupTab(
             identity_inspector=lambda: identity_report(False), identity_ensurer=ensurer,
             client_prereq_inspector=lambda: missing, client_prereq_preparer=prereq_preparer,
-            auto_refresh=False,
+            profile_loader=lambda: None, auto_refresh=False,
         )
         with mock.patch("b300_gui.gateway_setup_tab.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes), \
              mock.patch("b300_gui.gateway_setup_tab.QMessageBox.information"):
@@ -206,7 +286,7 @@ class GatewaySetupTabTests(unittest.TestCase):
         authorizer = mock.Mock(return_value=result)
         tab = GatewaySetupTab(
             identity_inspector=lambda: identity_report(False), key_authorizer=authorizer,
-            auto_refresh=False,
+            profile_loader=lambda: None, auto_refresh=False,
         )
         with mock.patch("b300_gui.gateway_setup_tab.QInputDialog.getMultiLineText", return_value=(public, True)), \
              mock.patch("b300_gui.gateway_setup_tab.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes), \
@@ -220,13 +300,48 @@ class GatewaySetupTabTests(unittest.TestCase):
         authorizer = mock.Mock()
         tab = GatewaySetupTab(
             identity_inspector=lambda: identity_report(False), key_authorizer=authorizer,
-            auto_refresh=False,
+            profile_loader=lambda: None, auto_refresh=False,
         )
         with mock.patch("b300_gui.gateway_setup_tab.QInputDialog.getMultiLineText", return_value=("not-a-key", True)), \
              mock.patch("b300_gui.gateway_setup_tab.QMessageBox.critical") as dialog:
             tab.authorize_client_key()
         dialog.assert_called_once()
         authorizer.assert_not_called()
+        tab.close()
+
+
+    def test_compact_gateway_layout_has_equal_action_widths_and_no_idle_progress(self):
+        tab = GatewaySetupTab(
+            identity_inspector=lambda: identity_report(False), profile_loader=lambda: None, auto_refresh=False,
+        )
+        tab.resize(580, 520)
+        tab.show()
+        self.app.processEvents()
+        self.assertEqual(tab.gateway_role_button.height(), tab.client_role_button.height())
+        self.assertLessEqual(abs(tab.gateway_role_button.width() - tab.client_role_button.width()), 2)
+        host_widths = [tab.refresh_button.width(), tab.prepare_button.width(), tab.selftest_button.width()]
+        self.assertLessEqual(max(host_widths) - min(host_widths), 2)
+        config_widths = [tab.copy_button.width(), tab.show_host_key_button.width(), tab.copy_host_fingerprint_button.width()]
+        self.assertLessEqual(max(config_widths) - min(config_widths), 2)
+        self.assertFalse(tab.progress.isVisible())
+        gateway_scroll = tab.role_stack.widget(0)
+        self.assertEqual(gateway_scroll.horizontalScrollBar().maximum(), 0)
+        tab.close()
+
+    def test_client_form_remains_readable_without_horizontal_scroll_at_compact_width(self):
+        tab = GatewaySetupTab(
+            identity_inspector=lambda: identity_report(True), profile_loader=lambda: None, auto_refresh=False,
+        )
+        tab.resize(580, 520)
+        tab.show()
+        tab._select_role(1)
+        self.app.processEvents()
+        self.assertGreater(tab.trust_host.width(), tab.trust_port.width())
+        self.assertGreater(tab.trust_user.width(), tab.trust_port.width())
+        self.assertGreaterEqual(tab.trust_host.height(), 28)
+        self.assertGreaterEqual(tab.trust_host_button.height(), 34)
+        client_scroll = tab.role_stack.widget(1)
+        self.assertEqual(client_scroll.horizontalScrollBar().maximum(), 0)
         tab.close()
 
 

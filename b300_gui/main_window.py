@@ -119,7 +119,7 @@ class MainWindow(QMainWindow):
         self._update_poll_timer.setInterval(15 * 60 * 1000)
         self._update_poll_timer.timeout.connect(self._automatic_update_tick)
 
-        self.setWindowTitle("B300 ST-Link Provisioning")
+        self.setWindowTitle("B300 ST-Link Tools")
         self.setWindowIcon(QIcon(str(asset_path("b300-stlink-icon.png"))))
         # Fit laptop/high-DPI desktops. 1366x768 at 125-150% scaling can have
         # less than 650 logical pixels of usable height. Never force the window
@@ -180,9 +180,8 @@ class MainWindow(QMainWindow):
         self.brand_logo.mousePressEvent = self._brand_logo_clicked
         brand_card_layout.addWidget(self.brand_logo)
 
-        eyebrow = QLabel("STM32F407 PROVISIONING")
+        eyebrow = QLabel("B300 ENGINEERING TOOLKIT")
         eyebrow.setObjectName("eyebrowLabel")
-        eyebrow.setStyleSheet("font-size: 10px; font-weight: 700; color: #0284C7; padding-left: 2px;")
         brand_card_layout.addWidget(eyebrow)
 
         channel = getattr(self.update_client, "channel", "stable")
@@ -199,7 +198,7 @@ class MainWindow(QMainWindow):
 
         # Navigation Section Title
         nav_title = QLabel("CHỨC NĂNG")
-        nav_title.setStyleSheet("font-size: 10px; font-weight: 700; color: #94A3B8; padding: 4px 6px 2px 6px; letter-spacing: 0.5px;")
+        nav_title.setObjectName("navSectionTitle")
         sidebar_layout.addWidget(nav_title)
 
         # Navigation Buttons (Grouped closely with 4px gap)
@@ -227,7 +226,7 @@ class MainWindow(QMainWindow):
         sidebar_layout.addWidget(self.nav_debug_btn)
         self.nav_buttons.append(self.nav_debug_btn)
 
-        self.nav_gateway_btn = QPushButton("🔐  Gateway Setup")
+        self.nav_gateway_btn = QPushButton("🔐  Remote Gateway / Client")
         self.nav_gateway_btn.setObjectName("navButton")
         self.nav_gateway_btn.setCheckable(True)
         self.nav_gateway_btn.clicked.connect(lambda: self.tabs.setCurrentIndex(3))
@@ -254,14 +253,29 @@ class MainWindow(QMainWindow):
         # Right Content Area
         content_area = QWidget()
         content_v_layout = QVBoxLayout(content_area)
-        content_v_layout.setContentsMargins(10, 8, 10, 8)
-        content_v_layout.setSpacing(6)
+        content_v_layout.setContentsMargins(12, 10, 12, 10)
+        content_v_layout.setSpacing(8)
 
-        # Status Banner
+        # Persistent page context + task status. Users should not need to infer
+        # the active workflow from the sidebar or rely on transient toasts.
+        page_header = QFrame()
+        page_header.setObjectName("pageContextHeader")
+        page_header_layout = QVBoxLayout(page_header)
+        page_header_layout.setContentsMargins(12, 8, 12, 8)
+        page_header_layout.setSpacing(3)
+        self.page_title = QLabel("Nạp firmware")
+        self.page_title.setObjectName("pageContextTitle")
+        self.page_subtitle = QLabel("Provision Application an toàn, giữ Bootloader và metadata contract.")
+        self.page_subtitle.setObjectName("pageContextSubtitle")
+        self.page_subtitle.setWordWrap(True)
+        page_header_layout.addWidget(self.page_title)
+        page_header_layout.addWidget(self.page_subtitle)
+        content_v_layout.addWidget(page_header)
+
         self.status_banner = QLabel("Sẵn sàng kiểm tra ST-Link")
         self.status_banner.setObjectName("statusBanner")
-        self.status_banner.setAccessibleName("Trạng thái phiên nạp")
-        self.status_banner.setVisible(False)
+        self.status_banner.setAccessibleName("Trạng thái nhiệm vụ hiện tại")
+        self.status_banner.setVisible(True)
         content_v_layout.addWidget(self.status_banner)
 
         # Workstation Tab Widget (Native top tab bar hidden in favor of vertical sidebar)
@@ -285,6 +299,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.gateway_tab, "Gateway Setup")
         self.tabs.currentChanged.connect(self._tab_changed)
         content_v_layout.addWidget(self.tabs, 1)
+        self._update_page_context(0)
 
         main_h_layout.addWidget(content_area, 1)
         self.setCentralWidget(central)
@@ -623,26 +638,43 @@ class MainWindow(QMainWindow):
         if app is not None:
             QTimer.singleShot(0, app.quit)
 
-    def _tab_changed(self, index: int) -> None:
+    def _update_page_context(self, index: int) -> None:
+        pages = {
+            0: (
+                "Nạp firmware",
+                "Provision Application an toàn · Bootloader S0–S2 được bảo vệ · có dry-run trước khi ghi.",
+            ),
+            1: (
+                "Memory / Metadata",
+                "Quan sát Flash map, OTA metadata và Application Health theo hướng read-only trước khi can thiệp.",
+            ),
+            2: (
+                "Debug Workstation",
+                "Local / Gateway / Client · Realtime Live Monitor non-halting tách biệt với Interactive Debug.",
+            ),
+            3: (
+                "Remote Gateway / Client",
+                "Thiết lập hai máy theo vai trò, SSH strict trust và saved profile; debug ports luôn loopback-only.",
+            ),
+        }
+        title, subtitle = pages.get(index, ("B300 ST-Link Tools", ""))
+        self.page_title.setText(title)
+        self.page_subtitle.setText(subtitle)
         if self.busy or bool(self._threads):
             return
         if index == 0:
             if self.image_info is not None:
-                self._set_status("Firmware hợp lệ; sẵn sàng dry-run hoặc nạp", "normal")
+                self._set_status("Firmware hợp lệ · bước tiếp theo: dry-run hoặc Nạp Application", "normal", notify=False)
             elif self.openocd_ready:
-                self._set_status("Sẵn sàng kiểm tra ST-Link", "normal")
+                self._set_status("Bước tiếp theo: chọn ST-Link, kiểm tra target rồi chọn Application HEX", "normal", notify=False)
             else:
-                self._set_status("OpenOCD chưa sẵn sàng; hãy thiết lập môi trường offline", "error")
+                self._set_status("OpenOCD chưa sẵn sàng · dùng Thiết lập môi trường ở sidebar", "error", notify=False)
         elif index == 1:
-            self._set_status(
-                "Khảo sát bộ nhớ Flash (Read-Only) · Sector & OTA Metadata",
-                "normal",
-            )
+            self._set_status("Read-only workspace · chọn probe rồi đọc Memory / Metadata / Application Health", "normal", notify=False)
         elif index == 2:
-            self._set_status(
-                "DEBUG MODE · Điều khiển OpenOCD / GDB; không ghi nạp firmware",
-                "normal",
-            )
+            self._set_status("Chọn Local / Gateway / Client; Live Monitor không halt MCU, Interactive Debug có thể halt", "normal", notify=False)
+        elif index == 3:
+            self._set_status("Chọn vai trò Gateway hoặc Client ở đầu trang và làm theo Bước tiếp theo", "normal", notify=False)
 
     def _build_flash_tab(self) -> QWidget:
         page = QWidget()
@@ -716,7 +748,7 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(firmware_group)
 
         # 3. Flash Plan & Action Execution Card
-        plan_group = QGroupBox("3. Flash plan cố định")
+        plan_group = QGroupBox("3. Preflight & Nạp Application")
         plan_layout = QVBoxLayout(plan_group)
         plan_layout.setContentsMargins(8, 8, 8, 8)
         plan_layout.setSpacing(6)
@@ -743,6 +775,14 @@ class MainWindow(QMainWindow):
         self.flash_plan_label.setWordWrap(True)
         plan_layout.addWidget(self.flash_plan_label)
 
+        self.recommended_flow = QLabel(
+            "Luồng khuyến nghị · ① Kiểm tra target  →  ② Chọn Application HEX  →  "
+            "③ Dry-run  →  ④ Nạp Application"
+        )
+        self.recommended_flow.setObjectName("recommendedFlashFlow")
+        self.recommended_flow.setWordWrap(True)
+        plan_layout.addWidget(self.recommended_flow)
+
         self.plan_table = QTableWidget(5, 3)
         self.plan_table.setHorizontalHeaderLabels(["Sector", "Vai trò", "Thao tác"])
         self.plan_table.verticalHeader().setVisible(False)
@@ -765,28 +805,25 @@ class MainWindow(QMainWindow):
         actions = QGridLayout()
         actions.setHorizontalSpacing(10)
         actions.setVerticalSpacing(8)
-        self.dry_run_button = QPushButton("Kiểm tra dry-run")
+        self.dry_run_button = QPushButton("① Kiểm tra Dry-run · Khuyến nghị")
+        self.dry_run_button.setObjectName("dryRunButton")
+        self.dry_run_button.setToolTip("Preflight offline/read-only plan trước khi nạp. Không ghi Flash.")
         self.dry_run_button.clicked.connect(self.show_dry_run)
-        self.cancel_button = QPushButton("Hủy thao tác an toàn")
-        self.cancel_button.clicked.connect(self.cancel_operation)
-        self.cancel_button.setEnabled(False)
-        actions.addWidget(self.dry_run_button, 0, 0)
-        actions.addWidget(self.cancel_button, 0, 1)
 
-        self.factory_provision_button = QPushButton("Nạp Bootloader")
-        self.factory_provision_button.setObjectName("factoryProvisionButton")
-        self.factory_provision_button.setToolTip(
-            "One-click Factory: tự động nạp Bootloader tin cậy (Sector 0–2), "
-            "kiểm tra chip/WRP và khôi phục bảo vệ an toàn."
-        )
-        self.factory_provision_button.clicked.connect(self.start_factory_provision)
-
-        self.flash_button = QPushButton("Nạp Application")
+        self.flash_button = QPushButton("② Nạp Application")
         self.flash_button.setObjectName("flashButton")
+        self.flash_button.setToolTip("Nạp Application theo fixed safe plan sau khi target + HEX đã hợp lệ.")
         self.flash_button.clicked.connect(self.confirm_flash)
 
-        actions.addWidget(self.factory_provision_button, 1, 0)
-        actions.addWidget(self.flash_button, 1, 1)
+        self.cancel_button = QPushButton("Hủy thao tác read-only")
+        self.cancel_button.setObjectName("cancelOperationButton")
+        self.cancel_button.clicked.connect(self.cancel_operation)
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.setVisible(False)
+
+        actions.addWidget(self.dry_run_button, 0, 0)
+        actions.addWidget(self.flash_button, 0, 1)
+        actions.addWidget(self.cancel_button, 1, 0, 1, 2)
         actions.setColumnStretch(0, 1)
         actions.setColumnStretch(1, 1)
         plan_layout.addLayout(actions)
@@ -823,6 +860,22 @@ class MainWindow(QMainWindow):
         self.factory_detail_btn.setToolTip("Mở cửa sổ xem đầy đủ cấu hình UART, DMA, GPIO pins, Flash map và SHA-256.")
         self.factory_detail_btn.clicked.connect(self.show_factory_profile_dialog)
         factory_profile_layout.addWidget(self.factory_detail_btn)
+
+        factory_warning = QLabel(
+            "⚠ FACTORY / ADVANCED · Chỉ dùng khi mainboard cần provisioning Bootloader. "
+            "Đây không phải bước của luồng nạp Application thông thường."
+        )
+        factory_warning.setObjectName("factoryWarningNote")
+        factory_warning.setWordWrap(True)
+        factory_profile_layout.addWidget(factory_warning)
+
+        self.factory_provision_button = QPushButton("Nạp Bootloader · Factory Provisioning")
+        self.factory_provision_button.setObjectName("factoryProvisionButton")
+        self.factory_provision_button.setToolTip(
+            "Factory-only: nạp trusted Bootloader, kiểm tra chip/WRP và khôi phục protection contract."
+        )
+        self.factory_provision_button.clicked.connect(self.start_factory_provision)
+        factory_profile_layout.addWidget(self.factory_provision_button)
 
         # Hidden text fallback for test/compatibility
         self.factory_artifact_label = QLabel()
@@ -946,6 +999,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "nav_buttons"):
             for i, btn in enumerate(self.nav_buttons):
                 btn.setChecked(i == index)
+        self._update_page_context(index)
         if (index == 3 and hasattr(self, "gateway_tab") and
                 self.gateway_tab._report is None and not self.gateway_tab.has_active_operation):
             self.gateway_tab.refresh_host()
@@ -1557,6 +1611,7 @@ class MainWindow(QMainWindow):
         self._threads.append(worker)
         if cancellable:
             self._cancellable_worker = worker
+            self.cancel_button.setVisible(True)
             self.cancel_button.setEnabled(True)
         worker.start()
 
@@ -1567,6 +1622,7 @@ class MainWindow(QMainWindow):
         if worker is self._cancellable_worker:
             self._cancellable_worker = None
             self.cancel_button.setEnabled(False)
+            self.cancel_button.setVisible(False)
         worker.deleteLater()
         # completed/failed callbacks run before QThread.finished, so their first
         # _update_controls() still sees this worker in self._threads and keeps
@@ -1719,12 +1775,13 @@ class MainWindow(QMainWindow):
         except OSError as error:
             QMessageBox.critical(self, "Không thể xuất log", str(error))
 
-    def _set_status(self, text: str, state: str) -> None:
+    def _set_status(self, text: str, state: str, *, notify: bool = True) -> None:
         self.status_banner.setText(text)
         self.status_banner.setProperty("state", state)
         self.status_banner.style().unpolish(self.status_banner)
         self.status_banner.style().polish(self.status_banner)
-        self._show_toast(text, state)
+        if notify:
+            self._show_toast(text, state)
 
     def _show_toast(self, text: str, state: str) -> None:
         if not text or not self.isVisible():

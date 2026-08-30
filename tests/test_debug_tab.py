@@ -314,7 +314,7 @@ class DebugTabTests(unittest.TestCase):
         self.fail("Timed out waiting for Qt worker completion")
 
     def make_tab(self, *, initial="running", attach_state="halted", fail_start=None,
-                 probe_count=1, settings=None):
+                 probe_count=1, settings=None, profile_loader=lambda: None):
         service = FakeDebugService(DebugState.STOPPED)
         session = FakeSession(
             service, initial=initial, attach_state=attach_state, fail_start=fail_start,
@@ -324,7 +324,7 @@ class DebugTabTests(unittest.TestCase):
             service, lambda: ProbeRef("DEBUG123"), debug_session=session,
             tcl_factory=lambda _endpoint: service.tcl, probe_count=lambda: probe_count,
             tunnel_factory=lambda config: FakeTunnel(config, tunnel_events), settings=settings,
-            live_session_factory=FakeLiveMonitorSession,
+            live_session_factory=FakeLiveMonitorSession, profile_loader=profile_loader,
         )
         tab._test_tunnel_events = tunnel_events
         return tab, service, session
@@ -342,6 +342,21 @@ class DebugTabTests(unittest.TestCase):
             tab.log_box.geometry().top(),
             "Diagnostics and log groups must remain vertically separated.",
         )
+        tab.close()
+
+    def test_empty_debug_endpoint_uses_managed_gateway_profile(self) -> None:
+        from b300_core.remote_profile import RemoteGatewayProfile
+        profile = RemoteGatewayProfile("192.168.1.95", "automation", 2222)
+        tab, _service, _session = self.make_tab(
+            probe_count=0, settings=FakeSettings({"debug/mode": "client"}),
+            profile_loader=lambda: profile,
+        )
+        self.assertEqual(tab.client_host.text(), "192.168.1.95")
+        self.assertEqual(tab.client_user.text(), "automation")
+        self.assertEqual(tab.client_ssh_port.value(), 2222)
+        self.assertTrue(tab._managed_profile_loaded)
+        self.assertIn("saved Gateway profile", tab.role_summary.text())
+        self.assertIsNotNone(tab.safety_guide)
         tab.close()
 
     def test_debug_profile_restore_is_atomic_and_keeps_gateway_identity(self) -> None:

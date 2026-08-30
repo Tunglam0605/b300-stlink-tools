@@ -65,10 +65,19 @@ QLabel#brandLogo:hover {
 
 QLabel#eyebrowLabel {
     color: #0284C7;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 700;
-    letter-spacing: 0.8px;
+    letter-spacing: 0.7px;
     text-transform: uppercase;
+    padding-left: 2px;
+}
+
+QLabel#navSectionTitle {
+    color: #94A3B8;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 4px 6px 2px 6px;
+    letter-spacing: 0.5px;
 }
 
 QLabel#updateChannelLabel {
@@ -91,8 +100,8 @@ QLabel#subtitleLabel {
 QFrame#sidebarPanel {
     background-color: #F8FAFC;
     border-right: 1px solid #E2E8F0;
-    min-width: 200px;
-    max-width: 220px;
+    min-width: 196px;
+    max-width: 208px;
 }
 
 QPushButton#navButton {
@@ -164,8 +173,8 @@ QGroupBox {
     background-color: #FFFFFF;
     border: 1px solid #E2E8F0;
     border-radius: 8px;
-    margin-top: 14px;
-    padding: 12px 10px 8px 10px;
+    margin-top: 12px;
+    padding: 10px 10px 8px 10px;
     font-weight: 700;
     font-size: 12px;
     color: #1E293B;
@@ -309,8 +318,8 @@ QTextBrowser {
 
 /* Standard PushButtons with Elevation & Glow */
 QPushButton {
-    min-height: 28px;
-    padding: 3px 14px;
+    min-height: 30px;
+    padding: 4px 12px;
     border-radius: 6px;
     border: 1px solid #CBD5E1;
     background-color: #FFFFFF;
@@ -925,5 +934,314 @@ QLabel#factoryBootloaderProfileInfo {
     font-family: "Cascadia Code", "Consolas", monospace;
     font-size: 11px;
     line-height: 1.4;
+}
+
+
+/* RC3 UX hierarchy: persistent page context + role-based remote workflow */
+QFrame#pageContextHeader {
+    background-color: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-radius: 8px;
+}
+
+QLabel#pageContextTitle, QLabel#pageTitle {
+    color: #0F172A;
+    font-size: 17px;
+    font-weight: 800;
+}
+
+QLabel#pageContextSubtitle, QLabel#pageSubtitle {
+    color: #64748B;
+    font-size: 12px;
+    line-height: 1.3;
+}
+
+QLabel#roleSectionTitle {
+    color: #0F172A;
+    font-size: 13px;
+    font-weight: 800;
+}
+
+QLabel#formLabel {
+    color: #64748B;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+QFrame#gatewayHero {
+    background-color: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-radius: 10px;
+}
+
+QLabel#rolePrompt {
+    color: #475569;
+    font-weight: 700;
+    padding-right: 4px;
+}
+
+QPushButton#roleToggle {
+    background-color: #F8FAFC;
+    color: #475569;
+    border: 1px solid #CBD5E1;
+    border-radius: 7px;
+    padding: 6px 12px;
+    min-height: 34px;
+    font-weight: 650;
+}
+
+QPushButton#roleToggle:hover {
+    background-color: #F0F9FF;
+    color: #0369A1;
+    border-color: #7DD3FC;
+}
+
+QPushButton#roleToggle:checked {
+    background-color: #E0F2FE;
+    color: #0369A1;
+    border: 2px solid #38BDF8;
+    font-weight: 800;
+}
+
+QLabel#nextActionBanner {
+    background-color: #EFF6FF;
+    color: #1E40AF;
+    border: 1px solid #BFDBFE;
+    border-left: 4px solid #3B82F6;
+    border-radius: 7px;
+    padding: 7px 10px;
+    font-weight: 650;
+}
+
+QLabel#nextActionBanner[state="warning"] {
+    background-color: #FFFBEB;
+    color: #92400E;
+    border-color: #FDE68A;
+    border-left-color: #D97706;
+}
+
+QLabel#nextActionBanner[state="success"] {
+    background-color: #ECFDF5;
+    color: #065F46;
+    border-color: #A7F3D0;
+    border-left-color: #059669;
+}
+
+QFrame#workflowStepHeader {
+    background-color: transparent;
+    border: none;
+    padding-top: 2px;
+}
+
+QLabel#workflowStepBadge {
+    background-color: #0284C7;
+    color: white;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+QScrollArea#workflowScroll {
+    background-color: transparent;
+    border: none;
+}
+
+QScrollArea#workflowScroll > QWidget > QWidget {
+    background-color: #F8FAFC;
+}
+
+QLabel#gatewaySetupStatus, QLabel#clientProfileStatus, QLabel#clientConnectionStatus {
+    background-color: #F8FAFC;
+    color: #475569;
+    border: 1px solid #E2E8F0;
+    border-radius: 6px;
+    padding: 6px 9px;
+    font-weight: 650;
+}
+
+QLabel#gatewaySetupStatus[state="ready"],
+QLabel#clientProfileStatus[state="ready"],
+QLabel#clientConnectionStatus[state="ready"] {
+    background-color: #ECFDF5;
+    color: #065F46;
+    border-color: #A7F3D0;
+}
+
+QLabel#gatewaySetupStatus[state="warning"] {
+    background-color: #FFFBEB;
+    color: #92400E;
+    border-color: #FDE68A;
+}
+
+QLabel#gatewaySetupStatus[state="error"],
+QLabel#clientProfileStatus[state="error"],
+QLabel#clientConnectionStatus[state="error"] {
+    background-color: #FEF2F2;
+    color: #991B1B;
+    border-color: #FECACA;
+}
+
+QLabel#safetyNote, QLabel#infoNote {
+    background-color: #F8FAFC;
+    color: #64748B;
+    border: 1px solid #E2E8F0;
+    border-radius: 6px;
+    padding: 7px 9px;
+    font-size: 11px;
+}
+
+
+QFrame#debugSafetyGuide {
+    background-color: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-radius: 8px;
+}
+
+QLabel#debugSafeModeBadge {
+    background-color: #ECFDF5;
+    color: #065F46;
+    border: 1px solid #A7F3D0;
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+QLabel#debugIntrusiveModeBadge {
+    background-color: #FFFBEB;
+    color: #92400E;
+    border: 1px solid #FDE68A;
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-size: 11px;
+    font-weight: 750;
+}
+
+
+QLabel#recommendedFlashFlow {
+    background-color: #EFF6FF;
+    color: #1E40AF;
+    border: 1px solid #BFDBFE;
+    border-radius: 6px;
+    padding: 7px 10px;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+QPushButton#dryRunButton {
+    background-color: #F0F9FF;
+    color: #0369A1;
+    border: 1px solid #7DD3FC;
+    border-radius: 6px;
+    min-height: 32px;
+    padding: 6px 16px;
+    font-weight: 700;
+}
+
+QPushButton#dryRunButton:hover {
+    background-color: #E0F2FE;
+    border-color: #38BDF8;
+}
+
+QLabel#factoryWarningNote {
+    background-color: #FFF7ED;
+    color: #9A3412;
+    border: 1px solid #FED7AA;
+    border-left: 4px solid #F97316;
+    border-radius: 6px;
+    padding: 7px 9px;
+    font-size: 11px;
+    font-weight: 650;
+}
+
+QPushButton#cancelOperationButton {
+    background-color: #FEF2F2;
+    color: #991B1B;
+    border: 1px solid #FECACA;
+    border-radius: 6px;
+    min-height: 28px;
+    font-weight: 650;
+}
+
+
+QLabel#memoryReadOnlyNotice {
+    background-color: #FFF7ED;
+    color: #9A3412;
+    border: 1px solid #FED7AA;
+    border-left: 4px solid #F97316;
+    border-radius: 6px;
+    padding: 7px 10px;
+    font-size: 11px;
+    font-weight: 650;
+}
+
+QLabel#memoryOperationStatus {
+    background-color: #F8FAFC;
+    color: #475569;
+    border: 1px solid #E2E8F0;
+    border-radius: 6px;
+    padding: 6px 9px;
+    font-size: 11px;
+    font-weight: 650;
+}
+
+QPushButton#memoryCancelButton {
+    background-color: #FEF2F2;
+    color: #991B1B;
+    border: 1px solid #FECACA;
+    border-radius: 6px;
+    font-weight: 650;
+}
+
+/* RC3 compact action hierarchy */
+QPushButton#gatewayPrepareButton,
+QPushButton#gatewayTrustHostButton,
+QPushButton#gatewayClientConnectButton,
+QPushButton#gatewayIdentityPrepareButton {
+    min-height: 34px;
+    background-color: #0284C7;
+    color: #FFFFFF;
+    border: 1px solid #0284C7;
+    font-weight: 750;
+}
+
+QPushButton#gatewayPrepareButton:hover,
+QPushButton#gatewayTrustHostButton:hover,
+QPushButton#gatewayClientConnectButton:hover,
+QPushButton#gatewayIdentityPrepareButton:hover {
+    background-color: #0369A1;
+    color: #FFFFFF;
+    border-color: #0369A1;
+}
+
+QPushButton#gatewayRefreshButton,
+QPushButton#gatewaySelfTestButton,
+QPushButton#gatewayCopyClientButton,
+QPushButton#gatewayShowHostKeyButton,
+QPushButton#gatewayCopyHostFingerprintButton,
+QPushButton#gatewayIdentityCopyButton,
+QPushButton#gatewayAuthorizeKeyButton {
+    min-height: 34px;
+    background-color: #FFFFFF;
+    color: #334155;
+    border: 1px solid #CBD5E1;
+    font-weight: 650;
+}
+
+QTableWidget#gatewaySetupCheckTable {
+    font-size: 12px;
+    gridline-color: #E2E8F0;
+}
+
+QTableWidget#gatewaySetupCheckTable QHeaderView::section {
+    min-height: 28px;
+    padding: 4px 8px;
+    font-size: 11px;
+    font-weight: 750;
+}
+
+QProgressBar#gatewayProgress {
+    min-height: 8px;
+    max-height: 12px;
 }
 """

@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Signal, Qt
 from PySide6.QtWidgets import (
-    QApplication, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox, QPlainTextEdit,
-    QSpinBox,
-    QProgressBar, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QApplication, QButtonGroup, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
+    QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QStackedWidget,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from b300_core.gateway_readiness import inspect_gateway_readiness
@@ -25,6 +25,8 @@ from b300_core.ssh_host_trust import (
     GatewayHostKey, HostTrustResult, local_gateway_host_key, scan_gateway_host_key,
     trust_gateway_host_key,
 )
+from b300_core.remote_profile import RemoteGatewayProfile, load_remote_profile, save_remote_profile
+from b300_core.remote_connectivity import RemoteConnectivityResult, check_remote_connectivity
 from .workers import FunctionWorker
 
 
@@ -54,6 +56,9 @@ class GatewaySetupTab(QWidget):
             host_key_reader: Callable[..., GatewayHostKey] = local_gateway_host_key,
             host_key_scanner: Callable[..., GatewayHostKey] = scan_gateway_host_key,
             host_truster: Callable[..., HostTrustResult] = trust_gateway_host_key,
+            profile_loader: Callable[..., Optional[RemoteGatewayProfile]] = load_remote_profile,
+            profile_saver: Callable[..., object] = save_remote_profile,
+            connectivity_checker: Callable[..., RemoteConnectivityResult] = check_remote_connectivity,
             auto_refresh: bool = True,
     ) -> None:
         super().__init__(parent)
@@ -68,6 +73,11 @@ class GatewaySetupTab(QWidget):
         self.host_key_reader = host_key_reader
         self.host_key_scanner = host_key_scanner
         self.host_truster = host_truster
+        self.profile_loader = profile_loader
+        self.profile_saver = profile_saver
+        self.connectivity_checker = connectivity_checker
+        self._remote_profile: Optional[RemoteGatewayProfile] = None
+        self._connectivity_ready = False
         self._identity: Optional[SshIdentityReport] = None
         self._local_host_key: Optional[GatewayHostKey] = None
         self._worker: Optional[FunctionWorker] = None
@@ -75,6 +85,8 @@ class GatewaySetupTab(QWidget):
         self._report: Optional[GatewayHostReport] = None
         self._build_ui()
         self._render_identity(self.identity_inspector())
+        self._load_saved_profile()
+        self._update_next_action()
         if auto_refresh:
             self.refresh_host()
 
@@ -87,155 +99,423 @@ class GatewaySetupTab(QWidget):
         root.setContentsMargins(12, 10, 12, 10)
         root.setSpacing(8)
 
-        title = QLabel("Remote Debug Gateway Setup")
-        title.setStyleSheet("font-size: 18px; font-weight: 800; color: #0F172A;")
-        root.addWidget(title)
-        subtitle = QLabel(
-            "Biến máy này thành B300 Gateway hoàn chỉnh. Tool chỉ quản lý OpenSSH/SSH TCP 22; "
-            "OpenOCD 3333/4444/6666 luôn phải giữ loopback-only."
-        )
+        header = QFrame()
+        header.setObjectName("gatewayHero")
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(12, 10, 12, 10)
+        header_layout.setSpacing(6)
+        role_intro = QLabel("Chọn vai trò của máy này")
+        role_intro.setObjectName("roleSectionTitle")
+        header_layout.addWidget(role_intro)
+        subtitle = QLabel("Mỗi vai trò chỉ hiện đúng 3 bước cần thiết. Debug ports luôn loopback-only.")
+        subtitle.setObjectName("pageSubtitle")
         subtitle.setWordWrap(True)
-        subtitle.setStyleSheet("color: #475569;")
-        root.addWidget(subtitle)
+        header_layout.addWidget(subtitle)
 
-        self.status = QLabel("Đang kiểm tra Gateway host…")
-        self.status.setObjectName("gatewaySetupStatus")
-        self.status.setStyleSheet("padding: 8px; font-weight: 700; background: #F1F5F9; border-radius: 6px;")
-        root.addWidget(self.status)
+        role_row = QHBoxLayout()
+        role_row.setSpacing(8)
+        role_label = QLabel("Vai trò")
+        role_label.setObjectName("rolePrompt")
+        role_row.addWidget(role_label)
+        self.gateway_role_button = QPushButton("🖥  Gateway · ST-Link")
+        self.gateway_role_button.setObjectName("roleToggle")
+        self.gateway_role_button.setCheckable(True)
+        self.client_role_button = QPushButton("💻  Client · Từ xa")
+        self.client_role_button.setObjectName("roleToggle")
+        self.client_role_button.setCheckable(True)
+        self.role_group = QButtonGroup(self)
+        self.role_group.setExclusive(True)
+        self.role_group.addButton(self.gateway_role_button, 0)
+        self.role_group.addButton(self.client_role_button, 1)
+        self.gateway_role_button.setChecked(True)
+        self.gateway_role_button.setMinimumHeight(34)
+        self.client_role_button.setMinimumHeight(34)
+        self.gateway_role_button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.client_role_button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        role_row.addWidget(self.gateway_role_button, 1)
+        role_row.addWidget(self.client_role_button, 1)
+        header_layout.addLayout(role_row)
+        root.addWidget(header)
 
-        host_group = QGroupBox("Host readiness")
+        self.next_action = QLabel("Bước tiếp theo: kiểm tra trạng thái máy Gateway.")
+        self.next_action.setObjectName("nextActionBanner")
+        self.next_action.setWordWrap(True)
+        root.addWidget(self.next_action)
+
+        self.role_stack = QStackedWidget()
+        self.role_stack.setObjectName("gatewayRoleStack")
+        self.role_stack.addWidget(self._build_gateway_page())
+        self.role_stack.addWidget(self._build_client_page())
+        root.addWidget(self.role_stack, 1)
+        self.gateway_role_button.clicked.connect(lambda: self._select_role(0))
+        self.client_role_button.clicked.connect(lambda: self._select_role(1))
+
+        self.progress = QProgressBar()
+        self.progress.setObjectName("gatewayProgress")
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        self.progress.setTextVisible(True)
+        self.progress.setFormat("Idle")
+        self.progress.setVisible(False)
+        root.addWidget(self.progress)
+
+    def _step_header(self, number: int, title: str, description: str) -> QWidget:
+        frame = QFrame()
+        frame.setObjectName("workflowStepHeader")
+        layout = QHBoxLayout(frame)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        badge = QLabel(str(number))
+        badge.setObjectName("workflowStepBadge")
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge.setFixedSize(24, 24)
+        text = QLabel("<b>%s</b><br><span style='color:#64748B'>%s</span>" % (title, description))
+        text.setWordWrap(True)
+        layout.addWidget(badge)
+        layout.addWidget(text, 1)
+        return frame
+
+    def _scroll_page(self, content: QWidget) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setObjectName("workflowScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(content)
+        return scroll
+
+    def _build_gateway_page(self) -> QWidget:
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 6, 6)
+        layout.setSpacing(8)
+
+        layout.addWidget(self._step_header(
+            1, "Chuẩn bị Gateway",
+            "Kiểm OpenSSH Server, SSH service, firewall TCP/22 và chắc chắn debug ports không lộ ra LAN.",
+        ))
+        host_group = QGroupBox("Gateway readiness")
         host_layout = QVBoxLayout(host_group)
+        self.status = QLabel("Chưa kiểm tra Gateway host")
+        self.status.setObjectName("gatewaySetupStatus")
+        self.status.setWordWrap(True)
+        host_layout.addWidget(self.status)
         self.check_table = QTableWidget(0, 3)
         self.check_table.setObjectName("gatewaySetupCheckTable")
-        self.check_table.setHorizontalHeaderLabels(["Check", "State", "Detail"])
+        self.check_table.setHorizontalHeaderLabels(["Kiểm tra", "Trạng thái", "Chi tiết"])
         self.check_table.verticalHeader().setVisible(False)
         self.check_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.check_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
-        self.check_table.horizontalHeader().setStretchLastSection(True)
+        header = self.check_table.horizontalHeader()
+        header.setStretchLastSection(True)
+        header.resizeSection(0, 190)
+        header.resizeSection(1, 105)
+        self.check_table.setMinimumHeight(132)
+        self.check_table.setMaximumHeight(180)
         host_layout.addWidget(self.check_table)
-        root.addWidget(host_group, 1)
+        host_actions = QHBoxLayout()
+        self.refresh_button = QPushButton("Kiểm tra lại")
+        self.refresh_button.setObjectName("gatewayRefreshButton")
+        self.refresh_button.clicked.connect(self.refresh_host)
+        self.prepare_button = QPushButton("Chuẩn bị Gateway")
+        self.prepare_button.setObjectName("gatewayPrepareButton")
+        self.prepare_button.clicked.connect(self.prepare_host)
+        self.selftest_button = QPushButton("Gateway Self-Test")
+        self.selftest_button.setObjectName("gatewaySelfTestButton")
+        self.selftest_button.clicked.connect(self.run_selftest)
+        for button in (self.refresh_button, self.prepare_button, self.selftest_button):
+            button.setMinimumHeight(34)
+            button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+            host_actions.addWidget(button, 1)
+        host_layout.addLayout(host_actions)
+        layout.addWidget(host_group)
 
-        config_group = QGroupBox("Client connection")
+        layout.addWidget(self._step_header(
+            2, "Gửi thông tin kết nối cho Client",
+            "Copy địa chỉ kết nối và fingerprint trực tiếp từ Gateway này sang laptop Client.",
+        ))
+        config_group = QGroupBox("Thông tin kết nối an toàn")
         config_layout = QVBoxLayout(config_group)
         self.client_config = QPlainTextEdit()
         self.client_config.setObjectName("gatewayClientConfiguration")
         self.client_config.setReadOnly(True)
-        self.client_config.setMaximumHeight(125)
+        self.client_config.setMinimumHeight(72)
+        self.client_config.setMaximumHeight(96)
+        self.client_config.setPlaceholderText("Kiểm tra Gateway để lấy IP/hostname và SSH port.")
         config_layout.addWidget(self.client_config)
-        root.addWidget(config_group)
+        self.host_key_status = QLabel("Host fingerprint: chưa đọc")
+        self.host_key_status.setObjectName("gatewayHostKeyStatus")
+        self.host_key_status.setWordWrap(True)
+        config_layout.addWidget(self.host_key_status)
+        config_actions = QHBoxLayout()
+        self.copy_button = QPushButton("Copy Client Config")
+        self.copy_button.setObjectName("gatewayCopyClientButton")
+        self.copy_button.clicked.connect(self.copy_client_configuration)
+        self.copy_button.setEnabled(False)
+        self.show_host_key_button = QPushButton("Đọc fingerprint")
+        self.show_host_key_button.setObjectName("gatewayShowHostKeyButton")
+        self.show_host_key_button.clicked.connect(self.show_local_host_key)
+        self.copy_host_fingerprint_button = QPushButton("Copy fingerprint")
+        self.copy_host_fingerprint_button.setObjectName("gatewayCopyHostFingerprintButton")
+        self.copy_host_fingerprint_button.clicked.connect(self.copy_host_fingerprint)
+        self.copy_host_fingerprint_button.setEnabled(False)
+        for button in (self.copy_button, self.show_host_key_button, self.copy_host_fingerprint_button):
+            button.setMinimumHeight(34)
+            button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+            config_actions.addWidget(button, 1)
+        config_layout.addLayout(config_actions)
+        layout.addWidget(config_group)
 
-        identity_group = QGroupBox("SSH key bootstrap")
+        layout.addWidget(self._step_header(
+            3, "Cho phép Client đăng nhập",
+            "Paste public key từ Client. Private key tuyệt đối không được đưa sang Gateway.",
+        ))
+        authorize_group = QGroupBox("Authorize Client public key")
+        authorize_layout = QHBoxLayout(authorize_group)
+        authorize_note = QLabel(
+            "Sau khi Client tạo B300 key, copy <b>public key</b> sang đây để cho phép SSH không mật khẩu."
+        )
+        authorize_note.setWordWrap(True)
+        self.authorize_key_button = QPushButton("Authorize Public Key…")
+        self.authorize_key_button.setObjectName("gatewayAuthorizeKeyButton")
+        self.authorize_key_button.clicked.connect(self.authorize_client_key)
+        self.authorize_key_button.setMinimumHeight(34)
+        authorize_layout.addWidget(authorize_note, 1)
+        authorize_layout.addWidget(self.authorize_key_button)
+        layout.addWidget(authorize_group)
+
+        safety = QLabel(
+            "🔒 Safety: không sửa sshd_config, không đổi password, không tắt firewall và không tạo rule cho "
+            "TCP 3333/4444/6666. Nếu SSH đã READY, Prepare là no-op."
+        )
+        safety.setObjectName("safetyNote")
+        safety.setWordWrap(True)
+        layout.addWidget(safety)
+        layout.addStretch(1)
+        return self._scroll_page(content)
+
+    def _build_client_page(self) -> QWidget:
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 6, 6)
+        layout.setSpacing(8)
+
+        layout.addWidget(self._step_header(
+            1, "Chuẩn bị khóa Client",
+            "Tool tạo/reuse một B300 ed25519 key riêng. Chỉ public key được copy sang Gateway.",
+        ))
+        identity_group = QGroupBox("B300 Client SSH identity")
         identity_layout = QVBoxLayout(identity_group)
         self.identity_status = QLabel("B300 Client key: not checked")
         self.identity_status.setObjectName("gatewayIdentityStatus")
+        self.identity_status.setWordWrap(True)
         identity_layout.addWidget(self.identity_status)
         identity_actions = QHBoxLayout()
-        self.identity_prepare_button = QPushButton("Generate / Reuse Client Key")
+        self.identity_prepare_button = QPushButton("Tạo / kiểm tra Key")
         self.identity_prepare_button.setObjectName("gatewayIdentityPrepareButton")
         self.identity_prepare_button.clicked.connect(self.prepare_client_identity)
         self.identity_copy_button = QPushButton("Copy Public Key")
         self.identity_copy_button.setObjectName("gatewayIdentityCopyButton")
         self.identity_copy_button.clicked.connect(self.copy_public_key)
-        self.authorize_key_button = QPushButton("Authorize Client Public Key")
-        self.authorize_key_button.setObjectName("gatewayAuthorizeKeyButton")
-        self.authorize_key_button.clicked.connect(self.authorize_client_key)
-        identity_actions.addWidget(self.identity_prepare_button)
-        identity_actions.addWidget(self.identity_copy_button)
-        identity_actions.addWidget(self.authorize_key_button)
-        identity_actions.addStretch(1)
+        for button in (self.identity_prepare_button, self.identity_copy_button):
+            button.setMinimumHeight(34)
+            button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+            identity_actions.addWidget(button, 1)
         identity_layout.addLayout(identity_actions)
-        key_note = QLabel(
-            "Client creates/reuses one B300 ed25519 key. Only the public key is copied to the Gateway; "
-            "the private key never leaves the Client or enters logs."
-        )
-        key_note.setWordWrap(True)
-        key_note.setStyleSheet("color: #64748B; font-size: 11px;")
-        identity_layout.addWidget(key_note)
-        root.addWidget(identity_group)
+        layout.addWidget(identity_group)
 
-        trust_group = QGroupBox("Strict SSH host trust")
+        layout.addWidget(self._step_header(
+            2, "Xác minh Gateway và lưu profile",
+            "Nhập fingerprint nhìn trực tiếp trên máy Gateway. Tool scan rồi chỉ trust nếu khớp chính xác.",
+        ))
+        trust_group = QGroupBox("Remote Gateway")
         trust_layout = QVBoxLayout(trust_group)
-        self.host_key_status = QLabel("Gateway host fingerprint: not loaded")
-        self.host_key_status.setObjectName("gatewayHostKeyStatus")
-        trust_layout.addWidget(self.host_key_status)
-        local_host_actions = QHBoxLayout()
-        self.show_host_key_button = QPushButton("Show This Gateway Fingerprint")
-        self.show_host_key_button.setObjectName("gatewayShowHostKeyButton")
-        self.show_host_key_button.clicked.connect(self.show_local_host_key)
-        self.copy_host_fingerprint_button = QPushButton("Copy Host Fingerprint")
-        self.copy_host_fingerprint_button.setObjectName("gatewayCopyHostFingerprintButton")
-        self.copy_host_fingerprint_button.clicked.connect(self.copy_host_fingerprint)
-        self.copy_host_fingerprint_button.setEnabled(False)
-        local_host_actions.addWidget(self.show_host_key_button)
-        local_host_actions.addWidget(self.copy_host_fingerprint_button)
-        local_host_actions.addStretch(1)
-        trust_layout.addLayout(local_host_actions)
-
-        remote_row = QHBoxLayout()
-        remote_row.addWidget(QLabel("Remote Gateway:"))
+        endpoint_grid = QGridLayout()
+        endpoint_grid.setHorizontalSpacing(8)
+        endpoint_grid.setVerticalSpacing(6)
+        host_label = QLabel("Host / IP")
+        host_label.setObjectName("formLabel")
+        user_label = QLabel("User")
+        user_label.setObjectName("formLabel")
+        port_label = QLabel("Port")
+        port_label.setObjectName("formLabel")
+        endpoint_grid.addWidget(host_label, 0, 0)
+        endpoint_grid.addWidget(user_label, 0, 1)
+        endpoint_grid.addWidget(port_label, 0, 2)
         self.trust_host = QLineEdit()
         self.trust_host.setObjectName("gatewayTrustHost")
-        self.trust_host.setPlaceholderText("IP or hostname")
-        remote_row.addWidget(self.trust_host, 2)
-        remote_row.addWidget(QLabel("SSH:"))
+        self.trust_host.setPlaceholderText("192.168.1.95")
+        self.trust_host.setMinimumHeight(32)
+        endpoint_grid.addWidget(self.trust_host, 1, 0)
+        self.trust_user = QLineEdit()
+        self.trust_user.setObjectName("gatewayTrustUser")
+        self.trust_user.setPlaceholderText("automation")
+        self.trust_user.setMinimumHeight(32)
+        endpoint_grid.addWidget(self.trust_user, 1, 1)
         self.trust_port = QSpinBox()
         self.trust_port.setObjectName("gatewayTrustPort")
         self.trust_port.setRange(1, 65535)
         self.trust_port.setValue(22)
-        remote_row.addWidget(self.trust_port)
-        remote_row.addWidget(QLabel("Expected SHA256:"))
+        self.trust_port.setMinimumWidth(92)
+        self.trust_port.setMinimumHeight(32)
+        endpoint_grid.addWidget(self.trust_port, 1, 2)
+        endpoint_grid.setColumnStretch(0, 3)
+        endpoint_grid.setColumnStretch(1, 2)
+        endpoint_grid.setColumnStretch(2, 0)
+        trust_layout.addLayout(endpoint_grid)
+
+        fingerprint_label = QLabel("Host fingerprint · SHA256")
+        fingerprint_label.setObjectName("formLabel")
+        trust_layout.addWidget(fingerprint_label)
+        fingerprint_row = QHBoxLayout()
+        fingerprint_row.setSpacing(8)
         self.trust_fingerprint = QLineEdit()
         self.trust_fingerprint.setObjectName("gatewayTrustFingerprint")
-        self.trust_fingerprint.setPlaceholderText("SHA256:... copied from physical Gateway")
-        remote_row.addWidget(self.trust_fingerprint, 3)
-        self.trust_host_button = QPushButton("Scan + Verify + Trust")
+        self.trust_fingerprint.setPlaceholderText("SHA256:... lấy trực tiếp từ Gateway")
+        self.trust_fingerprint.setMinimumHeight(32)
+        fingerprint_row.addWidget(self.trust_fingerprint, 1)
+        self.trust_host_button = QPushButton("Verify & Lưu")
         self.trust_host_button.setObjectName("gatewayTrustHostButton")
+        self.trust_host_button.setMinimumHeight(34)
         self.trust_host_button.clicked.connect(self.trust_remote_host)
-        remote_row.addWidget(self.trust_host_button)
-        trust_layout.addLayout(remote_row)
-        trust_note = QLabel(
-            "Client must compare the fingerprint shown by the physical Gateway. ssh-keyscan alone is never trusted. "
-            "A changed host key is blocked and never overwritten automatically."
+        fingerprint_row.addWidget(self.trust_host_button)
+        trust_layout.addLayout(fingerprint_row)
+        self.client_profile_status = QLabel("Profile: chưa cấu hình")
+        self.client_profile_status.setObjectName("clientProfileStatus")
+        self.client_profile_status.setWordWrap(True)
+        trust_layout.addWidget(self.client_profile_status)
+        layout.addWidget(trust_group)
+
+        layout.addWidget(self._step_header(
+            3, "Kiểm tra kết nối thật",
+            "Sau khi Gateway đã authorize public key, chạy kiểm tra SSH strict trước khi Debug/Live Monitor.",
+        ))
+        connection_group = QGroupBox("SSH connection check")
+        connection_layout = QHBoxLayout(connection_group)
+        self.client_connection_status = QLabel("Chưa kiểm tra kết nối SSH")
+        self.client_connection_status.setObjectName("clientConnectionStatus")
+        self.client_connection_status.setWordWrap(True)
+        self.client_connect_button = QPushButton("Kiểm tra SSH")
+        self.client_connect_button.setMinimumHeight(34)
+        self.client_connect_button.setObjectName("gatewayClientConnectButton")
+        self.client_connect_button.clicked.connect(self.check_client_connection)
+        connection_layout.addWidget(self.client_connection_status, 1)
+        connection_layout.addWidget(self.client_connect_button)
+        layout.addWidget(connection_group)
+
+        client_note = QLabel(
+            "💡 Sau khi Connection PASS, tab Debug Workstation sẽ tự dùng saved Gateway profile; "
+            "không cần nhập lại host/user mỗi lần."
         )
-        trust_note.setWordWrap(True)
-        trust_note.setStyleSheet("color: #64748B; font-size: 11px;")
-        trust_layout.addWidget(trust_note)
-        root.addWidget(trust_group)
+        client_note.setObjectName("infoNote")
+        client_note.setWordWrap(True)
+        layout.addWidget(client_note)
+        layout.addStretch(1)
+        return self._scroll_page(content)
 
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 1)
-        self.progress.setValue(0)
-        self.progress.setTextVisible(True)
-        self.progress.setFormat("Idle")
-        root.addWidget(self.progress)
+    def _select_role(self, index: int) -> None:
+        self.role_stack.setCurrentIndex(index)
+        self.gateway_role_button.setChecked(index == 0)
+        self.client_role_button.setChecked(index == 1)
+        self._update_next_action()
 
-        actions = QHBoxLayout()
-        self.refresh_button = QPushButton("Refresh")
-        self.refresh_button.setObjectName("gatewayRefreshButton")
-        self.refresh_button.clicked.connect(self.refresh_host)
-        self.prepare_button = QPushButton("Prepare This PC as Gateway")
-        self.prepare_button.setObjectName("gatewayPrepareButton")
-        self.prepare_button.clicked.connect(self.prepare_host)
-        self.selftest_button = QPushButton("Run Gateway Self-Test")
-        self.selftest_button.setObjectName("gatewaySelfTestButton")
-        self.selftest_button.clicked.connect(self.run_selftest)
-        self.copy_button = QPushButton("Copy Client Configuration")
-        self.copy_button.setObjectName("gatewayCopyClientButton")
-        self.copy_button.clicked.connect(self.copy_client_configuration)
-        for button in (self.refresh_button, self.prepare_button, self.selftest_button, self.copy_button):
-            actions.addWidget(button)
-        actions.addStretch(1)
-        root.addLayout(actions)
-
-        safety = QLabel(
-            "Safety: Gateway Setup không sửa sshd_config, không đổi password, không tắt firewall và "
-            "không tạo rule cho TCP 3333/4444/6666. Nếu SSH đã READY, Prepare là no-op."
+    def _load_saved_profile(self) -> None:
+        try:
+            profile = self.profile_loader()
+        except Exception as error:
+            self._remote_profile = None
+            self.client_profile_status.setText("Profile lỗi/không đọc được · %s" % error)
+            self.client_profile_status.setProperty("state", "error")
+            return
+        self._remote_profile = profile
+        if profile is None:
+            self.client_profile_status.setText("Profile: chưa cấu hình")
+            self.client_profile_status.setProperty("state", "idle")
+            return
+        self.trust_host.setText(profile.host)
+        self.trust_user.setText(profile.user)
+        self.trust_port.setValue(profile.port)
+        self.client_profile_status.setText(
+            "Saved profile READY · %s@%s:%d · không chứa password/private key" %
+            (profile.user, profile.host, profile.port)
         )
-        safety.setWordWrap(True)
-        safety.setStyleSheet("color: #64748B; font-size: 11px;")
-        root.addWidget(safety)
+        self.client_profile_status.setProperty("state", "ready")
+        self.client_profile_status.style().unpolish(self.client_profile_status)
+        self.client_profile_status.style().polish(self.client_profile_status)
+
+    def _update_next_action(self) -> None:
+        if not hasattr(self, "next_action"):
+            return
+        if self.role_stack.currentIndex() == 0:
+            if self._report is None:
+                text = "Bước tiếp theo · Gateway: bấm “Kiểm tra lại” để đọc trạng thái SSH và debug-port safety."
+                state = "info"
+            elif not self._report.ready:
+                text = "Bước tiếp theo · Gateway: bấm “Chuẩn bị máy Gateway”, xem plan và xác nhận thay đổi hệ điều hành nếu cần."
+                state = "warning"
+            elif self._local_host_key is None:
+                text = "Bước tiếp theo · Gateway READY: đọc/copy fingerprint rồi gửi cùng IP/username cho máy Client."
+                state = "success"
+            else:
+                text = "Bước tiếp theo · Gateway: chờ Client gửi public key, sau đó chọn “Authorize Client Public Key…”."
+                state = "success"
+        else:
+            if self._identity is None or not self._identity.ready:
+                text = "Bước tiếp theo · Client: tạo/reuse B300 Client Key. Private key luôn ở lại máy này."
+                state = "info"
+            elif self._remote_profile is None:
+                text = "Bước tiếp theo · Client: nhập Host/User/Fingerprint từ Gateway rồi “Verify Gateway & Lưu Profile”."
+                state = "info"
+            elif not self._connectivity_ready:
+                text = "Bước tiếp theo · Client: copy Public Key sang Gateway để authorize, rồi bấm “Kiểm tra SSH Connection”."
+                state = "warning"
+            else:
+                text = "Client READY ✓ · Có thể mở Debug Workstation; endpoint sẽ được lấy tự động từ saved profile."
+                state = "success"
+        self.next_action.setText(text)
+        self.next_action.setProperty("state", state)
+        self.next_action.style().unpolish(self.next_action)
+        self.next_action.style().polish(self.next_action)
+
+    def _trust_and_save_profile(
+            self, host: str, user: str, port: int, expected_fingerprint: str,
+    ):
+        profile = RemoteGatewayProfile(host, user, port).validate()
+        trust_result = self._scan_verify_trust_host(profile.host, profile.port, expected_fingerprint)
+        path = self.profile_saver(profile)
+        return trust_result, profile, path
+
+    def check_client_connection(self) -> None:
+        if self._remote_profile is None:
+            QMessageBox.warning(
+                self, "Chưa có Gateway profile",
+                "Hãy hoàn tất bước Verify Gateway & Lưu Profile trước khi kiểm tra kết nối SSH.",
+            )
+            return
+        self._connectivity_ready = False
+        self._start(
+            lambda: self.connectivity_checker(self._remote_profile),
+            self._client_connection_checked,
+            "Checking managed SSH connection…",
+        )
+
+    def _client_connection_checked(self, result: RemoteConnectivityResult) -> None:
+        self._connectivity_ready = bool(result.ready)
+        if result.ready:
+            self.client_connection_status.setText("SSH READY ✓ · %s" % result.gateway)
+            self.client_connection_status.setProperty("state", "ready")
+            self.log.emit("Gateway Client connectivity PASS: %s" % result.gateway)
+        else:
+            self.client_connection_status.setText(
+                "SSH chưa sẵn sàng · %s · %s" % (result.reason_code, result.message)
+            )
+            self.client_connection_status.setProperty("state", "error")
+            self.log.emit("Gateway Client connectivity BLOCKED: %s" % result.message)
+        self.client_connection_status.style().unpolish(self.client_connection_status)
+        self.client_connection_status.style().polish(self.client_connection_status)
+        self._update_next_action()
 
     def _set_busy(self, busy: bool, text: str = "") -> None:
+        self.progress.setVisible(bool(busy))
         self.progress.setRange(0, 0 if busy else 1)
         if not busy:
             self.progress.setValue(1 if self._report and self._report.ready else 0)
@@ -243,7 +523,8 @@ class GatewaySetupTab(QWidget):
         for button in (
             self.refresh_button, self.prepare_button, self.selftest_button,
             self.identity_prepare_button, self.authorize_key_button,
-            self.show_host_key_button, self.trust_host_button,
+            self.show_host_key_button, self.trust_host_button, self.client_connect_button,
+            self.gateway_role_button, self.client_role_button,
         ):
             button.setEnabled(not busy)
         self.copy_button.setEnabled(not busy and self._report is not None)
@@ -272,12 +553,22 @@ class GatewaySetupTab(QWidget):
             # owning tab lifetime instead of mixing deleteLater with parent teardown.
             self._retired_workers.append(worker)
         self._set_busy(False)
+        self._update_next_action()
 
     def _failed(self, failure) -> None:
         message = getattr(failure, "message", str(failure))
-        self.status.setText("Gateway operation FAILED: %s" % message)
-        self.status.setStyleSheet("padding: 8px; font-weight: 700; background: #FEE2E2; color: #991B1B; border-radius: 6px;")
+        if self.role_stack.currentIndex() == 0:
+            self.status.setText("Gateway operation FAILED · %s" % message)
+            self.status.setProperty("state", "error")
+            self.status.style().unpolish(self.status)
+            self.status.style().polish(self.status)
+        else:
+            self.client_connection_status.setText("Client operation FAILED · %s" % message)
+            self.client_connection_status.setProperty("state", "error")
+            self.client_connection_status.style().unpolish(self.client_connection_status)
+            self.client_connection_status.style().polish(self.client_connection_status)
         self.log.emit("Gateway Setup failed: %s" % message)
+        self._update_next_action()
 
     def refresh_host(self) -> None:
         self._start(lambda: self.inspector(ssh_port=22), self._host_refreshed, "Checking host…")
@@ -290,10 +581,12 @@ class GatewaySetupTab(QWidget):
         self._report = report
         if report.ready:
             self.status.setText("GATEWAY SSH READY ✓ · %s · TCP/%d" % (report.platform.upper(), report.ssh_port))
-            self.status.setStyleSheet("padding: 8px; font-weight: 700; background: #DCFCE7; color: #166534; border-radius: 6px;")
+            self.status.setProperty("state", "ready")
         else:
             self.status.setText("GATEWAY SETUP REQUIRED · %s" % report.platform.upper())
-            self.status.setStyleSheet("padding: 8px; font-weight: 700; background: #FEF3C7; color: #92400E; border-radius: 6px;")
+            self.status.setProperty("state", "warning")
+        self.status.style().unpolish(self.status)
+        self.status.style().polish(self.status)
         self.check_table.setRowCount(len(report.checks))
         for row, check in enumerate(report.checks):
             self.check_table.setItem(row, 0, QTableWidgetItem(check.name))
@@ -307,7 +600,8 @@ class GatewaySetupTab(QWidget):
         except ValueError:
             self.prepare_button.setEnabled(False)
         else:
-            self.prepare_button.setText("Gateway Ready · Verify" if not plan.changes_required else "Prepare This PC as Gateway")
+            self.prepare_button.setText("Gateway READY · Kiểm tra lại" if not plan.changes_required else "Chuẩn bị Gateway")
+        self._update_next_action()
 
     def prepare_host(self) -> None:
         if self._report is None:
@@ -354,16 +648,17 @@ class GatewaySetupTab(QWidget):
         self._identity = report
         if report.ready:
             self.identity_status.setText(
-                "B300 Client key READY · %s · private key stays local" % report.fingerprint
+                "Client Key READY ✓ · %s · private key chỉ nằm trên máy này" % report.fingerprint
             )
             self.identity_copy_button.setEnabled(True)
-            self.identity_prepare_button.setText("Client Key Ready · Verify")
+            self.identity_prepare_button.setText("Key READY · Kiểm tra lại")
         else:
             self.identity_status.setText(
-                "B300 Client key NOT READY · Generate/Re-use before passwordless Client connection"
+                "Client Key chưa sẵn sàng · tạo/reuse trước khi thiết lập kết nối SSH"
             )
             self.identity_copy_button.setEnabled(False)
-            self.identity_prepare_button.setText("Generate / Reuse Client Key")
+            self.identity_prepare_button.setText("Tạo / kiểm tra Key")
+        self._update_next_action()
 
     def prepare_client_identity(self) -> None:
         try:
@@ -392,6 +687,7 @@ class GatewaySetupTab(QWidget):
         return self.identity_ensurer()
 
     def _identity_prepared(self, report: SshIdentityReport) -> None:
+        self._connectivity_ready = False
         self._render_identity(report)
         self.log.emit("B300 Client SSH key READY; fingerprint=%s; private key content not exported." % report.fingerprint)
         QMessageBox.information(
@@ -450,6 +746,7 @@ class GatewaySetupTab(QWidget):
         self.host_key_status.setText("Gateway host fingerprint · ssh-ed25519 · %s" % host_key.fingerprint)
         self.copy_host_fingerprint_button.setEnabled(True)
         self.log.emit("Gateway SSH host fingerprint loaded: %s; private host key was not read/exported." % host_key.fingerprint)
+        self._update_next_action()
 
     def copy_host_fingerprint(self) -> None:
         if self._local_host_key is None:
@@ -459,17 +756,18 @@ class GatewaySetupTab(QWidget):
 
     def trust_remote_host(self) -> None:
         host = self.trust_host.text().strip()
+        user = self.trust_user.text().strip()
         fingerprint = self.trust_fingerprint.text().strip()
         port = self.trust_port.value()
-        if not host or not fingerprint:
+        if not host or not user or not fingerprint:
             QMessageBox.warning(
-                self, "Host trust incomplete",
-                "Enter the remote Gateway host/IP and the SHA256 fingerprint shown on that physical Gateway.",
+                self, "Thiếu thông tin Gateway",
+                "Nhập Host/IP, SSH username và fingerprint SHA256 hiển thị trực tiếp trên máy Gateway.",
             )
             return
         self._start(
-            lambda: self._scan_verify_trust_host(host, port, fingerprint),
-            self._remote_host_trusted, "Scanning and verifying Gateway host key…",
+            lambda: self._trust_and_save_profile(host, user, port, fingerprint),
+            self._remote_host_trusted, "Verifying Gateway + saving profile…",
         )
 
     def _scan_verify_trust_host(self, host: str, port: int, expected_fingerprint: str) -> HostTrustResult:
@@ -481,15 +779,26 @@ class GatewaySetupTab(QWidget):
             )
         return self.host_truster(scanned)
 
-    def _remote_host_trusted(self, result: HostTrustResult) -> None:
-        self.log.emit(
-            "Remote Gateway host trusted; fingerprint=%s changed=%s known_hosts=%s" %
-            (result.fingerprint, result.changed, result.known_hosts_file)
+    def _remote_host_trusted(self, payload) -> None:
+        result, profile, profile_path = payload
+        self._remote_profile = profile
+        self._connectivity_ready = False
+        self.client_profile_status.setText(
+            "Profile READY ✓ · %s@%s:%d · strict host trust verified" %
+            (profile.user, profile.host, profile.port)
         )
+        self.client_profile_status.setProperty("state", "ready")
+        self.client_profile_status.style().unpolish(self.client_profile_status)
+        self.client_profile_status.style().polish(self.client_profile_status)
+        self.log.emit(
+            "Remote Gateway verified + profile saved; fingerprint=%s changed=%s profile=%s" %
+            (result.fingerprint, result.changed, profile_path)
+        )
+        self._update_next_action()
         QMessageBox.information(
-            self, "Gateway Host Trusted",
-            "Strict host trust is ready%s.\nFingerprint: %s\nKnown hosts: %s" %
-            ("" if result.changed else " (already enrolled)", result.fingerprint, result.known_hosts_file),
+            self, "Gateway đã xác minh",
+            "Strict host trust + saved profile đã sẵn sàng.\n\n"
+            "Bước tiếp theo: authorize Public Key trên máy Gateway, sau đó chạy Kiểm tra SSH Connection.",
         )
 
     def run_selftest(self) -> None:

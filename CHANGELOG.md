@@ -7,12 +7,19 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ### Added
 
+- Bổ sung frontend workflow theo vai trò cho `Remote Gateway / Client`: người dùng chọn rõ máy hiện tại là Gateway hay Client; mỗi vai trò chỉ hiển thị 3 bước liên quan, có banner `Bước tiếp theo`, saved Gateway profile và `SSH Connection Check` ngay trong GUI.
+- Chuẩn hóa compact/responsive UX cho GUI: giảm minimum width Remote workflow từ khoảng 891 px xuống 362 px, action row chia cột đều, input Host/User/Port có hit-area tối thiểu 32 px, button chính 34 px, progress Gateway chỉ hiện khi thực sự chạy và layout không sinh horizontal scroll ở viewport 580 px / MainWindow 760×460.
+- Bổ sung persistent page context bar cho toàn MainWindow: mỗi workspace có tiêu đề, mô tả ngắn và trạng thái nhiệm vụ luôn hiển thị; điều hướng giữa các trang không còn phụ thuộc vào toast thoáng qua.
+
 - Thêm CLI automation layer cho remote workflow: `gateway quickstart`, `gateway client-setup`, `gateway status`, `gateway connect-check` và `gateway profile-clear`; các primitive `plan/prepare/client-key/host-key/trust-host` vẫn giữ để tương thích và chẩn đoán chi tiết.
 - Thêm saved Gateway profile chỉ chứa `host/user/port`; `debug client` và `debug vscode` tự dùng profile khi endpoint bị bỏ trống. Profile không lưu password, private key hoặc host-key material.
 - `gateway authorize-key` nhận trực tiếp `--public-key` để bỏ bước tạo/copy file `.pub`; `client-setup` in sẵn public-only `authorize_command`.
 
 ### Changed
 
+- Tối ưu Debug Workstation theo safety-first UX: hiển thị trực tiếp `Live Monitor · MCU tiếp tục RUNNING` đối lập với `Interactive Debug · có thể HALT/STEP/RESET`; Interactive Debug mặc định thu gọn và Debug Client tự điền managed Gateway profile đã xác minh khi endpoint cũ trống.
+- Tách rõ Flash workflow thông thường khỏi Factory provisioning: card Application chỉ còn `Dry-run → Nạp Application`; nút `Nạp Bootloader` chuyển vào Bootloader Factory card với cảnh báo `FACTORY / ADVANCED`, giảm nguy cơ người dùng mới chọn nhầm thao tác provisioning.
+- Memory / Metadata hiển thị công khai cảnh báo `CHỈ ĐỌC (READ-ONLY)` nhưng CPU có thể tạm dừng trong ST-Link read transaction, đồng thời chỉ hiện nút Cancel khi có read worker thực sự đang chạy.
 - `gateway status` phân biệt rõ **local setup readiness** với kết nối thật; output giữ `connectivity_verified=false` cho tới khi người dùng chạy `gateway connect-check`.
 - Profile-backed Debug/Live/VS Code fail-closed nếu B300 managed identity hoặc managed host trust bị mất, thay vì âm thầm fallback sang SSH mặc định của hệ điều hành.
 - CI Qt tests trên Windows/Linux chạy module-isolated để loại native offscreen lifecycle crash theo test order trong hosted runners.

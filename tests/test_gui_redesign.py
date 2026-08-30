@@ -254,6 +254,8 @@ class GuiRedesignTests(unittest.TestCase):
 
     def test_interactive_debug_warning_visible_and_controls_work(self) -> None:
         panel = DebugInteractivePanel()
+        self.assertFalse(panel.is_expanded())  # safety-first: intrusive controls start collapsed
+        panel.set_expanded(True)
         self.assertTrue(panel.is_expanded())
         warn = panel.findChild(QLabel, "interactiveDebugWarningText")
         self.assertIsNotNone(warn)

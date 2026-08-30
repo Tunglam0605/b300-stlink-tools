@@ -24,6 +24,19 @@ STM32 + ST-Link
 
 B300 Tools chỉ cho phép SSH là cổng ingress từ mạng. Tool **không** tạo firewall rule cho `3333/4444/6666`, không sửa `sshd_config`, không đổi password và không tự overwrite host key đã thay đổi.
 
+## GUI workflow theo vai trò (RC3+)
+
+Tab sidebar **Remote Gateway / Client** không còn trộn thao tác của hai máy trên một trang. Ở đầu màn hình, chọn đúng vai trò:
+
+- **Gateway · Có ST-Link**: `Kiểm tra Gateway → Chuẩn bị Gateway → Copy cấu hình/fingerprint → Authorize Client Public Key`.
+- **Client · Điều khiển từ xa**: `Tạo/reuse Client Key → Verify Gateway & Lưu Profile → Kiểm tra SSH Connection`.
+
+Banner **Bước tiếp theo** luôn phản ánh trạng thái hiện tại. Sau khi Client verify fingerprint chính xác, GUI lưu cùng non-secret profile `host/user/port` mà CLI dùng. Sau khi Gateway đã authorize public key, nút **Kiểm tra SSH Connection** chạy đúng managed strict SSH check; chỉ khi check PASS GUI mới hiển thị `Client READY`.
+
+Private key không bao giờ được copy sang Gateway. Nếu host fingerprint scan không khớp fingerprint lấy trực tiếp từ máy Gateway, GUI fail-closed và không lưu profile.
+
+Nếu máy Gateway có nhiều IPv4 adapter/VPN, tool không tự chọn địa chỉ đầu tiên; phần cấu hình hiển thị các candidate để người dùng chọn địa chỉ thực sự reachable từ Client.
+
 ## Workflow khuyến nghị: 2 máy, ít thao tác
 
 ### 1. Trên Gateway

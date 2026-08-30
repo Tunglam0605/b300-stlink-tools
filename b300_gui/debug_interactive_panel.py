@@ -21,7 +21,7 @@ class DebugInteractivePanel(CollapsibleCard):
             "Interactive Debug (GDB / Source-Level)",
             "Step, halt, breakpoints & call stack",
             parent,
-            expanded=True,
+            expanded=False,
         )
         self._build_ui()
 

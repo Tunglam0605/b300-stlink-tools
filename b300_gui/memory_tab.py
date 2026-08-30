@@ -149,7 +149,9 @@ class MemoryTab(QWidget):
         action_row.addWidget(self.export_button)
 
         self.cancel_button = QPushButton("⏹ Hủy đọc")
+        self.cancel_button.setObjectName("memoryCancelButton")
         self.cancel_button.setEnabled(False)
+        self.cancel_button.setVisible(False)
         self.cancel_button.clicked.connect(self.cancel_current)
         action_row.addWidget(self.cancel_button)
 
@@ -160,18 +162,22 @@ class MemoryTab(QWidget):
 
         # Hidden labels preserved for status & test assertions
         self.read_only_notice = QLabel(
-            "CHỈ ĐỌC (READ-ONLY) · CPU tạm dừng khi đọc và luôn tiếp tục chạy "
-            "(resume) trước khi ngắt kết nối."
+            "CHỈ ĐỌC (READ-ONLY) · CPU tạm dừng khi đọc qua ST-Link và tool luôn yêu cầu resume "
+            "trước khi ngắt kết nối. Với quan sát realtime không halt, dùng Live Monitor ở Debug Workstation."
         )
-        self.read_only_notice.setVisible(False)
+        self.read_only_notice.setObjectName("memoryReadOnlyNotice")
+        self.read_only_notice.setWordWrap(True)
+        self.read_only_notice.setVisible(True)
         root.addWidget(self.read_only_notice)
 
         self.range_info_label = QLabel("Target memory: Chưa đọc dữ liệu")
         self.range_info_label.setVisible(False)
         root.addWidget(self.range_info_label)
 
-        self.status_label = QLabel("Chưa đọc dữ liệu")
-        self.status_label.setVisible(False)
+        self.status_label = QLabel("Chưa đọc dữ liệu · chọn Sector hoặc đọc Application Health/Metadata")
+        self.status_label.setObjectName("memoryOperationStatus")
+        self.status_label.setWordWrap(True)
+        self.status_label.setVisible(True)
         root.addWidget(self.status_label)
 
         # Splitter: Left = Memory Table, Right = Sidebar (Health + Metadata)
@@ -343,7 +349,9 @@ class MemoryTab(QWidget):
         self.health_button.setEnabled(available)
         self.sector_combo.setEnabled(available)
         self.export_button.setEnabled(available and bool(self.current_data))
-        self.cancel_button.setEnabled(self._busy and self._active_worker is not None)
+        cancellable = self._busy and self._active_worker is not None
+        self.cancel_button.setVisible(cancellable)
+        self.cancel_button.setEnabled(cancellable)
 
     @property
     def has_active_operation(self) -> bool:
@@ -428,6 +436,7 @@ class MemoryTab(QWidget):
         self._threads.append(worker)
         self._active_worker = worker
         self.operation_state_changed.emit(True)
+        self.cancel_button.setVisible(True)
         self.cancel_button.setEnabled(True)
         worker.start()
 
@@ -438,6 +447,7 @@ class MemoryTab(QWidget):
         if worker is self._active_worker:
             self._active_worker = None
             self.cancel_button.setEnabled(False)
+            self.cancel_button.setVisible(False)
         self.operation_state_changed.emit(self.has_active_operation)
         worker.deleteLater()
 

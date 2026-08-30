@@ -4,6 +4,15 @@
 không nạp flash. Khi debugger kết nối, CPU có
 thể bị halt/reset nên chỉ dùng khi board và cơ cấu đang ở trạng thái an toàn.
 
+## GUI safety-first workflow (RC3+)
+
+Debug Workstation hiển thị hai mức tác động ngay đầu màn hình:
+
+- **LIVE MONITOR · KHUYẾN NGHỊ · MCU tiếp tục RUNNING**: đường quan sát non-halting dùng TCL/SWD bounded reads; không GDB attach, không breakpoint/watchpoint, không reset.
+- **INTERACTIVE DEBUG · Có thể HALT/STEP/RESET MCU**: đường GDB source-level có thể tác động realtime; panel này mặc định **thu gọn** để tránh bấm nhầm khi mục tiêu chỉ là quan sát robot đang chạy.
+
+Khi máy đã được cấu hình ở **Remote Gateway / Client**, Debug Client tự điền managed Gateway profile `host/user/port` nếu các field cũ trống. Managed SSH key + strict host trust vẫn là bắt buộc; việc tự điền profile không làm yếu authentication policy.
+
 ## Cần chuẩn bị
 
 - ST-Link đã kết nối với board và không bị Keil, CubeProgrammer hoặc OpenOCD

@@ -7,7 +7,7 @@ from typing import Callable, Optional
 
 from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLayout, QLineEdit,
+    QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLayout, QLineEdit,
     QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QVBoxLayout, QWidget,
 )
 
@@ -24,6 +24,7 @@ from b300_core.live_session import (
 from b300_core.remote_debug_guard import RemoteDebugGuard
 from b300_core.ssh_host_trust import trusted_known_hosts_file
 from b300_core.ssh_identity import managed_identity_file
+from b300_core.remote_profile import load_remote_profile
 from b300_core.ssh_debug_tunnel import (
     SshDebugTunnel, SshDebugTunnelConfig, find_available_loopback_port,
 )
@@ -52,7 +53,8 @@ class DebugTab(QWidget):
                  debug_session: Optional[DebugSession] = None,
                  tcl_factory=SafeTclClient, settings=None,
                  probe_count: Optional[Callable[[], int]] = None,
-                 tunnel_factory=SshDebugTunnel, live_session_factory=LiveMonitorSession) -> None:
+                 tunnel_factory=SshDebugTunnel, live_session_factory=LiveMonitorSession,
+                 profile_loader=load_remote_profile) -> None:
         super().__init__(parent)
         self.service = service
         self.selected_probe = selected_probe
@@ -80,6 +82,8 @@ class DebugTab(QWidget):
         self._probe_count = probe_count
         self._tunnel_factory = tunnel_factory
         self._live_session_factory = live_session_factory
+        self._profile_loader = profile_loader
+        self._managed_profile_loaded = False
         self._sampling_active = False
         self._live_session: Optional[LiveMonitorSession] = None
 
@@ -103,6 +107,21 @@ class DebugTab(QWidget):
         layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         self.scroll_area.setWidget(self.scroll_content)
         root_layout.addWidget(self.scroll_area)
+
+        # Safety-first mode guide. Keep the non-halting path visually primary.
+        self.safety_guide = QFrame(self.scroll_content)
+        self.safety_guide.setObjectName("debugSafetyGuide")
+        safety_layout = QHBoxLayout(self.safety_guide)
+        safety_layout.setContentsMargins(10, 7, 10, 7)
+        safety_layout.setSpacing(10)
+        safe = QLabel("● LIVE MONITOR · KHUYẾN NGHỊ · MCU tiếp tục RUNNING")
+        safe.setObjectName("debugSafeModeBadge")
+        intrusive = QLabel("▲ INTERACTIVE DEBUG · Có thể HALT/STEP/RESET MCU")
+        intrusive.setObjectName("debugIntrusiveModeBadge")
+        safety_layout.addWidget(safe)
+        safety_layout.addWidget(intrusive)
+        safety_layout.addStretch(1)
+        layout.addWidget(self.safety_guide)
 
         # 1. Top Section: Connection & Environment Panel
         self.conn_panel = DebugConnectionPanel(self.scroll_content)
@@ -232,12 +251,28 @@ class DebugTab(QWidget):
         mode = str(self._setting_value("debug/mode", "auto") or "auto")
         host = str(self._setting_value("debug/gateway_host", "") or "")
         user = str(self._setting_value("debug/gateway_user", "") or "")
+        self._managed_profile_loaded = False
+        if not host or not user:
+            try:
+                profile = self._profile_loader()
+            except Exception:
+                profile = None
+            if profile is not None:
+                host = profile.host
+                user = profile.user
+                ssh_port = profile.port
+                self._managed_profile_loaded = True
+            else:
+                ssh_port = None
+        else:
+            ssh_port = None
         last_symbols = str(self._setting_value("debug/last_symbols", "") or "")
         root_text = str(self._setting_value("debug/symbol_root", "") or "")
-        try:
-            ssh_port = int(self._setting_value("debug/gateway_ssh_port", 22) or 22)
-        except (TypeError, ValueError):
-            ssh_port = 22
+        if ssh_port is None:
+            try:
+                ssh_port = int(self._setting_value("debug/gateway_ssh_port", 22) or 22)
+            except (TypeError, ValueError):
+                ssh_port = 22
         sample_expressions = str(self._setting_value("debug/sample_expressions", "") or "")
         try:
             sample_cycles = int(self._setting_value("debug/sample_cycles", 100) or 100)
@@ -322,7 +357,10 @@ class DebugTab(QWidget):
         elif role == "gateway":
             summary = "Gateway giữ ST-Link/OpenOCD; máy khác kết nối qua SSH."
         elif role == "client":
-            summary = "Client tự mở SSH tunnel rồi GDB/MI attach tới Gateway."
+            if self._managed_profile_loaded:
+                summary = "Client · dùng saved Gateway profile đã xác minh · SSH strict trust + managed key."
+            else:
+                summary = "Client tự mở SSH tunnel rồi GDB/MI attach tới Gateway. Thiết lập profile ở Gateway Setup để không nhập lại endpoint."
         else:
             summary = "Local debug trực tiếp ST-Link trên máy này."
         self.role_summary.setText(summary)
