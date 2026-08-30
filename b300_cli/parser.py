@@ -87,7 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     debug.add_argument(
         "debug_mode", nargs="?",
-        choices=("gateway", "client", "server", "vscode", "symbols", "selftest", "inspect", "where", "registers", "stack", "variable", "poll", "read-words", "break", "watch"),
+        choices=("gateway", "client", "server", "vscode", "symbols", "selftest", "inspect", "where", "registers", "stack", "variable", "sample", "poll", "read-words", "break", "watch"),
         default="gateway", metavar="mode",
         help="Debug mode: gateway, client, selftest, server (legacy alias), or diagnostics.",
     )
@@ -116,7 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="SSH port for remote Client/VSCode (default: 22).")
     debug.add_argument(
         "--client-action",
-        choices=("inspect", "where", "registers", "stack", "variable", "poll",
+        choices=("inspect", "where", "registers", "stack", "variable", "sample", "poll",
                  "read-words", "break", "watch"),
         default="inspect",
         help="One-shot operation for debug client (default: inspect).",
@@ -136,7 +136,23 @@ def build_parser() -> argparse.ArgumentParser:
     debug.add_argument("--frames", type=parse_integer, default=8,
                        help="Maximum stack frames for inspect/stack (default: 8).")
     debug.add_argument("--expression",
-                       help="Allow-listed variable expression for debug variable/watch.")
+                       help="Allow-listed variable expression for debug variable/watch/sample.")
+    debug.add_argument(
+        "--sample-expression", action="append", default=[],
+        help="Additional allow-listed expression for debug sample; repeatable, max 16 total.",
+    )
+    debug.add_argument(
+        "--samples", type=parse_integer, default=20,
+        help="Bounded sample cycles for debug sample (default: 20, max: 1000).",
+    )
+    debug.add_argument(
+        "--sample-interval", type=float, default=0.5,
+        help="Delay between sample cycles in seconds (default: 0.5, min: 0.1).",
+    )
+    debug.add_argument(
+        "--sample-output", type=Path,
+        help="Optional .csv or .jsonl file for bounded variable samples.",
+    )
     debug.add_argument("--location",
                        help="Function or basename:line for one-shot hardware breakpoint.")
     debug.add_argument("--timeout", type=float, default=5.0,

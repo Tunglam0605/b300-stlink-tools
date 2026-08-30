@@ -480,6 +480,126 @@ class B300StlinkTests(unittest.TestCase):
         self.assertEqual(record["frame"]["line"], 417)
         self.assertTrue(created[0].stopped)
 
+    def test_integrated_sample_dry_run_is_bounded_multi_variable_and_non_mutating(self) -> None:
+        module = tool()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            symbols = root / "firmware.axf"
+            symbols.write_bytes(b"AXF")
+            sample_output = root / "samples.csv"
+            output = io.StringIO()
+            with redirect_stdout(output):
+                result = module.main([
+                    "debug", "sample", "--symbols", str(symbols),
+                    "--expression", "xTickCount",
+                    "--sample-expression", "motorSpeed",
+                    "--samples", "5", "--sample-interval", "0.2",
+                    "--sample-output", str(sample_output),
+                    "--dry-run", "--json",
+                ])
+            self.assertFalse(sample_output.exists())
+        self.assertEqual(result, 0)
+        record = json.loads(output.getvalue())
+        self.assertEqual(record["mode"], "sample")
+        self.assertEqual(record["sample_expressions"], ["xTickCount", "motorSpeed"])
+        self.assertEqual(record["sample_cycles"], 5)
+        self.assertEqual(record["sample_interval"], 0.2)
+        self.assertTrue(record["preserve_target_state"])
+        rendered = " ".join(record["command"]).lower()
+        for forbidden in ("flash erase_sector", "mass_erase", "program {", "flash protect", "mww "):
+            self.assertNotIn(forbidden, rendered)
+
+    def test_integrated_sample_validates_bounds_symbols_and_output_before_hardware(self) -> None:
+        module = tool()
+        cases = [
+            (["debug", "sample", "--expression", "xTickCount", "--dry-run", "--json"], "requires --symbols"),
+            (["debug", "sample", "--symbols", "missing.axf", "--expression", "xTickCount", "--samples", "0", "--dry-run", "--json"], "Sample cycles"),
+            (["debug", "sample", "--symbols", "missing.axf", "--expression", "xTickCount", "--sample-interval", "0.01", "--dry-run", "--json"], "Sample interval"),
+            (["debug", "sample", "--symbols", "missing.axf", "--expression", "xTickCount", "--sample-output", "samples.txt", "--dry-run", "--json"], "csv or .jsonl"),
+        ]
+        for argv, expected in cases:
+            with self.subTest(argv=argv):
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    result = module.main(argv)
+                self.assertEqual(result, 1)
+                self.assertIn(expected, output.getvalue())
+
+    def test_integrated_sample_writes_csv_and_stops_session(self) -> None:
+        module = tool()
+        created = []
+
+        class Info:
+            gdb_endpoint = "127.0.0.1:3333"
+            tcl_endpoint = "127.0.0.1:6666"
+            tcl_version = "OpenOCD test"
+            initial_target_state = "running"
+            symbols = "C:/fw/firmware.axf"
+
+        class FakeSession:
+            def __init__(self, *args, **kwargs):
+                self.stopped = False
+                self.cycles = 0
+                created.append(self)
+            def start(self, config):
+                return Info()
+            def capture_variables(self, expressions):
+                self.cycles += 1
+                return tuple(
+                    SimpleNamespace(expression=expression, value=str(self.cycles * index))
+                    for index, expression in enumerate(expressions, start=1)
+                )
+            def stop(self):
+                self.stopped = True
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            symbols = root / "firmware.axf"
+            symbols.write_bytes(b"AXF")
+            sample_output = root / "samples.csv"
+            output = io.StringIO()
+            with mock.patch.object(module, "DebugSession", FakeSession), \
+                    mock.patch.object(module, "list_probes", return_value=(ProbeInfo("TEST123", "ST-Link", "test"),)), \
+                    redirect_stdout(output):
+                result = module.main([
+                    "debug", "sample", "--symbols", str(symbols),
+                    "--expression", "speed", "--sample-expression", "current",
+                    "--samples", "2", "--sample-interval", "0.1",
+                    "--sample-output", str(sample_output), "--json",
+                ])
+            csv_text = sample_output.read_text(encoding="utf-8")
+        self.assertEqual(result, 0)
+        record = json.loads(output.getvalue())
+        self.assertEqual(record["sampling"]["sample_cycles"], 2)
+        self.assertEqual(len(record["sampling"]["samples"]), 4)
+        self.assertEqual(record["sampling"]["samples"][0]["expression"], "speed")
+        self.assertIn("speed", csv_text)
+        self.assertIn("current", csv_text)
+        self.assertTrue(created[0].stopped)
+
+    def test_debug_client_sample_dry_run_uses_same_bounded_sampling_contract(self) -> None:
+        module = tool()
+        with tempfile.TemporaryDirectory() as directory:
+            symbols = Path(directory) / "firmware.axf"
+            symbols.write_bytes(b"AXF")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                result = module.main([
+                    "debug", "client", "--ssh-host", "gateway.example",
+                    "--ssh-user", "automation", "--client-action", "sample",
+                    "--symbols", str(symbols), "--expression", "xTickCount",
+                    "--sample-expression", "motorSpeed", "--samples", "3",
+                    "--sample-interval", "0.25", "--dry-run", "--json",
+                ])
+        self.assertEqual(result, 0)
+        record = json.loads(output.getvalue())
+        self.assertEqual(record["event"], "debug_client_plan")
+        self.assertEqual(record["action"], "sample")
+        self.assertEqual(record["sample_expressions"], ["xTickCount", "motorSpeed"])
+        self.assertEqual(record["sample_cycles"], 3)
+        self.assertEqual(record["sample_interval"], 0.25)
+        self.assertEqual(record["remote_transport"], "ssh-local-forwarding")
+
     def test_integrated_break_dry_run_requires_symbols_and_is_hardware_only(self) -> None:
         module = tool()
         with tempfile.TemporaryDirectory() as directory:

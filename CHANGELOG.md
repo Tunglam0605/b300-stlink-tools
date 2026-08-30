@@ -9,6 +9,11 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 - Linux AppImage packaging tự retry tối đa 3 lần khi `appimagetool` trả lỗi process tạm thời (ví dụ runtime download HTTP 5xx), xóa AppImage dở trước lần thử tiếp theo và vẫn fail-closed sau khi hết retry; giảm việc phải rerun toàn bộ release job vì sự cố mạng nhất thời.
 
+### Added
+
+- Thêm nền `debug sample` cho Local và `debug client --client-action sample` qua SSH: lấy mẫu hữu hạn tối đa 16 biến trong **một HALT/RUN cycle**, giới hạn 0.1–60 s giữa các chu kỳ, tối đa 1000 chu kỳ, giữ nguyên trạng thái target và có thể xuất `.csv`/`.jsonl` để làm nguồn dữ liệu cho Live Plot sau này.
+- Sampling phân biệt `raw_value` và `numeric_value`, nên enum/string vẫn được lưu nhưng chỉ scalar số rõ ràng mới được coi là dữ liệu đồ thị. Hardware smoke trên B300 thật với `xTickCount`, 5 chu kỳ ở 5 Hz, đã PASS và target/WRP/metadata vẫn nguyên trạng.
+
 ## [0.9.0] - 2026-08-30
 
 ### Added

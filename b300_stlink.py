@@ -43,6 +43,7 @@ from b300_core.openocd import (
 from b300_core.debug_service import DebugConfig, DebugService, DebugState
 from b300_core.debug_session import DebugSession, DebugSessionConfig
 from b300_core.debug_selftest import run_loopback_debug_selftest
+from b300_core.debug_sampling import sample_variables, validate_sampling_request, write_samples
 from b300_core.elf_matcher import discover_symbol_files, find_matching_symbol_file
 from b300_core.tcl_client import SafeTclClient, TclEndpoint
 from b300_core.ssh_debug_tunnel import (
@@ -316,6 +317,21 @@ def run_debug_selftest(args: argparse.Namespace, reporter: Reporter) -> int:
     emit_snapshot(record, args.json, "\n".join(text))
     return 0 if report.passed else 1
 
+def _sampling_expressions(args) -> tuple:
+    expressions = []
+    if getattr(args, "expression", None):
+        expressions.append(args.expression)
+    expressions.extend(getattr(args, "sample_expression", ()) or ())
+    return validate_sampling_request(
+        expressions, getattr(args, "samples", 20), getattr(args, "sample_interval", 0.5)
+    )
+
+
+def _validate_sample_output(path) -> None:
+    if path is not None and Path(path).suffix.lower() not in {".csv", ".jsonl"}:
+        raise ValueError("--sample-output must use .csv or .jsonl.")
+
+
 def _execute_debug_operation(session: DebugSession, mode: str, args, base: dict) -> str:
     """Execute one bounded read/debug action on an already-connected session."""
     if mode == "poll":
@@ -354,6 +370,25 @@ def _execute_debug_operation(session: DebugSession, mode: str, args, base: dict)
         value = session.capture_variable(args.expression)
         base["variable"] = {"expression": value.expression, "value": value.value}
         text = "%s=%s" % (value.expression, value.value)
+    elif mode == "sample":
+        expressions = _sampling_expressions(args)
+        samples = sample_variables(
+            session.capture_variables, expressions, args.samples, args.sample_interval
+        )
+        output = None
+        if args.sample_output is not None:
+            output = str(write_samples(args.sample_output, samples))
+        base["sampling"] = {
+            "expressions": list(expressions),
+            "sample_cycles": args.samples,
+            "interval_seconds": args.sample_interval,
+            "output": output,
+            "samples": [sample.to_record() for sample in samples],
+        }
+        text = "\n".join(
+            "%.3fs %s=%s" % (sample.elapsed_seconds, sample.expression, sample.raw_value)
+            for sample in samples
+        )
     elif mode == "break":
         hit = session.break_once(args.location, args.timeout)
         base["hit"] = {
@@ -407,6 +442,11 @@ def run_integrated_debug(args: argparse.Namespace, reporter: Reporter) -> int:
         raise ValueError("--frames must be in range 1..64.")
     if args.debug_mode in {"variable", "watch"} and not args.expression:
         raise ValueError("debug %s requires --expression NAME." % args.debug_mode)
+    if args.debug_mode == "sample":
+        _sampling_expressions(args)
+        _validate_sample_output(args.sample_output)
+        if args.symbols is None:
+            raise ValueError("debug sample requires --symbols ELF_OR_AXF.")
     if args.debug_mode == "break" and not args.location:
         raise ValueError("debug break requires --location FUNCTION_OR_FILE_LINE.")
     if args.debug_mode in {"break", "watch"} and args.symbols is None:
@@ -438,7 +478,12 @@ def run_integrated_debug(args: argparse.Namespace, reporter: Reporter) -> int:
             gdb_endpoint="%s:%d" % (config.bind_address, config.gdb_port),
             tcl_endpoint="%s:%d" % (config.bind_address, config.tcl_port),
             preserve_target_state=True, timeout=args.timeout, location=args.location,
-            expression=args.expression, dry_run=True,
+            expression=args.expression,
+            sample_expressions=list(_sampling_expressions(args)) if args.debug_mode == "sample" else None,
+            sample_cycles=args.samples if args.debug_mode == "sample" else None,
+            sample_interval=args.sample_interval if args.debug_mode == "sample" else None,
+            sample_output=str(args.sample_output) if args.sample_output is not None else None,
+            dry_run=True,
         )
         return 0
 
@@ -473,6 +518,11 @@ def run_debug_client(args, reporter: Reporter) -> int:
         raise ValueError("--frames must be in range 1..64.")
     if action in {"variable", "watch"} and not args.expression:
         raise ValueError("debug client %s requires --expression NAME." % action)
+    if action == "sample":
+        _sampling_expressions(args)
+        _validate_sample_output(args.sample_output)
+        if args.symbols is None and not args.symbol_root:
+            raise ValueError("debug client sample requires --symbols or --symbol-root.")
     if action == "break" and not args.location:
         raise ValueError("debug client break requires --location FUNCTION_OR_FILE_LINE.")
     if action in {"break", "watch"} and args.symbols is None:
@@ -505,6 +555,10 @@ def run_debug_client(args, reporter: Reporter) -> int:
             symbols=str(symbols) if symbols else None,
             preserve_target_state=True,
             gateway_ports={"gdb": 3333, "tcl": 6666},
+            sample_expressions=list(_sampling_expressions(args)) if action == "sample" else None,
+            sample_cycles=args.samples if action == "sample" else None,
+            sample_interval=args.sample_interval if action == "sample" else None,
+            sample_output=str(args.sample_output) if args.sample_output is not None else None,
             remote_transport="ssh-local-forwarding", dry_run=True,
         )
         return 0

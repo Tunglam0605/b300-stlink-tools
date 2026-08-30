@@ -188,6 +188,29 @@ class DebugSessionTests(unittest.TestCase):
         self.assertNotIn("continue", events)
         session.stop()
 
+    def test_capture_variables_halts_once_for_multiple_expressions_and_restores_running(self) -> None:
+        session, _service, _gdb, events = self.make_session(poll_state="running")
+        session.start(DebugSessionConfig(ProbeRef("TEST")))
+        values = session.capture_variables(("speed", "current", "error"))
+        self.assertEqual(values, (
+            ("variable", "speed"),
+            ("variable", "current"),
+            ("variable", "error"),
+        ))
+        self.assertEqual(events.count("interrupt-stopped"), 1)
+        self.assertEqual(events.count("continue"), 1)
+        session.stop()
+
+    def test_capture_variables_validates_expression_count_before_halting(self) -> None:
+        session, _service, _gdb, events = self.make_session(poll_state="running")
+        session.start(DebugSessionConfig(ProbeRef("TEST")))
+        with self.assertRaisesRegex(ValueError, "At least one"):
+            session.capture_variables(())
+        with self.assertRaisesRegex(ValueError, "At most 16"):
+            session.capture_variables(tuple("v%d" % index for index in range(17)))
+        self.assertNotIn("interrupt-stopped", events)
+        session.stop()
+
     def test_break_once_verifies_hit_deletes_resource_and_resumes(self) -> None:
         session, _service, gdb, events = self.make_session(poll_state="halted")
         session.start(DebugSessionConfig(ProbeRef("TEST")))
