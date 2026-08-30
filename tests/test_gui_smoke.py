@@ -92,7 +92,8 @@ class GuiSmokeTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls) -> None:
         cls.app.processEvents()
-        cls.app.shutdown()
+        # Keep the process-wide Qt application alive for later GUI test modules.
+        # Entry-point finalization is covered in an isolated subprocess below.
         cls.app = None
 
     def test_smoke_entry_point_finalizes_qapplication(self) -> None:
