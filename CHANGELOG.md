@@ -5,6 +5,8 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+- Sửa UX updater cho Preview/Development build: GUI luôn hiển thị rõ phiên bản đang chạy (`Đang dùng v0.12.0`) tách biệt với `Stable mới nhất`; nếu build hiện tại mới hơn Stable (ví dụ v0.12.0 so với v0.10.0), UI ghi `Preview/Dev`, giải thích updater không downgrade và không còn báo nhầm v0.10.0 là phiên bản đang dùng/mới nhất của build hiện tại.
+
 ### Added
 
 - Bổ sung frontend workflow theo vai trò cho `Remote Gateway / Client`: người dùng chọn rõ máy hiện tại là Gateway hay Client; mỗi vai trò chỉ hiển thị 3 bước liên quan, có banner `Bước tiếp theo`, saved Gateway profile và `SSH Connection Check` ngay trong GUI.

@@ -186,7 +186,9 @@ class MainWindow(QMainWindow):
 
         channel = getattr(self.update_client, "channel", "stable")
         channel_name = getattr(channel, "value", str(channel)).capitalize()
-        self.update_channel_label = QLabel("v%s · %s" % (__version__, channel_name))
+        self.update_channel_label = QLabel(
+            "Đang dùng v%s · Cập nhật: %s" % (__version__, channel_name)
+        )
         self.update_channel_label.setObjectName("updateChannelLabel")
         self.update_channel_label.setCursor(Qt.CursorShape.PointingHandCursor)
         self.update_channel_label.setToolTip("Nhấn để kiểm tra cập nhật phiên bản mới")
@@ -475,7 +477,9 @@ class MainWindow(QMainWindow):
         self.check_updates_action.setEnabled(False)
         channel = getattr(self.update_client, "channel", "stable")
         channel_name = getattr(channel, "value", str(channel)).capitalize()
-        self.update_channel_label.setText("v%s · %s · Đang kiểm tra…" % (__version__, channel_name))
+        self.update_channel_label.setText(
+            "Đang dùng v%s · %s · Đang kiểm tra…" % (__version__, channel_name)
+        )
         worker.start()
 
     def _update_check_finished(
@@ -484,22 +488,53 @@ class MainWindow(QMainWindow):
         self._update_result = result
         channel = getattr(self.update_client, "channel", "stable")
         channel_name = getattr(channel, "value", str(channel)).capitalize()
-        status = "Có bản mới" if result.available else "Đã mới nhất"
+        current_version = SemVer.parse(__version__)
+        latest_version = result.release.version
         if result.available:
             self.update_channel_label.setText(
-                "⬆ v%s có sẵn · đang dùng v%s" % (result.release.version, __version__)
+                "⬆ %s v%s có sẵn · đang dùng v%s" %
+                (channel_name, latest_version, __version__)
             )
             self.update_channel_label.setToolTip(
-                "Có bản cập nhật mới. Nhấn để xem hoặc kiểm tra lại."
+                "Có bản cập nhật mới trên kênh %s. Nhấn để xem hoặc kiểm tra lại." % channel_name
             )
+            if result.asset is None:
+                if manual:
+                    QMessageBox.information(
+                        self, "Có bản mới nhưng chưa có gói phù hợp",
+                        "%s v%s đã có, nhưng chưa có package cho nền tảng hiện tại.\n\n"
+                        "Đang dùng: v%s." % (channel_name, latest_version, __version__),
+                    )
+                return
         else:
-            self.update_channel_label.setText("v%s · %s · %s" % (__version__, channel_name, status))
-            self.update_channel_label.setToolTip("Đang dùng phiên bản mới nhất. Nhấn để kiểm tra lại.")
-        if not result.available or result.asset is None:
+            if current_version > latest_version:
+                self.update_channel_label.setText(
+                    "Đang dùng v%s · Preview/Dev · %s mới nhất v%s" %
+                    (__version__, channel_name, latest_version)
+                )
+                self.update_channel_label.setToolTip(
+                    "Bản đang chạy mới hơn kênh %s. Updater không hạ cấp. "
+                    "Nhấn để kiểm tra lại." % channel_name
+                )
+                if manual:
+                    QMessageBox.information(
+                        self, "Trạng thái cập nhật",
+                        "Bạn đang dùng v%s (Preview/Development).\n\n"
+                        "%s mới nhất hiện là v%s.\n"
+                        "Updater sẽ không hạ cấp bản đang chạy." %
+                        (__version__, channel_name, latest_version),
+                    )
+                return
+            self.update_channel_label.setText(
+                "Đang dùng v%s · %s · Mới nhất" % (__version__, channel_name)
+            )
+            self.update_channel_label.setToolTip(
+                "Đang dùng phiên bản mới nhất trên kênh %s. Nhấn để kiểm tra lại." % channel_name
+            )
             if manual:
                 QMessageBox.information(
                     self, "Đã cập nhật",
-                    "Bạn đang dùng phiên bản mới nhất (%s)." % __version__,
+                    "Bạn đang dùng bản %s mới nhất (v%s)." % (channel_name, __version__),
                 )
             return
         if self.update_dialog is not None:
@@ -518,7 +553,9 @@ class MainWindow(QMainWindow):
         self.append_log("Update check failed: %s" % error)
         channel = getattr(self.update_client, "channel", "stable")
         channel_name = getattr(channel, "value", str(channel)).capitalize()
-        self.update_channel_label.setText("v%s · %s · Lỗi kiểm tra" % (__version__, channel_name))
+        self.update_channel_label.setText(
+            "Đang dùng v%s · %s · Lỗi kiểm tra" % (__version__, channel_name)
+        )
         if manual:
             QMessageBox.warning(self, "Không thể kiểm tra cập nhật", str(error))
 

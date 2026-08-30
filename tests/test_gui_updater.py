@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from b300_core.updater import UpdateCheckResult
 from b300_core.release_manifest import parse_latest_manifest
 from b300_core.update_platform import UpdatePlatform
+from b300_core.versioning import SemVer
 from b300_gui.main_window import MainWindow
 from b300_version import __version__ as CURRENT_VERSION
 from tests.test_gui_smoke import FakeService
@@ -42,10 +44,20 @@ class GuiUpdaterTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls) -> None:
         cls.app.processEvents()
-        # GuiSmokeTests may already have finalized a previous process-wide Qt
-        # application. Keep this replacement instance alive through process
-        # exit, matching GuiMemoryTests and avoiding a second Linux teardown.
-        cls.app = None
+        # Keep the QApplication wrapper alive until the isolated module process
+        # exits. Releasing the final reference here can crash PySide/Qt after
+        # unittest has already reported OK on Windows hosted runners.
+
+    def tearDown(self) -> None:
+        # Some updater tests intentionally mock MainWindow.close() to assert the
+        # install hand-off. Ensure the real Qt top-level widgets are still closed
+        # after each test so dialogs/timers never leak into module teardown.
+        for widget in list(QApplication.topLevelWidgets()):
+            try:
+                widget.close()
+            except RuntimeError:
+                pass
+        self.app.processEvents()
 
     def make_window(self, client=None, installer=None, settings=None,
                     automatic_updates=False) -> MainWindow:
@@ -71,6 +83,24 @@ class GuiUpdaterTests(unittest.TestCase):
         self.assertIn("0.12.0-7", window.about_dialog.openocd_value.text())
         self.assertTrue(window.about_dialog.build_value.text())
         window.about_dialog.close()
+        window.close()
+
+    def test_running_preview_newer_than_stable_is_not_reported_as_v010_current_or_downgrade(self) -> None:
+        stable = replace(RELEASE, version=SemVer.parse("0.10.0"))
+        result = UpdateCheckResult(False, stable, None)
+        window = self.make_window(FakeUpdateClient(result=result))
+        self.assertIn("Đang dùng v%s" % CURRENT_VERSION, window.update_channel_label.text())
+        with mock.patch.object(QMessageBox, "information") as info:
+            window._update_check_finished(result, manual=True)
+        text = window.update_channel_label.text()
+        self.assertIn("Đang dùng v%s" % CURRENT_VERSION, text)
+        self.assertIn("Preview/Dev", text)
+        self.assertIn("Stable mới nhất v0.10.0", text)
+        self.assertNotIn("Đang dùng v0.10.0", text)
+        message = info.call_args.args[2]
+        self.assertIn("Preview/Development", message)
+        self.assertIn("Stable mới nhất hiện là v0.10.0", message)
+        self.assertIn("không hạ cấp", message)
         window.close()
 
     def test_available_release_dialog_displays_version_notes_and_download(self) -> None:
@@ -175,6 +205,7 @@ class GuiUpdaterTests(unittest.TestCase):
                 self.assertIsNone(window.whats_new_dialog)
                 self.assertEqual(settings.value("updates/last_seen_version"), CURRENT_VERSION)
                 window.close()
+                self.app.processEvents()
 
     def test_periodic_automatic_update_tick_checks_when_last_check_is_stale(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

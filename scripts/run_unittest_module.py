@@ -13,7 +13,41 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-def main(argv=None) -> int:
+class HardExitTextResult(unittest.TextTestResult):
+    """Report the module result, then exit before Qt/PySide native teardown."""
+
+    def stopTestRun(self) -> None:
+        super().stopTestRun()
+        self.printErrors()
+        self.stream.writeln(self.separator2)
+        self.stream.writeln("Ran %d tests" % self.testsRun)
+        self.stream.writeln()
+        if self.wasSuccessful():
+            status = "OK"
+            if self.skipped:
+                status += " (skipped=%d)" % len(self.skipped)
+            exit_code = 0
+        else:
+            parts = []
+            if self.failures:
+                parts.append("failures=%d" % len(self.failures))
+            if self.errors:
+                parts.append("errors=%d" % len(self.errors))
+            if self.skipped:
+                parts.append("skipped=%d" % len(self.skipped))
+            status = "FAILED" + (" (%s)" % ", ".join(parts) if parts else "")
+            exit_code = 1
+        self.stream.writeln(status)
+        try:
+            self.stream.flush()
+        except Exception:
+            pass
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(exit_code)
+
+
+def run_and_exit(argv=None) -> None:
     parser = argparse.ArgumentParser(
         description="Run one unittest module in an isolated process."
     )
@@ -21,15 +55,17 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     suite = unittest.defaultTestLoader.loadTestsFromName(args.module)
-    result = unittest.TextTestRunner(verbosity=1).run(suite)
-    return 0 if result.wasSuccessful() else 1
+    # Retain all nested test cases until HardExitTextResult.stopTestRun().
+    pending = [suite]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, unittest.TestSuite):
+            current._cleanup = False
+            pending.extend(test for test in current if isinstance(test, unittest.TestSuite))
+
+    unittest.TextTestRunner(verbosity=1, resultclass=HardExitTextResult).run(suite)
+    raise RuntimeError("isolated unittest runner returned unexpectedly")
 
 
 if __name__ == "__main__":
-    exit_code = main()
-    # PySide/Qt can fail during interpreter finalization after unittest already
-    # reported OK on hosted runners. Flush useful output, then terminate this
-    # intentionally isolated module process without running native destructors.
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(exit_code)
+    run_and_exit()

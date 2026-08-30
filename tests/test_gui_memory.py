@@ -23,8 +23,8 @@ class GuiMemoryTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls) -> None:
         cls.app.processEvents()
-        # Keep the process-wide Qt application alive for later GUI test modules.
-        cls.app = None
+        # Keep the QApplication wrapper alive until the isolated module process
+        # exits; releasing the final wrapper can crash native Qt after unittest OK.
 
     def test_memory_tab_lists_all_sectors_and_has_no_write_controls(self) -> None:
         tab = MemoryTab(service=object(), probe_provider=lambda: None)
