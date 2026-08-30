@@ -67,6 +67,7 @@ class SshDebugTunnelConfig:
     gateway_gdb_port: int = 3333
     gateway_tcl_port: int = 6666
     identity_file: Optional[Path] = None
+    known_hosts_file: Optional[Path] = None
 
     def validate(self) -> None:
         if not self.host or not _SAFE_HOST.fullmatch(self.host):
@@ -86,6 +87,8 @@ class SshDebugTunnelConfig:
             raise ValueError("Local GDB and TCL forwarded ports must be distinct.")
         if self.identity_file is not None and not Path(self.identity_file).is_file():
             raise ValueError("SSH identity file does not exist: %s" % self.identity_file)
+        if self.known_hosts_file is not None and not Path(self.known_hosts_file).is_file():
+            raise ValueError("SSH known_hosts file does not exist: %s" % self.known_hosts_file)
 
     @property
     def destination(self) -> str:
@@ -109,6 +112,8 @@ class SshDebugTunnelConfig:
         ]
         if self.identity_file is not None:
             command.extend(("-o", "IdentitiesOnly=yes", "-i", str(Path(self.identity_file))))
+        if self.known_hosts_file is not None:
+            command.extend(("-o", "UserKnownHostsFile=%s" % Path(self.known_hosts_file)))
         if self.ssh_port != 22:
             command.extend(("-p", str(self.ssh_port)))
         command.append(self.destination)

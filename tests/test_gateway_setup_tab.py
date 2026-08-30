@@ -15,6 +15,7 @@ from b300_core.gateway_setup import GatewayHostCheck, GatewayHostReport
 from b300_core.ssh_identity import (
     AuthorizedKeyResult, SshClientPrepareResult, SshClientPrerequisiteReport, SshIdentityReport,
 )
+from b300_core.ssh_host_trust import GatewayHostKey, HostTrustResult
 from tests.test_ssh_identity import key_line
 from b300_gui.gateway_setup_tab import GatewaySetupTab
 
@@ -94,6 +95,55 @@ class GatewaySetupTabTests(unittest.TestCase):
             tab.prepare_host()
         dialog.assert_called_once()
         preparer.assert_not_called()
+        tab.close()
+
+    def test_show_local_gateway_host_fingerprint_exposes_only_fingerprint(self):
+        host_key = GatewayHostKey(
+            "localhost", 22, "localhost", key_line(91), "SHA256:GATEWAYHOST"
+        )
+        tab = GatewaySetupTab(
+            identity_inspector=lambda: identity_report(False),
+            host_key_reader=lambda: host_key, auto_refresh=False,
+        )
+        tab.show_local_host_key()
+        self.wait_until(lambda: not tab.has_active_operation)
+        self.assertIn("SHA256:GATEWAYHOST", tab.host_key_status.text())
+        self.assertTrue(tab.copy_host_fingerprint_button.isEnabled())
+        self.assertNotIn("PRIVATE", tab.host_key_status.text())
+        tab.close()
+
+    def test_remote_host_trust_requires_exact_fingerprint_before_write(self):
+        scanned = GatewayHostKey(
+            "gateway.local", 22, "gateway.local", key_line(92), "SHA256:SCANNED"
+        )
+        truster = mock.Mock()
+        tab = GatewaySetupTab(
+            identity_inspector=lambda: identity_report(False),
+            host_key_scanner=lambda host, port: scanned, host_truster=truster,
+            auto_refresh=False,
+        )
+        with self.assertRaisesRegex(RuntimeError, "HOST_KEY_FINGERPRINT_MISMATCH"):
+            tab._scan_verify_trust_host("gateway.local", 22, "SHA256:EXPECTED")
+        truster.assert_not_called()
+        tab.close()
+
+    def test_remote_host_trust_matching_fingerprint_calls_truster(self):
+        scanned = GatewayHostKey(
+            "gateway.local", 22, "gateway.local", key_line(93), "SHA256:MATCH"
+        )
+        trusted = HostTrustResult(
+            Path("C:/Users/test/.ssh/b300_known_hosts"), "gateway.local",
+            "SHA256:MATCH", True,
+        )
+        truster = mock.Mock(return_value=trusted)
+        tab = GatewaySetupTab(
+            identity_inspector=lambda: identity_report(False),
+            host_key_scanner=lambda host, port: scanned, host_truster=truster,
+            auto_refresh=False,
+        )
+        result = tab._scan_verify_trust_host("gateway.local", 22, "SHA256:MATCH")
+        self.assertEqual(result, trusted)
+        truster.assert_called_once_with(scanned)
         tab.close()
 
     def test_selftest_uses_host_and_full_gateway_doctor(self):

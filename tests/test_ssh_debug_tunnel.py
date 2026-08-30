@@ -52,15 +52,19 @@ class SshDebugTunnelTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             identity = Path(directory) / "id_ed25519"
             identity.write_text("private-placeholder", encoding="utf-8")
+            known_hosts = Path(directory) / "b300_known_hosts"
+            known_hosts.write_text("gateway.local ssh-ed25519 AAAAplaceholder\n", encoding="utf-8")
             config = SshDebugTunnelConfig(
                 "gateway.local", "automation", local_gdb_port=13333, local_tcl_port=16666,
-                identity_file=identity,
+                identity_file=identity, known_hosts_file=known_hosts,
             )
             argv = config.argv("ssh")
             rendered = " ".join(argv)
             self.assertIn("IdentitiesOnly=yes", rendered)
             self.assertIn("-i", argv)
             self.assertIn(str(identity), argv)
+            self.assertIn("UserKnownHostsFile=%s" % known_hosts, argv)
+            self.assertIn("StrictHostKeyChecking=yes", rendered)
             self.assertIn("127.0.0.1:13333:127.0.0.1:3333", rendered)
             self.assertNotIn("0.0.0.0", rendered)
 

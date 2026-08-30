@@ -184,12 +184,14 @@ def build_parser() -> argparse.ArgumentParser:
         "gateway", help="Inspect remote Debug Gateway host readiness.", parents=[json_parent],
     )
     gateway.add_argument(
-        "gateway_action", nargs="?", choices=("doctor", "plan", "prepare", "client-key", "authorize-key"), default="doctor",
-        help="doctor=readiness, plan/prepare=host SSH setup, client-key=generate/reuse B300 key, authorize-key=install a Client public key.",
+        "gateway_action", nargs="?", choices=("doctor", "plan", "prepare", "client-key", "authorize-key", "host-key", "trust-host"), default="doctor",
+        help="doctor/readiness; plan/prepare SSH server; client-key/authorize-key authentication; host-key/trust-host strict host verification.",
     )
     gateway.add_argument("--openocd")
     gateway.add_argument("--probe-serial", type=parse_probe_serial,
                          help="Select one ST-Link when multiple probes are connected.")
+    gateway.add_argument("--ssh-host",
+                         help="Remote Gateway hostname/IP for trust-host enrollment.")
     gateway.add_argument("--ssh-port", type=parse_tcp_port, default=22,
                          help="Local SSH server port expected by Client (default: 22).")
     gateway.add_argument("--gdb-port", type=parse_tcp_port, default=3333,
@@ -207,6 +209,10 @@ def build_parser() -> argparse.ArgumentParser:
     gateway.add_argument(
         "--public-key-file", type=Path,
         help="ssh-ed25519 public-key file for gateway authorize-key.",
+    )
+    gateway.add_argument(
+        "--confirm-host-fingerprint",
+        help="Exact SHA256 fingerprint shown locally by the trusted Gateway for trust-host.",
     )
 
     doctor = commands.add_parser(

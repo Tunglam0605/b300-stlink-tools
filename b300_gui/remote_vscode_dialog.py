@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 from b300_core.models import ProbeRef
 from b300_core.gdb_runtime import resolve_gdb
 from b300_core.remote_vscode import RemoteVsCodeProfile, workspace_executable
+from b300_core.ssh_host_trust import trusted_known_hosts_file
 from b300_core.ssh_identity import managed_identity_file
 
 
@@ -97,6 +98,9 @@ class RemoteVsCodeDialog(QDialog):
             gdb_path=self.gdb_edit.text().strip(),
             probe_serial=probe_serial,
             identity_file=managed_identity_file(),
+            known_hosts_file=trusted_known_hosts_file(
+                self.host_edit.text().strip(), self.ssh_port.value()
+            ),
         )
 
     def refresh_preview(self) -> None:

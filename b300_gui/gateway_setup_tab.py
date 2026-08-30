@@ -6,7 +6,8 @@ from typing import Callable, Optional
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QApplication, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QMessageBox, QPlainTextEdit,
+    QApplication, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox, QPlainTextEdit,
+    QSpinBox,
     QProgressBar, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -19,6 +20,10 @@ from b300_core.ssh_identity import (
     AuthorizedKeyResult, SshClientPrepareResult, SshClientPrerequisiteReport, SshIdentityReport,
     ensure_ssh_identity, inspect_ssh_client_prerequisites, inspect_ssh_identity,
     install_gateway_public_key, prepare_ssh_client_prerequisites, validate_public_key,
+)
+from b300_core.ssh_host_trust import (
+    GatewayHostKey, HostTrustResult, local_gateway_host_key, scan_gateway_host_key,
+    trust_gateway_host_key,
 )
 from .workers import FunctionWorker
 
@@ -46,6 +51,9 @@ class GatewaySetupTab(QWidget):
             client_prereq_inspector: Callable[..., SshClientPrerequisiteReport] = inspect_ssh_client_prerequisites,
             client_prereq_preparer: Callable[..., SshClientPrepareResult] = prepare_ssh_client_prerequisites,
             key_authorizer: Callable[..., AuthorizedKeyResult] = install_gateway_public_key,
+            host_key_reader: Callable[..., GatewayHostKey] = local_gateway_host_key,
+            host_key_scanner: Callable[..., GatewayHostKey] = scan_gateway_host_key,
+            host_truster: Callable[..., HostTrustResult] = trust_gateway_host_key,
             auto_refresh: bool = True,
     ) -> None:
         super().__init__(parent)
@@ -57,7 +65,11 @@ class GatewaySetupTab(QWidget):
         self.client_prereq_inspector = client_prereq_inspector
         self.client_prereq_preparer = client_prereq_preparer
         self.key_authorizer = key_authorizer
+        self.host_key_reader = host_key_reader
+        self.host_key_scanner = host_key_scanner
+        self.host_truster = host_truster
         self._identity: Optional[SshIdentityReport] = None
+        self._local_host_key: Optional[GatewayHostKey] = None
         self._worker: Optional[FunctionWorker] = None
         self._retired_workers = []
         self._report: Optional[GatewayHostReport] = None
@@ -141,6 +153,55 @@ class GatewaySetupTab(QWidget):
         identity_layout.addWidget(key_note)
         root.addWidget(identity_group)
 
+        trust_group = QGroupBox("Strict SSH host trust")
+        trust_layout = QVBoxLayout(trust_group)
+        self.host_key_status = QLabel("Gateway host fingerprint: not loaded")
+        self.host_key_status.setObjectName("gatewayHostKeyStatus")
+        trust_layout.addWidget(self.host_key_status)
+        local_host_actions = QHBoxLayout()
+        self.show_host_key_button = QPushButton("Show This Gateway Fingerprint")
+        self.show_host_key_button.setObjectName("gatewayShowHostKeyButton")
+        self.show_host_key_button.clicked.connect(self.show_local_host_key)
+        self.copy_host_fingerprint_button = QPushButton("Copy Host Fingerprint")
+        self.copy_host_fingerprint_button.setObjectName("gatewayCopyHostFingerprintButton")
+        self.copy_host_fingerprint_button.clicked.connect(self.copy_host_fingerprint)
+        self.copy_host_fingerprint_button.setEnabled(False)
+        local_host_actions.addWidget(self.show_host_key_button)
+        local_host_actions.addWidget(self.copy_host_fingerprint_button)
+        local_host_actions.addStretch(1)
+        trust_layout.addLayout(local_host_actions)
+
+        remote_row = QHBoxLayout()
+        remote_row.addWidget(QLabel("Remote Gateway:"))
+        self.trust_host = QLineEdit()
+        self.trust_host.setObjectName("gatewayTrustHost")
+        self.trust_host.setPlaceholderText("IP or hostname")
+        remote_row.addWidget(self.trust_host, 2)
+        remote_row.addWidget(QLabel("SSH:"))
+        self.trust_port = QSpinBox()
+        self.trust_port.setObjectName("gatewayTrustPort")
+        self.trust_port.setRange(1, 65535)
+        self.trust_port.setValue(22)
+        remote_row.addWidget(self.trust_port)
+        remote_row.addWidget(QLabel("Expected SHA256:"))
+        self.trust_fingerprint = QLineEdit()
+        self.trust_fingerprint.setObjectName("gatewayTrustFingerprint")
+        self.trust_fingerprint.setPlaceholderText("SHA256:... copied from physical Gateway")
+        remote_row.addWidget(self.trust_fingerprint, 3)
+        self.trust_host_button = QPushButton("Scan + Verify + Trust")
+        self.trust_host_button.setObjectName("gatewayTrustHostButton")
+        self.trust_host_button.clicked.connect(self.trust_remote_host)
+        remote_row.addWidget(self.trust_host_button)
+        trust_layout.addLayout(remote_row)
+        trust_note = QLabel(
+            "Client must compare the fingerprint shown by the physical Gateway. ssh-keyscan alone is never trusted. "
+            "A changed host key is blocked and never overwritten automatically."
+        )
+        trust_note.setWordWrap(True)
+        trust_note.setStyleSheet("color: #64748B; font-size: 11px;")
+        trust_layout.addWidget(trust_note)
+        root.addWidget(trust_group)
+
         self.progress = QProgressBar()
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
@@ -182,6 +243,7 @@ class GatewaySetupTab(QWidget):
         for button in (
             self.refresh_button, self.prepare_button, self.selftest_button,
             self.identity_prepare_button, self.authorize_key_button,
+            self.show_host_key_button, self.trust_host_button,
         ):
             button.setEnabled(not busy)
         self.copy_button.setEnabled(not busy and self._report is not None)
@@ -378,6 +440,56 @@ class GatewaySetupTab(QWidget):
             self, "Client Key Authorized",
             "Public key authorized%s.\nFingerprint: %s\nTarget: %s" %
             ("" if result.changed else " (already present)", result.fingerprint, result.target),
+        )
+
+    def show_local_host_key(self) -> None:
+        self._start(self.host_key_reader, self._local_host_key_loaded, "Reading Gateway host fingerprint…")
+
+    def _local_host_key_loaded(self, host_key: GatewayHostKey) -> None:
+        self._local_host_key = host_key
+        self.host_key_status.setText("Gateway host fingerprint · ssh-ed25519 · %s" % host_key.fingerprint)
+        self.copy_host_fingerprint_button.setEnabled(True)
+        self.log.emit("Gateway SSH host fingerprint loaded: %s; private host key was not read/exported." % host_key.fingerprint)
+
+    def copy_host_fingerprint(self) -> None:
+        if self._local_host_key is None:
+            return
+        QApplication.clipboard().setText(self._local_host_key.fingerprint)
+        self.log.emit("Gateway SSH host-key fingerprint copied.")
+
+    def trust_remote_host(self) -> None:
+        host = self.trust_host.text().strip()
+        fingerprint = self.trust_fingerprint.text().strip()
+        port = self.trust_port.value()
+        if not host or not fingerprint:
+            QMessageBox.warning(
+                self, "Host trust incomplete",
+                "Enter the remote Gateway host/IP and the SHA256 fingerprint shown on that physical Gateway.",
+            )
+            return
+        self._start(
+            lambda: self._scan_verify_trust_host(host, port, fingerprint),
+            self._remote_host_trusted, "Scanning and verifying Gateway host key…",
+        )
+
+    def _scan_verify_trust_host(self, host: str, port: int, expected_fingerprint: str) -> HostTrustResult:
+        scanned = self.host_key_scanner(host, port)
+        if scanned.fingerprint != expected_fingerprint:
+            raise RuntimeError(
+                "HOST_KEY_FINGERPRINT_MISMATCH: expected %s but scanned %s. No trust record was written." %
+                (expected_fingerprint, scanned.fingerprint)
+            )
+        return self.host_truster(scanned)
+
+    def _remote_host_trusted(self, result: HostTrustResult) -> None:
+        self.log.emit(
+            "Remote Gateway host trusted; fingerprint=%s changed=%s known_hosts=%s" %
+            (result.fingerprint, result.changed, result.known_hosts_file)
+        )
+        QMessageBox.information(
+            self, "Gateway Host Trusted",
+            "Strict host trust is ready%s.\nFingerprint: %s\nKnown hosts: %s" %
+            ("" if result.changed else " (already enrolled)", result.fingerprint, result.known_hosts_file),
         )
 
     def run_selftest(self) -> None:

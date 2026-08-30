@@ -22,6 +22,7 @@ from b300_core.live_session import (
     ClientLiveMonitorConfig, LiveMonitorSession, LocalLiveMonitorConfig,
 )
 from b300_core.remote_debug_guard import RemoteDebugGuard
+from b300_core.ssh_host_trust import trusted_known_hosts_file
 from b300_core.ssh_identity import managed_identity_file
 from b300_core.ssh_debug_tunnel import (
     SshDebugTunnel, SshDebugTunnelConfig, find_available_loopback_port,
@@ -686,6 +687,7 @@ class DebugTab(QWidget):
                 local_gdb_port=local_gdb, local_tcl_port=local_tcl,
                 gateway_gdb_port=3333, gateway_tcl_port=6666,
                 identity_file=managed_identity_file(),
+                known_hosts_file=trusted_known_hosts_file(host, self.client_ssh_port.value()),
             )
             tunnel_config.validate()
         except (ValueError, RuntimeError) as error:

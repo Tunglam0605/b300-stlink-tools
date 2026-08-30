@@ -14,6 +14,7 @@ from b300_core.gateway_setup import GatewayHostReport, GatewayPrepareResult, bui
 from b300_core.ssh_identity import (
     AuthorizedKeyResult, SshClientPrepareResult, SshClientPrerequisiteReport, SshIdentityReport,
 )
+from b300_core.ssh_host_trust import GatewayHostKey, HostTrustResult
 from tests.test_ssh_identity import key_line
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -90,6 +91,74 @@ class CliGatewaySetupTests(unittest.TestCase):
         self.assertTrue(record["succeeded"])
         self.assertTrue(record["changed"])
         self.assertEqual(record["security"]["lan_ingress"], [22])
+
+    def test_gateway_host_key_reports_public_fingerprint_only(self):
+        module = tool()
+        host_key = GatewayHostKey(
+            "localhost", 22, "localhost", key_line(101), "SHA256:HOST"
+        )
+        output = io.StringIO()
+        with mock.patch.object(module, "local_gateway_host_key", return_value=host_key), redirect_stdout(output):
+            result = module.main(["gateway", "host-key", "--json"])
+        self.assertEqual(result, 0)
+        record = json.loads(output.getvalue().strip().splitlines()[-1])
+        self.assertEqual(record["fingerprint"], "SHA256:HOST")
+        self.assertFalse(record["private_key_exported"])
+
+    def test_trust_host_requires_explicit_fingerprint_confirmation(self):
+        module = tool()
+        scanned = GatewayHostKey(
+            "gateway.local", 22, "gateway.local", key_line(102), "SHA256:SCAN"
+        )
+        output = io.StringIO()
+        with mock.patch.object(module, "scan_gateway_host_key", return_value=scanned), \
+             mock.patch.object(module, "trust_gateway_host_key") as trust, redirect_stdout(output):
+            result = module.main(["gateway", "trust-host", "--ssh-host", "gateway.local", "--json"])
+        self.assertEqual(result, 1)
+        trust.assert_not_called()
+        record = json.loads(output.getvalue().strip().splitlines()[-1])
+        self.assertEqual(record["reason_code"], "HOST_KEY_FINGERPRINT_CONFIRMATION_REQUIRED")
+        self.assertFalse(record["changed"])
+
+    def test_trust_host_mismatch_fails_closed(self):
+        module = tool()
+        scanned = GatewayHostKey(
+            "gateway.local", 22, "gateway.local", key_line(103), "SHA256:REAL"
+        )
+        output = io.StringIO()
+        with mock.patch.object(module, "scan_gateway_host_key", return_value=scanned), \
+             mock.patch.object(module, "trust_gateway_host_key") as trust, redirect_stdout(output):
+            result = module.main([
+                "gateway", "trust-host", "--ssh-host", "gateway.local",
+                "--confirm-host-fingerprint", "SHA256:WRONG", "--json",
+            ])
+        self.assertEqual(result, 1)
+        trust.assert_not_called()
+        record = json.loads(output.getvalue().strip().splitlines()[-1])
+        self.assertEqual(record["reason_code"], "HOST_KEY_FINGERPRINT_MISMATCH")
+        self.assertFalse(record["changed"])
+
+    def test_trust_host_matching_fingerprint_enrolls_managed_known_hosts(self):
+        module = tool()
+        scanned = GatewayHostKey(
+            "gateway.local", 22, "gateway.local", key_line(104), "SHA256:MATCH"
+        )
+        trusted = HostTrustResult(
+            Path("C:/Users/test/.ssh/b300_known_hosts"), "gateway.local",
+            "SHA256:MATCH", True,
+        )
+        output = io.StringIO()
+        with mock.patch.object(module, "scan_gateway_host_key", return_value=scanned), \
+             mock.patch.object(module, "trust_gateway_host_key", return_value=trusted) as trust, redirect_stdout(output):
+            result = module.main([
+                "gateway", "trust-host", "--ssh-host", "gateway.local",
+                "--confirm-host-fingerprint", "SHA256:MATCH", "--json",
+            ])
+        self.assertEqual(result, 0)
+        trust.assert_called_once_with(scanned)
+        record = json.loads(output.getvalue().strip().splitlines()[-1])
+        self.assertTrue(record["strict_host_key_checking"])
+        self.assertTrue(record["changed"])
 
     def test_client_key_reports_public_material_but_never_private_contents(self):
         module = tool()

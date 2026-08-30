@@ -55,13 +55,18 @@ class SshLiveTunnelTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             identity = Path(directory) / "id_ed25519"
             identity.write_text("private-placeholder", encoding="utf-8")
+            known_hosts = Path(directory) / "b300_known_hosts"
+            known_hosts.write_text("gateway.local ssh-ed25519 AAAAplaceholder\n", encoding="utf-8")
             config = SshLiveTunnelConfig(
-                "gateway.local", "automation", local_tcl_port=16666, identity_file=identity
+                "gateway.local", "automation", local_tcl_port=16666,
+                identity_file=identity, known_hosts_file=known_hosts,
             )
             argv = config.argv("ssh")
             rendered = " ".join(argv)
             self.assertIn("IdentitiesOnly=yes", rendered)
             self.assertIn(str(identity), argv)
+            self.assertIn("UserKnownHostsFile=%s" % known_hosts, argv)
+            self.assertIn("StrictHostKeyChecking=yes", rendered)
             self.assertEqual(argv.count("-L"), 1)
             self.assertNotIn(":3333", rendered)
 

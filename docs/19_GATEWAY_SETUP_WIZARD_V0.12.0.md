@@ -112,3 +112,31 @@ b300-stlink gateway authorize-key --public-key-file client.pub --confirm-system-
 ```
 
 `client-key` chỉ cài OpenSSH Client khi thiếu và khi có `--confirm-system-change`. `authorize-key` không nhận private key.
+## Strict Host-Key Trust Bootstrap
+
+B300 không tắt `StrictHostKeyChecking` và không dùng `accept-new`. Lần kết nối đầu tiên được bootstrap theo quy trình có đối chiếu fingerprint:
+
+1. Trên máy Gateway vật lý, bấm **Show This Gateway Fingerprint** hoặc chạy `b300-stlink gateway host-key --json`. Tool chỉ đọc `ssh_host_ed25519_key.pub`; private host key không được đọc/export.
+2. Copy fingerprint `SHA256:...` sang máy Client bằng kênh người vận hành kiểm soát.
+3. Trên Client, nhập IP/hostname Gateway + SSH port + fingerprint vào **Strict SSH host trust**, rồi bấm **Scan + Verify + Trust**.
+4. Tool dùng `ssh-keyscan -t ed25519` để lấy public host key từ mạng nhưng **không tin kết quả scan một mình**. Fingerprint scan phải trùng chính xác fingerprint đã lấy trực tiếp từ Gateway.
+5. Khi trùng, key được append idempotent vào `~/.ssh/b300_known_hosts`. Nếu cùng host đã có key khác, thao tác fail-closed với `HOST_KEY_CONFLICT`; tool không overwrite tự động.
+6. Debug Client, Realtime Live Monitor và VS Code kit tự thêm `UserKnownHostsFile=~/.ssh/b300_known_hosts` khi host đã enroll, đồng thời vẫn giữ `StrictHostKeyChecking=yes`.
+
+CLI tương đương:
+
+```bash
+# On physical Gateway
+b300-stlink gateway host-key --json
+
+# On Client: scan only; no trust record is written yet
+b300-stlink gateway trust-host --ssh-host 192.168.1.50 --json
+
+# After comparing the exact SHA256 fingerprint
+b300-stlink gateway trust-host \
+  --ssh-host 192.168.1.50 \
+  --confirm-host-fingerprint SHA256:EXACT_FINGERPRINT \
+  --json
+```
+
+Đường này chống việc vô tình tin một Gateway giả/MITM trong lần kết nối đầu tiên tốt hơn việc tự động `accept-new`.

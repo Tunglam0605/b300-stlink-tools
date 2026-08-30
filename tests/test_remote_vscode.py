@@ -51,15 +51,18 @@ class RemoteVsCodeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             identity = Path(directory) / "b300_gateway_ed25519"
             identity.write_text("private-placeholder", encoding="utf-8")
+            known_hosts = Path(directory) / "b300_known_hosts"
+            known_hosts.write_text("gateway.example ssh-ed25519 AAAAplaceholder\n", encoding="utf-8")
             profile = RemoteVsCodeProfile(
                 ssh_host="gateway.example", ssh_user="automation",
                 executable=workspace_executable("Objects/F407/Main_V2_F407.axf"),
-                identity_file=identity,
+                identity_file=identity, known_hosts_file=known_hosts,
             )
             tunnel = profile.tunnel_argv()
             rendered = " ".join(tunnel)
             self.assertIn("IdentitiesOnly=yes", rendered)
             self.assertIn(str(identity), tunnel)
+            self.assertIn("UserKnownHostsFile=%s" % known_hosts, tunnel)
             self.assertIn("StrictHostKeyChecking=yes", rendered)
             self.assertNotIn("6666", tunnel)
 

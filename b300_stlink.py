@@ -54,6 +54,10 @@ from b300_core.debug_selftest import run_loopback_debug_selftest
 from b300_core.debug_sampling import sample_variables, validate_sampling_request, write_samples
 from b300_core.elf_matcher import discover_symbol_files, find_matching_symbol_file
 from b300_core.tcl_client import SafeTclClient, TclEndpoint
+from b300_core.ssh_host_trust import (
+    local_gateway_host_key, scan_gateway_host_key, trust_gateway_host_key,
+    trusted_known_hosts_file,
+)
 from b300_core.ssh_identity import (
     ensure_ssh_identity, inspect_ssh_client_prerequisites, install_gateway_public_key,
     managed_identity_file, prepare_ssh_client_prerequisites, validate_public_key,
@@ -150,6 +154,7 @@ def run_vscode_profile(args: argparse.Namespace) -> int:
         gdb_path=_resolve_vscode_gdb_path(args.vscode_gdb_path),
         probe_serial=args.probe_serial,
         identity_file=managed_identity_file(),
+        known_hosts_file=trusted_known_hosts_file(args.ssh_host, args.ssh_port),
     )
     record = profile.record()
     if args.output_dir is not None:
@@ -593,6 +598,7 @@ def run_debug_client(args, reporter: Reporter) -> int:
         local_gdb_port=local_gdb, local_tcl_port=local_tcl,
         gateway_gdb_port=3333, gateway_tcl_port=6666,
         identity_file=managed_identity_file(),
+        known_hosts_file=trusted_known_hosts_file(args.ssh_host, args.ssh_port),
     )
     tunnel_config.validate()
 
@@ -1015,6 +1021,78 @@ def main(argv: Optional[List[str]] = None) -> int:
                 },
                 args.json,
                 format_probes_text(probes),
+            )
+            return 0
+
+        if args.command == "gateway" and args.gateway_action == "host-key":
+            host_key = local_gateway_host_key()
+            record = {
+                "schema_version": 1,
+                "command": "gateway host-key",
+                "status": "ok",
+                "key_type": "ssh-ed25519",
+                "fingerprint": host_key.fingerprint,
+                "public_key": host_key.public_key,
+                "private_key_exported": False,
+                "next_action": "Compare this fingerprint on the Client before trust-host enrollment.",
+            }
+            emit_snapshot(
+                record, args.json,
+                "Gateway SSH host key fingerprint: %s\nType: ssh-ed25519" % host_key.fingerprint,
+            )
+            return 0
+
+        if args.command == "gateway" and args.gateway_action == "trust-host":
+            if not args.ssh_host:
+                raise ValueError("gateway trust-host requires --ssh-host HOST.")
+            scanned = scan_gateway_host_key(args.ssh_host, args.ssh_port)
+            if not args.confirm_host_fingerprint:
+                record = {
+                    "schema_version": 1,
+                    "command": "gateway trust-host",
+                    "status": "confirmation_required",
+                    "reason_code": "HOST_KEY_FINGERPRINT_CONFIRMATION_REQUIRED",
+                    "host": scanned.host,
+                    "ssh_port": scanned.port,
+                    "scanned_fingerprint": scanned.fingerprint,
+                    "changed": False,
+                    "next_action": "Compare with `gateway host-key` on the physical Gateway, then re-run with --confirm-host-fingerprint.",
+                }
+                emit_snapshot(
+                    record, args.json,
+                    "HOST_KEY_FINGERPRINT_CONFIRMATION_REQUIRED: scanned=%s; no known_hosts change made." % scanned.fingerprint,
+                )
+                return 1
+            if args.confirm_host_fingerprint.strip() != scanned.fingerprint:
+                record = {
+                    "schema_version": 1,
+                    "command": "gateway trust-host",
+                    "status": "blocked",
+                    "reason_code": "HOST_KEY_FINGERPRINT_MISMATCH",
+                    "host": scanned.host,
+                    "ssh_port": scanned.port,
+                    "scanned_fingerprint": scanned.fingerprint,
+                    "confirmed_fingerprint": args.confirm_host_fingerprint.strip(),
+                    "changed": False,
+                }
+                emit_snapshot(record, args.json, "HOST_KEY_FINGERPRINT_MISMATCH: refusing known_hosts enrollment.")
+                return 1
+            trusted = trust_gateway_host_key(scanned)
+            record = {
+                "schema_version": 1,
+                "command": "gateway trust-host",
+                "status": "ok",
+                "host": scanned.host,
+                "ssh_port": scanned.port,
+                "fingerprint": trusted.fingerprint,
+                "known_hosts_file": str(trusted.known_hosts_file),
+                "changed": trusted.changed,
+                "strict_host_key_checking": True,
+            }
+            emit_snapshot(
+                record, args.json,
+                "Gateway host trusted%s: %s (%s)" %
+                ("" if trusted.changed else " (already enrolled)", scanned.host, trusted.fingerprint),
             )
             return 0
 

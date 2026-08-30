@@ -730,6 +730,8 @@ class DebugTabTests(unittest.TestCase):
                 return_value=(matched, (matched,)),
             ), mock.patch(
                 "b300_gui.debug_tab.managed_identity_file", return_value=symbols,
+            ), mock.patch(
+                "b300_gui.debug_tab.trusted_known_hosts_file", return_value=symbols,
             ):
                 tab.start_selected_mode()
                 self.wait_until(lambda: tab._worker is None)
@@ -747,6 +749,7 @@ class DebugTabTests(unittest.TestCase):
         self.assertTrue(any(isinstance(item, tuple) and item[0] == "tunnel-start" for item in tab._test_tunnel_events))
         tunnel_start = next(item for item in tab._test_tunnel_events if isinstance(item, tuple) and item[0] == "tunnel-start")
         self.assertEqual(tunnel_start[1].identity_file, symbols)
+        self.assertEqual(tunnel_start[1].known_hosts_file, symbols)
 
         tab.stop_debug()
         self.wait_until(lambda: tab._worker is None)
