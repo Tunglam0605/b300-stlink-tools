@@ -119,8 +119,8 @@ def _prepare_windows_ssh_client(runner: CommandRunner) -> None:
         escaped_ps = ps.replace("'", "''")
         command = (
             ps, "-NoProfile", "-Command",
-            "$p=Start-Process -FilePath '%s' -Verb RunAs -Wait -PassThru "
-            "-ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File','%s'); exit $p.ExitCode" %
+            "$p=Start-Process -FilePath '%s' -Verb RunAs -WindowStyle Hidden -Wait -PassThru "
+            "-ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File','%s'); exit $p.ExitCode" %
             (escaped_ps, path),
         )
         result = runner(command, 900.0)
@@ -333,7 +333,7 @@ exit 0
 """ % (str(Path(key_file.name).resolve()).replace("'", "''"), str(target).replace("'", "''"))
             with script_file:
                 script_file.write(script)
-            command = (ps, "-NoProfile", "-Command", "$p=Start-Process -FilePath '%s' -Verb RunAs -Wait -PassThru -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File','%s'); exit $p.ExitCode" % (ps.replace("'", "''"), str(Path(script_file.name).resolve()).replace("'", "''")))
+            command = (ps, "-NoProfile", "-Command", "$p=Start-Process -FilePath '%s' -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File','%s'); exit $p.ExitCode" % (ps.replace("'", "''"), str(Path(script_file.name).resolve()).replace("'", "''")))
             result = runner(command, 300.0)
             if result.returncode != 0:
                 raise RuntimeError("Elevated authorized_keys update failed with exit code %d." % result.returncode)

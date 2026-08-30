@@ -4,7 +4,7 @@ from unittest import mock
 
 from b300_core.gateway_setup import (
     DEBUG_PORTS, GatewayHostReport, build_gateway_prepare_plan,
-    client_connection_text, prepare_gateway_host, _windows_prepare_script,
+    client_connection_text, prepare_gateway_host, _run_windows_elevated, _windows_prepare_script,
 )
 
 
@@ -50,6 +50,21 @@ class GatewaySetupTests(unittest.TestCase):
         self.assertNotIn("sshd_config", script)
         for port in DEBUG_PORTS:
             self.assertNotIn("LocalPort %d" % port, script)
+
+    def test_windows_elevated_prepare_keeps_uac_but_hides_powershell_console(self):
+        plan = build_gateway_prepare_plan(report(
+            installed=False, running=False, startup=False, firewall=False, listening=False
+        ))
+        commands = []
+        def runner(argv, timeout):
+            commands.append(tuple(argv))
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        with mock.patch("b300_core.gateway_setup._powershell", return_value="powershell.exe"):
+            _run_windows_elevated(plan, runner)
+        rendered = " ".join(commands[0])
+        self.assertIn("-Verb RunAs", rendered)
+        self.assertIn("-WindowStyle Hidden", rendered)
+        self.assertIn("'-NonInteractive'", rendered)
 
     def test_existing_install_only_repairs_service_and_firewall(self):
         plan = build_gateway_prepare_plan(report(

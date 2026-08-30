@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Iterable, Tuple
 
 from .models import ProbeInfo
+from .process_startup import child_process_kwargs
 
 
 def _unique(probes: Iterable[ProbeInfo]) -> Tuple[ProbeInfo, ...]:
@@ -115,8 +116,11 @@ def list_probes() -> Tuple[ProbeInfo, ...]:
             "ConvertTo-Json -Compress",
         ]
         try:
-            completed = subprocess.run(command, check=False, capture_output=True,
-                                       text=True, encoding="utf-8", errors="replace")
+            completed = subprocess.run(
+                command, check=False, capture_output=True, text=True,
+                encoding="utf-8", errors="replace",
+                **child_process_kwargs("windows"),
+            )
         except OSError:
             return ()
         return parse_windows_pnp_output(completed.stdout)

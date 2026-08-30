@@ -170,7 +170,10 @@ class SshIdentityTests(unittest.TestCase):
         self.assertTrue(result.succeeded)
         self.assertTrue(result.changed)
         self.assertEqual(inspector.call_count, 2)
-        self.assertTrue(any("Start-Process" in " ".join(command) for command in commands))
+        elevated = next(" ".join(command) for command in commands if "Start-Process" in " ".join(command))
+        self.assertIn("-Verb RunAs", elevated)
+        self.assertIn("-WindowStyle Hidden", elevated)
+        self.assertIn("'-NonInteractive'", elevated)
 
     def test_managed_identity_returns_path_only_when_pair_is_verified(self):
         with tempfile.TemporaryDirectory() as directory:

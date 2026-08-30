@@ -210,7 +210,7 @@ def _run_windows_elevated(plan: GatewayPreparePlan, runner: CommandRunner) -> No
             handle.write(script)
         path = str(Path(handle.name).resolve())
         ps = _powershell()
-        command = (ps, "-NoProfile", "-Command", "$p=Start-Process -FilePath '%s' -Verb RunAs -Wait -PassThru -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File','%s'); exit $p.ExitCode" % (ps.replace("'", "''"), path.replace("'", "''")))
+        command = (ps, "-NoProfile", "-Command", "$p=Start-Process -FilePath '%s' -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File','%s'); exit $p.ExitCode" % (ps.replace("'", "''"), path.replace("'", "''")))
         result = runner(command, 900.0)
         if result.returncode != 0:
             raise RuntimeError("Elevated Windows OpenSSH setup failed with exit code %d." % result.returncode)

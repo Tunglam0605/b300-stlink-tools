@@ -5,6 +5,7 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+- Ẩn toàn bộ PowerShell backend khỏi UX desktop trên Windows: dò ST-Link lúc startup/refresh dùng hidden child-process policy; các thao tác OpenSSH/Gateway cần quyền Admin vẫn giữ UAC bắt buộc nhưng PowerShell elevated sau UAC chạy `WindowStyle Hidden` + `NonInteractive`, nên không còn terminal xanh che GUI.
 - Sửa UX updater cho Preview/Development build: GUI luôn hiển thị rõ phiên bản đang chạy (`Đang dùng v0.12.0`) tách biệt với `Stable mới nhất`; nếu build hiện tại mới hơn Stable (ví dụ v0.12.0 so với v0.10.0), UI ghi `Preview/Dev`, giải thích updater không downgrade và không còn báo nhầm v0.10.0 là phiên bản đang dùng/mới nhất của build hiện tại.
 
 ### Added

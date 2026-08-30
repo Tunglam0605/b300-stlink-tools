@@ -6,6 +6,7 @@ import tempfile
 import threading
 import unittest
 import zlib
+from unittest import mock
 from pathlib import Path
 
 from b300_core.memory import build_read_memory_command, read_memory
@@ -19,6 +20,7 @@ from b300_core.metadata import (
 )
 from b300_core.models import CommandResult, ImageInfo, ProbeRef
 from b300_core.policy import validate_read_range
+from b300_core import probe as probe_module
 from b300_core.probe import parse_linux_sysfs, parse_windows_pnp_output
 
 
@@ -40,6 +42,18 @@ def make_metadata(state: int = 3, image_size: int = 130008,
 
 
 class ProbeMemoryMetadataTests(unittest.TestCase):
+    def test_windows_probe_discovery_hides_backend_powershell(self) -> None:
+        completed = type("Result", (), {"stdout": "", "returncode": 0})()
+        with mock.patch.object(probe_module.platform, "system", return_value="Windows"), \
+             mock.patch.object(probe_module.shutil, "which", return_value=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"), \
+             mock.patch.object(probe_module, "child_process_kwargs", return_value={"creationflags": 0x08000000, "startupinfo": object()}), \
+             mock.patch.object(probe_module.subprocess, "run", return_value=completed) as run:
+            self.assertEqual(probe_module.list_probes(), ())
+        kwargs = run.call_args.kwargs
+        self.assertEqual(kwargs["creationflags"], 0x08000000)
+        self.assertIn("startupinfo", kwargs)
+        self.assertTrue(kwargs["capture_output"])
+
     def test_windows_probe_parser_extracts_unique_serials(self) -> None:
         raw = json.dumps([
             {"FriendlyName": "ST-Link Debug", "InstanceId":
