@@ -192,6 +192,13 @@ def build_parser() -> argparse.ArgumentParser:
     inspect_target.add_argument("--openocd")
     inspect_target.add_argument("--probe-serial", type=parse_probe_serial,
                                 help="Select one ST-Link when multiple probes are connected.")
+    health_target = target_commands.add_parser(
+        "health", help="Read AppMeta + installed Application CRC/vector health.",
+        parents=[json_parent],
+    )
+    health_target.add_argument("--openocd")
+    health_target.add_argument("--probe-serial", type=parse_probe_serial,
+                               help="Select one ST-Link when multiple probes are connected.")
 
     probes = commands.add_parser(
         "probes", help="List discovered ST-Link probes.", parents=[json_parent],

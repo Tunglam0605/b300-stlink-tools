@@ -329,6 +329,83 @@ class B300StlinkTests(unittest.TestCase):
                 "--dry-run",
             ])
 
+    def test_target_health_reports_bootability_crc_and_vector_without_write_surface(self) -> None:
+        module = tool()
+        metadata = SimpleNamespace(
+            classification="VALID", valid=True, magic=0x53544C4D, format_version=1,
+            state=3, state_name="CONFIRMED", image_size=126580, image_crc32=0xC99ED31F,
+            board_token="B300_F407ZE", sequence=4, meta_crc32=0x11111111,
+            calculated_meta_crc32=0x11111111,
+        )
+        vector = SimpleNamespace(
+            initial_msp=0x200185C8, reset_vector=0x08010361, valid=True,
+            reason="Application vector is valid.",
+        )
+        health = SimpleNamespace(
+            lifecycle="BOOTABLE", bootable=True, reason="evidence matches",
+            next_action="No action is required.", bytes_checked=126580,
+            image_crc_valid=True, actual_image_crc32=0xC99ED31F,
+            metadata=metadata, application_vector=vector,
+        )
+        created = []
+
+        class FakeService:
+            def __init__(self, executable=None):
+                self.executable = executable
+                created.append(self)
+            def inspect_application_health(self, probe):
+                self.probe = probe
+                return health
+
+        output = io.StringIO()
+        with mock.patch.object(module, "B300Service", FakeService), \
+                mock.patch.object(module, "list_probes", return_value=(
+                    ProbeInfo("TEST123", "ST-Link", "test"),
+                )), redirect_stdout(output):
+            result = module.main(["target", "health", "--json"])
+
+        self.assertEqual(result, 0)
+        record = json.loads(output.getvalue())
+        self.assertEqual(record["command"], "target health")
+        self.assertEqual(record["health"]["lifecycle"], "BOOTABLE")
+        self.assertTrue(record["health"]["bootable"])
+        self.assertTrue(record["health"]["image_crc_valid"])
+        self.assertEqual(record["health"]["expected_image_crc32"], "0xC99ED31F")
+        self.assertEqual(record["health"]["actual_image_crc32"], "0xC99ED31F")
+        self.assertTrue(record["health"]["application_vector"]["valid"])
+        self.assertEqual(created[0].probe.serial, "TEST123")
+        rendered = output.getvalue().lower()
+        for forbidden in ("erase_sector", "mass_erase", "flash protect", "mww ", "program {"):
+            self.assertNotIn(forbidden, rendered)
+
+    def test_target_health_returns_nonzero_for_nonbootable_evidence(self) -> None:
+        module = tool()
+        metadata = SimpleNamespace(
+            classification="VALID", valid=True, magic=0x53544C4D, format_version=1,
+            state=2, state_name="VERIFIED", image_size=64, image_crc32=0x12345678,
+            board_token="B300_F407ZE", sequence=9, meta_crc32=1, calculated_meta_crc32=1,
+        )
+        health = SimpleNamespace(
+            lifecycle="STLINK_VERIFIED_PENDING", bootable=False,
+            reason="pending one-shot Bootloader consumption",
+            next_action="Reset once", bytes_checked=64, image_crc_valid=True,
+            actual_image_crc32=0x12345678, metadata=metadata, application_vector=None,
+        )
+        class FakeService:
+            def __init__(self, executable=None): pass
+            def inspect_application_health(self, probe): return health
+
+        output = io.StringIO()
+        with mock.patch.object(module, "B300Service", FakeService), \
+                mock.patch.object(module, "list_probes", return_value=(
+                    ProbeInfo("TEST123", "ST-Link", "test"),
+                )), redirect_stdout(output):
+            result = module.main(["target", "health", "--json"])
+        self.assertEqual(result, 1)
+        record = json.loads(output.getvalue())
+        self.assertEqual(record["status"], "warning")
+        self.assertEqual(record["health"]["lifecycle"], "STLINK_VERIFIED_PENDING")
+
     def test_debug_gateway_dry_run_uses_fixed_safe_headless_profile(self) -> None:
         output = io.StringIO()
         with redirect_stdout(output):

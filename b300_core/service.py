@@ -10,6 +10,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Optional
 
+from .app_health import evaluate_application_health
 from .hex_image import inspect_bootloader_image, inspect_image
 from .hardware_session import (
     DEFAULT_HARDWARE_SESSION_MANAGER,
@@ -32,6 +33,7 @@ from .models import (
     FactoryPreview,
     FlashPlan,
     FlashPhaseEvent,
+    ApplicationHealth,
     ImageInfo,
     OtaMetadata,
     ProbeRef,
@@ -57,6 +59,7 @@ from .openocd import (
 from .factory_policy import build_factory_plan, build_factory_preview
 from .factory_resource import TrustedBootloader, load_trusted_bootloader
 from .policy import (
+    APPLICATION_ADDRESS,
     METADATA_ADDRESS,
     build_flash_plan,
     build_flash_preview,
@@ -777,3 +780,23 @@ class B300Service:
                 probe, METADATA_ADDRESS, OTA_META_SIZE, event_sink, cancel_event
             )
             return decode_ota_metadata(data)
+
+    def inspect_application_health(
+            self, probe: ProbeRef, event_sink: Optional[EventSink] = None,
+            cancel_event: Optional[threading.Event] = None) -> ApplicationHealth:
+        """Read AppMeta plus the bounded installed image and classify bootability."""
+        with self._exclusive_hardware_operation(HardwareMode.READING, probe):
+            metadata_bytes = self._read_memory(
+                probe, METADATA_ADDRESS, OTA_META_SIZE, event_sink, cancel_event
+            )
+            metadata = decode_ota_metadata(metadata_bytes)
+            read_length = metadata.image_size if metadata.valid else 8
+            application_data = None
+            read_error = None
+            try:
+                application_data = self._read_memory(
+                    probe, APPLICATION_ADDRESS, read_length, event_sink, cancel_event
+                )
+            except (OSError, RuntimeError, ValueError) as error:
+                read_error = str(error)
+            return evaluate_application_health(metadata, application_data, read_error)

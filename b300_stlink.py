@@ -20,8 +20,9 @@ from b300_cli.parser import (
     parse_tcp_port,
 )
 from b300_cli.reporting import (
-    Reporter, diagnostic_snapshot, emit_snapshot, format_memory_rows, format_metadata_text,
-    flash_result_fields, flash_start_fields, format_probes_text, memory_snapshot,
+    Reporter, application_health_snapshot, diagnostic_snapshot, emit_snapshot,
+    flash_result_fields, flash_start_fields, format_application_health_text,
+    format_memory_rows, format_metadata_text, format_probes_text, memory_snapshot,
     metadata_snapshot, probe_record,
 )
 from b300_cli.update_commands import run_update_command
@@ -978,8 +979,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "command": "target",
                 "status": "error",
                 "reason_code": "TARGET_SUBCOMMAND_REQUIRED",
-                "message": "The target command requires the inspect subcommand.",
-                "next_action": "Run target inspect to perform read-only target diagnostics.",
+                "message": "The target command requires the inspect or health subcommand.",
+                "next_action": "Run target inspect for a quick snapshot or target health for CRC/vector bootability evidence.",
             }
             emit_snapshot(record, args.json, "%s: %s" % (record["reason_code"], record["message"]))
             return 1
@@ -1023,6 +1024,22 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "%s (%s)" % (report.conclusion, report.reason_code),
             )
             return 0 if report.conclusion == "READY_FOR_APPLICATION_FLASH" else 1
+
+        if args.command == "target" and args.target_command == "health":
+            probe = _select_read_probe(args, "target health")
+            if probe is None:
+                return 1
+            try:
+                health = B300Service(executable=args.openocd).inspect_application_health(probe)
+            except (OSError, RuntimeError, ValueError) as error:
+                return _read_only_error(
+                    args, "target health", "APPLICATION_HEALTH_READ_FAILED", str(error)
+                )
+            emit_snapshot(
+                application_health_snapshot(health), args.json,
+                format_application_health_text(health),
+            )
+            return 0 if health.bootable else 1
 
         if args.command == "metadata" and args.metadata_command == "show":
             probe = _select_read_probe(args, "metadata show")

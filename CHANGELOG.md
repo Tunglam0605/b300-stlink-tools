@@ -17,6 +17,9 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 - GUI Debug bổ sung **Live Variables** dùng chung bounded sampling core: Start/Stop cooperative, bảng giá trị mới nhất, ring buffer 2000 điểm, lưu profile expressions/cycles/interval và export CSV/JSONL. GUI cảnh báo rõ mỗi chu kỳ GDB sampling sẽ HALT target rất ngắn rồi khôi phục RUNNING, nên đây là công cụ chẩn đoán chứ không phải phép đo timing hard real-time.
 - Bổ sung **Live Plot** nhẹ bằng Qt/Painter, không thêm thư viện chart ngoài: tự vẽ tối đa 400 điểm cho mỗi numeric series từ cùng ring buffer; enum/string không bị ép sang số và vẫn chỉ xuất hiện ở bảng/file export.
 
+- Thêm `target health` read-only để phân loại sức khỏe Application theo Bootloader v0.6.5: `BOOTABLE`, `UNMANAGED_RECOVERY`, `INVALID_METADATA`, `OTA_IN_PROGRESS`, `STLINK_VERIFIED_PENDING`, `IMAGE_READ_INCOMPLETE`, `INVALID_VECTOR`, `IMAGE_CRC_MISMATCH` và `NOT_BOOTABLE`; command đọc đúng `image_size`, đối chiếu CRC/vector/metadata và trả `next_action` nhưng không reset/erase/program/đổi Option Bytes.
+- Hardware smoke trên B300 thật xác nhận `target health` = `BOOTABLE`, đọc 126580 byte, expected/actual CRC32 đều `0xC99ED31F`, vector hợp lệ, metadata `STLM + CONFIRMED seq=4`; post-check vẫn giữ WRP S0-S2 protected và target `READY_FOR_APPLICATION_FLASH`.
+
 ## [0.9.0] - 2026-08-30
 
 ### Added
