@@ -127,6 +127,30 @@ class DebugLivePanel(QGroupBox):
 
         panel_layout.addLayout(toolbar)
 
+        self.stats_frame = QFrame()
+        self.stats_frame.setObjectName("debugLiveStatsFrame")
+        stats = QGridLayout(self.stats_frame)
+        stats.setContentsMargins(8, 5, 8, 5)
+        stats.setHorizontalSpacing(18)
+        stats.setVerticalSpacing(2)
+        self.stats_samples = QLabel("Samples: 0")
+        self.stats_overruns = QLabel("Overruns: 0")
+        self.stats_mean_read = QLabel("Mean read: —")
+        self.stats_max_lag = QLabel("Max lag: —")
+        self.stats_incoherent = QLabel("Incoherent: 0")
+        self.stats_variables = QLabel("Variables: 0")
+        for label in (self.stats_samples, self.stats_overruns, self.stats_mean_read,
+                      self.stats_max_lag, self.stats_incoherent, self.stats_variables):
+            label.setStyleSheet("color: #334155; font-size: 11px; font-weight: 600;")
+        stats.addWidget(self.stats_samples, 0, 0)
+        stats.addWidget(self.stats_overruns, 0, 1)
+        stats.addWidget(self.stats_mean_read, 0, 2)
+        stats.addWidget(self.stats_max_lag, 0, 3)
+        stats.addWidget(self.stats_incoherent, 0, 4)
+        stats.addWidget(self.stats_variables, 0, 5)
+        stats.setColumnStretch(6, 1)
+        panel_layout.addWidget(self.stats_frame)
+
         # Workstation Splitter: Left = Execution Timeline, Right = Live Variables
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(False)
@@ -217,9 +241,12 @@ class DebugLivePanel(QGroupBox):
 
         variables_layout.addLayout(add_var_row)
 
-        self.table = QTableWidget(0, 6)
+        self.table = QTableWidget(0, 9)
         self.table.setObjectName("debugSampleTable")
-        self.table.setHorizontalHeaderLabels(("Variable", "Value", "Type", "Address", "Time (s)", "Plot"))
+        self.table.setHorizontalHeaderLabels((
+            "Variable", "Value", "Type", "Address", "Time (s)", "Plot",
+            "Min", "Max", "Mean",
+        ))
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.verticalHeader().setVisible(False)
@@ -230,6 +257,9 @@ class DebugLivePanel(QGroupBox):
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
         self.table.setMinimumHeight(140)
         variables_layout.addWidget(self.table)
 
@@ -362,6 +392,47 @@ class DebugLivePanel(QGroupBox):
         )
         return tuple(converted)
 
+    @staticmethod
+    def _format_stat_value(value) -> str:
+        if value is None:
+            return "—"
+        try:
+            return "%.6g" % float(value)
+        except (TypeError, ValueError, OverflowError):
+            return str(value)
+
+    def apply_analytics(self, snapshot) -> None:
+        """Render already-collected LiveMonitorStore statistics without new target reads."""
+        timing = snapshot.timing
+        variables = tuple(getattr(snapshot, "variables", ()) or ())
+        self.stats_samples.setText("Samples: %d" % int(getattr(timing, "total_samples", 0)))
+        self.stats_overruns.setText("Overruns: %d" % int(getattr(timing, "overruns", 0)))
+        self.stats_mean_read.setText(
+            "Mean read: %.2f ms" % (float(getattr(timing, "mean_read_duration_seconds", 0.0)) * 1000.0)
+        )
+        self.stats_max_lag.setText(
+            "Max lag: %.2f ms" % (float(getattr(timing, "max_schedule_lag_seconds", 0.0)) * 1000.0)
+        )
+        self.stats_incoherent.setText(
+            "Incoherent: %d" % int(getattr(timing, "incoherent_values", 0))
+        )
+        self.stats_variables.setText("Variables: %d" % len(variables))
+        for stat in variables:
+            row = self.rows.get(stat.name)
+            if row is None:
+                continue
+            self.table.setItem(row, 6, QTableWidgetItem(self._format_stat_value(stat.minimum)))
+            self.table.setItem(row, 7, QTableWidgetItem(self._format_stat_value(stat.maximum)))
+            self.table.setItem(row, 8, QTableWidgetItem(self._format_stat_value(stat.mean)))
+
+    def reset_analytics(self) -> None:
+        self.stats_samples.setText("Samples: 0")
+        self.stats_overruns.setText("Overruns: 0")
+        self.stats_mean_read.setText("Mean read: —")
+        self.stats_max_lag.setText("Max lag: —")
+        self.stats_incoherent.setText("Incoherent: 0")
+        self.stats_variables.setText("Variables: 0")
+
     def mark_live_completed(self, summary) -> None:
         self.status.setText(
             "Completed %d samples · overruns %d · target %s" % (
@@ -407,6 +478,7 @@ class DebugLivePanel(QGroupBox):
         self.table.setRowCount(0)
         self.timeline_table.setRowCount(0)
         self._timeline_samples.clear()
+        self.reset_analytics()
         self.status.setText("Sampling 0/%d cycles..." % self.cycles.value())
 
     def mark_stopping(self) -> None:
@@ -500,6 +572,7 @@ class DebugLivePanel(QGroupBox):
         self.table.setRowCount(0)
         self.timeline_table.setRowCount(0)
         self._timeline_samples.clear()
+        self.reset_analytics()
         self.status.setText("Ready · 0 samples")
 
     def export_samples(self, parent: Optional[QWidget] = None) -> Optional[Path]:

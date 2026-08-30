@@ -125,6 +125,44 @@ class GuiRedesignTests(unittest.TestCase):
         self.assertIsNone(converted[1].numeric_value)
         panel.close()
 
+    def test_live_runtime_dashboard_renders_existing_analytics_without_target_reads(self) -> None:
+        panel = DebugLivePanel()
+        sample = LiveSample(
+            0, 0.0, 0.012, 0.012, True, 0x08025FDA,
+            SourceLocation(0x08025FDA, "vApplicationIdleHook", "main.c", 87),
+            (LiveValue("xTickCount", "u32", 0x20000030, 102, "66000000"),),
+        )
+        panel.append_live_sample(sample)
+        snapshot = SimpleNamespace(
+            timing=SimpleNamespace(
+                total_samples=3, overruns=1, mean_read_duration_seconds=0.0125,
+                max_schedule_lag_seconds=0.004, incoherent_values=2,
+            ),
+            variables=(SimpleNamespace(
+                name="xTickCount", minimum=100.0, maximum=104.0, mean=102.0,
+            ),),
+        )
+
+        panel.apply_analytics(snapshot)
+
+        self.assertEqual(panel.table.columnCount(), 9)
+        self.assertEqual(panel.stats_samples.text(), "Samples: 3")
+        self.assertEqual(panel.stats_overruns.text(), "Overruns: 1")
+        self.assertEqual(panel.stats_mean_read.text(), "Mean read: 12.50 ms")
+        self.assertEqual(panel.stats_max_lag.text(), "Max lag: 4.00 ms")
+        self.assertEqual(panel.stats_incoherent.text(), "Incoherent: 2")
+        self.assertEqual(panel.stats_variables.text(), "Variables: 1")
+        row = panel.rows["xTickCount"]
+        self.assertEqual(panel.table.item(row, 6).text(), "100")
+        self.assertEqual(panel.table.item(row, 7).text(), "104")
+        self.assertEqual(panel.table.item(row, 8).text(), "102")
+
+        panel.clear_history()
+        self.assertEqual(panel.stats_samples.text(), "Samples: 0")
+        self.assertEqual(panel.stats_overruns.text(), "Overruns: 0")
+        self.assertEqual(panel.stats_variables.text(), "Variables: 0")
+        panel.close()
+
     def test_live_monitor_timeline_update_and_follow_latest(self) -> None:
         panel = DebugLivePanel()
         panel.resize(800, 400)

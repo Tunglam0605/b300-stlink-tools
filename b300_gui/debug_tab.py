@@ -1212,6 +1212,13 @@ class DebugTab(QWidget):
         if not isinstance(sample, LiveSample):
             return
         self.live_panel.append_live_sample(sample)
+        live = self._live_session
+        if live is not None:
+            try:
+                self.live_panel.apply_analytics(live.analytics_snapshot())
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                # Analytics are presentation-only; never fail an otherwise valid live session.
+                pass
         self.plot_panel.set_samples(self._sample_buffer.snapshot())
 
     def _live_sampling_completed(self, result) -> None:
@@ -1222,6 +1229,7 @@ class DebugTab(QWidget):
         self._status_override = (
             "LIVE COMPLETE · TARGET %s" % str(summary.final_target_state).upper(), "ready",
         )
+        self.live_panel.apply_analytics(analytics)
         self.live_panel.mark_live_completed(summary)
         self.plot_panel.set_samples(self._sample_buffer.snapshot())
         top = analytics.functions[:5]
