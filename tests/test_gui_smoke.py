@@ -139,6 +139,8 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertIn("Sector 3–7", window.flash_plan_label.text())
         self.assertEqual(window.plan_table.verticalScrollBar().maximum(), 0)
         self.assertEqual(window.log_view.horizontalScrollBar().value(), 0)
+        self.assertEqual(window.log_view.document().maximumBlockCount(), 10000)
+        self.assertEqual(window.debug_tab.log_view.document().maximumBlockCount(), 5000)
         self.assertEqual(window.about_action.text(), "Giới thiệu")
         self.assertIn("Core v%s" % __version__, window.log_view.toPlainText())
         window.close()

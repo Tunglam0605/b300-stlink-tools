@@ -154,11 +154,16 @@ class DebugLivePanel(QGroupBox):
         self.timeline_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.timeline_table.verticalHeader().setVisible(False)
         self.timeline_table.verticalHeader().setDefaultSectionSize(22)
-        self.timeline_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.timeline_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.timeline_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self.timeline_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self.timeline_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        header = self.timeline_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self.timeline_table.setColumnWidth(0, 84)
+        self.timeline_table.setColumnWidth(1, 104)
+        self.timeline_table.setColumnWidth(3, 180)
+        self.timeline_table.setColumnWidth(4, 58)
         self.timeline_table.setMinimumHeight(140)
         timeline_layout.addWidget(self.timeline_table)
 
@@ -421,21 +426,43 @@ class DebugLivePanel(QGroupBox):
             )
         )
 
+    def _append_timeline_row(self, item: dict) -> None:
+        row = self.timeline_table.rowCount()
+        self.timeline_table.insertRow(row)
+        self.timeline_table.setItem(row, 0, QTableWidgetItem("%.3fs" % item["elapsed_s"]))
+        self.timeline_table.setItem(row, 1, QTableWidgetItem(item["pc"]))
+        self.timeline_table.setItem(row, 2, QTableWidgetItem(item["function"] or "??"))
+        self.timeline_table.setItem(row, 3, QTableWidgetItem(item["file"] or "??"))
+        line = item["line"]
+        self.timeline_table.setItem(row, 4, QTableWidgetItem(str(line) if line is not None else "??"))
+
+    def _rebuild_timeline_view(self) -> None:
+        self.timeline_table.setUpdatesEnabled(False)
+        try:
+            self.timeline_table.setRowCount(0)
+            for item in self._timeline_samples:
+                self._append_timeline_row(item)
+        finally:
+            self.timeline_table.setUpdatesEnabled(True)
+
     def append_timeline_sample(
         self, elapsed_s: float, pc: int, function_name: str, file_name: str, line: int
     ) -> None:
-        row = self.timeline_table.rowCount()
-        self.timeline_table.insertRow(row)
-        self.timeline_table.setItem(row, 0, QTableWidgetItem("%.3fs" % elapsed_s))
-        self.timeline_table.setItem(row, 1, QTableWidgetItem("0x%08X" % pc))
-        self.timeline_table.setItem(row, 2, QTableWidgetItem(function_name or "??"))
-        self.timeline_table.setItem(row, 3, QTableWidgetItem(file_name or "??"))
-        self.timeline_table.setItem(row, 4, QTableWidgetItem(str(line) if line is not None else "??"))
-
-        self._timeline_samples.append({
+        item = {
             "elapsed_s": elapsed_s, "pc": "0x%08X" % pc,
             "function": function_name, "file": file_name, "line": line,
-        })
+        }
+        self._timeline_samples.append(item)
+
+        if len(self._timeline_samples) > self.TIMELINE_CAPACITY:
+            # Removing row 0 on every 10 Hz sample becomes O(n) and makes long
+            # sessions progressively expensive.  Trim one quarter in a batch,
+            # then rebuild the bounded viewport once.
+            retain = max(1, self.TIMELINE_CAPACITY * 3 // 4)
+            self._timeline_samples[:] = self._timeline_samples[-retain:]
+            self._rebuild_timeline_view()
+        else:
+            self._append_timeline_row(item)
 
         if self.follow_latest_check.isChecked():
             self.timeline_table.scrollToBottom()

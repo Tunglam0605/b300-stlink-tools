@@ -13,7 +13,7 @@ from unittest import mock
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QCoreApplication, QEvent, Qt
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QHeaderView, QLabel
 
 from b300_core.debug_service import DebugState
 from b300_core.debug_sampling import VariableSample
@@ -145,6 +145,32 @@ class GuiRedesignTests(unittest.TestCase):
 
         panel.clear_history()
         self.assertEqual(panel.timeline_table.rowCount(), 0)
+        panel.close()
+
+    def test_live_monitor_timeline_avoids_resize_to_contents_hot_path(self) -> None:
+        panel = DebugLivePanel()
+        header = panel.timeline_table.horizontalHeader()
+        self.assertEqual(header.sectionResizeMode(0), QHeaderView.ResizeMode.Fixed)
+        self.assertEqual(header.sectionResizeMode(1), QHeaderView.ResizeMode.Fixed)
+        self.assertEqual(header.sectionResizeMode(2), QHeaderView.ResizeMode.Stretch)
+        self.assertEqual(header.sectionResizeMode(3), QHeaderView.ResizeMode.Interactive)
+        self.assertEqual(header.sectionResizeMode(4), QHeaderView.ResizeMode.Fixed)
+        panel.close()
+
+    def test_live_monitor_timeline_is_bounded_for_long_running_sessions(self) -> None:
+        panel = DebugLivePanel()
+        panel.TIMELINE_CAPACITY = 3
+        for index in range(5):
+            panel.append_timeline_sample(
+                index * 0.1, 0x08010000 + index * 2,
+                "fn%d" % index, "main.c", 10 + index,
+            )
+
+        self.assertEqual(panel.timeline_table.rowCount(), 3)
+        self.assertEqual(len(panel._timeline_samples), 3)
+        self.assertEqual(panel.timeline_table.item(0, 2).text(), "fn2")
+        self.assertEqual(panel.timeline_table.item(2, 2).text(), "fn4")
+        self.assertEqual(panel._timeline_samples[0]["function"], "fn2")
         panel.close()
 
     def test_live_variables_table_watch_operations(self) -> None:

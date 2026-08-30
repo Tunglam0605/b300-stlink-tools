@@ -73,6 +73,7 @@ class DebugLogPanel(CollapsibleCard):
         self.log_view.setObjectName("debugLogView")
         self.log_view.setReadOnly(True)
         self.log_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.log_view.document().setMaximumBlockCount(5000)
         self.log_view.setMinimumHeight(110)
         content_layout.addWidget(self.log_view)
 

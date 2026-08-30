@@ -856,6 +856,8 @@ class MainWindow(QMainWindow):
         self.log_view.setReadOnly(True)
         self.log_view.setAccessibleName("Log OpenOCD")
         self.log_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        # Bound retained GUI text for long-running engineering sessions.
+        self.log_view.document().setMaximumBlockCount(10000)
         self.log_view.setMinimumHeight(140)
         log_layout.addWidget(self.log_view, 1)
 

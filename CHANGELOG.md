@@ -7,6 +7,9 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ### Fixed
 
+- Harden GUI cho session dài: Realtime Execution Timeline giờ giữ bounded window tối đa 1000 sample gần nhất và trim theo lô; bỏ `ResizeToContents` khỏi hot path của bảng timeline, giảm benchmark synthetic 5000 events từ ~58.7 s xuống ~0.75 s trên máy test. Main OpenOCD log giữ tối đa 10000 blocks và Debug Technical Log tối đa 5000 blocks để tránh tăng RAM vô hạn khi treo tool lâu.
+- Hardware GUI soak sau hardening: 300/300 sample @ 10 Hz với `xTickCount:u32`, `bRUN:u8`, `v_current:f64`, 0 overrun, tick-rate ~999.93 Hz, target cuối `RUNNING`; 10/10 vòng Start→first sample→Stop PASS với cooperative Stop ~15–32 ms, GDB 3333 luôn đóng, TCL 6666 được release sau mỗi vòng và không còn OpenOCD orphan. Evidence: `docs/17_GUI_RUNTIME_HARDENING_POST_V0.9.0.md`.
+- Validation sau hardening: **661 tests PASS, 2 skipped, 0 failures**; GUI **79 tests PASS**, GUI smoke, `compileall` và `git diff --check` PASS.
 - Linux AppImage packaging tự retry tối đa 3 lần khi `appimagetool` trả lỗi process tạm thời (ví dụ runtime download HTTP 5xx), xóa AppImage dở trước lần thử tiếp theo và vẫn fail-closed sau khi hết retry; giảm việc phải rerun toàn bộ release job vì sự cố mạng nhất thời.
 
 ### Added
