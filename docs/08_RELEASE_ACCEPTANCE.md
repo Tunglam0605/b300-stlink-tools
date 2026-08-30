@@ -1,5 +1,15 @@
 # Biên bản nghiệm thu và phát hành B300 ST-Link Tools
 
+## Bản 0.11.0 - Software/Hardware RC
+
+- Software regression: 676 tests, 0 failures/errors, 2 skipped.
+- Python 3.9 focused compatibility: 20/20 PASS.
+- CI: Windows x64, Ubuntu x64, Ubuntu ARM64 PASS.
+- Development Packages: Windows, Linux x64, Linux ARM64 PASS.
+- Physical non-halting Live Monitor: 100/100 samples @ 10 Hz, 0 overrun, final target RUNNING; metadata CONFIRMED and WRP S0-S2 preserved.
+- Evidence: [v0.11.0 Release Candidate Acceptance 2026-08-30](18_V0.11.0_RELEASE_CANDIDATE_ACCEPTANCE_2026-08-30.md).
+- Stable publication remains blocked until cold power-cycle, full OTA -> ST-Link -> OTA, and real two-machine SSH acceptance are completed.
+
 ## Bản 0.9.0 - Software RC trước hardware/field E2E
 
 Mục tiêu của 0.9.0 là hợp nhất AppMeta/Bootloader v0.6.5 và giữ đầy đủ ba đường remote-debug Client của Gateway: **GUI Client, CLI Client, VS Code/Cortex-Debug**. Source/package/CI có thể đạt release-candidate gate; **không tag/publish Stable cho tới khi current-code hardware acceptance, OTA ↔ ST-Link interoperability và SSH/two-machine Client↔Gateway E2E được chủ dự án nghiệm thu trên thiết bị thật**.

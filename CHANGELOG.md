@@ -5,6 +5,8 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-08-30
+
 ### Added
 
 - Bổ sung Stateful Interactive Debug Workspace trên GUI cho các primitive GDB đã có: target state + last action và các tab Current Location / Call Stack / Registers / Variables / Diagnostic. Workspace chỉ định tuyến kết quả chẩn đoán đã thu được vào đúng vùng hiển thị, giữ tương thích `diagnostic_view`, không thêm GDB command, không thay đổi breakpoint/watchpoint semantics và vẫn giữ cảnh báo Interactive Debug có thể halt MCU/ảnh hưởng realtime.
@@ -24,7 +26,6 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 - Loại bỏ `b300_gui/live_variables_panel.py` và test legacy tương ứng sau frontend redesign; import-graph production xác nhận module này không còn reachable từ `b300_gui.__main__`. Realtime Live Monitor hiện dùng `debug_live_panel.py`/`debug_plot_panel.py`, nên việc dọn bỏ giảm code/runtime surface mà không thay đổi chức năng.
 - Loại bỏ `b300_core/target.py`, shim re-export cũ cho `build_boot_verify_command`/`parse_boot_verification`; toàn bộ production/test code hiện gọi API canonical từ `b300_core.openocd`, nên shim này không còn importer và chỉ làm tăng maintenance surface.
-- Loại bỏ shim `b300_core/target.py` chỉ re-export hai helper từ `openocd.py`; toàn production import-graph và test suite không còn reference, và module này không nằm trong public `b300_core.__all__`.
 
 ## [0.10.0] - 2026-08-30
 
