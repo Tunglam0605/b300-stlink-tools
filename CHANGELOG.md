@@ -11,6 +11,10 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ### Added
 
+- Bổ sung **Realtime Live Monitor** non-halting cho Local (`debug live`) và remote Client (`debug client --client-action live`): lấy mẫu `DWT_PCSR @ 0xE000101C` để quan sát PC khi Cortex-M4 vẫn RUNNING, map PC sang function/file/line offline từ AXF/ELF và đọc tối đa 16 symbol RAM trong cùng bounded SWD/TCL transaction. Cadence hỗ trợ 0.1–60 s, scheduler neo theo thời gian tuyệt đối để tránh drift tích lũy, có `overrun` evidence và export CSV/JSONL.
+- Local Live Monitor dùng OpenOCD **TCL-only** (`gdb port disabled`, Telnet disabled); remote Live Client chỉ forward TCL 6666 qua managed SSH, không forward GDB 3333. Watch dùng `NAME:TYPE` (`u8/i8/u16/i16/u32/i32/f32/f64`), chỉ chấp nhận CCM/SRAM F407 và fail-closed với symbol trùng tên/ngoài RAM; `f64` được double-read và chỉ trả numeric value khi hai raw read coherent. Đây là statistical execution sampling, không phải instruction trace đầy đủ và không tuyên bố zero timing impact.
+- Hardware smoke trên B300 thật: 30 mẫu ở 10 Hz với `xTickCount:u32`, `bRUN:u8`, `v_current:f64`, `0` overrun, target cuối `RUNNING`; `xTickCount` tăng 2350361→2353278 trong 2.922 s (~998.3 tick/s), source mapping và CSV đều PASS. Evidence/contract: `docs/15_REALTIME_LIVE_MONITOR.md`.
+
 - Thêm nền `debug sample` cho Local và `debug client --client-action sample` qua SSH: lấy mẫu hữu hạn tối đa 16 biến trong **một HALT/RUN cycle**, giới hạn 0.1–60 s giữa các chu kỳ, tối đa 1000 chu kỳ, giữ nguyên trạng thái target và có thể xuất `.csv`/`.jsonl` để làm nguồn dữ liệu cho Live Plot sau này.
 - Sampling phân biệt `raw_value` và `numeric_value`, nên enum/string vẫn được lưu nhưng chỉ scalar số rõ ràng mới được coi là dữ liệu đồ thị. Hardware smoke trên B300 thật với `xTickCount`, 5 chu kỳ ở 5 Hz, đã PASS và target/WRP/metadata vẫn nguyên trạng.
 

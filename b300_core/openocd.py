@@ -105,6 +105,19 @@ def _base_command(probe: ProbeRef, executable: str, *, gdb_port: Optional[int] =
     return command
 
 
+def build_live_monitor_command(probe: ProbeRef, executable: str, tcl_port: int,
+                               bind_address: str = "127.0.0.1") -> List[str]:
+    """OpenOCD profile for zero-halt monitoring: TCL only, no GDB/Telnet surface."""
+    if not 1 <= int(tcl_port) <= 65535:
+        raise ValueError("Live Monitor TCL port must be in range 1..65535.")
+    if bind_address not in {"127.0.0.1", "::1"}:
+        raise ValueError("Live Monitor OpenOCD must bind to loopback.")
+    return _base_command(
+        probe, executable, gdb_port=None, telnet_port=None, tcl_port=int(tcl_port),
+        bind_address=bind_address,
+    ) + ["-c", "init"]
+
+
 def build_flash_command(plan: FlashPlan, executable: str) -> List[str]:
     validate_openocd_value(plan.image.path, "Application path")
     if plan.erase_sectors != (3, 4, 5, 6, 7):

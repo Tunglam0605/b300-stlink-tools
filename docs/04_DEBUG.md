@@ -128,6 +128,26 @@ từ cột `State` của `targets`; OpenOCD `poll`
 chỉ phản ánh background polling/TAP và không được dùng để kết luận CPU đang
 `running` hay `halted`.
 
+## Realtime Live Monitor — non-halting
+
+Để quan sát robot đang chạy mà không dùng chu kỳ HALT/RUN, dùng `debug live`. Backend
+đọc DWT PC sample register và các symbol RAM qua Safe TCL `mdw` khi target vẫn RUNNING;
+source mapping được làm offline bằng AXF/ELF. Local profile tắt cả GDB/Telnet, còn Client
+Live chỉ forward TCL qua SSH. Cadence hỗ trợ từ 0.1 s.
+
+```text
+b300-stlink debug live --symbols firmware.axf --live-interval 0.1 \
+  --live-watch xTickCount:u32
+
+b300-stlink debug client --ssh-host <gateway> --ssh-user <user> \
+  --client-action live --symbols firmware.axf --live-interval 0.5 \
+  --live-watch xTickCount:u32
+```
+
+Đây là **statistical execution sampling**, không phải trace đầy đủ từng instruction. CPU không
+bị debugger halt, nhưng SWD vẫn tạo một lượng bus traffic nhỏ nên không tuyên bố zero timing
+impact. Contract, giới hạn và hardware evidence nằm tại `docs/15_REALTIME_LIVE_MONITOR.md`.
+
 ## Self-test một máy cho đường Remote Debug lõi
 
 Từ v0.8.1, khi chưa có hai máy để thử SSH thật, có thể nghiệm thu phần mềm của đường Gateway → external Client ngay trên **một máy**. Lệnh này mở Gateway OpenOCD chỉ trên loopback rồi dùng chính `DebugSession.start_external()` để attach lại qua `127.0.0.1:3333/6666`; vì vậy nó kiểm tra đúng data path GDB/Safe TCL nằm **sau lớp SSH forwarding** mà không làm yếu policy mạng.
@@ -204,9 +224,9 @@ b300-stlink debug client --ssh-host <gateway> --ssh-user <user> \
 ```
 
 `--client-action` hỗ trợ `inspect`, `where`, `registers`, `stack`, `variable`, `poll`,
-`read-words`, `break`, `watch`. Client chỉ forward loopback GDB/TCL bằng SSH; không
-expose raw OpenOCD ra LAN và không có flash/erase/WRP surface. Hai máy thật qua SSH
-vẫn là field acceptance riêng.
+`read-words`, `break`, `watch`, `sample` và `live`. Các action Interactive Debug forward
+GDB/TCL loopback bằng SSH. Riêng `live` dùng tunnel TCL-only và không forward GDB 3333.
+Không expose raw OpenOCD ra LAN và không có flash/erase/WRP surface.
 
 ### B300 GUI: Auto / Local / Gateway / Client
 

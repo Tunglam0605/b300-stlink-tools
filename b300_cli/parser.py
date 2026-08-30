@@ -87,7 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     debug.add_argument(
         "debug_mode", nargs="?",
-        choices=("gateway", "client", "server", "vscode", "symbols", "selftest", "inspect", "where", "registers", "stack", "variable", "sample", "poll", "read-words", "break", "watch"),
+        choices=("gateway", "client", "server", "vscode", "symbols", "selftest", "inspect", "where", "registers", "stack", "variable", "sample", "live", "poll", "read-words", "break", "watch"),
         default="gateway", metavar="mode",
         help="Debug mode: gateway, client, selftest, server (legacy alias), or diagnostics.",
     )
@@ -116,7 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="SSH port for remote Client/VSCode (default: 22).")
     debug.add_argument(
         "--client-action",
-        choices=("inspect", "where", "registers", "stack", "variable", "sample", "poll",
+        choices=("inspect", "where", "registers", "stack", "variable", "sample", "live", "poll",
                  "read-words", "break", "watch"),
         default="inspect",
         help="One-shot operation for debug client (default: inspect).",
@@ -152,6 +152,22 @@ def build_parser() -> argparse.ArgumentParser:
     debug.add_argument(
         "--sample-output", type=Path,
         help="Optional .csv or .jsonl file for bounded variable samples.",
+    )
+    debug.add_argument(
+        "--live-interval", type=float, default=0.5,
+        help="Zero-halt Live Monitor cadence in seconds (default: 0.5, min: 0.1).",
+    )
+    debug.add_argument(
+        "--live-samples", type=parse_integer,
+        help="Optional bounded Live Monitor sample count; omitted means run until Ctrl+C.",
+    )
+    debug.add_argument(
+        "--live-watch", action="append", default=[],
+        help="Zero-halt RAM watch NAME:TYPE; repeatable, types u8/i8/u16/i16/u32/i32/f32/f64.",
+    )
+    debug.add_argument(
+        "--live-output", type=Path,
+        help="Optional .jsonl or .csv stream for zero-halt Live Monitor samples.",
     )
     debug.add_argument("--location",
                        help="Function or basename:line for one-shot hardware breakpoint.")
