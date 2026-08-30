@@ -20,6 +20,8 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 - Thêm `target health` read-only để phân loại sức khỏe Application theo Bootloader v0.6.5: `BOOTABLE`, `UNMANAGED_RECOVERY`, `INVALID_METADATA`, `OTA_IN_PROGRESS`, `STLINK_VERIFIED_PENDING`, `IMAGE_READ_INCOMPLETE`, `INVALID_VECTOR`, `IMAGE_CRC_MISMATCH` và `NOT_BOOTABLE`; command đọc đúng `image_size`, đối chiếu CRC/vector/metadata và trả `next_action` nhưng không reset/erase/program/đổi Option Bytes.
 - Hardware smoke trên B300 thật xác nhận `target health` = `BOOTABLE`, đọc 126580 byte, expected/actual CRC32 đều `0xC99ED31F`, vector hợp lệ, metadata `STLM + CONFIRMED seq=4`; post-check vẫn giữ WRP S0-S2 protected và target `READY_FOR_APPLICATION_FLASH`.
 
+- GUI Memory/Metadata bổ sung **Application Health** read-only card dùng chung `target health` core: hiển thị lifecycle, bootable, expected/actual CRC32, vector, số byte đã kiểm và `Next action`; snapshot tự chuyển `STALE` sau mọi transaction làm thay đổi Flash. Nút Health dùng worker/cancel/interlock hiện có và không cung cấp repair/write tự động.
+
 ## [0.9.0] - 2026-08-30
 
 ### Added

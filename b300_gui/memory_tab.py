@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from b300_core.metadata import OTA_META_MAGIC_OTA, OTA_META_MAGIC_STLINK
-from b300_core.models import OtaMetadata, ProbeRef
+from b300_core.models import ApplicationHealth, OtaMetadata, ProbeRef
 from b300_core.policy import SECTORS
 from .workers import FunctionWorker
 
@@ -140,12 +140,16 @@ class MemoryTab(QWidget):
         self.export_button.clicked.connect(self.export_sector)
         self.metadata_button = QPushButton("Đọc Application metadata")
         self.metadata_button.clicked.connect(self.read_metadata)
+        self.health_button = QPushButton("Kiểm tra Application Health")
+        self.health_button.setToolTip("Read-only: đọc AppMeta + đúng image_size để đối chiếu CRC32/vector; không reset hoặc ghi Flash.")
+        self.health_button.clicked.connect(self.read_application_health)
         self.cancel_button = QPushButton("Hủy đọc")
         self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self.cancel_current)
 
         action_grid.addWidget(self.read_button, 0, 0)
         action_grid.addWidget(self.metadata_button, 0, 1)
+        action_grid.addWidget(self.health_button, 0, 2)
         action_grid.addWidget(self.export_button, 1, 0)
         action_grid.addWidget(self.cancel_button, 1, 1)
         action_grid.setColumnStretch(0, 1)
@@ -241,7 +245,41 @@ class MemoryTab(QWidget):
         splitter.setStretchFactor(1, 2)
         root.addWidget(splitter, 1)
 
-        self.scroll_content.setMinimumHeight(500)
+        self.health_group = QGroupBox("Application Health · read-only CRC/vector evidence")
+        health_layout = QVBoxLayout(self.health_group)
+        health_layout.setContentsMargins(10, 10, 10, 10)
+        self.health_notice = QLabel(
+            "Nhấn 'Kiểm tra Application Health' để đối chiếu metadata, vector và CRC32 toàn image đã cài."
+        )
+        self.health_notice.setObjectName("applicationHealthNotice")
+        self.health_notice.setWordWrap(True)
+        health_layout.addWidget(self.health_notice)
+        health_form = QFormLayout()
+        self.health_values = {}
+        for field, display_label in (
+            ("Lifecycle", "Vòng đời (Lifecycle)"),
+            ("Bootable", "Có thể boot (Bootable)"),
+            ("Image CRC", "CRC image (Image CRC)"),
+            ("Expected CRC32", "CRC32 metadata (Expected)"),
+            ("Actual CRC32", "CRC32 đọc lại (Actual)"),
+            ("Vector", "Vector Application"),
+            ("Bytes checked", "Số byte đã kiểm (Bytes checked)"),
+            ("Next action", "Hành động tiếp theo (Next action)"),
+        ):
+            value = QLabel("—")
+            value.setWordWrap(field == "Next action")
+            value.setTextInteractionFlags(value.textInteractionFlags() | value.textInteractionFlags().TextSelectableByMouse)
+            value.setStyleSheet(
+                "color: #334155; font-family: 'Cascadia Code', 'Consolas', monospace; "
+                "padding: 3px 8px; background-color: #F8FAFC; border-radius: 4px; "
+                "border: 1px solid #E2E8F0;"
+            )
+            self.health_values[field] = value
+            health_form.addRow(display_label + ":", value)
+        health_layout.addLayout(health_form)
+        root.addWidget(self.health_group)
+
+        self.scroll_content.setMinimumHeight(650)
         self._init_empty_table()
 
     def _init_empty_table(self) -> None:
@@ -271,6 +309,7 @@ class MemoryTab(QWidget):
         available = not self._busy and not self._external_blocked
         self.read_button.setEnabled(available)
         self.metadata_button.setEnabled(available)
+        self.health_button.setEnabled(available)
         self.sector_combo.setEnabled(available)
         self.export_button.setEnabled(available and bool(self.current_data))
         self.cancel_button.setEnabled(self._busy and self._active_worker is not None)
@@ -283,6 +322,16 @@ class MemoryTab(QWidget):
         """Mark the displayed Application metadata snapshot stale after a write transaction."""
         for value in self.metadata_values.values():
             value.setText("—")
+        for value in self.health_values.values():
+            value.setText("—")
+        self.health_values["Lifecycle"].setText("STALE")
+        self.health_notice.setText(
+            "⚠ Application Health snapshot đã hết hiệu lực. %s Nhấn 'Kiểm tra Application Health' để đọc lại CRC/vector hiện tại." % reason
+        )
+        self.health_notice.setStyleSheet(
+            "background-color: #FFFBEB; color: #92400E; border: 1px solid #FDE68A; "
+            "border-radius: 6px; padding: 8px 12px;"
+        )
         self.metadata_values["Classification"].setText("STALE")
         self.metadata_values["Classification"].setStyleSheet(
             "color: #92400E; font-weight: 700; font-family: 'Cascadia Code', 'Consolas', monospace; "
@@ -325,6 +374,18 @@ class MemoryTab(QWidget):
                 probe, event_sink=log, cancel_event=cancel
             ),
             self.show_metadata,
+        )
+
+    def read_application_health(self) -> None:
+        probe = self.probe_provider()
+        self.status_label.setText("Đang kiểm tra Application Health…")
+        self.range_info_label.setText("Đọc AppMeta + Application image để đối chiếu CRC32/vector…")
+        self._set_busy(True)
+        self._start_worker(
+            lambda log, phase, cancel: self.service.inspect_application_health(
+                probe, event_sink=log, cancel_event=cancel
+            ),
+            self.show_application_health,
         )
 
     def _start_worker(self, operation, on_finished) -> None:
@@ -529,6 +590,64 @@ class MemoryTab(QWidget):
         for col in range(1, cols - 1):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(cols - 1, QHeaderView.ResizeMode.ResizeToContents)
+
+    def show_application_health(self, health: ApplicationHealth) -> None:
+        expected_crc = (
+            "0x%08X" % health.metadata.image_crc32 if health.metadata.valid else "—"
+        )
+        actual_crc = (
+            "0x%08X" % health.actual_image_crc32
+            if health.actual_image_crc32 is not None else "—"
+        )
+        vector = health.application_vector
+        vector_text = (
+            "VALID · reset=0x%08X" % vector.reset_vector
+            if vector is not None and vector.valid and vector.reset_vector is not None
+            else ("INVALID · %s" % vector.reason if vector is not None else "UNAVAILABLE")
+        )
+        values = {
+            "Lifecycle": health.lifecycle,
+            "Bootable": "YES" if health.bootable else "NO",
+            "Image CRC": (
+                "MATCH" if health.image_crc_valid is True else
+                "MISMATCH" if health.image_crc_valid is False else "UNKNOWN"
+            ),
+            "Expected CRC32": expected_crc,
+            "Actual CRC32": actual_crc,
+            "Vector": vector_text,
+            "Bytes checked": str(health.bytes_checked),
+            "Next action": health.next_action,
+        }
+        for field, value in values.items():
+            self.health_values[field].setText(value)
+        if health.bootable:
+            self.health_notice.setText("✓ BOOTABLE · %s" % health.reason)
+            notice_style = (
+                "background-color: #ECFDF5; color: #047857; border: 1px solid #A7F3D0; "
+                "border-radius: 6px; padding: 8px 12px; font-weight: 600;"
+            )
+            lifecycle_style = (
+                "color: #047857; font-weight: 700; padding: 3px 8px; background-color: #ECFDF5; "
+                "border-radius: 4px; border: 1px solid #A7F3D0;"
+            )
+        else:
+            self.health_notice.setText("⚠ %s · %s" % (health.lifecycle, health.reason))
+            notice_style = (
+                "background-color: #FFF7ED; color: #9A3412; border: 1px solid #FED7AA; "
+                "border-radius: 6px; padding: 8px 12px; font-weight: 600;"
+            )
+            lifecycle_style = (
+                "color: #B45309; font-weight: 700; padding: 3px 8px; background-color: #FFFBEB; "
+                "border-radius: 4px; border: 1px solid #FDE68A;"
+            )
+        self.health_notice.setStyleSheet(notice_style)
+        self.health_values["Lifecycle"].setStyleSheet(lifecycle_style)
+        self.status_label.setText("Application Health: %s" % health.lifecycle)
+        self.range_info_label.setText(
+            "Application Health · checked %d bytes · CRC=%s" %
+            (health.bytes_checked, values["Image CRC"])
+        )
+        self._set_busy(False)
 
     def show_metadata(self, metadata: OtaMetadata) -> None:
         if metadata.classification == "ERASED":
