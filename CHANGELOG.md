@@ -5,6 +5,8 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-30
+
 ### Fixed
 
 - Harden GUI cho session dài: Realtime Execution Timeline giờ giữ bounded window tối đa 1000 sample gần nhất và trim theo lô; bỏ `ResizeToContents` khỏi hot path của bảng timeline, giảm benchmark synthetic 5000 events từ ~58.7 s xuống ~0.75 s trên máy test. Main OpenOCD log giữ tối đa 10000 blocks và Debug Technical Log tối đa 5000 blocks để tránh tăng RAM vô hạn khi treo tool lâu.
