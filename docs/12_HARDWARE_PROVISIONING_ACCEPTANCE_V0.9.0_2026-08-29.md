@@ -176,14 +176,11 @@ Final read-only checks after all tests:
 - metadata CRC image: `0xC99ED31F`
 - debug poll: target `RUNNING`
 
-## Remaining field gates before Stable
+## Deferred field acceptance after v0.9.0 release
 
-The following are deliberately **not** marked PASS by this acceptance run:
+The following are deliberately **not** marked PASS by this acceptance run and remain scheduled for later hands-on field testing because this release session is being completed remotely:
 
 - real cold power-cycle (power removed and restored), then metadata/Application validation
 - full OTA image transfer through the real OTA server/gateway, including OTA → ST-Link → OTA interoperability
-- two-machine SSH field acceptance for GUI Client
-- two-machine SSH field acceptance for CLI Client
-- two-machine SSH field acceptance for VS Code/Cortex-Debug Client
 
-Stable release must not claim these gates until they are executed on the final release commit/artifacts.
+These two items are **deferred, not waived as successful**. The v0.9.0 release notes must keep their status explicit until they are executed on final hardware. Real SSH forwarding/debug correctness for GUI Client, CLI Client and VS Code/Cortex-Debug is covered separately by `docs/13_SSH_LOOPBACK_ACCEPTANCE_V0.9.0_2026-08-29.md`.

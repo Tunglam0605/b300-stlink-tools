@@ -5,7 +5,7 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
-## [0.9.0] - 2026-08-29
+## [0.9.0] - 2026-08-30
 
 ### Added
 
@@ -44,8 +44,8 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ### Release gates
 
-- `0.9.0` hiện là development/release-candidate source trên `develop/v0.9.0`; Factory v0.6.5 + strict ST-Link AppMeta current-code hardware acceptance đã PASS trên CI-built artifact.
-- Chưa tag/publish Stable cho đến khi **cold power-cycle thật** và **full OTA image-transfer interoperability** hoàn thành. SSH correctness đã PASS bằng real loopback tunnel acceptance cho GUI/CLI/VS Code; two-machine networking chỉ còn là field-environment test bổ sung.
+- `0.9.0` được chốt phát hành Stable sau khi software/packaging, Factory v0.6.5, strict ST-Link AppMeta và real debug/SSH acceptance đã PASS trên artifact đóng gói/CI-built.
+- **Cold power-cycle thật** và **full OTA image-transfer interoperability (OTA → ST-Link → OTA)** vẫn **chưa được thực thi** do phiên nghiệm thu hiện tại thực hiện từ xa; chúng được ghi là **deferred field acceptance**, không được tuyên bố PASS và sẽ được chạy bổ sung khi có điều kiện thao tác trực tiếp phần cứng. SSH correctness đã PASS bằng real loopback tunnel acceptance cho GUI/CLI/VS Code.
 - Historical v0.6.5 hardware evidence chỉ dùng làm reference; current v0.9.0 evidence được ghi riêng trong `docs/12_HARDWARE_PROVISIONING_ACCEPTANCE_V0.9.0_2026-08-29.md`.
 
 ## [0.8.2] - 2026-08-29
