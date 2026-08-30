@@ -71,6 +71,55 @@ class GuiPackagingTests(unittest.TestCase):
             ("B300-STLink-GUI-Ubuntu-arm64.AppImage", "b300-stlink-gui_arm64.deb"),
         )
 
+    def test_appimagetool_transient_failure_retries_and_cleans_partial_output(self) -> None:
+        module = gui_builder()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            appimage = root / "B300.AppImage"
+            calls = []
+
+            def fake_check_call(command, env=None):
+                calls.append((command, env))
+                if len(calls) == 1:
+                    appimage.write_bytes(b"partial")
+                    raise subprocess.CalledProcessError(1, command)
+                self.assertFalse(appimage.exists())
+                appimage.write_bytes(b"complete")
+                return 0
+
+            with mock.patch.object(module.subprocess, "check_call", side_effect=fake_check_call), \
+                    mock.patch.object(module.time, "sleep") as sleep:
+                module.run_appimagetool(
+                    Path("appimagetool"), root / "AppDir", appimage, {"ARCH": "x86_64"},
+                    attempts=3, retry_delay=0.25,
+                )
+
+            self.assertEqual(len(calls), 2)
+            sleep.assert_called_once_with(0.25)
+            self.assertEqual(appimage.read_bytes(), b"complete")
+
+    def test_appimagetool_retry_exhaustion_raises_and_removes_partial_output(self) -> None:
+        module = gui_builder()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            appimage = root / "B300.AppImage"
+
+            def always_fail(command, env=None):
+                appimage.write_bytes(b"partial")
+                raise subprocess.CalledProcessError(1, command)
+
+            with mock.patch.object(module.subprocess, "check_call", side_effect=always_fail) as call, \
+                    mock.patch.object(module.time, "sleep") as sleep:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    module.run_appimagetool(
+                        Path("appimagetool"), root / "AppDir", appimage, {},
+                        attempts=3, retry_delay=0.5,
+                    )
+
+            self.assertEqual(call.call_count, 3)
+            self.assertEqual(sleep.call_count, 2)
+            self.assertFalse(appimage.exists())
+
     def test_arm64_build_uses_an_available_pyside_release(self) -> None:
         requirements = (ROOT / "requirements-gui.txt").read_text(encoding="utf-8")
         self.assertIn("PySide6==6.10.3; platform_machine != 'aarch64'", requirements)

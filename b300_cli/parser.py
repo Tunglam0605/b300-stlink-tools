@@ -87,7 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     debug.add_argument(
         "debug_mode", nargs="?",
-        choices=("gateway", "client", "server", "vscode", "symbols", "selftest", "inspect", "where", "registers", "stack", "variable", "poll", "read-words", "break", "watch"),
+        choices=("gateway", "client", "server", "vscode", "symbols", "selftest", "inspect", "where", "registers", "stack", "variable", "sample", "live", "poll", "read-words", "break", "watch"),
         default="gateway", metavar="mode",
         help="Debug mode: gateway, client, selftest, server (legacy alias), or diagnostics.",
     )
@@ -116,7 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="SSH port for remote Client/VSCode (default: 22).")
     debug.add_argument(
         "--client-action",
-        choices=("inspect", "where", "registers", "stack", "variable", "poll",
+        choices=("inspect", "where", "registers", "stack", "variable", "sample", "live", "poll",
                  "read-words", "break", "watch"),
         default="inspect",
         help="One-shot operation for debug client (default: inspect).",
@@ -136,7 +136,39 @@ def build_parser() -> argparse.ArgumentParser:
     debug.add_argument("--frames", type=parse_integer, default=8,
                        help="Maximum stack frames for inspect/stack (default: 8).")
     debug.add_argument("--expression",
-                       help="Allow-listed variable expression for debug variable/watch.")
+                       help="Allow-listed variable expression for debug variable/watch/sample.")
+    debug.add_argument(
+        "--sample-expression", action="append", default=[],
+        help="Additional allow-listed expression for debug sample; repeatable, max 16 total.",
+    )
+    debug.add_argument(
+        "--samples", type=parse_integer, default=20,
+        help="Bounded sample cycles for debug sample (default: 20, max: 1000).",
+    )
+    debug.add_argument(
+        "--sample-interval", type=float, default=0.5,
+        help="Delay between sample cycles in seconds (default: 0.5, min: 0.1).",
+    )
+    debug.add_argument(
+        "--sample-output", type=Path,
+        help="Optional .csv or .jsonl file for bounded variable samples.",
+    )
+    debug.add_argument(
+        "--live-interval", type=float, default=0.5,
+        help="Zero-halt Live Monitor cadence in seconds (default: 0.5, min: 0.1).",
+    )
+    debug.add_argument(
+        "--live-samples", type=parse_integer,
+        help="Optional bounded Live Monitor sample count; omitted means run until Ctrl+C.",
+    )
+    debug.add_argument(
+        "--live-watch", action="append", default=[],
+        help="Zero-halt RAM watch NAME:TYPE; repeatable, types u8/i8/u16/i16/u32/i32/f32/f64.",
+    )
+    debug.add_argument(
+        "--live-output", type=Path,
+        help="Optional .jsonl or .csv stream for zero-halt Live Monitor samples.",
+    )
     debug.add_argument("--location",
                        help="Function or basename:line for one-shot hardware breakpoint.")
     debug.add_argument("--timeout", type=float, default=5.0,
@@ -176,6 +208,13 @@ def build_parser() -> argparse.ArgumentParser:
     inspect_target.add_argument("--openocd")
     inspect_target.add_argument("--probe-serial", type=parse_probe_serial,
                                 help="Select one ST-Link when multiple probes are connected.")
+    health_target = target_commands.add_parser(
+        "health", help="Read AppMeta + installed Application CRC/vector health.",
+        parents=[json_parent],
+    )
+    health_target.add_argument("--openocd")
+    health_target.add_argument("--probe-serial", type=parse_probe_serial,
+                               help="Select one ST-Link when multiple probes are connected.")
 
     probes = commands.add_parser(
         "probes", help="List discovered ST-Link probes.", parents=[json_parent],
@@ -219,6 +258,22 @@ def build_parser() -> argparse.ArgumentParser:
     read_sector.add_argument("--openocd")
     read_sector.add_argument("--probe-serial", type=parse_probe_serial,
                              help="Select one ST-Link when multiple probes are connected.")
+
+    support = commands.add_parser(
+        "support", help="Create a privacy-bounded read-only diagnostic support bundle.",
+        parents=[json_parent],
+    )
+    support_commands = support.add_subparsers(dest="support_command")
+    support_bundle = support_commands.add_parser(
+        "bundle", help="Write support.json + README.txt to one bounded ZIP.",
+        parents=[json_parent],
+    )
+    support_bundle.add_argument("output", type=Path)
+    support_bundle.add_argument("--force", action="store_true",
+                                help="Replace an existing support ZIP atomically.")
+    support_bundle.add_argument("--openocd")
+    support_bundle.add_argument("--probe-serial", type=parse_probe_serial,
+                                help="Select one ST-Link when multiple probes are connected.")
 
     update = commands.add_parser(
         "update", help="Check for or download a signed CLI update.", parents=[json_parent],

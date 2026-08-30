@@ -4,6 +4,8 @@ import os
 import tempfile
 import time
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -81,12 +83,14 @@ class GuiHardwareInterlockTests(unittest.TestCase):
         self.assertFalse(window.factory_probe_combo.isEnabled())
         self.assertFalse(window.memory_tab.read_button.isEnabled())
         self.assertFalse(window.memory_tab.metadata_button.isEnabled())
+        self.assertFalse(window.support_bundle_action.isEnabled())
         self.assertTrue(window.debug_tab.stop_button.isEnabled())
 
         debug.state = DebugState.STOPPED
         window._hardware_activity_changed(False)
         self.assertTrue(window.flash_button.isEnabled())
         self.assertTrue(window.memory_tab.read_button.isEnabled())
+        self.assertTrue(window.support_bundle_action.isEnabled())
         window.close()
 
     def test_main_worker_completion_releases_memory_interlock_without_gui_restart(self) -> None:
@@ -161,6 +165,64 @@ class GuiHardwareInterlockTests(unittest.TestCase):
         self.assertEqual(window.memory_tab.metadata_values["Classification"].text(), "ERASED")
         self.assertEqual(window.memory_tab.metadata_values["State"].text(), "—")
         self.assertTrue(window.memory_tab.metadata_button.isEnabled())
+        window.close()
+
+    def test_gui_support_bundle_runs_in_main_read_only_worker_and_releases_interlock(self) -> None:
+        window = MainWindow(
+            service=FakeService(), debug_service=FakeDebugService(DebugState.STOPPED),
+            probe_loader=lambda: (),
+        )
+        snapshot = {
+            "diagnostics": {"conclusion": "READY_FOR_APPLICATION_FLASH"},
+            "application_health": {"lifecycle": "BOOTABLE"},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "support.zip"
+            result = SimpleNamespace(
+                path=destination.resolve(), sha256="B" * 64, size_bytes=1776, snapshot=snapshot
+            )
+            with mock.patch(
+                "b300_gui.main_window.QFileDialog.getSaveFileName",
+                return_value=(str(destination), "ZIP archive (*.zip)"),
+            ), mock.patch(
+                "b300_gui.main_window.collect_support_snapshot", return_value=snapshot
+            ) as collect, mock.patch(
+                "b300_gui.main_window.write_support_bundle", return_value=result
+            ) as write:
+                window.export_support_bundle()
+                self.assertTrue(window.busy)
+                self.assertFalse(window.support_bundle_action.isEnabled())
+                self.assertFalse(window.memory_tab.read_button.isEnabled())
+                deadline = time.monotonic() + 1.0
+                while window._threads and time.monotonic() < deadline:
+                    self.app.processEvents()
+                    time.sleep(0.01)
+                self.app.processEvents()
+
+        self.assertFalse(window.busy)
+        self.assertFalse(window._threads)
+        self.assertTrue(window.support_bundle_action.isEnabled())
+        self.assertTrue(window.memory_tab.read_button.isEnabled())
+        self.assertIn("Support bundle đã tạo", window.status_banner.text())
+        collect.assert_called_once()
+        write.assert_called_once()
+        self.assertEqual(write.call_args.args[0], destination)
+        self.assertFalse(write.call_args.kwargs["force"])
+        window.close()
+
+    def test_gui_support_bundle_refuses_to_start_while_hardware_busy(self) -> None:
+        window = MainWindow(
+            service=FakeService(), debug_service=FakeDebugService(DebugState.STOPPED),
+            probe_loader=lambda: (),
+        )
+        window.busy = True
+        window._update_controls()
+        with mock.patch("b300_gui.main_window.QFileDialog.getSaveFileName") as dialog:
+            window.export_support_bundle()
+        dialog.assert_not_called()
+        self.assertIn("ST-Link đang bận", window.status_banner.text())
+        window.busy = False
+        window._update_controls()
         window.close()
 
     def test_main_or_memory_activity_disables_starting_debug(self) -> None:

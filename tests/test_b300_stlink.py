@@ -329,6 +329,125 @@ class B300StlinkTests(unittest.TestCase):
                 "--dry-run",
             ])
 
+    def test_target_health_reports_bootability_crc_and_vector_without_write_surface(self) -> None:
+        module = tool()
+        metadata = SimpleNamespace(
+            classification="VALID", valid=True, magic=0x53544C4D, format_version=1,
+            state=3, state_name="CONFIRMED", image_size=126580, image_crc32=0xC99ED31F,
+            board_token="B300_F407ZE", sequence=4, meta_crc32=0x11111111,
+            calculated_meta_crc32=0x11111111,
+        )
+        vector = SimpleNamespace(
+            initial_msp=0x200185C8, reset_vector=0x08010361, valid=True,
+            reason="Application vector is valid.",
+        )
+        health = SimpleNamespace(
+            lifecycle="BOOTABLE", bootable=True, reason="evidence matches",
+            next_action="No action is required.", bytes_checked=126580,
+            image_crc_valid=True, actual_image_crc32=0xC99ED31F,
+            metadata=metadata, application_vector=vector,
+        )
+        created = []
+
+        class FakeService:
+            def __init__(self, executable=None):
+                self.executable = executable
+                created.append(self)
+            def inspect_application_health(self, probe):
+                self.probe = probe
+                return health
+
+        output = io.StringIO()
+        with mock.patch.object(module, "B300Service", FakeService), \
+                mock.patch.object(module, "list_probes", return_value=(
+                    ProbeInfo("TEST123", "ST-Link", "test"),
+                )), redirect_stdout(output):
+            result = module.main(["target", "health", "--json"])
+
+        self.assertEqual(result, 0)
+        record = json.loads(output.getvalue())
+        self.assertEqual(record["command"], "target health")
+        self.assertEqual(record["health"]["lifecycle"], "BOOTABLE")
+        self.assertTrue(record["health"]["bootable"])
+        self.assertTrue(record["health"]["image_crc_valid"])
+        self.assertEqual(record["health"]["expected_image_crc32"], "0xC99ED31F")
+        self.assertEqual(record["health"]["actual_image_crc32"], "0xC99ED31F")
+        self.assertTrue(record["health"]["application_vector"]["valid"])
+        self.assertEqual(created[0].probe.serial, "TEST123")
+        rendered = output.getvalue().lower()
+        for forbidden in ("erase_sector", "mass_erase", "flash protect", "mww ", "program {"):
+            self.assertNotIn(forbidden, rendered)
+
+    def test_support_bundle_cli_emits_privacy_bounded_result(self) -> None:
+        module = tool()
+        snapshot = {
+            "diagnostics": {"conclusion": "READY_FOR_APPLICATION_FLASH"},
+            "application_health": {"lifecycle": "BOOTABLE"},
+        }
+        created_service = object()
+        result_object = SimpleNamespace(
+            path=Path("support.zip").resolve(),
+            sha256="A" * 64,
+            size_bytes=1234,
+        )
+        output = io.StringIO()
+        with mock.patch.object(module, "B300Service", return_value=created_service), \
+                mock.patch.object(module, "collect_support_snapshot", return_value=snapshot) as collect, \
+                mock.patch.object(module, "write_support_bundle", return_value=result_object) as write, \
+                mock.patch.object(module, "list_probes", return_value=()), \
+                redirect_stdout(output):
+            rc = module.main(["support", "bundle", "support.zip", "--json"])
+        self.assertEqual(rc, 0)
+        record = json.loads(output.getvalue())
+        self.assertEqual(record["command"], "support bundle")
+        self.assertEqual(record["status"], "ok")
+        self.assertTrue(record["privacy_bounded"])
+        self.assertEqual(record["diagnostics_conclusion"], "READY_FOR_APPLICATION_FLASH")
+        self.assertEqual(record["application_lifecycle"], "BOOTABLE")
+        self.assertEqual(record["sha256"], "A" * 64)
+        collect.assert_called_once()
+        write.assert_called_once()
+        self.assertEqual(write.call_args.args[0], Path("support.zip"))
+        self.assertFalse(write.call_args.kwargs["force"])
+
+    def test_support_without_bundle_subcommand_fails_without_hardware_access(self) -> None:
+        module = tool()
+        output = io.StringIO()
+        with mock.patch.object(module, "B300Service") as service, redirect_stdout(output):
+            rc = module.main(["support", "--json"])
+        self.assertEqual(rc, 1)
+        service.assert_not_called()
+        record = json.loads(output.getvalue())
+        self.assertEqual(record["reason_code"], "SUPPORT_SUBCOMMAND_REQUIRED")
+
+    def test_target_health_returns_nonzero_for_nonbootable_evidence(self) -> None:
+        module = tool()
+        metadata = SimpleNamespace(
+            classification="VALID", valid=True, magic=0x53544C4D, format_version=1,
+            state=2, state_name="VERIFIED", image_size=64, image_crc32=0x12345678,
+            board_token="B300_F407ZE", sequence=9, meta_crc32=1, calculated_meta_crc32=1,
+        )
+        health = SimpleNamespace(
+            lifecycle="STLINK_VERIFIED_PENDING", bootable=False,
+            reason="pending one-shot Bootloader consumption",
+            next_action="Reset once", bytes_checked=64, image_crc_valid=True,
+            actual_image_crc32=0x12345678, metadata=metadata, application_vector=None,
+        )
+        class FakeService:
+            def __init__(self, executable=None): pass
+            def inspect_application_health(self, probe): return health
+
+        output = io.StringIO()
+        with mock.patch.object(module, "B300Service", FakeService), \
+                mock.patch.object(module, "list_probes", return_value=(
+                    ProbeInfo("TEST123", "ST-Link", "test"),
+                )), redirect_stdout(output):
+            result = module.main(["target", "health", "--json"])
+        self.assertEqual(result, 1)
+        record = json.loads(output.getvalue())
+        self.assertEqual(record["status"], "warning")
+        self.assertEqual(record["health"]["lifecycle"], "STLINK_VERIFIED_PENDING")
+
     def test_debug_gateway_dry_run_uses_fixed_safe_headless_profile(self) -> None:
         output = io.StringIO()
         with redirect_stdout(output):
@@ -479,6 +598,126 @@ class B300StlinkTests(unittest.TestCase):
         self.assertEqual(record["frame"]["function"], "Motor_Update")
         self.assertEqual(record["frame"]["line"], 417)
         self.assertTrue(created[0].stopped)
+
+    def test_integrated_sample_dry_run_is_bounded_multi_variable_and_non_mutating(self) -> None:
+        module = tool()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            symbols = root / "firmware.axf"
+            symbols.write_bytes(b"AXF")
+            sample_output = root / "samples.csv"
+            output = io.StringIO()
+            with redirect_stdout(output):
+                result = module.main([
+                    "debug", "sample", "--symbols", str(symbols),
+                    "--expression", "xTickCount",
+                    "--sample-expression", "motorSpeed",
+                    "--samples", "5", "--sample-interval", "0.2",
+                    "--sample-output", str(sample_output),
+                    "--dry-run", "--json",
+                ])
+            self.assertFalse(sample_output.exists())
+        self.assertEqual(result, 0)
+        record = json.loads(output.getvalue())
+        self.assertEqual(record["mode"], "sample")
+        self.assertEqual(record["sample_expressions"], ["xTickCount", "motorSpeed"])
+        self.assertEqual(record["sample_cycles"], 5)
+        self.assertEqual(record["sample_interval"], 0.2)
+        self.assertTrue(record["preserve_target_state"])
+        rendered = " ".join(record["command"]).lower()
+        for forbidden in ("flash erase_sector", "mass_erase", "program {", "flash protect", "mww "):
+            self.assertNotIn(forbidden, rendered)
+
+    def test_integrated_sample_validates_bounds_symbols_and_output_before_hardware(self) -> None:
+        module = tool()
+        cases = [
+            (["debug", "sample", "--expression", "xTickCount", "--dry-run", "--json"], "requires --symbols"),
+            (["debug", "sample", "--symbols", "missing.axf", "--expression", "xTickCount", "--samples", "0", "--dry-run", "--json"], "Sample cycles"),
+            (["debug", "sample", "--symbols", "missing.axf", "--expression", "xTickCount", "--sample-interval", "0.01", "--dry-run", "--json"], "Sample interval"),
+            (["debug", "sample", "--symbols", "missing.axf", "--expression", "xTickCount", "--sample-output", "samples.txt", "--dry-run", "--json"], "csv or .jsonl"),
+        ]
+        for argv, expected in cases:
+            with self.subTest(argv=argv):
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    result = module.main(argv)
+                self.assertEqual(result, 1)
+                self.assertIn(expected, output.getvalue())
+
+    def test_integrated_sample_writes_csv_and_stops_session(self) -> None:
+        module = tool()
+        created = []
+
+        class Info:
+            gdb_endpoint = "127.0.0.1:3333"
+            tcl_endpoint = "127.0.0.1:6666"
+            tcl_version = "OpenOCD test"
+            initial_target_state = "running"
+            symbols = "C:/fw/firmware.axf"
+
+        class FakeSession:
+            def __init__(self, *args, **kwargs):
+                self.stopped = False
+                self.cycles = 0
+                created.append(self)
+            def start(self, config):
+                return Info()
+            def capture_variables(self, expressions):
+                self.cycles += 1
+                return tuple(
+                    SimpleNamespace(expression=expression, value=str(self.cycles * index))
+                    for index, expression in enumerate(expressions, start=1)
+                )
+            def stop(self):
+                self.stopped = True
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            symbols = root / "firmware.axf"
+            symbols.write_bytes(b"AXF")
+            sample_output = root / "samples.csv"
+            output = io.StringIO()
+            with mock.patch.object(module, "DebugSession", FakeSession), \
+                    mock.patch.object(module, "list_probes", return_value=(ProbeInfo("TEST123", "ST-Link", "test"),)), \
+                    redirect_stdout(output):
+                result = module.main([
+                    "debug", "sample", "--symbols", str(symbols),
+                    "--expression", "speed", "--sample-expression", "current",
+                    "--samples", "2", "--sample-interval", "0.1",
+                    "--sample-output", str(sample_output), "--json",
+                ])
+            csv_text = sample_output.read_text(encoding="utf-8")
+        self.assertEqual(result, 0)
+        record = json.loads(output.getvalue())
+        self.assertEqual(record["sampling"]["sample_cycles"], 2)
+        self.assertEqual(len(record["sampling"]["samples"]), 4)
+        self.assertEqual(record["sampling"]["samples"][0]["expression"], "speed")
+        self.assertIn("speed", csv_text)
+        self.assertIn("current", csv_text)
+        self.assertTrue(created[0].stopped)
+
+    def test_debug_client_sample_dry_run_uses_same_bounded_sampling_contract(self) -> None:
+        module = tool()
+        with tempfile.TemporaryDirectory() as directory:
+            symbols = Path(directory) / "firmware.axf"
+            symbols.write_bytes(b"AXF")
+            output = io.StringIO()
+            with redirect_stdout(output):
+                result = module.main([
+                    "debug", "client", "--ssh-host", "gateway.example",
+                    "--ssh-user", "automation", "--client-action", "sample",
+                    "--symbols", str(symbols), "--expression", "xTickCount",
+                    "--sample-expression", "motorSpeed", "--samples", "3",
+                    "--sample-interval", "0.25", "--dry-run", "--json",
+                ])
+        self.assertEqual(result, 0)
+        record = json.loads(output.getvalue())
+        self.assertEqual(record["event"], "debug_client_plan")
+        self.assertEqual(record["action"], "sample")
+        self.assertEqual(record["sample_expressions"], ["xTickCount", "motorSpeed"])
+        self.assertEqual(record["sample_cycles"], 3)
+        self.assertEqual(record["sample_interval"], 0.25)
+        self.assertEqual(record["remote_transport"], "ssh-local-forwarding")
 
     def test_integrated_break_dry_run_requires_symbols_and_is_hardware_only(self) -> None:
         module = tool()

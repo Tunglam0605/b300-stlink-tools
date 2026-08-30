@@ -6,7 +6,7 @@ import json
 from typing import Iterable, Mapping, Optional
 
 from b300_core.metadata import OTA_META_SIZE
-from b300_core.models import DiagnosticReport, OtaMetadata, ProbeInfo, TargetInfo
+from b300_core.models import ApplicationHealth, DiagnosticReport, OtaMetadata, ProbeInfo, TargetInfo
 from b300_core.policy import METADATA_ADDRESS, SECTORS
 
 
@@ -244,6 +244,61 @@ def format_metadata_text(metadata: OtaMetadata) -> str:
     record = metadata_record(metadata)
     return "\n".join("%s=%s" % (key, "-" if value is None else value)
                      for key, value in record.items())
+
+
+def application_health_record(health: ApplicationHealth) -> dict:
+    vector = health.application_vector
+    return {
+        "lifecycle": health.lifecycle,
+        "bootable": health.bootable,
+        "reason": health.reason,
+        "next_action": health.next_action,
+        "bytes_checked": health.bytes_checked,
+        "image_crc_valid": health.image_crc_valid,
+        "expected_image_crc32": (
+            "0x%08X" % health.metadata.image_crc32 if health.metadata.valid else None
+        ),
+        "actual_image_crc32": (
+            "0x%08X" % health.actual_image_crc32
+            if health.actual_image_crc32 is not None else None
+        ),
+        "application_vector": None if vector is None else {
+            "initial_msp": "0x%08X" % vector.initial_msp if vector.initial_msp is not None else None,
+            "reset_vector": "0x%08X" % vector.reset_vector if vector.reset_vector is not None else None,
+            "valid": vector.valid,
+            "reason": vector.reason,
+        },
+        "metadata": metadata_record(health.metadata),
+    }
+
+
+def application_health_snapshot(health: ApplicationHealth) -> dict:
+    return {
+        "schema_version": 1,
+        "command": "target health",
+        "status": "ok" if health.bootable else "warning",
+        "health": application_health_record(health),
+    }
+
+
+def format_application_health_text(health: ApplicationHealth) -> str:
+    record = application_health_record(health)
+    lines = [
+        "lifecycle=%s" % record["lifecycle"],
+        "bootable=%s" % record["bootable"],
+        "reason=%s" % record["reason"],
+        "next_action=%s" % record["next_action"],
+        "bytes_checked=%s" % record["bytes_checked"],
+        "image_crc_valid=%s" % record["image_crc_valid"],
+        "expected_image_crc32=%s" % record["expected_image_crc32"],
+        "actual_image_crc32=%s" % record["actual_image_crc32"],
+    ]
+    vector = record["application_vector"]
+    if vector is not None:
+        lines.append("vector_valid=%s" % vector["valid"])
+        lines.append("reset_vector=%s" % vector["reset_vector"])
+    lines.append("metadata_state=%s" % record["metadata"].get("state_name"))
+    return "\n".join(lines)
 
 
 def diagnostic_snapshot(command: str, report: DiagnosticReport) -> dict:

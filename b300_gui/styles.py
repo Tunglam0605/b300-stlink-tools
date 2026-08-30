@@ -87,7 +87,43 @@ QLabel#subtitleLabel {
     font-size: 12px;
 }
 
-/* Tab Widget & Bar */
+/* Sidebar Navigation Panel - Vertical Workstation */
+QFrame#sidebarPanel {
+    background-color: #F8FAFC;
+    border-right: 1px solid #E2E8F0;
+    min-width: 200px;
+    max-width: 220px;
+}
+
+QPushButton#navButton {
+    background-color: transparent;
+    color: #475569;
+    font-size: 13px;
+    font-weight: 600;
+    text-align: left;
+    padding: 6px 12px;
+    border: none;
+    border-radius: 6px;
+    margin: 1px 4px;
+    min-height: 36px;
+    max-height: 36px;
+}
+
+QPushButton#navButton:hover {
+    background-color: #F1F5F9;
+    color: #0F172A;
+}
+
+QPushButton#navButton:checked, QPushButton#navButton[active="true"] {
+    background-color: #E0F2FE;
+    color: #0284C7;
+    font-weight: 700;
+    border-left: 3px solid #0284C7;
+    border-top-left-radius: 2px;
+    border-bottom-left-radius: 2px;
+}
+
+/* Tab Widget & Bar - Modern Engineering Workstation */
 QTabWidget::pane {
     border: 1px solid #E2E8F0;
     background-color: #FFFFFF;
@@ -97,7 +133,7 @@ QTabWidget::pane {
 
 QTabBar::tab {
     min-width: 140px;
-    padding: 9px 18px;
+    padding: 8px 20px;
     font-weight: 600;
     font-size: 13px;
     color: #64748B;
@@ -115,37 +151,43 @@ QTabBar::tab:hover {
 }
 
 QTabBar::tab:selected {
-    color: #0F172A;
+    color: #0284C7;
     background-color: #FFFFFF;
     border-top: 3px solid #0284C7;
-    border-left: 1px solid #E2E8F0;
-    border-right: 1px solid #E2E8F0;
+    border-left: 1px solid #CBD5E1;
+    border-right: 1px solid #CBD5E1;
     font-weight: 700;
 }
 
-/* GroupBox Card Surface with Interactive Glow */
+/* GroupBox Card Surface - Sleek Workstation Panels */
 QGroupBox {
     background-color: #FFFFFF;
     border: 1px solid #E2E8F0;
     border-radius: 8px;
-    margin-top: 10px;
-    padding: 12px 10px 10px 10px;
+    margin-top: 14px;
+    padding: 12px 10px 8px 10px;
     font-weight: 700;
-    color: #0F172A;
+    font-size: 12px;
+    color: #1E293B;
 }
 
 QGroupBox:hover {
-    border: 1px solid #BAE6FD;
+    border-color: #CBD5E1;
 }
 
 QGroupBox::title {
     subcontrol-origin: margin;
-    left: 14px;
-    padding: 0 8px;
-    color: #0284C7;
-    background-color: #FFFFFF;
+    subcontrol-position: top left;
+    left: 10px;
+    top: 2px;
+    padding: 2px 8px;
+    color: #0369A1;
+    background-color: #F0F9FF;
+    border: 1px solid #BAE6FD;
     border-radius: 4px;
     font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 0.3px;
 }
 
 /* Form Controls & Inputs */
@@ -159,6 +201,7 @@ QLineEdit, QComboBox, QPlainTextEdit {
     selection-background-color: #E0F2FE;
     selection-color: #0369A1;
 }
+
 
 QLineEdit:hover, QComboBox:hover {
     border: 1px solid #94A3B8;
@@ -266,14 +309,15 @@ QTextBrowser {
 
 /* Standard PushButtons with Elevation & Glow */
 QPushButton {
-    min-height: 32px;
-    padding: 4px 16px;
+    min-height: 28px;
+    padding: 3px 14px;
     border-radius: 6px;
     border: 1px solid #CBD5E1;
     background-color: #FFFFFF;
     color: #1E293B;
     font-weight: 600;
 }
+
 
 QPushButton:hover {
     background-color: #F0F9FF;
@@ -299,25 +343,25 @@ QPushButton:disabled {
 
 /* Primary CTA Flash Action Button */
 QPushButton#flashButton {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #059669, stop:1 #10B981);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0284C7, stop:1 #0369A1);
     color: #FFFFFF;
-    border: 1px solid #047857;
+    border: 1px solid #0369A1;
     font-size: 13px;
     font-weight: 700;
-    min-height: 36px;
-    padding: 6px 22px;
+    min-height: 32px;
+    padding: 6px 20px;
     border-radius: 6px;
 }
 
 QPushButton#flashButton:hover {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #047857, stop:1 #059669);
-    border-color: #065F46;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0369A1, stop:1 #075985);
+    border-color: #075985;
     color: #FFFFFF;
 }
 
 QPushButton#flashButton:pressed {
-    background-color: #065F46;
-    border-color: #047857;
+    background-color: #075985;
+    border-color: #0C4A6E;
     color: #FFFFFF;
 }
 
@@ -327,35 +371,36 @@ QPushButton#flashButton:disabled {
     border: 1px solid #CBD5E1;
 }
 
-/* Destructive Action Factory Provision Button */
+/* Secondary Factory Provision Button */
 QPushButton#factoryProvisionButton {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #DC2626, stop:1 #EA580C);
-    color: #FFFFFF;
-    border: 1px solid #B91C1C;
+    background-color: #FFF7ED;
+    color: #C2410C;
+    border: 1px solid #FED7AA;
     font-size: 13px;
     font-weight: 700;
-    min-height: 36px;
-    padding: 6px 22px;
+    min-height: 32px;
+    padding: 6px 18px;
     border-radius: 6px;
 }
 
 QPushButton#factoryProvisionButton:hover {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #B91C1C, stop:1 #C2410C);
-    border-color: #991B1B;
-    color: #FFFFFF;
+    background-color: #FFEDD5;
+    border-color: #FDBA74;
+    color: #9A3412;
 }
 
 QPushButton#factoryProvisionButton:pressed {
-    background-color: #991B1B;
-    border-color: #7F1D1D;
-    color: #FFFFFF;
+    background-color: #FDBA74;
+    border-color: #FB923C;
+    color: #7C2D12;
 }
 
 QPushButton#factoryProvisionButton:disabled {
     color: #94A3B8;
-    background: #E2E8F0;
-    border: 1px solid #CBD5E1;
+    background: #F1F5F9;
+    border: 1px solid #E2E8F0;
 }
+
 
 /* Primary Action Update Button (Cockpit style) */
 QPushButton#updateActionButton {
@@ -677,5 +722,208 @@ QMessageBox QPushButton {
 QMessageBox QPushButton:hover {
     background-color: #E2E8F0;
     color: #0F172A;
+}
+
+/* Collapsible Engineering Card & Panels */
+QFrame#collapsibleCard {
+    background-color: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-radius: 8px;
+}
+
+QFrame#collapsibleCard:hover {
+    border-color: #CBD5E1;
+}
+
+QFrame#collapsibleHeader {
+    background-color: #F8FAFC;
+    border-top-left-radius: 7px;
+    border-top-right-radius: 7px;
+    border-bottom: 1px solid #E2E8F0;
+    padding: 6px 12px;
+}
+
+QFrame#collapsibleHeader[expanded="false"] {
+    border-bottom: none;
+    border-radius: 7px;
+}
+
+QLabel#collapsibleTitle {
+    font-weight: 700;
+    font-size: 13px;
+    color: #0F172A;
+}
+
+QLabel#collapsibleSubtitle {
+    color: #64748B;
+    font-size: 11px;
+    font-weight: 500;
+}
+
+/* Live Monitor & Workstation Tables */
+QTableWidget#timelineTable, QTableWidget#liveVariablesTable {
+    background-color: #FFFFFF;
+    color: #0F172A;
+    alternate-background-color: #F8FAFC;
+    gridline-color: #F1F5F9;
+    border: 1px solid #E2E8F0;
+    border-radius: 6px;
+    font-family: "Cascadia Code", "Consolas", "Courier New", monospace;
+    font-size: 12px;
+}
+
+QTableWidget#timelineTable::item, QTableWidget#liveVariablesTable::item {
+    padding: 4px 6px;
+}
+
+QTableWidget#timelineTable::item:selected, QTableWidget#liveVariablesTable::item:selected {
+    background-color: #E0F2FE;
+    color: #0369A1;
+}
+
+/* Count & Filter Badges */
+QLabel#badgeInfo {
+    background-color: #F0F9FF;
+    color: #0369A1;
+    border: 1px solid #BAE6FD;
+    border-radius: 10px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: "Cascadia Code", "Consolas", monospace;
+}
+
+QLabel#badgeWarn {
+    background-color: #FFFBEB;
+    color: #B45309;
+    border: 1px solid #FDE68A;
+    border-radius: 10px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: "Cascadia Code", "Consolas", monospace;
+}
+
+QLabel#badgeError {
+    background-color: #FEF2F2;
+    color: #B91C1C;
+    border: 1px solid #FECACA;
+    border-radius: 10px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: "Cascadia Code", "Consolas", monospace;
+}
+
+/* Interactive Debug Amber Warning Banner */
+QFrame#interactiveDebugWarning {
+    background-color: #FFFBEB;
+    border: 1px solid #FDE68A;
+    border-left: 4px solid #D97706;
+    border-radius: 6px;
+    padding: 8px 12px;
+}
+
+QLabel#interactiveDebugWarningText {
+    color: #92400E;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+/* Primary Live Monitor Action Button */
+QPushButton#liveStartButton {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #059669, stop:1 #10B981);
+    color: #FFFFFF;
+    border: 1px solid #047857;
+    font-weight: 700;
+    border-radius: 6px;
+    padding: 4px 16px;
+}
+
+QPushButton#liveStartButton:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #047857, stop:1 #059669);
+    border-color: #065F46;
+}
+
+QPushButton#liveStartButton:disabled {
+    color: #94A3B8;
+    background: #E2E8F0;
+    border-color: #CBD5E1;
+}
+
+/* Secondary Action Button */
+QPushButton#secondaryActionBtn {
+    background-color: #F8FAFC;
+    color: #334155;
+    border: 1px solid #CBD5E1;
+    font-weight: 600;
+    border-radius: 6px;
+    padding: 4px 12px;
+}
+
+QPushButton#secondaryActionBtn:hover {
+    background-color: #F1F5F9;
+    color: #0F172A;
+    border-color: #94A3B8;
+}
+
+/* Health Badge styling */
+QLabel#healthLifecycleBadge {
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-weight: 700;
+    font-size: 12px;
+    font-family: "Cascadia Code", "Consolas", monospace;
+}
+
+QLabel#healthLifecycleBadge[lifecycle="BOOTABLE"] {
+    background-color: #ECFDF5;
+    color: #047857;
+    border: 1px solid #6EE7B7;
+}
+
+QLabel#healthLifecycleBadge[lifecycle="NON_BOOTABLE"] {
+    background-color: #FEF2F2;
+    color: #991B1B;
+    border: 1px solid #FECACA;
+}
+
+QLabel#healthLifecycleBadge[lifecycle="STALE"] {
+    background-color: #F1F5F9;
+    color: #64748B;
+    border: 1px solid #CBD5E1;
+}
+
+/* Flash Plan Cards & Factory Profile */
+QLabel#flashPlanSummaryCard {
+    background-color: #F0F9FF;
+    color: #0369A1;
+    border: 1px solid #BAE6FD;
+    border-left: 3px solid #0284C7;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+}
+
+QLabel#flashPlanBadge {
+    background-color: #F8FAFC;
+    color: #475569;
+    border: 1px solid #E2E8F0;
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-weight: 600;
+    font-size: 11px;
+    font-family: "Cascadia Code", "Consolas", monospace;
+}
+
+QLabel#factoryBootloaderProfileInfo {
+    background-color: #F8FAFC;
+    color: #334155;
+    border: 1px solid #E2E8F0;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-family: "Cascadia Code", "Consolas", monospace;
+    font-size: 11px;
+    line-height: 1.4;
 }
 """

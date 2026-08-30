@@ -131,6 +131,29 @@ class SafeTclClient:
             )
         return tuple(values)
 
+    def read_word_addresses(self, addresses) -> Tuple[int, ...]:
+        selected = tuple(int(address) for address in addresses)
+        if not 1 <= len(selected) <= 32:
+            raise ValueError("TCL multi-read requires 1..32 addresses.")
+        for address in selected:
+            if not 0 <= address <= 0xFFFFFFFF or address % 4:
+                raise ValueError("TCL multi-read addresses must be 32-bit aligned uint32 values.")
+        assignments = [
+            "set b300_v%d [mdw 0x%08X 1]" % (index, address)
+            for index, address in enumerate(selected)
+        ]
+        result = "list " + " ".join("$b300_v%d" % index for index in range(len(selected)))
+        text = self._request("; ".join(assignments + [result]))
+        values = []
+        for match in re.finditer(r"0x[0-9A-Fa-f]+:\s+([0-9A-Fa-f]{8})", text):
+            values.append(int(match.group(1), 16))
+        if len(values) != len(selected):
+            raise TclClientError(
+                "OpenOCD TCL returned %d multi-read words; expected %d." %
+                (len(values), len(selected))
+            )
+        return tuple(values)
+
     def read_register(self, name: str) -> str:
         if not _REGISTER_NAME.fullmatch(name):
             raise ValueError("Register name contains unsupported characters.")

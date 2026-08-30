@@ -125,6 +125,31 @@ class OtaMetadata:
 
 
 @dataclass(frozen=True)
+class ApplicationHealth:
+    """Bounded read-only evidence for installed Application bootability."""
+
+    metadata: OtaMetadata
+    application_vector: Optional["ApplicationVector"]
+    image_crc_valid: Optional[bool]
+    actual_image_crc32: Optional[int]
+    bootable: bool
+    lifecycle: str
+    reason: str
+    next_action: str
+    bytes_checked: int = 0
+
+    @property
+    def vector_valid(self) -> Optional[bool]:
+        if self.application_vector is None:
+            return None
+        return self.application_vector.valid
+
+    @property
+    def metadata_crc_valid(self) -> bool:
+        return self.metadata.meta_crc32 == self.metadata.calculated_meta_crc32
+
+
+@dataclass(frozen=True)
 class TargetInfo:
     device_id: int
     flash_kib: int

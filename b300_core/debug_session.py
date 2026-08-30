@@ -264,6 +264,17 @@ class DebugSession:
         )
         return result
 
+    def capture_variables(self, expressions):
+        selected = tuple(str(item).strip() for item in expressions if str(item).strip())
+        if not selected:
+            raise ValueError("At least one variable expression is required.")
+        if len(selected) > 16:
+            raise ValueError("At most 16 variable expressions may be captured at once.")
+        _state, _resumed, result = self._with_preserved_run_state(
+            lambda: tuple(self.gdb.evaluate_variable(expression) for expression in selected)
+        )
+        return result
+
     def break_once(self, location: str, timeout_seconds: float = 5.0) -> DebugStopSnapshot:
         return self._stop_once(
             kind="hardware-breakpoint", location=location, timeout_seconds=timeout_seconds,

@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from b300_core.metadata import OTA_META_MAGIC_OTA, OTA_META_MAGIC_STLINK
-from b300_core.models import OtaMetadata, ProbeRef
+from b300_core.models import ApplicationHealth, OtaMetadata, ProbeRef
 from b300_core.policy import SECTORS
 from .workers import FunctionWorker
 
@@ -85,16 +85,16 @@ class MemoryTab(QWidget):
         self.scroll_area.setWidget(self.scroll_content)
         root_layout.addWidget(self.scroll_area)
 
-        # ST-Link Utility style Memory Display Parameters Toolbar
+        # Top Control Bar: Memory Display Toolbar
         display_group = QGroupBox("Khảo sát bộ nhớ Flash (Memory Display)")
         display_layout = QVBoxLayout(display_group)
-        display_layout.setContentsMargins(10, 10, 10, 10)
-        display_layout.setSpacing(8)
+        display_layout.setContentsMargins(12, 8, 12, 8)
+        display_layout.setSpacing(6)
 
-        param_grid = QGridLayout()
-        param_grid.setHorizontalSpacing(10)
-        param_grid.setVerticalSpacing(4)
-        param_grid.addWidget(QLabel("Address / Sector:"), 0, 0)
+        param_row = QHBoxLayout()
+        param_row.setSpacing(8)
+
+        param_row.addWidget(QLabel("Sector:"))
         self.sector_combo = QComboBox()
         self.sector_combo.setAccessibleName("Chọn Sector để đọc")
         for sector in SECTORS:
@@ -105,52 +105,57 @@ class MemoryTab(QWidget):
                 sector.index,
             )
         self.sector_combo.currentIndexChanged.connect(self._on_display_param_changed)
-        param_grid.addWidget(self.sector_combo, 1, 0)
+        param_row.addWidget(self.sector_combo, 3)
 
-        param_grid.addWidget(QLabel("Data Width:"), 0, 1)
+        param_row.addWidget(QLabel("Width:"))
         self.data_width_combo = QComboBox()
         self.data_width_combo.addItem("32 bits (Word)", 32)
         self.data_width_combo.addItem("16 bits (Half-word)", 16)
         self.data_width_combo.addItem("8 bits (Byte)", 8)
         self.data_width_combo.currentIndexChanged.connect(self._render_memory_table)
-        param_grid.addWidget(self.data_width_combo, 1, 1)
+        param_row.addWidget(self.data_width_combo, 1)
 
-        param_grid.addWidget(QLabel("Size:"), 0, 2)
+        param_row.addWidget(QLabel("Size:"))
         self.size_combo = QComboBox()
         self.size_combo.addItem("0x100 (256 B)", 256)
         self.size_combo.addItem("0x400 (1 KiB)", 1024)
         self.size_combo.addItem("0x1000 (4 KiB)", 4096)
         self.size_combo.addItem("Toàn bộ Sector (Full)", 0)
-        self.size_combo.setCurrentIndex(2)  # Default 4KB preview
+        self.size_combo.setCurrentIndex(2)
         self.size_combo.currentIndexChanged.connect(self._render_memory_table)
-        param_grid.addWidget(self.size_combo, 1, 2)
-        param_grid.setColumnStretch(0, 3)
-        param_grid.setColumnStretch(1, 1)
-        param_grid.setColumnStretch(2, 1)
-        display_layout.addLayout(param_grid)
+        param_row.addWidget(self.size_combo, 1)
+        display_layout.addLayout(param_row)
 
-        action_grid = QGridLayout()
-        action_grid.setHorizontalSpacing(8)
-        action_grid.setVerticalSpacing(8)
-        self.read_button = QPushButton("Đọc Sector")
+        action_row = QHBoxLayout()
+        action_row.setSpacing(6)
+
+        self.read_button = QPushButton("▶ Đọc Sector")
         self.read_button.setToolTip("CPU tạm dừng khi đọc và tự động tiếp tục chạy (resume) trước khi ngắt kết nối.")
         self.read_button.clicked.connect(self.read_selected_sector)
-        self.export_button = QPushButton("Xuất binary…")
+        action_row.addWidget(self.read_button)
+
+        self.metadata_button = QPushButton("⟳ Đọc Application metadata")
+        self.metadata_button.clicked.connect(self.read_metadata)
+        action_row.addWidget(self.metadata_button)
+
+        self.health_button = QPushButton("🛡 Kiểm tra Application Health")
+        self.health_button.setToolTip("Read-only: đọc AppMeta + đúng image_size để đối chiếu CRC32/vector; không reset hoặc ghi Flash.")
+        self.health_button.clicked.connect(self.read_application_health)
+        action_row.addWidget(self.health_button)
+
+        self.export_button = QPushButton("💾 Xuất binary…")
         self.export_button.setEnabled(False)
         self.export_button.clicked.connect(self.export_sector)
-        self.metadata_button = QPushButton("Đọc Application metadata")
-        self.metadata_button.clicked.connect(self.read_metadata)
-        self.cancel_button = QPushButton("Hủy đọc")
+        action_row.addWidget(self.export_button)
+
+        self.cancel_button = QPushButton("⏹ Hủy đọc")
         self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self.cancel_current)
+        action_row.addWidget(self.cancel_button)
 
-        action_grid.addWidget(self.read_button, 0, 0)
-        action_grid.addWidget(self.metadata_button, 0, 1)
-        action_grid.addWidget(self.export_button, 1, 0)
-        action_grid.addWidget(self.cancel_button, 1, 1)
-        action_grid.setColumnStretch(0, 1)
-        action_grid.setColumnStretch(1, 1)
-        display_layout.addLayout(action_grid)
+        action_row.addStretch(1)
+        display_layout.addLayout(action_row)
+
         root.addWidget(display_group)
 
         # Hidden labels preserved for status & test assertions
@@ -169,13 +174,14 @@ class MemoryTab(QWidget):
         self.status_label.setVisible(False)
         root.addWidget(self.status_label)
 
-        splitter = QSplitter()
-        splitter.setMinimumHeight(300)
+        # Splitter: Left = Memory Table, Right = Sidebar (Health + Metadata)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setMinimumHeight(440)
 
         # Left Panel: STM32 ST-LINK Utility Style Memory Table
         self.table_group = QGroupBox("Bảng nhớ thiết bị (Device Memory)")
         table_layout = QVBoxLayout(self.table_group)
-        table_layout.setContentsMargins(6, 8, 6, 6)
+        table_layout.setContentsMargins(6, 6, 6, 6)
 
         self.memory_table = QTableWidget()
         self.memory_table.setObjectName("memoryTable")
@@ -183,7 +189,7 @@ class MemoryTab(QWidget):
         self.memory_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.memory_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self.memory_table.verticalHeader().setVisible(False)
-        self.memory_table.verticalHeader().setDefaultSectionSize(26)
+        self.memory_table.verticalHeader().setDefaultSectionSize(24)
         font = QFont("Cascadia Code", 9)
         font.setStyleHint(QFont.StyleHint.Monospace)
         self.memory_table.setFont(font)
@@ -194,11 +200,68 @@ class MemoryTab(QWidget):
         self.hex_view.setObjectName("hexView")
         self.hex_view.setVisible(False)
         table_layout.addWidget(self.hex_view)
+        splitter.addWidget(self.table_group)
 
-        # Right Panel: OTA Metadata Form
-        metadata_group = QGroupBox("Application metadata · 0x0800C000")
+        # Right Sidebar Container
+        sidebar = QWidget()
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_layout.setSpacing(10)
+
+        # Right Panel Top: Application Health Card
+        self.health_group = QGroupBox("Application Health · read-only evidence")
+        health_layout = QVBoxLayout(self.health_group)
+        health_layout.setContentsMargins(10, 8, 10, 8)
+        health_layout.setSpacing(6)
+
+        self.health_notice = QLabel(
+            "Nhấn 'Kiểm tra Application Health' để đối chiếu metadata, vector và CRC32 toàn image."
+        )
+        self.health_notice.setObjectName("applicationHealthNotice")
+        self.health_notice.setWordWrap(True)
+        health_layout.addWidget(self.health_notice)
+
+        health_grid = QGridLayout()
+        health_grid.setHorizontalSpacing(10)
+        health_grid.setVerticalSpacing(4)
+        health_grid.setContentsMargins(0, 0, 0, 0)
+        self.health_values = {}
+
+        health_fields = [
+            ("Lifecycle", "Vòng đời (Lifecycle)", 0, 0),
+            ("Bootable", "Có thể boot (Bootable)", 0, 2),
+            ("Vector", "Vector Application", 1, 0),
+            ("Image CRC", "CRC image (Image CRC)", 1, 2),
+            ("Expected CRC32", "CRC32 metadata (Expected)", 2, 0),
+            ("Actual CRC32", "CRC32 đọc lại (Actual)", 2, 2),
+            ("Bytes checked", "Số byte đã kiểm (Bytes checked)", 3, 0),
+            ("Next action", "Hành động tiếp theo (Next action)", 3, 2),
+        ]
+
+        for field, display_label, r, c in health_fields:
+            lbl = QLabel(display_label + ":")
+            lbl.setStyleSheet("font-size: 11px; font-weight: 600; color: #475569;")
+            health_grid.addWidget(lbl, r, c)
+
+            val = QLabel("—")
+            val.setWordWrap(field == "Next action")
+            val.setTextInteractionFlags(val.textInteractionFlags() | val.textInteractionFlags().TextSelectableByMouse)
+            val.setStyleSheet(
+                "color: #0F172A; font-family: 'Cascadia Code', 'Consolas', monospace; "
+                "padding: 3px 6px; background-color: #F8FAFC; border-radius: 4px; "
+                "border: 1px solid #CBD5E1; font-size: 11px; min-height: 20px;"
+            )
+            self.health_values[field] = val
+            health_grid.addWidget(val, r, c + 1)
+
+        health_layout.addLayout(health_grid)
+        sidebar_layout.addWidget(self.health_group)
+
+        # Right Panel Bottom: OTA Metadata Form
+        metadata_group = QGroupBox("Application metadata · Sector 3 (0x0800C000)")
         metadata_layout = QVBoxLayout(metadata_group)
-        metadata_layout.setContentsMargins(10, 10, 10, 10)
+        metadata_layout.setContentsMargins(10, 8, 10, 8)
+        metadata_layout.setSpacing(6)
 
         self.metadata_notice = QLabel("Nhấn 'Đọc Application metadata' để kiểm tra bản ghi Sector 3.")
         self.metadata_notice.setObjectName("metadataNotice")
@@ -206,6 +269,9 @@ class MemoryTab(QWidget):
         metadata_layout.addWidget(self.metadata_notice)
 
         metadata_form = QFormLayout()
+        metadata_form.setVerticalSpacing(3)
+        metadata_form.setHorizontalSpacing(10)
+        metadata_form.setContentsMargins(0, 2, 0, 2)
         self.metadata_values = {}
         fields = (
             ("Classification", "Phân loại (Classification)"),
@@ -223,28 +289,31 @@ class MemoryTab(QWidget):
         for field, display_label in fields:
             value = QLabel("—")
             value.setStyleSheet(
-                "color: #0369A1; font-family: 'Cascadia Code', 'Consolas', 'Courier New', monospace; "
-                "font-weight: 600; padding: 3px 8px; background-color: #F8FAFC; "
-                "border-radius: 4px; border: 1px solid #E2E8F0;"
+                "color: #0369A1; font-family: 'Cascadia Code', 'Consolas', monospace; "
+                "font-weight: 600; padding: 2px 6px; background-color: #F8FAFC; "
+                "border-radius: 4px; border: 1px solid #CBD5E1; font-size: 11px; min-height: 18px;"
             )
             value.setTextInteractionFlags(value.textInteractionFlags() |
                                           value.textInteractionFlags().TextSelectableByMouse)
             self.metadata_values[field] = value
-            metadata_form.addRow(display_label + ":", value)
+            lbl = QLabel(display_label + ":")
+            lbl.setStyleSheet("font-size: 11px; color: #475569; font-weight: 500;")
+            metadata_form.addRow(lbl, value)
 
         metadata_layout.addLayout(metadata_form)
-        metadata_layout.addStretch(1)
+        sidebar_layout.addWidget(metadata_group)
 
-        splitter.addWidget(self.table_group)
-        splitter.addWidget(metadata_group)
+        splitter.addWidget(sidebar)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
         root.addWidget(splitter, 1)
 
-        self.scroll_content.setMinimumHeight(500)
         self._init_empty_table()
 
+
+
     def _init_empty_table(self) -> None:
+
         self.memory_table.setColumnCount(6)
         self.memory_table.setHorizontalHeaderLabels(["Address", "0", "4", "8", "C", "ASCII"])
         self.memory_table.setRowCount(0)
@@ -271,6 +340,7 @@ class MemoryTab(QWidget):
         available = not self._busy and not self._external_blocked
         self.read_button.setEnabled(available)
         self.metadata_button.setEnabled(available)
+        self.health_button.setEnabled(available)
         self.sector_combo.setEnabled(available)
         self.export_button.setEnabled(available and bool(self.current_data))
         self.cancel_button.setEnabled(self._busy and self._active_worker is not None)
@@ -283,6 +353,16 @@ class MemoryTab(QWidget):
         """Mark the displayed Application metadata snapshot stale after a write transaction."""
         for value in self.metadata_values.values():
             value.setText("—")
+        for value in self.health_values.values():
+            value.setText("—")
+        self.health_values["Lifecycle"].setText("STALE")
+        self.health_notice.setText(
+            "⚠ Application Health snapshot đã hết hiệu lực. %s Nhấn 'Kiểm tra Application Health' để đọc lại CRC/vector hiện tại." % reason
+        )
+        self.health_notice.setStyleSheet(
+            "background-color: #FFFBEB; color: #92400E; border: 1px solid #FDE68A; "
+            "border-radius: 6px; padding: 8px 12px;"
+        )
         self.metadata_values["Classification"].setText("STALE")
         self.metadata_values["Classification"].setStyleSheet(
             "color: #92400E; font-weight: 700; font-family: 'Cascadia Code', 'Consolas', monospace; "
@@ -325,6 +405,18 @@ class MemoryTab(QWidget):
                 probe, event_sink=log, cancel_event=cancel
             ),
             self.show_metadata,
+        )
+
+    def read_application_health(self) -> None:
+        probe = self.probe_provider()
+        self.status_label.setText("Đang kiểm tra Application Health…")
+        self.range_info_label.setText("Đọc AppMeta + Application image để đối chiếu CRC32/vector…")
+        self._set_busy(True)
+        self._start_worker(
+            lambda log, phase, cancel: self.service.inspect_application_health(
+                probe, event_sink=log, cancel_event=cancel
+            ),
+            self.show_application_health,
         )
 
     def _start_worker(self, operation, on_finished) -> None:
@@ -529,6 +621,64 @@ class MemoryTab(QWidget):
         for col in range(1, cols - 1):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(cols - 1, QHeaderView.ResizeMode.ResizeToContents)
+
+    def show_application_health(self, health: ApplicationHealth) -> None:
+        expected_crc = (
+            "0x%08X" % health.metadata.image_crc32 if health.metadata.valid else "—"
+        )
+        actual_crc = (
+            "0x%08X" % health.actual_image_crc32
+            if health.actual_image_crc32 is not None else "—"
+        )
+        vector = health.application_vector
+        vector_text = (
+            "VALID · reset=0x%08X" % vector.reset_vector
+            if vector is not None and vector.valid and vector.reset_vector is not None
+            else ("INVALID · %s" % vector.reason if vector is not None else "UNAVAILABLE")
+        )
+        values = {
+            "Lifecycle": health.lifecycle,
+            "Bootable": "YES" if health.bootable else "NO",
+            "Image CRC": (
+                "MATCH" if health.image_crc_valid is True else
+                "MISMATCH" if health.image_crc_valid is False else "UNKNOWN"
+            ),
+            "Expected CRC32": expected_crc,
+            "Actual CRC32": actual_crc,
+            "Vector": vector_text,
+            "Bytes checked": str(health.bytes_checked),
+            "Next action": health.next_action,
+        }
+        for field, value in values.items():
+            self.health_values[field].setText(value)
+        if health.bootable:
+            self.health_notice.setText("✓ BOOTABLE · %s" % health.reason)
+            notice_style = (
+                "background-color: #ECFDF5; color: #047857; border: 1px solid #A7F3D0; "
+                "border-radius: 6px; padding: 8px 12px; font-weight: 600;"
+            )
+            lifecycle_style = (
+                "color: #047857; font-weight: 700; padding: 3px 8px; background-color: #ECFDF5; "
+                "border-radius: 4px; border: 1px solid #A7F3D0;"
+            )
+        else:
+            self.health_notice.setText("⚠ %s · %s" % (health.lifecycle, health.reason))
+            notice_style = (
+                "background-color: #FFF7ED; color: #9A3412; border: 1px solid #FED7AA; "
+                "border-radius: 6px; padding: 8px 12px; font-weight: 600;"
+            )
+            lifecycle_style = (
+                "color: #B45309; font-weight: 700; padding: 3px 8px; background-color: #FFFBEB; "
+                "border-radius: 4px; border: 1px solid #FDE68A;"
+            )
+        self.health_notice.setStyleSheet(notice_style)
+        self.health_values["Lifecycle"].setStyleSheet(lifecycle_style)
+        self.status_label.setText("Application Health: %s" % health.lifecycle)
+        self.range_info_label.setText(
+            "Application Health · checked %d bytes · CRC=%s" %
+            (health.bytes_checked, values["Image CRC"])
+        )
+        self._set_busy(False)
 
     def show_metadata(self, metadata: OtaMetadata) -> None:
         if metadata.classification == "ERASED":

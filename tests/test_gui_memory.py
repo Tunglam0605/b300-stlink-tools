@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import time
 import unittest
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -48,13 +49,89 @@ class GuiMemoryTests(unittest.TestCase):
         self.assertEqual(tab.metadata_values["State"].text(), "CONFIRMED (3)")
         self.assertEqual(tab.metadata_values["Board token"].text(), "B300_F407ZE")
 
+    def test_application_health_renders_bootable_crc_and_vector_evidence(self) -> None:
+        tab = MemoryTab(service=object(), probe_provider=lambda: None)
+        metadata = decode_ota_metadata(make_metadata(state=3))
+        health = SimpleNamespace(
+            metadata=metadata, lifecycle="BOOTABLE", bootable=True,
+            reason="Application Metadata, image CRC, and vector permit bootability.",
+            next_action="No action is required.", bytes_checked=126580,
+            image_crc_valid=True, actual_image_crc32=metadata.image_crc32,
+            application_vector=SimpleNamespace(
+                valid=True, reset_vector=0x08010361, reason="Application vector is valid."
+            ),
+        )
+        tab.show_application_health(health)
+        self.assertEqual(tab.health_values["Lifecycle"].text(), "BOOTABLE")
+        self.assertEqual(tab.health_values["Bootable"].text(), "YES")
+        self.assertEqual(tab.health_values["Image CRC"].text(), "MATCH")
+        self.assertEqual(tab.health_values["Expected CRC32"].text(), "0x%08X" % metadata.image_crc32)
+        self.assertEqual(tab.health_values["Actual CRC32"].text(), "0x%08X" % metadata.image_crc32)
+        self.assertEqual(tab.health_values["Vector"].text(), "VALID · reset=0x08010361")
+        self.assertEqual(tab.health_values["Bytes checked"].text(), "126580")
+        self.assertIn("BOOTABLE", tab.health_notice.text())
+        self.assertIn("MATCH", tab.range_info_label.text())
+
+    def test_application_health_renders_nonbootable_crc_mismatch_with_next_action(self) -> None:
+        tab = MemoryTab(service=object(), probe_provider=lambda: None)
+        metadata = decode_ota_metadata(make_metadata(state=3))
+        health = SimpleNamespace(
+            metadata=metadata, lifecycle="IMAGE_CRC_MISMATCH", bootable=False,
+            reason="Application image CRC does not match metadata and cannot prove bootability.",
+            next_action="Reprovision or OTA-recover the Application.", bytes_checked=metadata.image_size,
+            image_crc_valid=False, actual_image_crc32=0xDEADBEEF,
+            application_vector=SimpleNamespace(
+                valid=True, reset_vector=0x08010361, reason="Application vector is valid."
+            ),
+        )
+        tab.show_application_health(health)
+        self.assertEqual(tab.health_values["Lifecycle"].text(), "IMAGE_CRC_MISMATCH")
+        self.assertEqual(tab.health_values["Bootable"].text(), "NO")
+        self.assertEqual(tab.health_values["Image CRC"].text(), "MISMATCH")
+        self.assertEqual(tab.health_values["Actual CRC32"].text(), "0xDEADBEEF")
+        self.assertIn("OTA-recover", tab.health_values["Next action"].text())
+        self.assertIn("IMAGE_CRC_MISMATCH", tab.health_notice.text())
+
+    def test_application_health_worker_is_read_only_busy_aware_and_survives_until_finish(self) -> None:
+        metadata = decode_ota_metadata(make_metadata(state=3))
+        health = SimpleNamespace(
+            metadata=metadata, lifecycle="BOOTABLE", bootable=True, reason="healthy",
+            next_action="No action is required.", bytes_checked=metadata.image_size,
+            image_crc_valid=True, actual_image_crc32=metadata.image_crc32,
+            application_vector=SimpleNamespace(valid=True, reset_vector=0x08010361, reason="valid"),
+        )
+        calls = []
+
+        class HealthService:
+            def inspect_application_health(self, probe, event_sink=None, cancel_event=None):
+                calls.append((probe, event_sink is not None, cancel_event is not None))
+                return health
+
+        probe = object()
+        tab = MemoryTab(service=HealthService(), probe_provider=lambda: probe)
+        tab.read_application_health()
+        self.assertTrue(tab._busy)
+        self.assertFalse(tab.health_button.isEnabled())
+        deadline = time.monotonic() + 1.0
+        while tab._threads and time.monotonic() < deadline:
+            self.app.processEvents()
+            time.sleep(0.01)
+        self.assertEqual(calls, [(probe, True, True)])
+        self.assertFalse(tab._busy)
+        self.assertTrue(tab.health_button.isEnabled())
+        self.assertEqual(tab.health_values["Lifecycle"].text(), "BOOTABLE")
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
     def test_metadata_snapshot_is_invalidated_after_external_flash_change(self) -> None:
         tab = MemoryTab(service=object(), probe_provider=lambda: None)
         tab.show_metadata(decode_ota_metadata(make_metadata(state=1)))
         self.assertEqual(tab.metadata_values["State"].text(), "IN_PROGRESS (1)")
+        tab.health_values["Lifecycle"].setText("BOOTABLE")
         tab.invalidate_metadata_view("Application provisioning completed.")
         self.assertEqual(tab.metadata_values["Classification"].text(), "STALE")
         self.assertEqual(tab.metadata_values["State"].text(), "—")
+        self.assertEqual(tab.health_values["Lifecycle"].text(), "STALE")
+        self.assertIn("Application Health snapshot", tab.health_notice.text())
         self.assertIn("cần đọc lại", tab.status_label.text())
         self.assertIn("Đọc Application metadata", tab.metadata_notice.text())
 

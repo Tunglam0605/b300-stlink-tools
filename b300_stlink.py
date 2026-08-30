@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import json
 import ipaddress
 import os
 import sys
@@ -20,8 +22,9 @@ from b300_cli.parser import (
     parse_tcp_port,
 )
 from b300_cli.reporting import (
-    Reporter, diagnostic_snapshot, emit_snapshot, format_memory_rows, format_metadata_text,
-    flash_result_fields, flash_start_fields, format_probes_text, memory_snapshot,
+    Reporter, application_health_snapshot, diagnostic_snapshot, emit_snapshot,
+    flash_result_fields, flash_start_fields, format_application_health_text,
+    format_memory_rows, format_metadata_text, format_probes_text, memory_snapshot,
     metadata_snapshot, probe_record,
 )
 from b300_cli.update_commands import run_update_command
@@ -29,6 +32,11 @@ from b300_core.diagnostics import DiagnosticsService
 from b300_core.gateway_readiness import inspect_gateway_readiness
 from b300_core.gdb_runtime import resolve_gdb
 from b300_core.hex_image import inspect_image
+from b300_core.live_monitor import (
+    run_live_monitor, validate_live_request, validate_live_watch_specs,
+)
+from b300_core.live_service import LiveMonitorService
+from b300_core.offline_symbols import OfflineSymbolTable
 from b300_core.linux_usb import (
     LinuxUsbSetupReport,
     SystemChangeConfirmationRequired,
@@ -43,11 +51,13 @@ from b300_core.openocd import (
 from b300_core.debug_service import DebugConfig, DebugService, DebugState
 from b300_core.debug_session import DebugSession, DebugSessionConfig
 from b300_core.debug_selftest import run_loopback_debug_selftest
+from b300_core.debug_sampling import sample_variables, validate_sampling_request, write_samples
 from b300_core.elf_matcher import discover_symbol_files, find_matching_symbol_file
 from b300_core.tcl_client import SafeTclClient, TclEndpoint
 from b300_core.ssh_debug_tunnel import (
     SshDebugTunnel, SshDebugTunnelConfig, find_available_loopback_port,
 )
+from b300_core.ssh_live_tunnel import SshLiveTunnel, SshLiveTunnelConfig
 from b300_core.remote_vscode import RemoteVsCodeProfile, workspace_executable
 from b300_core.remote_debug_guard import RemoteDebugGuard
 from b300_core.offline_setup import OPENOCD_VERSION, current_platform_name
@@ -62,6 +72,7 @@ from b300_core.policy import (
 from b300_core.service import B300Service, ProvisioningError
 from b300_core.probe import list_probes
 from b300_core.probe_selection import ProbeSelectionError, select_probe
+from b300_core.support_bundle import collect_support_snapshot, write_support_bundle
 from b300_version import __version__
 
 
@@ -316,6 +327,21 @@ def run_debug_selftest(args: argparse.Namespace, reporter: Reporter) -> int:
     emit_snapshot(record, args.json, "\n".join(text))
     return 0 if report.passed else 1
 
+def _sampling_expressions(args) -> tuple:
+    expressions = []
+    if getattr(args, "expression", None):
+        expressions.append(args.expression)
+    expressions.extend(getattr(args, "sample_expression", ()) or ())
+    return validate_sampling_request(
+        expressions, getattr(args, "samples", 20), getattr(args, "sample_interval", 0.5)
+    )
+
+
+def _validate_sample_output(path) -> None:
+    if path is not None and Path(path).suffix.lower() not in {".csv", ".jsonl"}:
+        raise ValueError("--sample-output must use .csv or .jsonl.")
+
+
 def _execute_debug_operation(session: DebugSession, mode: str, args, base: dict) -> str:
     """Execute one bounded read/debug action on an already-connected session."""
     if mode == "poll":
@@ -354,6 +380,25 @@ def _execute_debug_operation(session: DebugSession, mode: str, args, base: dict)
         value = session.capture_variable(args.expression)
         base["variable"] = {"expression": value.expression, "value": value.value}
         text = "%s=%s" % (value.expression, value.value)
+    elif mode == "sample":
+        expressions = _sampling_expressions(args)
+        samples = sample_variables(
+            session.capture_variables, expressions, args.samples, args.sample_interval
+        )
+        output = None
+        if args.sample_output is not None:
+            output = str(write_samples(args.sample_output, samples))
+        base["sampling"] = {
+            "expressions": list(expressions),
+            "sample_cycles": args.samples,
+            "interval_seconds": args.sample_interval,
+            "output": output,
+            "samples": [sample.to_record() for sample in samples],
+        }
+        text = "\n".join(
+            "%.3fs %s=%s" % (sample.elapsed_seconds, sample.expression, sample.raw_value)
+            for sample in samples
+        )
     elif mode == "break":
         hit = session.break_once(args.location, args.timeout)
         base["hit"] = {
@@ -400,6 +445,85 @@ def _execute_debug_operation(session: DebugSession, mode: str, args, base: dict)
         raise ValueError("Unsupported integrated debug mode: %s" % mode)
 
 
+def _validate_live_output(path) -> None:
+    if path is not None and Path(path).suffix.lower() not in {".csv", ".jsonl"}:
+        raise ValueError("--live-output must use .csv or .jsonl.")
+
+
+def _validate_live_options(args) -> None:
+    _validate_live_output(args.live_output)
+    validate_live_watch_specs(args.live_watch)
+    validate_live_request(args.live_interval, args.live_samples, ())
+
+
+def _open_live_output(path, watch_specs, force=False):
+    if path is None:
+        return None, None
+    target = _validated_output_path(Path(path), bool(force))
+    handle = target.open("w", encoding="utf-8", newline="")
+    if target.suffix.lower() == ".csv":
+        fieldnames = [
+            "cycle", "scheduled_elapsed_seconds", "captured_elapsed_seconds",
+            "read_duration_seconds", "overrun", "pc", "function", "file", "line",
+        ]
+        for spec in watch_specs:
+            name = str(spec).split(":", 1)[0].strip()
+            fieldnames.extend((name, name + "__coherent", name + "__raw_hex"))
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        return handle, writer
+    return handle, None
+
+
+def _run_zero_halt_live_monitor(tcl, args, reporter: Reporter, *, role: str) -> int:
+    if args.symbols is None:
+        raise ValueError("debug live requires --symbols ELF_OR_AXF.")
+    _validate_live_output(args.live_output)
+    output_handle = None
+    csv_writer = None
+    emitted = []
+    with OfflineSymbolTable(args.symbols) as symbols:
+        output_handle, csv_writer = _open_live_output(args.live_output, args.live_watch, args.force)
+        def on_sample(sample):
+            record = sample.to_record()
+            emitted.append(record)
+            reporter.emit("live_sample", role=role, **record)
+            if output_handle is not None:
+                if csv_writer is None:
+                    output_handle.write(json.dumps(record, sort_keys=True) + "\n")
+                    output_handle.flush()
+                else:
+                    row = {key: record.get(key) for key in csv_writer.fieldnames}
+                    for item in record.get("values", ()):
+                        name = item["name"]
+                        row[name] = item["value"]
+                        row[name + "__coherent"] = item["coherent"]
+                        row[name + "__raw_hex"] = item["raw_hex"]
+                    csv_writer.writerow(row)
+                    output_handle.flush()
+        try:
+            summary = run_live_monitor(
+                tcl, symbols, interval_seconds=args.live_interval,
+                sample_limit=args.live_samples, watch_specs=args.live_watch,
+                on_sample=on_sample,
+            )
+        except KeyboardInterrupt:
+            final_state = tcl.wait_target_state()
+            reporter.emit(
+                "live_summary", role=role, samples=len(emitted),
+                interval_seconds=args.live_interval, cancelled=True,
+                final_target_state=final_state, overruns=sum(bool(item["overrun"]) for item in emitted),
+            )
+            if final_state != "running":
+                raise RuntimeError("Live Monitor Ctrl+C ended with target state %s." % final_state)
+            return 0
+        finally:
+            if output_handle is not None:
+                output_handle.close()
+        reporter.emit("live_summary", role=role, **summary.to_record())
+        return 0
+
+
 def run_integrated_debug(args: argparse.Namespace, reporter: Reporter) -> int:
     if args.telnet_port is not None:
         raise ValueError("Integrated debug diagnostics do not enable Telnet.")
@@ -407,6 +531,11 @@ def run_integrated_debug(args: argparse.Namespace, reporter: Reporter) -> int:
         raise ValueError("--frames must be in range 1..64.")
     if args.debug_mode in {"variable", "watch"} and not args.expression:
         raise ValueError("debug %s requires --expression NAME." % args.debug_mode)
+    if args.debug_mode == "sample":
+        _sampling_expressions(args)
+        _validate_sample_output(args.sample_output)
+        if args.symbols is None:
+            raise ValueError("debug sample requires --symbols ELF_OR_AXF.")
     if args.debug_mode == "break" and not args.location:
         raise ValueError("debug break requires --location FUNCTION_OR_FILE_LINE.")
     if args.debug_mode in {"break", "watch"} and args.symbols is None:
@@ -438,7 +567,12 @@ def run_integrated_debug(args: argparse.Namespace, reporter: Reporter) -> int:
             gdb_endpoint="%s:%d" % (config.bind_address, config.gdb_port),
             tcl_endpoint="%s:%d" % (config.bind_address, config.tcl_port),
             preserve_target_state=True, timeout=args.timeout, location=args.location,
-            expression=args.expression, dry_run=True,
+            expression=args.expression,
+            sample_expressions=list(_sampling_expressions(args)) if args.debug_mode == "sample" else None,
+            sample_cycles=args.samples if args.debug_mode == "sample" else None,
+            sample_interval=args.sample_interval if args.debug_mode == "sample" else None,
+            sample_output=str(args.sample_output) if args.sample_output is not None else None,
+            dry_run=True,
         )
         return 0
 
@@ -462,6 +596,103 @@ def run_integrated_debug(args: argparse.Namespace, reporter: Reporter) -> int:
         session.stop()
 
 
+def run_live_local(args, reporter: Reporter) -> int:
+    """Run zero-halt DWT/RAM monitoring through local OpenOCD TCL only."""
+    if args.telnet_port is not None:
+        raise ValueError("debug live does not enable Telnet.")
+    if args.symbols is None:
+        raise ValueError("debug live requires --symbols ELF_OR_AXF.")
+    symbols = args.symbols.expanduser().resolve()
+    if symbols.suffix.lower() not in {".elf", ".axf"} or not symbols.is_file():
+        raise ValueError("debug live --symbols must reference an existing ELF/AXF file.")
+    _validate_live_options(args)
+    tcl_port = args.tcl_port if args.tcl_port is not None else 6666
+    probe = ProbeRef(args.probe_serial)
+    if not args.dry_run:
+        selected_probe = _select_read_probe(args, "debug live")
+        if selected_probe is None:
+            return 1
+        probe = selected_probe
+    service = LiveMonitorService(executable=args.openocd)
+    command = service.command(probe, tcl_port)
+    if args.dry_run:
+        reporter.emit(
+            "debug_live_plan", role="local", command=command, symbols=str(symbols),
+            tcl_endpoint="127.0.0.1:%d" % tcl_port, gdb_connected=False,
+            zero_halt=True, dwt_pcsr="0xE000101C", interval_seconds=args.live_interval,
+            sample_limit=args.live_samples, watches=list(args.live_watch),
+            output=str(args.live_output) if args.live_output is not None else None, dry_run=True,
+        )
+        return 0
+    try:
+        service.start(probe, tcl_port)
+        tcl = SafeTclClient(TclEndpoint("127.0.0.1", tcl_port))
+        selected, results = find_matching_symbol_file((symbols,), tcl.read_words)
+        if selected is None:
+            detail = results[0].reason if results else "ELF/AXF could not be sampled"
+            raise RuntimeError("Live Monitor AXF/ELF does not match target firmware: %s" % detail)
+        return _run_zero_halt_live_monitor(tcl, args, reporter, role="local")
+    finally:
+        service.stop()
+
+
+def _resolve_client_symbols(args, symbols, tcl):
+    selected_symbols = symbols
+    if selected_symbols is not None:
+        selected, results = find_matching_symbol_file((selected_symbols,), tcl.read_words)
+        if selected is None:
+            detail = results[0].reason if results else "ELF/AXF could not be sampled"
+            raise RuntimeError("Client AXF/ELF does not match Gateway firmware: %s" % detail)
+        return selected.path
+    if args.symbol_root:
+        candidates = discover_symbol_files(
+            [path.expanduser().resolve() for path in args.symbol_root],
+            max_files=args.symbol_max_files, max_depth=8,
+        )
+        selected, results = find_matching_symbol_file(candidates, tcl.read_words)
+        if selected is None:
+            exact_count = sum(1 for item in results if item.matched)
+            if exact_count > 1:
+                raise RuntimeError("Multiple AXF/ELF files match remote firmware; select --symbols explicitly.")
+            raise RuntimeError("No AXF/ELF under --symbol-root matches remote firmware.")
+        return selected.path
+    return None
+
+
+def _run_live_client(args, reporter: Reporter, symbols) -> int:
+    local_tcl = find_available_loopback_port(args.local_tcl_port)
+    tunnel_config = SshLiveTunnelConfig(
+        host=args.ssh_host, user=args.ssh_user, ssh_port=args.ssh_port,
+        local_tcl_port=local_tcl, gateway_tcl_port=6666,
+    )
+    tunnel_config.validate()
+    if args.dry_run:
+        reporter.emit(
+            "debug_client_plan", role="client", action="live",
+            gateway="%s@%s:%d" % (args.ssh_user, args.ssh_host, args.ssh_port),
+            ssh_command=tunnel_config.argv("ssh"), gdb_endpoint=None,
+            tcl_endpoint="127.0.0.1:%d" % local_tcl,
+            symbols=str(symbols) if symbols else None, preserve_target_state=True,
+            gateway_ports={"tcl": 6666}, zero_halt=True, gdb_connected=False,
+            live_interval=args.live_interval, live_samples=args.live_samples,
+            live_watches=list(args.live_watch),
+            live_output=str(args.live_output) if args.live_output is not None else None,
+            remote_transport="ssh-tcl-local-forwarding", dry_run=True,
+        )
+        return 0
+    tunnel = SshLiveTunnel(tunnel_config)
+    try:
+        tunnel.start()
+        tcl = SafeTclClient(TclEndpoint("127.0.0.1", local_tcl))
+        selected_symbols = _resolve_client_symbols(args, symbols, tcl)
+        if selected_symbols is None:
+            raise RuntimeError("Live Monitor requires a matched ELF/AXF file.")
+        args.symbols = selected_symbols
+        return _run_zero_halt_live_monitor(tcl, args, reporter, role="client")
+    finally:
+        tunnel.stop()
+
+
 def run_debug_client(args, reporter: Reporter) -> int:
     """Run one bounded debug action through the canonical SSH Gateway tunnel."""
     action = args.client_action
@@ -473,6 +704,15 @@ def run_debug_client(args, reporter: Reporter) -> int:
         raise ValueError("--frames must be in range 1..64.")
     if action in {"variable", "watch"} and not args.expression:
         raise ValueError("debug client %s requires --expression NAME." % action)
+    if action == "sample":
+        _sampling_expressions(args)
+        _validate_sample_output(args.sample_output)
+        if args.symbols is None and not args.symbol_root:
+            raise ValueError("debug client sample requires --symbols or --symbol-root.")
+    if action == "live":
+        _validate_live_options(args)
+        if args.symbols is None and not args.symbol_root:
+            raise ValueError("debug client live requires --symbols or --symbol-root.")
     if action == "break" and not args.location:
         raise ValueError("debug client break requires --location FUNCTION_OR_FILE_LINE.")
     if action in {"break", "watch"} and args.symbols is None:
@@ -485,6 +725,9 @@ def run_debug_client(args, reporter: Reporter) -> int:
     symbols = args.symbols.expanduser().resolve() if args.symbols is not None else None
     if symbols is not None and (symbols.suffix.lower() not in {".elf", ".axf"} or not symbols.is_file()):
         raise ValueError("debug client --symbols must reference an existing ELF/AXF file.")
+
+    if action == "live":
+        return _run_live_client(args, reporter, symbols)
 
     local_gdb = find_available_loopback_port(args.local_gdb_port)
     local_tcl = find_available_loopback_port(args.local_tcl_port, avoid=(local_gdb,))
@@ -505,6 +748,10 @@ def run_debug_client(args, reporter: Reporter) -> int:
             symbols=str(symbols) if symbols else None,
             preserve_target_state=True,
             gateway_ports={"gdb": 3333, "tcl": 6666},
+            sample_expressions=list(_sampling_expressions(args)) if action == "sample" else None,
+            sample_cycles=args.samples if action == "sample" else None,
+            sample_interval=args.sample_interval if action == "sample" else None,
+            sample_output=str(args.sample_output) if args.sample_output is not None else None,
             remote_transport="ssh-local-forwarding", dry_run=True,
         )
         return 0
@@ -514,26 +761,9 @@ def run_debug_client(args, reporter: Reporter) -> int:
     try:
         tunnel_version = tunnel.start()
         tcl = SafeTclClient(TclEndpoint("127.0.0.1", local_tcl))
-        selected_symbols = symbols
-        if selected_symbols is not None:
-            selected, results = find_matching_symbol_file((selected_symbols,), tcl.read_words)
-            if selected is None:
-                detail = results[0].reason if results else "ELF/AXF could not be sampled"
-                raise RuntimeError("Client AXF/ELF does not match Gateway firmware: %s" % detail)
-            selected_symbols = selected.path
-        elif args.symbol_root:
-            candidates = discover_symbol_files(
-                [path.expanduser().resolve() for path in args.symbol_root],
-                max_files=args.symbol_max_files, max_depth=8,
-            )
-            selected, results = find_matching_symbol_file(candidates, tcl.read_words)
-            if selected is None:
-                exact_count = sum(1 for item in results if item.matched)
-                if exact_count > 1:
-                    raise RuntimeError("Multiple AXF/ELF files match remote firmware; select --symbols explicitly.")
-                raise RuntimeError("No AXF/ELF under --symbol-root matches remote firmware.")
-            selected_symbols = selected.path
+        selected_symbols = _resolve_client_symbols(args, symbols, tcl)
 
+        session = DebugSession(service=DebugService(executable=args.openocd))
         info = session.start_external(
             symbol_file=selected_symbols,
             gdb_host="127.0.0.1", gdb_port=local_gdb,
@@ -799,6 +1029,52 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.command in {"update", "self-update"}:
             return run_update_command(args, __version__)
 
+        if args.command == "support":
+            if args.support_command is None:
+                record = {
+                    "schema_version": 1,
+                    "command": "support",
+                    "status": "error",
+                    "reason_code": "SUPPORT_SUBCOMMAND_REQUIRED",
+                    "message": "The support command requires the bundle subcommand.",
+                    "next_action": "Run support bundle <output.zip>.",
+                }
+                emit_snapshot(
+                    record, args.json, "%s: %s" % (record["reason_code"], record["message"])
+                )
+                return 1
+            service = B300Service(executable=args.openocd)
+            snapshot = collect_support_snapshot(
+                version=__version__,
+                openocd_version=OPENOCD_VERSION,
+                service=service,
+                probe_discovery=list_probes,
+                probe_serial=args.probe_serial,
+            )
+            bundle = write_support_bundle(args.output, snapshot, force=args.force)
+            health = snapshot.get("application_health") or {}
+            diagnostics = snapshot.get("diagnostics") or {}
+            record = {
+                "schema_version": 1,
+                "command": "support bundle",
+                "status": "ok",
+                "path": str(bundle.path),
+                "sha256": bundle.sha256,
+                "size_bytes": bundle.size_bytes,
+                "diagnostics_conclusion": diagnostics.get("conclusion"),
+                "application_lifecycle": health.get("lifecycle"),
+                "privacy_bounded": True,
+            }
+            emit_snapshot(
+                record, args.json,
+                "Support bundle: %s\nSHA-256: %s\nSize: %d bytes\nDiagnostics: %s\nApplication: %s" % (
+                    bundle.path, bundle.sha256, bundle.size_bytes,
+                    record["diagnostics_conclusion"] or "unavailable",
+                    record["application_lifecycle"] or "unavailable",
+                ),
+            )
+            return 0
+
         if args.command == "setup":
             def announce_setup(plan: LinuxUsbSetupReport) -> None:
                 reporter.emit(
@@ -924,8 +1200,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "command": "target",
                 "status": "error",
                 "reason_code": "TARGET_SUBCOMMAND_REQUIRED",
-                "message": "The target command requires the inspect subcommand.",
-                "next_action": "Run target inspect to perform read-only target diagnostics.",
+                "message": "The target command requires the inspect or health subcommand.",
+                "next_action": "Run target inspect for a quick snapshot or target health for CRC/vector bootability evidence.",
             }
             emit_snapshot(record, args.json, "%s: %s" % (record["reason_code"], record["message"]))
             return 1
@@ -969,6 +1245,22 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "%s (%s)" % (report.conclusion, report.reason_code),
             )
             return 0 if report.conclusion == "READY_FOR_APPLICATION_FLASH" else 1
+
+        if args.command == "target" and args.target_command == "health":
+            probe = _select_read_probe(args, "target health")
+            if probe is None:
+                return 1
+            try:
+                health = B300Service(executable=args.openocd).inspect_application_health(probe)
+            except (OSError, RuntimeError, ValueError) as error:
+                return _read_only_error(
+                    args, "target health", "APPLICATION_HEALTH_READ_FAILED", str(error)
+                )
+            emit_snapshot(
+                application_health_snapshot(health), args.json,
+                format_application_health_text(health),
+            )
+            return 0 if health.bootable else 1
 
         if args.command == "metadata" and args.metadata_command == "show":
             probe = _select_read_probe(args, "metadata show")
@@ -1061,6 +1353,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 return run_symbol_match(args, reporter)
             if args.debug_mode == "selftest":
                 return run_debug_selftest(args, reporter)
+            if args.debug_mode == "live":
+                return run_live_local(args, reporter)
             return run_integrated_debug(args, reporter)
 
         if args.command == "provision-bootloader":

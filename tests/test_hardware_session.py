@@ -165,5 +165,19 @@ class HardwareSessionManagerTests(unittest.TestCase):
             owner.join(timeout=2)
 
 
+    def test_monitoring_detached_lease_is_distinct_and_blocks_competing_operations(self):
+        manager = HardwareSessionManager()
+        probe = ProbeRef("MON123")
+        lease = manager.acquire_monitoring(probe)
+        self.assertEqual(manager.snapshot().mode, HardwareMode.MONITORING)
+        self.assertEqual(manager.snapshot().probe_serial, "MON123")
+        with self.assertRaisesRegex(HardwareBusyError, "MONITORING"):
+            with manager.acquire(HardwareMode.FLASHING, probe):
+                pass
+        with self.assertRaisesRegex(HardwareBusyError, "MONITORING"):
+            manager.acquire_debugging(probe)
+        lease.release()
+        self.assertEqual(manager.snapshot().mode, HardwareMode.IDLE)
+
 if __name__ == "__main__":
     unittest.main()

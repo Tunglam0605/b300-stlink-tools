@@ -5,6 +5,41 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-30
+
+### Fixed
+
+- Harden GUI cho session dài: Realtime Execution Timeline giờ giữ bounded window tối đa 1000 sample gần nhất và trim theo lô; bỏ `ResizeToContents` khỏi hot path của bảng timeline, giảm benchmark synthetic 5000 events từ ~58.7 s xuống ~0.75 s trên máy test. Main OpenOCD log giữ tối đa 10000 blocks và Debug Technical Log tối đa 5000 blocks để tránh tăng RAM vô hạn khi treo tool lâu.
+- Hardware GUI soak sau hardening: 300/300 sample @ 10 Hz với `xTickCount:u32`, `bRUN:u8`, `v_current:f64`, 0 overrun, tick-rate ~999.93 Hz, target cuối `RUNNING`; 10/10 vòng Start→first sample→Stop PASS với cooperative Stop ~15–32 ms, GDB 3333 luôn đóng, TCL 6666 được release sau mỗi vòng và không còn OpenOCD orphan. Evidence: `docs/17_GUI_RUNTIME_HARDENING_POST_V0.9.0.md`.
+- Validation sau hardening: **661 tests PASS, 2 skipped, 0 failures**; GUI **79 tests PASS**, GUI smoke, `compileall` và `git diff --check` PASS.
+- Linux AppImage packaging tự retry tối đa 3 lần khi `appimagetool` trả lỗi process tạm thời (ví dụ runtime download HTTP 5xx), xóa AppImage dở trước lần thử tiếp theo và vẫn fail-closed sau khi hết retry; giảm việc phải rerun toàn bộ release job vì sự cố mạng nhất thời.
+
+### Added
+
+- Bổ sung **Realtime Live Monitor** non-halting cho Local (`debug live`) và remote Client (`debug client --client-action live`): lấy mẫu `DWT_PCSR @ 0xE000101C` để quan sát PC khi Cortex-M4 vẫn RUNNING, map PC sang function/file/line offline từ AXF/ELF và đọc tối đa 16 symbol RAM trong cùng bounded SWD/TCL transaction. Cadence hỗ trợ 0.1–60 s, scheduler neo theo thời gian tuyệt đối để tránh drift tích lũy, có `overrun` evidence và export CSV/JSONL.
+- Local Live Monitor dùng OpenOCD **TCL-only** (`gdb port disabled`, Telnet disabled); remote Live Client chỉ forward TCL 6666 qua managed SSH, không forward GDB 3333. Watch dùng `NAME:TYPE` (`u8/i8/u16/i16/u32/i32/f32/f64`), chỉ chấp nhận CCM/SRAM F407 và fail-closed với symbol trùng tên/ngoài RAM; `f64` được double-read và chỉ trả numeric value khi hai raw read coherent. Đây là statistical execution sampling, không phải instruction trace đầy đủ và không tuyên bố zero timing impact.
+- Hardware smoke trên B300 thật: 30 mẫu ở 10 Hz với `xTickCount:u32`, `bRUN:u8`, `v_current:f64`, `0` overrun, target cuối `RUNNING`; `xTickCount` tăng 2350361→2353278 trong 2.922 s (~998.3 tick/s), source mapping và CSV đều PASS. Evidence/contract: `docs/15_REALTIME_LIVE_MONITOR.md`.
+- Bổ sung `LiveMonitorSession` facade cho GUI/CLI orchestration với `start_local/start_client/run/cancel/close`, cooperative cancellation bằng `threading.Event`, bounded symbol-root auto-match và hardware interlock `MONITORING` riêng biệt với Interactive `DEBUGGING`. Hardware smoke trực tiếp facade: 20 mẫu @ 10 Hz, 0 overrun, target cuối `RUNNING`, `f64` coherent 20/20.
+- Bổ sung `LiveMonitorStore` thread-safe cho frontend: bounded history, compressed execution transitions, function hit/share statistics, timing/overrun/schedule-lag statistics và numeric variable series với coherence tracking; xử lý hoàn toàn offline nên không tăng SWD traffic.
+- Tích hợp GUI redesign với backend non-halting: `Realtime Live Monitor` không còn gọi legacy GDB `sample_variables()`/HALT-RUN; `DebugTab` mở `LiveMonitorSession` độc lập cho Local/Client, stream DWT PC + typed RAM values vào timeline/table/plot, cooperative Stop/Shutdown và chặn đồng thời Interactive Debug/Gateway. GUI hardware acceptance trên B300 thật: 20 mẫu @ 10 Hz, 0 overrun, timeline 20 dòng, plot 20 điểm, `xTickCount` đọc tới 5704461; bài Stop với interval 60 s hoàn tất trong ~0.016 s. Trong lúc Live chạy GDB 3333 không listen, TCL 6666 listen; sau Stop cả hai đóng. Post-check WRP S0-S2/metadata CONFIRMED/vector đều PASS. Evidence: `docs/16_GUI_LIVE_MONITOR_ACCEPTANCE_POST_V0.9.0.md`.
+- Full integration regression sau frontend+backend merge: **659 tests PASS, 2 skipped, 0 failures**; riêng GUI **77 tests PASS**, GUI smoke, `compileall` và `git diff --check` PASS.
+
+- Thêm **Legacy bounded GDB Sampling** `debug sample` cho Local và `debug client --client-action sample` qua SSH: lấy mẫu hữu hạn tối đa 16 biến trong **một HALT/RUN cycle**, giới hạn 0.1–60 s giữa các chu kỳ, tối đa 1000 chu kỳ, giữ nguyên trạng thái target và có thể xuất `.csv`/`.jsonl` để làm nguồn dữ liệu cho Live Plot sau này.
+- Sampling phân biệt `raw_value` và `numeric_value`, nên enum/string vẫn được lưu nhưng chỉ scalar số rõ ràng mới được coi là dữ liệu đồ thị. Hardware smoke trên B300 thật với `xTickCount`, 5 chu kỳ ở 5 Hz, đã PASS và target/WRP/metadata vẫn nguyên trạng.
+
+- GUI Interactive Debug giữ **Legacy Live Variables / bounded GDB Sampling** dùng chung sampling core: Start/Stop cooperative, bảng giá trị mới nhất, ring buffer 2000 điểm, lưu profile expressions/cycles/interval và export CSV/JSONL. GUI cảnh báo rõ mỗi chu kỳ GDB sampling sẽ HALT target rất ngắn rồi khôi phục RUNNING, nên đây là công cụ chẩn đoán chứ không phải phép đo timing hard real-time.
+- Bổ sung **Live Plot** nhẹ bằng Qt/Painter, không thêm thư viện chart ngoài: tự vẽ tối đa 400 điểm cho mỗi numeric series từ cùng ring buffer; enum/string không bị ép sang số và vẫn chỉ xuất hiện ở bảng/file export.
+
+- Thêm `target health` read-only để phân loại sức khỏe Application theo Bootloader v0.6.5: `BOOTABLE`, `UNMANAGED_RECOVERY`, `INVALID_METADATA`, `OTA_IN_PROGRESS`, `STLINK_VERIFIED_PENDING`, `IMAGE_READ_INCOMPLETE`, `INVALID_VECTOR`, `IMAGE_CRC_MISMATCH` và `NOT_BOOTABLE`; command đọc đúng `image_size`, đối chiếu CRC/vector/metadata và trả `next_action` nhưng không reset/erase/program/đổi Option Bytes.
+- Hardware smoke trên B300 thật xác nhận `target health` = `BOOTABLE`, đọc 126580 byte, expected/actual CRC32 đều `0xC99ED31F`, vector hợp lệ, metadata `STLM + CONFIRMED seq=4`; post-check vẫn giữ WRP S0-S2 protected và target `READY_FOR_APPLICATION_FLASH`.
+
+- GUI Memory/Metadata bổ sung **Application Health** read-only card dùng chung `target health` core: hiển thị lifecycle, bootable, expected/actual CRC32, vector, số byte đã kiểm và `Next action`; snapshot tự chuyển `STALE` sau mọi transaction làm thay đổi Flash. Nút Health dùng worker/cancel/interlock hiện có và không cung cấp repair/write tự động.
+
+- Bổ sung **Diagnostic Support Bundle** read-only cho CLI (`support bundle`) và GUI menu Trợ giúp: ZIP chỉ chứa `support.json` + `README.txt`, tổng hợp version/runtime, diagnostic target/WRP, metadata và Application Health. Privacy contract loại probe serial/USB identity, username/hostname, SSH identity, source/AXF path, firmware bytes, environment variables và raw command logs; absolute paths được redact trước khi ghi.
+- Hardware smoke trên B300 thật tạo support ZIP 1776 byte, Health `BOOTABLE`, CRC `0xC99ED31F`, WRP S0-S2 và metadata `CONFIRMED`; scan bundle không phát hiện local path/user/USB identity/SSH fields.
+
+- Refactor GUI Debug: tách presentation của Live Variables/Live Plot khỏi `DebugTab` thành `LiveVariablesPanel`; GDB session/worker/interlock vẫn thuộc `DebugTab`. Giữ nguyên objectName, settings keys, sampling limits và compatibility aliases; `DebugTab` giảm từ 1570 xuống 1463 dòng để giảm coupling cho các nâng cấp telemetry/plot sau này.
+
 ## [0.9.0] - 2026-08-30
 
 ### Added

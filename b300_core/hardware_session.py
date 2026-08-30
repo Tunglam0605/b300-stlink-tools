@@ -17,6 +17,7 @@ class HardwareMode(str, Enum):
     FLASHING = "FLASHING"
     FACTORY_PROVISIONING = "FACTORY_PROVISIONING"
     DEBUGGING = "DEBUGGING"
+    MONITORING = "MONITORING"
 
 
 class HardwareBusyError(RuntimeError):
@@ -34,7 +35,7 @@ class HardwareSessionState:
 
 
 class HardwareSessionLease:
-    """Explicit DEBUGGING lease that may be released by the GUI control thread."""
+    """Explicit long-lived hardware lease releasable by a GUI/control thread."""
 
     def __init__(self, manager: "HardwareSessionManager", lease_id: int) -> None:
         self._manager = manager
@@ -60,6 +61,7 @@ class HardwareSessionManager:
             HardwareMode.READING, HardwareMode.FACTORY_PROVISIONING,
         ),
         HardwareMode.DEBUGGING: (HardwareMode.DEBUGGING,),
+        HardwareMode.MONITORING: (HardwareMode.MONITORING,),
     }
 
     def __init__(self) -> None:
@@ -90,7 +92,17 @@ class HardwareSessionManager:
                 self._release_thread_bound(owner)
 
     def acquire_debugging(self, probe: ProbeRef) -> HardwareSessionLease:
-        """Acquire a long-lived DEBUGGING session releasable from another thread."""
+        """Acquire a long-lived interactive DEBUGGING lease."""
+        return self._acquire_detached(HardwareMode.DEBUGGING, probe)
+
+    def acquire_monitoring(self, probe: ProbeRef) -> HardwareSessionLease:
+        """Acquire a long-lived non-halting MONITORING lease."""
+        return self._acquire_detached(HardwareMode.MONITORING, probe)
+
+    def _acquire_detached(self, mode: HardwareMode, probe: ProbeRef) -> HardwareSessionLease:
+        selected = HardwareMode(mode)
+        if selected not in {HardwareMode.DEBUGGING, HardwareMode.MONITORING}:
+            raise ValueError("Detached hardware leases are supported only for DEBUGGING/MONITORING.")
         owner = threading.get_ident()
         with self._lock:
             if self._owner_ident is not None:
@@ -99,7 +111,7 @@ class HardwareSessionManager:
             self._next_lease_id += 1
             self._owner_ident = owner
             self._depth = 1
-            self._state = HardwareSessionState(HardwareMode.DEBUGGING, probe.serial)
+            self._state = HardwareSessionState(selected, probe.serial)
             self._detached_lease_id = lease_id
             return HardwareSessionLease(self, lease_id)
 

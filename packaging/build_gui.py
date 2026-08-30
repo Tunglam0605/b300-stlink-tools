@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -20,6 +21,9 @@ from b300_core.linux_usb import B300_UDEV_RULE
 
 DESKTOP_SOURCE = ROOT / "packaging" / "linux" / "b300-stlink-gui.desktop"
 ICON_SOURCE = ROOT / "branding" / "b300-stlink-icon.png"
+APPIMAGETOOL_MAX_ATTEMPTS = 3
+APPIMAGETOOL_RETRY_DELAY_SECONDS = 3
+
 
 def gui_output_names(architecture: str):
     if architecture == "x86_64":
@@ -151,6 +155,35 @@ exec "$B300_APP_ROOT/b300-stlink-gui" "$@"
     return debroot
 
 
+def run_appimagetool(
+    appimagetool: Path,
+    appdir: Path,
+    appimage: Path,
+    environment: dict,
+    *,
+    attempts: int = APPIMAGETOOL_MAX_ATTEMPTS,
+    retry_delay: float = APPIMAGETOOL_RETRY_DELAY_SECONDS,
+) -> None:
+    if attempts < 1:
+        raise ValueError("appimagetool attempts must be >= 1")
+    command = [str(appimagetool), str(appdir), str(appimage)]
+    for attempt in range(1, attempts + 1):
+        try:
+            subprocess.check_call(command, env=environment)
+            return
+        except subprocess.CalledProcessError:
+            if appimage.exists():
+                appimage.unlink()
+            if attempt >= attempts:
+                raise
+            print(
+                "appimagetool failed on attempt %d/%d; retrying in %s seconds." %
+                (attempt, attempts, retry_delay),
+                file=sys.stderr,
+            )
+            time.sleep(retry_delay)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundle-dir", required=True, type=Path)
@@ -170,7 +203,7 @@ def main(argv=None) -> int:
         environment = os.environ.copy()
         environment["ARCH"] = args.architecture
         appimage = args.output_dir / appimage_name
-        subprocess.check_call([str(args.appimagetool), str(appdir), str(appimage)], env=environment)
+        run_appimagetool(args.appimagetool, appdir, appimage, environment)
 
     deb_arch = "amd64" if args.architecture == "x86_64" else "arm64"
     debroot = stage_deb_root(args.bundle_dir, args.output_dir, deb_arch, args.version)
