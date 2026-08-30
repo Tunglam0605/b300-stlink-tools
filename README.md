@@ -168,6 +168,33 @@ b300-stlink target health --json       # read-only AppMeta + full image CRC/vect
 b300-stlink support bundle b300-support.zip --json  # privacy-bounded support ZIP
 ```
 
+### 3.5. Remote Debug hai máy — workflow tự động khuyến nghị
+
+**Máy Gateway** (cắm STM32 + ST-Link):
+
+```text
+b300-stlink gateway quickstart
+# nếu tool báo cần cài/bật SSH, xem plan rồi chạy:
+b300-stlink gateway quickstart --confirm-system-change
+```
+
+Lệnh này chuẩn bị OpenSSH Server theo kiểu idempotent, giữ `3333/4444/6666` loopback-only và in sẵn một lệnh `gateway client-setup` để copy sang máy Client.
+
+**Máy Client**:
+
+```text
+# dùng nguyên lệnh client-setup mà Gateway in ra
+b300-stlink gateway client-setup --ssh-host <gateway> --ssh-user <user> \
+  --confirm-host-fingerprint <SHA256:fingerprint>
+
+# copy authorize_command mà Client in ra về Gateway và chạy đúng một lần
+# sau đó quay lại Client:
+b300-stlink gateway connect-check
+b300-stlink gateway status
+```
+
+`client-setup` tự chuẩn bị OpenSSH Client khi được xác nhận, tạo/reuse B300 `ed25519` key, verify fingerprint trước khi trust và lưu **chỉ** `host/user/port` vào profile cục bộ. Không lưu password/private key. Sau khi profile sẵn sàng, CLI Debug/Live/VS Code tự dùng endpoint đã lưu, nên không cần lặp `--ssh-host/--ssh-user` ở mọi lệnh.
+
 ### 4. Nạp, mở GUI hoặc debug
 
 ```text
@@ -178,14 +205,13 @@ b300-stlink provision-bootloader --profile b300-f407ze-com3-v00060500 --dry-run 
 b300-stlink-gui
 b300-stlink debug            # mặc định = debug gateway
 b300-stlink debug gateway    # cách viết tường minh
-b300-stlink debug client --ssh-host <gateway> --ssh-user <user> --symbols <application.axf> --client-action inspect --json
+b300-stlink debug client --symbols <application.axf> --client-action inspect --json  # tự dùng saved Gateway profile nếu có
 b300-stlink debug selftest --symbols <application.axf> --expression xTickCount --location vApplicationIdleHook --json
 # selftest kiểm Gateway→external Client + AXF↔Flash; SSH tunnel thật đã có loopback hardware acceptance riêng cho GUI/CLI/VS Code.
 # Gateway CLI vẫn có đầy đủ flash/provision/doctor; riêng Debug chỉ làm cầu nối ST-Link/OpenOCD.
 # GUI Debug và CLI Debug đều có Local/Gateway/Client path; Client giữ source + AXF/ELF và dùng managed SSH tunnel.
 b300-stlink debug where --symbols <application.axf> --json   # compatibility/local diagnostics
-b300-stlink debug vscode --ssh-host <gateway> --ssh-user <user> \
-  --program-relative Objects/F407/Main_V2_F407.axf --output-dir <workspace>
+b300-stlink debug vscode --program-relative Objects/F407/Main_V2_F407.axf --output-dir <workspace>  # tự dùng saved Gateway profile nếu có
 ```
 
 Flash thật làm thay đổi Sector 3–7. Luôn kiểm tra dry-run và xác nhận đúng board,

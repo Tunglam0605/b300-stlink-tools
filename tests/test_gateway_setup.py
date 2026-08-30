@@ -85,6 +85,20 @@ class GatewaySetupTests(unittest.TestCase):
         self.assertIn("SSH port: 22", text)
         self.assertIn("3333/4444/6666 stay loopback-only", text)
 
+    def test_client_connection_text_lists_all_adapter_candidates_without_guessing(self):
+        multi = report()
+        multi = type(multi)(
+            multi.platform, multi.checks, multi.ssh_installed, multi.ssh_service_running,
+            multi.ssh_startup_enabled, multi.ssh_firewall_ready, multi.ssh_port_listening,
+            multi.debug_ports_private, multi.ready, multi.conclusion, multi.ssh_port,
+            multi.username, multi.hostname, ("10.6.0.101", "192.168.1.95"),
+        )
+        text = client_connection_text(multi)
+        self.assertIn("10.6.0.101", text)
+        self.assertIn("192.168.1.95", text)
+        self.assertIn("choose the address reachable from the Client", text)
+        self.assertNotIn("GUI Client: host=10.6.0.101", text)
+
     def test_prepare_ready_host_does_not_execute_privileged_command(self):
         ready = report()
         inspector = mock.Mock(return_value=ready)

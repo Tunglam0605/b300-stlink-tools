@@ -255,5 +255,221 @@ class CliGatewaySetupTests(unittest.TestCase):
         self.assertTrue(record["changed"])
         self.assertFalse(record["private_key_received"])
 
+
+class CliGatewayAutomationTests(unittest.TestCase):
+    def test_parser_exposes_automation_actions_and_inline_public_key(self):
+        quick = parse_args(["gateway", "quickstart", "--json"])
+        client = parse_args([
+            "gateway", "client-setup", "--ssh-host", "gateway.local", "--ssh-user", "automation", "--json",
+        ])
+        direct = parse_args([
+            "gateway", "authorize-key", "--public-key", key_line(91), "--confirm-system-change", "--json",
+        ])
+        self.assertEqual(quick.gateway_action, "quickstart")
+        self.assertEqual(client.gateway_action, "client-setup")
+        self.assertEqual(client.ssh_user, "automation")
+        self.assertEqual(direct.public_key, key_line(91))
+
+    def test_quickstart_requires_confirmation_before_host_changes(self):
+        module = tool()
+        before = host_report(False)
+        output = io.StringIO()
+        with mock.patch.object(module.gateway_workflows, "inspect_gateway_host", return_value=before), \
+             mock.patch.object(module.gateway_workflows, "prepare_gateway_host") as prepare, \
+             mock.patch.object(module.gateway_workflows, "local_gateway_host_key") as host_key, redirect_stdout(output):
+            result = module.main(["gateway", "quickstart", "--json"])
+        self.assertEqual(result, 1)
+        prepare.assert_not_called()
+        host_key.assert_not_called()
+        record = json.loads(output.getvalue().strip().splitlines()[-1])
+        self.assertEqual(record["reason_code"], "SYSTEM_CHANGE_CONFIRMATION_REQUIRED")
+
+    def test_quickstart_ready_outputs_one_client_setup_command(self):
+        module = tool()
+        ready = host_report(True)
+        host_key = GatewayHostKey("localhost", 22, "localhost", key_line(92), "SHA256:GATEWAY")
+        output = io.StringIO()
+        with mock.patch.object(module.gateway_workflows, "inspect_gateway_host", return_value=ready), \
+             mock.patch.object(module.gateway_workflows, "local_gateway_host_key", return_value=host_key), redirect_stdout(output):
+            result = module.main(["gateway", "quickstart", "--json"])
+        self.assertEqual(result, 0)
+        record = json.loads(output.getvalue().strip().splitlines()[-1])
+        self.assertTrue(record["ready"])
+        self.assertIn("gateway client-setup", record["client_setup_command"])
+        self.assertIn("192.168.1.109", record["client_setup_command"])
+        self.assertIn("SHA256:GATEWAY", record["client_setup_command"])
+        self.assertEqual(record["security"]["openocd_public_ports"], [])
+
+    def test_quickstart_multiple_adapters_returns_commands_for_each_without_picking_one(self):
+        module = tool()
+        ready = host_report(True)
+        ready = type(ready)(
+            ready.platform, ready.checks, ready.ssh_installed, ready.ssh_service_running,
+            ready.ssh_startup_enabled, ready.ssh_firewall_ready, ready.ssh_port_listening,
+            ready.debug_ports_private, ready.ready, ready.conclusion, ready.ssh_port,
+            ready.username, ready.hostname, ("10.6.0.101", "192.168.1.95"),
+        )
+        host_key = GatewayHostKey("localhost", 22, "localhost", key_line(99), "SHA256:GATEWAY")
+        output = io.StringIO()
+        with mock.patch.object(module.gateway_workflows, "inspect_gateway_host", return_value=ready), \
+             mock.patch.object(module.gateway_workflows, "local_gateway_host_key", return_value=host_key), redirect_stdout(output):
+            result = module.main(["gateway", "quickstart", "--json"])
+        self.assertEqual(result, 0)
+        record = json.loads(output.getvalue().strip().splitlines()[-1])
+        self.assertTrue(record["network_selection_required"])
+        self.assertIsNone(record["client_setup_command"])
+        self.assertEqual(len(record["client_setup_commands"]), 2)
+        self.assertIn("10.6.0.101", record["client_setup_commands"][0])
+        self.assertIn("192.168.1.95", record["client_setup_commands"][1])
+
+    def test_client_setup_requires_physical_fingerprint_confirmation_before_trust_or_profile(self):
+        module = tool()
+        prereq = SshClientPrerequisiteReport(
+            "windows", Path("ssh.exe"), Path("ssh-keygen.exe"), True, True, (), False
+        )
+        identity = SshIdentityReport(
+            Path("C:/id"), Path("C:/id.pub"), True, True, key_line(93), "SHA256:CLIENT", True
+        )
+        scanned = GatewayHostKey("gateway.local", 22, "gateway.local", key_line(94), "SHA256:SCAN")
+        output = io.StringIO()
+        with mock.patch.object(module.gateway_workflows, "inspect_ssh_client_prerequisites", return_value=prereq), \
+             mock.patch.object(module.gateway_workflows, "ensure_ssh_identity", return_value=identity), \
+             mock.patch.object(module.gateway_workflows, "scan_gateway_host_key", return_value=scanned), \
+             mock.patch.object(module.gateway_workflows, "trust_gateway_host_key") as trust, \
+             mock.patch.object(module.gateway_workflows, "save_remote_profile") as save, redirect_stdout(output):
+            result = module.main([
+                "gateway", "client-setup", "--ssh-host", "gateway.local", "--ssh-user", "automation", "--json",
+            ])
+        self.assertEqual(result, 1)
+        trust.assert_not_called()
+        save.assert_not_called()
+        record = json.loads(output.getvalue().strip().splitlines()[-1])
+        self.assertEqual(record["reason_code"], "HOST_KEY_FINGERPRINT_CONFIRMATION_REQUIRED")
+        self.assertFalse(record["profile_saved"])
+        self.assertFalse(record["private_key_exported"])
+        self.assertIn("authorize-key --public-key", record["authorize_command"])
+
+    def test_client_setup_matching_fingerprint_trusts_and_saves_nonsecret_profile(self):
+        module = tool()
+        prereq = SshClientPrerequisiteReport(
+            "windows", Path("ssh.exe"), Path("ssh-keygen.exe"), True, True, (), False
+        )
+        identity = SshIdentityReport(
+            Path("C:/id"), Path("C:/id.pub"), True, True, key_line(95), "SHA256:CLIENT", True
+        )
+        scanned = GatewayHostKey("gateway.local", 22, "gateway.local", key_line(96), "SHA256:MATCH")
+        trusted = HostTrustResult(Path("C:/known_hosts"), "gateway.local", "SHA256:MATCH", True)
+        output = io.StringIO()
+        with mock.patch.object(module.gateway_workflows, "inspect_ssh_client_prerequisites", return_value=prereq), \
+             mock.patch.object(module.gateway_workflows, "ensure_ssh_identity", return_value=identity), \
+             mock.patch.object(module.gateway_workflows, "scan_gateway_host_key", return_value=scanned), \
+             mock.patch.object(module.gateway_workflows, "trust_gateway_host_key", return_value=trusted) as trust, \
+             mock.patch.object(module.gateway_workflows, "save_remote_profile", return_value=Path("C:/profile.json")) as save, redirect_stdout(output):
+            result = module.main([
+                "gateway", "client-setup", "--ssh-host", "gateway.local", "--ssh-user", "automation",
+                "--confirm-host-fingerprint", "SHA256:MATCH", "--json",
+            ])
+        self.assertEqual(result, 0)
+        trust.assert_called_once_with(scanned)
+        save.assert_called_once()
+        saved_profile = save.call_args.args[0]
+        self.assertEqual(saved_profile.host, "gateway.local")
+        self.assertEqual(saved_profile.user, "automation")
+        record = json.loads(output.getvalue().strip().splitlines()[-1])
+        self.assertTrue(record["profile_saved"])
+        self.assertFalse(record["private_key_exported"])
+        self.assertTrue(record["strict_host_key_checking"])
+        self.assertEqual(set(record["profile"]), {"host", "user", "port", "contains_secrets"})
+        self.assertFalse(record["profile"]["contains_secrets"])
+
+    def test_authorize_key_accepts_inline_public_material_without_temp_file(self):
+        module = tool()
+        public = key_line(97)
+        installed = AuthorizedKeyResult(Path("C:/authorized_keys"), "SHA256:KEY", True, False)
+        output = io.StringIO()
+        with mock.patch.object(module, "install_gateway_public_key", return_value=installed) as install, redirect_stdout(output):
+            result = module.main([
+                "gateway", "authorize-key", "--public-key", public, "--confirm-system-change", "--json",
+            ])
+        self.assertEqual(result, 0)
+        install.assert_called_once_with(public)
+        record = json.loads(output.getvalue().strip().splitlines()[-1])
+        self.assertFalse(record["private_key_received"])
+
+    def test_saved_profile_fills_debug_endpoint_only_when_endpoint_omitted(self):
+        module = tool()
+        from b300_core.remote_profile import RemoteGatewayProfile
+        args = parse_args(["debug", "client", "--dry-run"])
+        profile = RemoteGatewayProfile("gateway.local", "automation", 2222)
+        with mock.patch.object(module.gateway_workflows, "load_remote_profile", return_value=profile):
+            loaded = module.gateway_workflows.apply_saved_remote_profile(args)
+        self.assertEqual(loaded, profile)
+        self.assertEqual(args.ssh_host, "gateway.local")
+        self.assertEqual(args.ssh_user, "automation")
+        self.assertEqual(args.ssh_port, 2222)
+
+    def test_status_distinguishes_local_setup_from_real_connectivity(self):
+        module = tool()
+        from b300_core.remote_profile import RemoteGatewayProfile
+        profile = RemoteGatewayProfile("gateway.local", "automation", 22)
+        prereq = SshClientPrerequisiteReport(
+            "windows", Path("ssh.exe"), Path("ssh-keygen.exe"), True, True, (), False
+        )
+        identity = SshIdentityReport(
+            Path("C:/id"), Path("C:/id.pub"), True, True, key_line(98), "SHA256:CLIENT", True
+        )
+        output = io.StringIO()
+        with mock.patch.object(module.gateway_workflows, "inspect_ssh_client_prerequisites", return_value=prereq), \
+             mock.patch.object(module.gateway_workflows, "inspect_ssh_identity", return_value=identity), \
+             mock.patch.object(module.gateway_workflows, "load_remote_profile", return_value=profile), \
+             mock.patch.object(module.gateway_workflows, "trusted_known_hosts_file", return_value=Path("C:/known_hosts")), redirect_stdout(output):
+            result = module.main(["gateway", "status", "--json"])
+        self.assertEqual(result, 0)
+        record = json.loads(output.getvalue().strip().splitlines()[-1])
+        self.assertEqual(record["status"], "local_ready")
+        self.assertTrue(record["local_ready"])
+        self.assertFalse(record["connectivity_verified"])
+        self.assertIn("connect-check", record["next_action"])
+
+    def test_profile_backed_debug_client_fails_closed_when_managed_key_or_trust_is_missing(self):
+        module = tool()
+        from b300_core.remote_profile import RemoteGatewayProfile
+        profile = RemoteGatewayProfile("gateway.local", "automation", 22)
+        args = parse_args(["debug", "client", "--client-action", "inspect"])
+        with mock.patch.object(module.gateway_workflows, "load_remote_profile", return_value=profile), \
+             mock.patch.object(module, "managed_identity_file", return_value=None), \
+             mock.patch.object(module, "trusted_known_hosts_file", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "Saved Gateway profile is not locally ready"):
+                module.run_debug_client(args, mock.Mock())
+
+    def test_profile_backed_vscode_fails_closed_when_managed_key_or_trust_is_missing(self):
+        module = tool()
+        from b300_core.remote_profile import RemoteGatewayProfile
+        profile = RemoteGatewayProfile("gateway.local", "automation", 22)
+        args = parse_args(["debug", "vscode", "--program-relative", "build/application.elf"])
+        with mock.patch.object(module.gateway_workflows, "load_remote_profile", return_value=profile), \
+             mock.patch.object(module, "managed_identity_file", return_value=None), \
+             mock.patch.object(module, "trusted_known_hosts_file", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "Saved Gateway profile is not locally ready"):
+                module.run_vscode_profile(args)
+
+    def test_connect_check_uses_saved_profile_and_strict_key_trust_result(self):
+        module = tool()
+        from b300_core.remote_connectivity import RemoteConnectivityResult
+        from b300_core.remote_profile import RemoteGatewayProfile
+        profile = RemoteGatewayProfile("gateway.local", "automation", 22)
+        checked = RemoteConnectivityResult(True, 0, "automation@gateway.local:22", "SSH_READY", "ok")
+        output = io.StringIO()
+        with mock.patch.object(module.gateway_workflows, "load_remote_profile", return_value=profile), \
+             mock.patch.object(module.gateway_workflows, "check_remote_connectivity", return_value=checked) as check, redirect_stdout(output):
+            result = module.main(["gateway", "connect-check", "--json"])
+        self.assertEqual(result, 0)
+        check.assert_called_once_with(profile)
+        record = json.loads(output.getvalue().strip().splitlines()[-1])
+        self.assertTrue(record["strict_host_key_checking"])
+        self.assertFalse(record["password_authentication"])
+        self.assertFalse(record["debug_ports_exposed"])
+
+
 if __name__ == "__main__":
     unittest.main()

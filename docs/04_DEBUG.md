@@ -336,3 +336,23 @@ raw GDB console.
 ## Gateway Setup Wizard (v0.12.0+)
 
 Máy Gateway chưa có SSH có thể dùng tab **Gateway Setup** hoặc CLI `gateway plan` / `gateway prepare --confirm-system-change`. Wizard chỉ quản lý OpenSSH + TCP/22 và giữ OpenOCD GDB/TCL loopback-only. Chi tiết: [Gateway Setup Wizard v0.12.0](19_GATEWAY_SETUP_WIZARD_V0.12.0.md).
+### CLI workflow tự động (RC2+)
+
+Đối với hai máy mới, ưu tiên workflow sau thay vì gọi từng primitive SSH thủ công:
+
+```text
+# Gateway
+b300-stlink gateway quickstart --confirm-system-change
+
+# Client: dùng client_setup_command do Gateway in ra
+b300-stlink gateway client-setup --ssh-host <gateway> --ssh-user <user> \
+  --confirm-host-fingerprint <SHA256:...>
+
+# Gateway: chạy authorize_command do Client in ra
+
+# Client
+b300-stlink gateway connect-check
+b300-stlink gateway status
+```
+
+Sau khi saved profile đã sẵn sàng, `debug client` và `debug vscode` có thể bỏ `--ssh-host/--ssh-user`. `gateway status` chỉ phản ánh local setup; `gateway connect-check` mới xác minh SSH thật. Chi tiết đầy đủ: [Gateway Setup & Remote Workflow](19_GATEWAY_SETUP_WIZARD_V0.12.0.md).

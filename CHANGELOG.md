@@ -5,6 +5,18 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+### Added
+
+- Thêm CLI automation layer cho remote workflow: `gateway quickstart`, `gateway client-setup`, `gateway status`, `gateway connect-check` và `gateway profile-clear`; các primitive `plan/prepare/client-key/host-key/trust-host` vẫn giữ để tương thích và chẩn đoán chi tiết.
+- Thêm saved Gateway profile chỉ chứa `host/user/port`; `debug client` và `debug vscode` tự dùng profile khi endpoint bị bỏ trống. Profile không lưu password, private key hoặc host-key material.
+- `gateway authorize-key` nhận trực tiếp `--public-key` để bỏ bước tạo/copy file `.pub`; `client-setup` in sẵn public-only `authorize_command`.
+
+### Changed
+
+- `gateway status` phân biệt rõ **local setup readiness** với kết nối thật; output giữ `connectivity_verified=false` cho tới khi người dùng chạy `gateway connect-check`.
+- Profile-backed Debug/Live/VS Code fail-closed nếu B300 managed identity hoặc managed host trust bị mất, thay vì âm thầm fallback sang SSH mặc định của hệ điều hành.
+- CI Qt tests trên Windows/Linux chạy module-isolated để loại native offscreen lifecycle crash theo test order trong hosted runners.
+
 ## [0.12.0] - 2026-08-30
 
 ### Added

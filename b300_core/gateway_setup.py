@@ -262,5 +262,20 @@ def prepare_gateway_host(ssh_port: int = DEFAULT_SSH_PORT, *, runner: CommandRun
     return GatewayPrepareResult(plan, before, after, plan.changes_required, after.ready)
 
 def client_connection_text(report: GatewayHostReport) -> str:
-    host = report.ipv4_addresses[0] if report.ipv4_addresses else report.hostname
-    return ("Gateway host: %s\nSSH user: %s\nSSH port: %d\nGUI Client: host=%s user=%s port=%d\nSecurity: OpenOCD 3333/4444/6666 stay loopback-only; only SSH is exposed to LAN." % (host, report.username, report.ssh_port, host, report.username, report.ssh_port))
+    hosts = tuple(report.ipv4_addresses) or (report.hostname,)
+    if len(hosts) == 1:
+        connection = "Gateway host: %s\nGUI Client: host=%s user=%s port=%d" % (
+            hosts[0], hosts[0], report.username, report.ssh_port,
+        )
+    else:
+        candidates = "\n".join("  - %s" % host for host in hosts)
+        connection = (
+            "Gateway host candidates (choose the address reachable from the Client):\n%s\n"
+            "GUI Client: host=<one-candidate-above> user=%s port=%d" %
+            (candidates, report.username, report.ssh_port)
+        )
+    return (
+        "%s\nSSH user: %s\nSSH port: %d\n"
+        "Security: OpenOCD 3333/4444/6666 stay loopback-only; only SSH is exposed to LAN." %
+        (connection, report.username, report.ssh_port)
+    )

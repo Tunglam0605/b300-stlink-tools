@@ -1,8 +1,8 @@
-# B300 ST-Link Tools v0.12.0 — Gateway Setup Wizard
+# B300 ST-Link Tools v0.12.0 — Gateway Setup & Remote Workflow
 
 ## Mục tiêu
 
-Cho phép một máy Windows hoặc Ubuntu mới trở thành **B300 Remote Debug Gateway** trực tiếp từ B300 ST-Link Tools, kể cả khi máy chưa có SSH Server. Máy đã có SSH hợp lệ được giữ nguyên cấu hình và Prepare trở thành thao tác idempotent/no-op.
+Cho phép một máy Windows hoặc Ubuntu mới trở thành **B300 Remote Debug Gateway** mà không cần người dùng tự cài/cấu hình SSH bằng Terminal. Máy Client cũng được bootstrap key/trust/profile bằng tool, giảm thao tác lặp lại nhưng không làm yếu cơ chế xác thực.
 
 ## Kiến trúc an toàn
 
@@ -13,130 +13,200 @@ STM32 + ST-Link
        |
  OpenOCD localhost only
    3333 GDB
-   4444 Telnet (không dùng / disabled trong B300 profile)
-   6666 TCL
+   4444 Telnet (disabled trong B300 profile)
+   6666 Safe TCL
        |
       SSH TCP/22
 ------- LAN/Wi-Fi -------
        |
-   Client GUI / CLI / VS Code
+ Client GUI / CLI / VS Code
 ```
 
-Gateway Setup chỉ quản lý SSH prerequisite của hệ điều hành. Nó **không tạo firewall rule cho 3333/4444/6666**, không sửa `sshd_config`, không đổi password và không tự tắt process đang expose debug port. Nếu phát hiện debug listener trên non-loopback address, Prepare fail-closed và yêu cầu sửa thủ công.
+B300 Tools chỉ cho phép SSH là cổng ingress từ mạng. Tool **không** tạo firewall rule cho `3333/4444/6666`, không sửa `sshd_config`, không đổi password và không tự overwrite host key đã thay đổi.
 
-## GUI
+## Workflow khuyến nghị: 2 máy, ít thao tác
 
-Sidebar có mục **Gateway Setup**. Tab này lazy-load: chỉ đọc trạng thái hệ điều hành khi người dùng mở tab hoặc bấm Refresh.
+### 1. Trên Gateway
 
-Các hành động:
-
-- **Refresh**: read-only host inspection.
-- **Prepare This PC as Gateway**: hiển thị plan, yêu cầu người dùng xác nhận, sau đó mới xin UAC/administrator privilege.
-- **Run Gateway Self-Test**: kết hợp SSH host readiness với Gateway doctor hiện có (OpenOCD/ST-Link/loopback ports).
-- **Copy Client Configuration**: copy host/user/SSH port để nhập vào GUI Client của máy còn lại.
-
-## CLI
-
-Read-only plan:
+Chạy trước ở chế độ không thay đổi hệ thống:
 
 ```bash
-b300-stlink gateway plan --json
+b300-stlink gateway quickstart
 ```
 
-Apply có kiểm soát:
+Nếu OpenSSH Server/service/firewall chưa sẵn sàng, tool trả `SYSTEM_CHANGE_CONFIRMATION_REQUIRED` và liệt kê chính xác action cần làm. Sau khi kiểm tra plan:
 
 ```bash
-b300-stlink gateway prepare --confirm-system-change --json
+b300-stlink gateway quickstart --confirm-system-change
 ```
 
-Full Gateway readiness (OpenOCD + probe + SSH + ports):
+Khi PASS, output gồm:
+
+- IP/hostname candidate;
+- SSH username/port;
+- fingerprint `ssh-ed25519` của Gateway;
+- một `client_setup_command` hoàn chỉnh để chạy trên Client;
+- xác nhận `3333/4444/6666` vẫn loopback-only.
+
+Nếu Gateway đã READY, `quickstart` là no-op đối với hệ điều hành.
+
+### 2. Trên Client
+
+Dùng nguyên `client_setup_command` do Gateway in ra. Ví dụ:
+
+```bash
+b300-stlink gateway client-setup \
+  --ssh-host 192.168.1.50 \
+  --ssh-user automation \
+  --ssh-port 22 \
+  --confirm-host-fingerprint SHA256:EXACT_FINGERPRINT
+```
+
+`client-setup` thực hiện theo thứ tự:
+
+1. kiểm tra OpenSSH Client + `ssh-keygen`;
+2. nếu thiếu thì **dừng để xin `--confirm-system-change`**, không tự cài ngầm;
+3. tạo/reuse `~/.ssh/b300_gateway_ed25519`;
+4. scan public host key `ed25519` của Gateway;
+5. so sánh fingerprint scan với fingerprint lấy trực tiếp từ Gateway;
+6. chỉ khi trùng chính xác mới ghi `~/.ssh/b300_known_hosts`;
+7. lưu profile chỉ gồm `host/user/port`;
+8. in `authorize_command` chứa **chỉ public key** để copy về Gateway.
+
+Private key không rời Client và không được đưa vào log/report/profile.
+
+Nếu fingerprint không được cung cấp, tool chỉ hiển thị fingerprint scan và dừng ở `HOST_KEY_FINGERPRINT_CONFIRMATION_REQUIRED`. Nếu fingerprint sai, tool fail-closed với `HOST_KEY_FINGERPRINT_MISMATCH`.
+
+### 3. Trở lại Gateway: authorize public key
+
+Chạy nguyên `authorize_command` mà Client in ra:
+
+```bash
+b300-stlink gateway authorize-key \
+  --public-key "ssh-ed25519 AAAA..." \
+  --confirm-system-change
+```
+
+Không còn bắt buộc tạo/copy file `.pub` trung gian. `--public-key-file` vẫn được giữ để backward compatibility. Việc append key là idempotent.
+
+### 4. Trên Client: xác minh kết nối thật
+
+```bash
+b300-stlink gateway connect-check
+```
+
+Lệnh này dùng:
+
+- `BatchMode=yes`;
+- `StrictHostKeyChecking=yes`;
+- B300 managed `known_hosts`;
+- `IdentitiesOnly=yes`;
+- `PasswordAuthentication=no`;
+- timeout hữu hạn;
+- không forward `3333/6666`.
+
+Chỉ PASS khi SSH trả đúng token `B300_SSH_READY`. Đây mới là bằng chứng public key đã được authorize và kết nối thật hoạt động.
+
+### 5. Xem trạng thái local
+
+```bash
+b300-stlink gateway status
+```
+
+`status` chỉ kết luận **LOCAL SETUP READY** khi OpenSSH Client, B300 key, saved profile và managed host trust đều có. Nó luôn ghi `connectivity_verified=false`; muốn xác minh Gateway thật phải chạy `gateway connect-check`.
+
+### 6. Debug/Live/VS Code không cần lặp host/user
+
+Sau `client-setup`, endpoint được lấy từ saved profile:
+
+```bash
+b300-stlink debug client \
+  --client-action inspect \
+  --symbols Main_V2_F407.axf \
+  --json
+
+b300-stlink debug client \
+  --client-action live \
+  --symbols Main_V2_F407.axf \
+  --live-interval 0.5 \
+  --live-watch xTickCount:u32
+
+b300-stlink debug vscode \
+  --program-relative Objects/F407/Main_V2_F407.axf \
+  --output-dir .
+```
+
+Nếu endpoint được lấy tự động từ saved profile nhưng managed private key hoặc managed host trust bị mất, tool **không fallback âm thầm** sang SSH mặc định; nó yêu cầu chạy `gateway status`/`gateway client-setup` để khôi phục trạng thái rõ ràng.
+
+## Saved profile
+
+Profile không chứa secret. Nội dung duy nhất:
+
+```json
+{
+  "schema_version": 1,
+  "host": "192.168.1.50",
+  "user": "automation",
+  "port": 22
+}
+```
+
+Vị trí mặc định:
+
+- Windows: `%LOCALAPPDATA%\B300-STLink\remote_gateway.json`
+- Linux: `$XDG_CONFIG_HOME/b300-stlink/remote_gateway.json` hoặc `~/.config/b300-stlink/remote_gateway.json`
+
+Xóa riêng endpoint profile:
+
+```bash
+b300-stlink gateway profile-clear
+```
+
+Lệnh này **không xóa** Client private key và **không xóa** `b300_known_hosts`.
+
+## Các primitive thấp hơn vẫn được giữ
+
+Khi cần chẩn đoán chi tiết:
 
 ```bash
 b300-stlink gateway doctor --json
+b300-stlink gateway plan --json
+b300-stlink gateway prepare --confirm-system-change --json
+b300-stlink gateway client-key --json
+b300-stlink gateway host-key --json
+b300-stlink gateway trust-host --ssh-host <gateway> --json
 ```
 
-`gateway prepare` không có `--confirm-system-change` sẽ trả `SYSTEM_CHANGE_CONFIRMATION_REQUIRED` nếu cần thay đổi hệ điều hành.
+Workflow mới chỉ orchestration phía trên các primitive hiện có, không thay đổi tunnel/debug/Live Monitor safety contract.
 
 ## Windows
 
-Khi thiếu thành phần, một UAC transaction thực hiện đúng phần cần thiết:
+Khi được xác nhận, Gateway Prepare chỉ làm những việc cần thiết:
 
-1. `Add-WindowsCapability OpenSSH.Server~~~~0.0.1.0` nếu OpenSSH Server chưa có.
-2. `sshd` startup = Automatic nếu chưa enabled.
-3. Start `sshd` nếu chưa running.
-4. Tạo rule `B300-OpenSSH-Server-In-TCP` cho TCP/22 chỉ khi chưa có rule OpenSSH/B300 enabled.
+1. cài `OpenSSH.Server~~~~0.0.1.0` nếu thiếu;
+2. đặt `sshd` startup Automatic nếu chưa enabled;
+3. start `sshd` nếu chưa chạy;
+4. thêm allow rule SSH TCP/22 nếu chưa có.
 
-Tool không ghi `sshd_config`. Máy đã có `sshd` running/startup/firewall đúng thì không gọi elevated command.
+Tool không ghi `sshd_config`. Máy đã READY không gọi elevated command.
 
 ## Ubuntu/Linux
 
-Nếu đã chạy root thì dùng trực tiếp. GUI user thường dùng `pkexec`/PolicyKit. Không fallback sang `sudo` trong background để tránh treo GUI ở password prompt không nhìn thấy.
-
-Khi cần:
-
-1. `apt-get update` + `apt-get install -y openssh-server` nếu package chưa installed.
-2. `systemctl enable --now ssh`.
-3. Nếu UFW đang active và chưa allow SSH, chỉ chạy `ufw allow 22/tcp`.
-
-Nếu UFW inactive thì không bật UFW và không tạo rule dư thừa.
+GUI dùng root hoặc `pkexec`; không fallback sang `sudo` background có thể treo vì prompt password. Khi cần, tool cài `openssh-server`, enable/start `ssh`, và chỉ thêm `ufw allow 22/tcp` nếu UFW đang active mà SSH chưa được allow. Tool không tự bật UFW.
 
 ## Custom SSH port
 
-Gateway doctor vẫn có thể kiểm tra SSH port tùy chọn. Managed Prepare chỉ tự cấu hình TCP/22. Nếu custom-port server chưa READY, tool từ chối thay đổi vì việc này sẽ yêu cầu sửa `sshd_config`, trái với safety contract.
+Client profile và `connect-check` hỗ trợ custom SSH port. Managed Gateway Prepare chỉ tự cấu hình TCP/22; nếu một custom-port server chưa READY và việc sửa cần đụng `sshd_config`, tool yêu cầu xử lý thủ công thay vì tự thay đổi policy.
 
 ## Acceptance tối thiểu
 
-- Máy chưa có SSH: plan phải liệt kê install/enable/start/firewall.
-- Máy đã READY: plan rỗng, không elevation, không thay đổi hệ thống.
-- Debug port expose ngoài loopback: hard block.
-- GUI/CLI dùng chung backend.
-- Packaged Windows/Linux CLI và GUI phải chứa feature.
-- Two-machine acceptance cuối cùng vẫn phải xác minh kết nối thật từ Client qua SSH.
-## SSH Client + Key Bootstrap
-
-Máy Client mới hoàn toàn không cần tự chạy `ssh-keygen` bằng Terminal. Trong tab **Gateway Setup**:
-
-1. **Generate / Reuse Client Key** kiểm tra OpenSSH Client.
-2. Nếu thiếu OpenSSH Client, GUI hỏi xác nhận trước khi dùng UAC (Windows) hoặc root/`pkexec` (Ubuntu) để cài component/package.
-3. Tool tạo hoặc reuse `~/.ssh/b300_gateway_ed25519` bằng `ssh-ed25519`. Nếu chỉ một nửa key pair tồn tại hoặc public key hỏng, tool fail-closed và không overwrite.
-4. **Copy Public Key** chỉ copy dòng `ssh-ed25519 ...`; private key không được đọc để export và không vào log/report.
-5. Trên Gateway, **Authorize Client Public Key** validate canonical ed25519 rồi append idempotent. Windows account thuộc Administrators dùng `%ProgramData%\ssh\administrators_authorized_keys`; user thường/Linux dùng `~/.ssh/authorized_keys`.
-6. Debug Client và Realtime Live Monitor tự nhận identity đã verify và thêm `IdentitiesOnly=yes` + `-i <B300 identity>` vào SSH tunnel.
-
-CLI tương đương:
-
-```bash
-b300-stlink gateway client-key --json
-b300-stlink gateway client-key --confirm-system-change --json
-b300-stlink gateway authorize-key --public-key-file client.pub --confirm-system-change --json
-```
-
-`client-key` chỉ cài OpenSSH Client khi thiếu và khi có `--confirm-system-change`. `authorize-key` không nhận private key.
-## Strict Host-Key Trust Bootstrap
-
-B300 không tắt `StrictHostKeyChecking` và không dùng `accept-new`. Lần kết nối đầu tiên được bootstrap theo quy trình có đối chiếu fingerprint:
-
-1. Trên máy Gateway vật lý, bấm **Show This Gateway Fingerprint** hoặc chạy `b300-stlink gateway host-key --json`. Tool chỉ đọc `ssh_host_ed25519_key.pub`; private host key không được đọc/export.
-2. Copy fingerprint `SHA256:...` sang máy Client bằng kênh người vận hành kiểm soát.
-3. Trên Client, nhập IP/hostname Gateway + SSH port + fingerprint vào **Strict SSH host trust**, rồi bấm **Scan + Verify + Trust**.
-4. Tool dùng `ssh-keyscan -t ed25519` để lấy public host key từ mạng nhưng **không tin kết quả scan một mình**. Fingerprint scan phải trùng chính xác fingerprint đã lấy trực tiếp từ Gateway.
-5. Khi trùng, key được append idempotent vào `~/.ssh/b300_known_hosts`. Nếu cùng host đã có key khác, thao tác fail-closed với `HOST_KEY_CONFLICT`; tool không overwrite tự động.
-6. Debug Client, Realtime Live Monitor và VS Code kit tự thêm `UserKnownHostsFile=~/.ssh/b300_known_hosts` khi host đã enroll, đồng thời vẫn giữ `StrictHostKeyChecking=yes`.
-
-CLI tương đương:
-
-```bash
-# On physical Gateway
-b300-stlink gateway host-key --json
-
-# On Client: scan only; no trust record is written yet
-b300-stlink gateway trust-host --ssh-host 192.168.1.50 --json
-
-# After comparing the exact SHA256 fingerprint
-b300-stlink gateway trust-host \
-  --ssh-host 192.168.1.50 \
-  --confirm-host-fingerprint SHA256:EXACT_FINGERPRINT \
-  --json
-```
-
-Đường này chống việc vô tình tin một Gateway giả/MITM trong lần kết nối đầu tiên tốt hơn việc tự động `accept-new`.
+- Gateway thiếu SSH: quickstart chỉ báo plan cho tới khi có confirmation.
+- Gateway READY: quickstart không thay đổi hệ điều hành.
+- Debug port exposed ngoài loopback: hard block.
+- Client thiếu OpenSSH: client-setup yêu cầu confirmation trước OS change.
+- Host fingerprint mismatch/conflict: hard block, không overwrite.
+- Profile không chứa password/private key.
+- `status` không giả vờ kết nối thật đã PASS.
+- `connect-check` phải dùng strict host trust + public-key-only authentication.
+- Debug/Live/VS Code profile-backed mode fail-closed nếu managed key/trust bị mất.
+- Two-machine real acceptance vẫn là gate thực địa cuối cùng.

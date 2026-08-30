@@ -27,6 +27,7 @@ from b300_cli.reporting import (
     metadata_snapshot, probe_record,
 )
 from b300_cli.update_commands import run_update_command
+from b300_cli import gateway_workflows
 from b300_cli.output_paths import validated_output_path
 from b300_cli.live_commands import run_live_client, run_live_local, validate_live_options
 from b300_core.diagnostics import DiagnosticsService
@@ -140,10 +141,15 @@ def _resolve_vscode_gdb_path(explicit: Optional[str]) -> str:
 
 
 def run_vscode_profile(args: argparse.Namespace) -> int:
+    managed_profile = gateway_workflows.apply_saved_remote_profile(args)
     if not args.ssh_host or not args.ssh_user:
         raise ValueError("debug vscode requires --ssh-host HOST and --ssh-user USER.")
     if not args.program_relative:
         raise ValueError("debug vscode requires --program-relative PATH_TO_AXF_OR_ELF.")
+    identity_file = managed_identity_file()
+    known_hosts_file = trusted_known_hosts_file(args.ssh_host, args.ssh_port)
+    if managed_profile is not None and (identity_file is None or known_hosts_file is None):
+        raise RuntimeError("Saved Gateway profile is not locally ready; run `b300-stlink gateway status` or repeat `gateway client-setup`.")
     profile = RemoteVsCodeProfile(
         ssh_host=args.ssh_host,
         ssh_user=args.ssh_user,
@@ -153,8 +159,8 @@ def run_vscode_profile(args: argparse.Namespace) -> int:
         executable=workspace_executable(args.program_relative),
         gdb_path=_resolve_vscode_gdb_path(args.vscode_gdb_path),
         probe_serial=args.probe_serial,
-        identity_file=managed_identity_file(),
-        known_hosts_file=trusted_known_hosts_file(args.ssh_host, args.ssh_port),
+        identity_file=identity_file,
+        known_hosts_file=known_hosts_file,
     )
     record = profile.record()
     if args.output_dir is not None:
@@ -557,6 +563,7 @@ def _resolve_client_symbols(args, symbols, tcl):
 
 def run_debug_client(args, reporter: Reporter) -> int:
     """Run one bounded debug action through the canonical SSH Gateway tunnel."""
+    managed_profile = gateway_workflows.apply_saved_remote_profile(args)
     action = args.client_action
     if args.telnet_port is not None:
         raise ValueError("debug client does not enable Telnet.")
@@ -588,6 +595,11 @@ def run_debug_client(args, reporter: Reporter) -> int:
     if symbols is not None and (symbols.suffix.lower() not in {".elf", ".axf"} or not symbols.is_file()):
         raise ValueError("debug client --symbols must reference an existing ELF/AXF file.")
 
+    identity_file = managed_identity_file()
+    known_hosts_file = trusted_known_hosts_file(args.ssh_host, args.ssh_port)
+    if managed_profile is not None and (identity_file is None or known_hosts_file is None):
+        raise RuntimeError("Saved Gateway profile is not locally ready; run `b300-stlink gateway status` or repeat `gateway client-setup`.")
+
     if action == "live":
         return run_live_client(args, reporter, symbols)
 
@@ -597,8 +609,8 @@ def run_debug_client(args, reporter: Reporter) -> int:
         host=args.ssh_host, user=args.ssh_user, ssh_port=args.ssh_port,
         local_gdb_port=local_gdb, local_tcl_port=local_tcl,
         gateway_gdb_port=3333, gateway_tcl_port=6666,
-        identity_file=managed_identity_file(),
-        known_hosts_file=trusted_known_hosts_file(args.ssh_host, args.ssh_port),
+        identity_file=identity_file,
+        known_hosts_file=known_hosts_file,
     )
     tunnel_config.validate()
 
@@ -835,39 +847,6 @@ def _memory_dump_record(command: str, address: int, data: bytes, output: Path) -
     return record
 
 
-def _gateway_host_record(report, command: str, plan=None) -> dict:
-    record = {
-        "schema_version": 1,
-        "command": command,
-        "status": "ok" if report.ready else "blocked",
-        "conclusion": report.conclusion,
-        "ready": report.ready,
-        "platform": report.platform,
-        "ssh_port": report.ssh_port,
-        "username": report.username,
-        "hostname": report.hostname,
-        "ipv4_addresses": list(report.ipv4_addresses),
-        "security": {
-            "debug_ports_private": report.debug_ports_private,
-            "openocd_public_ports": [],
-            "lan_ingress": [report.ssh_port],
-        },
-        "checks": [
-            {
-                "name": item.name, "status": item.status, "code": item.code,
-                "message": item.message, "next_action": item.next_action,
-            }
-            for item in report.checks
-        ],
-        "client_configuration": client_connection_text(report),
-    }
-    if plan is not None:
-        record["plan"] = {
-            "actions": list(plan.actions),
-            "changes_required": plan.changes_required,
-            "requires_elevation": plan.requires_elevation,
-        }
-    return record
 
 
 def _linux_setup_record(report: LinuxUsbSetupReport) -> dict:
@@ -885,6 +864,7 @@ def _linux_setup_record(report: LinuxUsbSetupReport) -> dict:
         "rule_path": str(report.rule_path),
         "commands": [list(command) for command in report.commands],
     }
+
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -1024,6 +1004,41 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
             return 0
 
+        if args.command == "gateway" and args.gateway_action == "quickstart":
+            code, record, text = gateway_workflows.gateway_quickstart(args)
+            emit_snapshot(record, args.json, text)
+            return code
+
+        if args.command == "gateway" and args.gateway_action == "client-setup":
+            code, record, text = gateway_workflows.gateway_client_setup(args)
+            emit_snapshot(record, args.json, text)
+            return code
+
+        if args.command == "gateway" and args.gateway_action == "status":
+            code, record, text = gateway_workflows.gateway_status()
+            emit_snapshot(record, args.json, text)
+            return code
+
+        if args.command == "gateway" and args.gateway_action == "connect-check":
+            code, record, text = gateway_workflows.gateway_connect_check(args)
+            emit_snapshot(record, args.json, text)
+            return code
+
+        if args.command == "gateway" and args.gateway_action == "profile-clear":
+            changed = gateway_workflows.clear_remote_profile()
+            record = {
+                "schema_version": 1,
+                "command": "gateway profile-clear",
+                "status": "ok",
+                "changed": changed,
+                "profile_path": str(gateway_workflows.default_remote_profile_path()),
+                "keys_removed": False,
+                "known_hosts_removed": False,
+                "next_action": "Run gateway client-setup to configure another Gateway." if changed else "No saved Gateway profile existed.",
+            }
+            emit_snapshot(record, args.json, "Saved Gateway profile %s." % ("cleared" if changed else "was already absent"))
+            return 0
+
         if args.command == "gateway" and args.gateway_action == "host-key":
             host_key = local_gateway_host_key()
             record = {
@@ -1139,19 +1154,25 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 0
 
         if args.command == "gateway" and args.gateway_action == "authorize-key":
-            if args.public_key_file is None:
-                raise ValueError("gateway authorize-key requires --public-key-file PATH.")
-            key_path = args.public_key_file.expanduser().resolve()
-            if not key_path.is_file():
-                raise ValueError("Gateway public-key file does not exist: %s" % key_path)
-            public_key = validate_public_key(key_path.read_text(encoding="utf-8"))
+            if bool(args.public_key_file) == bool(args.public_key):
+                raise ValueError("gateway authorize-key requires exactly one of --public-key-file PATH or --public-key TEXT.")
+            key_path = None
+            if args.public_key_file is not None:
+                key_path = args.public_key_file.expanduser().resolve()
+                if not key_path.is_file():
+                    raise ValueError("Gateway public-key file does not exist: %s" % key_path)
+                public_key = validate_public_key(key_path.read_text(encoding="utf-8"))
+                public_key_source = str(key_path)
+            else:
+                public_key = validate_public_key(args.public_key)
+                public_key_source = "inline-public-key"
             if not args.confirm_system_change:
                 record = {
                     "schema_version": 1,
                     "command": "gateway authorize-key",
                     "status": "confirmation_required",
                     "reason_code": "SYSTEM_CHANGE_CONFIRMATION_REQUIRED",
-                    "public_key_file": str(key_path),
+                    "public_key_source": public_key_source,
                     "private_key_received": False,
                     "next_action": "Re-run with --confirm-system-change to append this public key idempotently.",
                 }
@@ -1179,7 +1200,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             host_report = inspect_gateway_host(ssh_port=args.ssh_port)
             plan = build_gateway_prepare_plan(host_report)
             if args.gateway_action == "plan":
-                record = _gateway_host_record(host_report, "gateway plan", plan)
+                record = gateway_workflows.gateway_host_record(host_report, "gateway plan", plan)
                 text = client_connection_text(host_report)
                 if plan.actions:
                     text += "\nPlanned actions: " + ", ".join(plan.actions)
@@ -1188,7 +1209,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 emit_snapshot(record, args.json, text)
                 return 0
             if plan.changes_required and not args.confirm_system_change:
-                record = _gateway_host_record(host_report, "gateway prepare", plan)
+                record = gateway_workflows.gateway_host_record(host_report, "gateway prepare", plan)
                 record.update({
                     "status": "confirmation_required",
                     "reason_code": "SYSTEM_CHANGE_CONFIRMATION_REQUIRED",
@@ -1201,7 +1222,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 )
                 return 1
             result = prepare_gateway_host(ssh_port=args.ssh_port)
-            record = _gateway_host_record(result.after, "gateway prepare", result.plan)
+            record = gateway_workflows.gateway_host_record(result.after, "gateway prepare", result.plan)
             record["changed"] = result.changed
             record["succeeded"] = result.succeeded
             text = client_connection_text(result.after)
