@@ -26,6 +26,10 @@ def builder():
     spec = importlib.util.spec_from_file_location("build_native_bundle", SOURCE)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
+    # Python 3.9 dataclasses resolves postponed annotations through
+    # sys.modules[cls.__module__]. Dynamic imports must register the module
+    # before exec_module so this test is independent of discovery order.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
