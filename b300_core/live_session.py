@@ -146,6 +146,14 @@ class LiveMonitorSession:
     def variable_series(self, name: str, limit: Optional[int] = None) -> Tuple[LiveSeriesPoint, ...]:
         return self._store.variable_series(name, limit)
 
+    def target_state(self) -> str:
+        """Read the current target state without changing RUN/HALT state."""
+        with self._lock:
+            if not self._active or self._tcl is None:
+                raise RuntimeError("Live Monitor session is not started.")
+            tcl = self._tcl
+        return tcl.wait_target_state()
+
     def start_local(self, config: LocalLiveMonitorConfig) -> LiveMonitorSessionInfo:
         config.validate()
         self._require_inactive()

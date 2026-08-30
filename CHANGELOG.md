@@ -5,6 +5,10 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+### Changed
+
+- Hợp nhất runtime `debug live` của CLI với `LiveMonitorSession` mà GUI đang dùng: Local/Client giờ chia sẻ cùng TCL-only OpenOCD, SSH forwarding, AXF matching, RUNNING-state guard, cooperative cancel và cleanup policy. Phần CSV/JSONL/reporting được tách sang `b300_cli/live_commands.py`, giúp `b300_stlink.py` trở lại vai trò entrypoint/dispatcher thay vì giữ một implementation Live Monitor thứ hai.
+
 ### Removed
 
 - Loại bỏ `b300_gui/live_variables_panel.py` và test legacy tương ứng sau frontend redesign; import-graph production xác nhận module này không còn reachable từ `b300_gui.__main__`. Realtime Live Monitor hiện dùng `debug_live_panel.py`/`debug_plot_panel.py`, nên việc dọn bỏ giảm code/runtime surface mà không thay đổi chức năng.

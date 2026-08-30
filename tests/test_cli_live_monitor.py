@@ -9,6 +9,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
+from b300_cli import live_commands
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "b300_stlink.py"
@@ -95,7 +97,7 @@ class CliLiveMonitorTests(unittest.TestCase):
         module = tool()
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "trace.csv"
-            handle, writer = module._open_live_output(output, ("xTickCount:u32", "speed:f64"), False)
+            handle, writer = live_commands._open_live_output(output, ("xTickCount:u32", "speed:f64"), False)
             try:
                 self.assertIsNotNone(writer)
                 self.assertIn("xTickCount__coherent", writer.fieldnames)
@@ -111,8 +113,8 @@ class CliLiveMonitorTests(unittest.TestCase):
             output = Path(directory) / "trace.jsonl"
             output.write_text("keep", encoding="utf-8")
             with self.assertRaisesRegex(FileExistsError, "--force"):
-                module._open_live_output(output, (), False)
-            handle, writer = module._open_live_output(output, (), True)
+                live_commands._open_live_output(output, (), False)
+            handle, writer = live_commands._open_live_output(output, (), True)
             self.assertIsNone(writer)
             handle.close()
 

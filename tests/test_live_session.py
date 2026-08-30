@@ -106,6 +106,7 @@ class LiveMonitorSessionTests(unittest.TestCase):
             self.assertTrue(session.active)
             self.assertEqual(info.role, "local")
             self.assertEqual(info.initial_target_state, "running")
+            self.assertEqual(session.target_state(), "running")
             service = session._service
             summary = session.run()
             self.assertEqual(summary.samples, 2)
