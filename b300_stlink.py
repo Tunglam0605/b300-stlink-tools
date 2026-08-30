@@ -31,6 +31,10 @@ from b300_cli.output_paths import validated_output_path
 from b300_cli.live_commands import run_live_client, run_live_local, validate_live_options
 from b300_core.diagnostics import DiagnosticsService
 from b300_core.gateway_readiness import inspect_gateway_readiness
+from b300_core.gateway_setup import (
+    build_gateway_prepare_plan, client_connection_text, inspect_gateway_host,
+    prepare_gateway_host,
+)
 from b300_core.gdb_runtime import resolve_gdb
 from b300_core.hex_image import inspect_image
 from b300_core.linux_usb import (
@@ -819,6 +823,41 @@ def _memory_dump_record(command: str, address: int, data: bytes, output: Path) -
     return record
 
 
+def _gateway_host_record(report, command: str, plan=None) -> dict:
+    record = {
+        "schema_version": 1,
+        "command": command,
+        "status": "ok" if report.ready else "blocked",
+        "conclusion": report.conclusion,
+        "ready": report.ready,
+        "platform": report.platform,
+        "ssh_port": report.ssh_port,
+        "username": report.username,
+        "hostname": report.hostname,
+        "ipv4_addresses": list(report.ipv4_addresses),
+        "security": {
+            "debug_ports_private": report.debug_ports_private,
+            "openocd_public_ports": [],
+            "lan_ingress": [report.ssh_port],
+        },
+        "checks": [
+            {
+                "name": item.name, "status": item.status, "code": item.code,
+                "message": item.message, "next_action": item.next_action,
+            }
+            for item in report.checks
+        ],
+        "client_configuration": client_connection_text(report),
+    }
+    if plan is not None:
+        record["plan"] = {
+            "actions": list(plan.actions),
+            "changes_required": plan.changes_required,
+            "requires_elevation": plan.requires_elevation,
+        }
+    return record
+
+
 def _linux_setup_record(report: LinuxUsbSetupReport) -> dict:
     return {
         "schema_version": 1,
@@ -972,6 +1011,40 @@ def main(argv: Optional[List[str]] = None) -> int:
                 format_probes_text(probes),
             )
             return 0
+
+        if args.command == "gateway" and args.gateway_action in {"plan", "prepare"}:
+            host_report = inspect_gateway_host(ssh_port=args.ssh_port)
+            plan = build_gateway_prepare_plan(host_report)
+            if args.gateway_action == "plan":
+                record = _gateway_host_record(host_report, "gateway plan", plan)
+                text = client_connection_text(host_report)
+                if plan.actions:
+                    text += "\nPlanned actions: " + ", ".join(plan.actions)
+                else:
+                    text += "\nNo system changes required."
+                emit_snapshot(record, args.json, text)
+                return 0
+            if plan.changes_required and not args.confirm_system_change:
+                record = _gateway_host_record(host_report, "gateway prepare", plan)
+                record.update({
+                    "status": "confirmation_required",
+                    "reason_code": "SYSTEM_CHANGE_CONFIRMATION_REQUIRED",
+                    "next_action": "Re-run with --confirm-system-change after reviewing gateway plan.",
+                })
+                emit_snapshot(
+                    record, args.json,
+                    "SYSTEM_CHANGE_CONFIRMATION_REQUIRED: review `gateway plan`, then re-run "
+                    "`gateway prepare --confirm-system-change`."
+                )
+                return 1
+            result = prepare_gateway_host(ssh_port=args.ssh_port)
+            record = _gateway_host_record(result.after, "gateway prepare", result.plan)
+            record["changed"] = result.changed
+            record["succeeded"] = result.succeeded
+            text = client_connection_text(result.after)
+            text += "\nGateway Prepare: %s" % ("READY" if result.succeeded else "BLOCKED")
+            emit_snapshot(record, args.json, text)
+            return 0 if result.succeeded else 1
 
         if args.command == "gateway":
             report = inspect_gateway_readiness(

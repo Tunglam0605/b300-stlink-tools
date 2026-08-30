@@ -183,7 +183,10 @@ def build_parser() -> argparse.ArgumentParser:
     gateway = commands.add_parser(
         "gateway", help="Inspect remote Debug Gateway host readiness.", parents=[json_parent],
     )
-    gateway.add_argument("gateway_action", nargs="?", choices=("doctor",), default="doctor")
+    gateway.add_argument(
+        "gateway_action", nargs="?", choices=("doctor", "plan", "prepare"), default="doctor",
+        help="doctor=full readiness, plan=host SSH changes, prepare=apply confirmed host SSH setup.",
+    )
     gateway.add_argument("--openocd")
     gateway.add_argument("--probe-serial", type=parse_probe_serial,
                          help="Select one ST-Link when multiple probes are connected.")
@@ -193,6 +196,10 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Gateway loopback GDB port (default: 3333).")
     gateway.add_argument("--tcl-port", type=parse_tcp_port, default=6666,
                          help="Gateway loopback Safe TCL port (default: 6666).")
+    gateway.add_argument(
+        "--confirm-system-change", action="store_true",
+        help="Confirm privileged OpenSSH/service/firewall changes for gateway prepare.",
+    )
 
     doctor = commands.add_parser(
         "doctor", help="Inspect local tool availability.", parents=[json_parent],

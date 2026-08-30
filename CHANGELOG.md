@@ -5,6 +5,10 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+### Added
+
+- Bổ sung Gateway Setup Wizard cho Windows/Ubuntu: kiểm tra OpenSSH Server/service/startup/firewall/SSH listener và exposure của 3333/4444/6666; `gateway plan` luôn read-only, `gateway prepare` yêu cầu `--confirm-system-change`, GUI có Prepare/Refresh/Self-Test/Copy Client Configuration. Setup idempotent, không sửa `sshd_config`, không đổi password, không reinstall nếu SSH đã sẵn sàng, Windows dùng UAC, Ubuntu dùng root/`pkexec`, và chỉ cho phép SSH TCP/22 qua host firewall; debug ports vẫn loopback-only.
+
 ## [0.11.0] - 2026-08-30
 
 ### Added

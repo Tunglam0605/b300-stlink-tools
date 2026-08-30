@@ -63,6 +63,7 @@ from .viewmodels import FlashViewState, confirmation_text
 from .workers import FunctionWorker
 from .memory_tab import MemoryTab
 from .debug_tab import DebugTab
+from .gateway_setup_tab import GatewaySetupTab
 from .branding import asset_path
 from .about_dialog import AboutDialog
 from .confirm_dialog import ConfirmFlashDialog
@@ -226,6 +227,13 @@ class MainWindow(QMainWindow):
         sidebar_layout.addWidget(self.nav_debug_btn)
         self.nav_buttons.append(self.nav_debug_btn)
 
+        self.nav_gateway_btn = QPushButton("🔐  Gateway Setup")
+        self.nav_gateway_btn.setObjectName("navButton")
+        self.nav_gateway_btn.setCheckable(True)
+        self.nav_gateway_btn.clicked.connect(lambda: self.tabs.setCurrentIndex(3))
+        sidebar_layout.addWidget(self.nav_gateway_btn)
+        self.nav_buttons.append(self.nav_gateway_btn)
+
         sidebar_layout.addStretch(1)
 
         # Setup Button (when OpenOCD missing)
@@ -272,6 +280,9 @@ class MainWindow(QMainWindow):
         self.debug_tab.log.connect(self.append_log)
         self.debug_tab.operation_state_changed.connect(self._hardware_activity_changed)
         self.tabs.addTab(self.debug_tab, "Debug")
+        self.gateway_tab = GatewaySetupTab(self, auto_refresh=False)
+        self.gateway_tab.log.connect(self.append_log)
+        self.tabs.addTab(self.gateway_tab, "Gateway Setup")
         self.tabs.currentChanged.connect(self._tab_changed)
         content_v_layout.addWidget(self.tabs, 1)
 
@@ -935,6 +946,9 @@ class MainWindow(QMainWindow):
         if hasattr(self, "nav_buttons"):
             for i, btn in enumerate(self.nav_buttons):
                 btn.setChecked(i == index)
+        if (index == 3 and hasattr(self, "gateway_tab") and
+                self.gateway_tab._report is None and not self.gateway_tab.has_active_operation):
+            self.gateway_tab.refresh_host()
 
     def _render_factory_profile_info(self) -> None:
         if self.factory_trusted is None:
@@ -1666,7 +1680,8 @@ class MainWindow(QMainWindow):
         self._update_controls()
 
     def closeEvent(self, event) -> None:
-        if self.busy or self._threads or self.memory_tab.has_active_operation or self.debug_tab.has_active_operation:
+        if (self.busy or self._threads or self.memory_tab.has_active_operation or
+                self.debug_tab.has_active_operation or self.gateway_tab.has_active_operation):
             event.ignore()
             self._set_status(
                 "Thao tác đang chạy; hãy chờ hoàn tất hoặc hủy khi nút Hủy được bật.",

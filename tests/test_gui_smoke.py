@@ -135,6 +135,10 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertIn(
             "Debug", [window.tabs.tabText(index) for index in range(window.tabs.count())]
         )
+        self.assertIn(
+            "Gateway Setup", [window.tabs.tabText(index) for index in range(window.tabs.count())]
+        )
+        self.assertEqual(len(window.nav_buttons), 4)
         self.assertFalse(window.debug_tab.stop_button.isEnabled())
         self.assertIn("Stable", window.update_channel_label.text())
         self.assertIn("Sector 3–7", window.flash_plan_label.text())

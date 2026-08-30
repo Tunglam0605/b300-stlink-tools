@@ -333,3 +333,6 @@ register, variable, hardware breakpoint và watchpoint. Keil vẫn dùng để b
 tạo AXF; chế độ debug native của Keil không phải client của OpenOCD flow này.
 Integrated CLI không cung cấp flash/program, arbitrary memory write, raw TCL hay
 raw GDB console.
+## Gateway Setup Wizard (v0.12.0+)
+
+Máy Gateway chưa có SSH có thể dùng tab **Gateway Setup** hoặc CLI `gateway plan` / `gateway prepare --confirm-system-change`. Wizard chỉ quản lý OpenSSH + TCP/22 và giữ OpenOCD GDB/TCL loopback-only. Chi tiết: [Gateway Setup Wizard v0.12.0](19_GATEWAY_SETUP_WIZARD_V0.12.0.md).
