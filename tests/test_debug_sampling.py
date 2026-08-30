@@ -8,7 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from b300_core.debug_sampling import (
-    parse_numeric_value, sample_variables, validate_sampling_request, write_samples,
+    VariableSampleBuffer, parse_numeric_value, sample_variables,
+    validate_sampling_request, write_samples,
 )
 
 
@@ -65,6 +66,55 @@ class DebugSamplingTests(unittest.TestCase):
         self.assertEqual(samples[-1].raw_value, "6")
         self.assertEqual(samples[0].captured_at_unix_ms, 100000)
         self.assertAlmostEqual(samples[-1].elapsed_seconds, 1.03, places=3)
+
+    def test_sampler_streams_each_cycle_and_can_cancel_during_interval_wait(self) -> None:
+        batches = []
+        waits = []
+        cancelled = {"value": False}
+
+        def wait(interval):
+            waits.append(interval)
+            cancelled["value"] = True
+            return True
+
+        samples = sample_variables(
+            lambda expressions: tuple(
+                SimpleNamespace(expression=expression, value="1") for expression in expressions
+            ),
+            ("speed", "current"), 5, 0.2,
+            cancelled=lambda: cancelled["value"],
+            waiter=wait, on_cycle=batches.append,
+        )
+        self.assertEqual(len(samples), 2)
+        self.assertEqual(len(batches), 1)
+        self.assertEqual(tuple(item.expression for item in batches[0]), ("speed", "current"))
+        self.assertEqual(waits, [0.2])
+
+    def test_sample_buffer_is_fixed_capacity_and_tracks_latest_values(self) -> None:
+        batches = []
+        values = iter((("1", "10"), ("2", "20"), ("3", "30")))
+
+        def capture(expressions):
+            row = next(values)
+            return tuple(
+                SimpleNamespace(expression=expression, value=value)
+                for expression, value in zip(expressions, row)
+            )
+
+        samples = sample_variables(capture, ("speed", "current"), 3, 0.1, sleeper=lambda _value: None)
+        buffer = VariableSampleBuffer(max_samples=4)
+        buffer.extend(samples)
+        snapshot = buffer.snapshot()
+        self.assertEqual(len(snapshot), 4)
+        self.assertEqual(snapshot[0].cycle, 1)
+        self.assertEqual(snapshot[-1].raw_value, "30")
+        latest = buffer.latest_by_expression()
+        self.assertEqual(latest["speed"].raw_value, "3")
+        self.assertEqual(latest["current"].raw_value, "30")
+        buffer.clear()
+        self.assertEqual(len(buffer), 0)
+        with self.assertRaises(ValueError):
+            VariableSampleBuffer(0)
 
     def test_sampler_rejects_capture_count_or_expression_mismatch(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "captured 0 values"):

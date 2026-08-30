@@ -69,6 +69,7 @@ class FakeSession:
         self.fail_start = fail_start
         self.active = False
         self.events = []
+        self.sample_cycle = 0
 
     def start(self, config, event_sink=None):
         self.events.append(("start", config))
@@ -161,6 +162,16 @@ class FakeSession:
         from types import SimpleNamespace
         self.events.append(("variable", expression))
         return SimpleNamespace(expression=expression, value="1")
+
+    def capture_variables(self, expressions):
+        from types import SimpleNamespace
+        self.sample_cycle += 1
+        selected = tuple(expressions)
+        self.events.append(("variables", selected, self.sample_cycle))
+        return tuple(
+            SimpleNamespace(expression=expression, value=str(self.sample_cycle * index))
+            for index, expression in enumerate(selected, start=1)
+        )
 
     def read_words(self, address, count):
         self.events.append(("read-words", address, count))
@@ -279,6 +290,9 @@ class DebugTabTests(unittest.TestCase):
                 "debug/gateway_ssh_port": 2222,
                 "debug/last_symbols": str(symbols),
                 "debug/symbol_root": str(root),
+                "debug/sample_expressions": "xTickCount, motorSpeed",
+                "debug/sample_cycles": 250,
+                "debug/sample_interval": 0.2,
             })
             tab, _service, _session = self.make_tab(probe_count=0, settings=settings)
             self.assertEqual(tab.mode_combo.currentData(), "client")
@@ -287,6 +301,9 @@ class DebugTabTests(unittest.TestCase):
             self.assertEqual(tab.client_ssh_port.value(), 2222)
             self.assertEqual(tab.symbol_path.text(), str(symbols))
             self.assertEqual(tab._symbol_root, root.resolve())
+            self.assertEqual(tab.sample_expressions.text(), "xTickCount, motorSpeed")
+            self.assertEqual(tab.sample_cycles.value(), 250)
+            self.assertAlmostEqual(tab.sample_interval.value(), 0.2, places=2)
             self.assertEqual(settings.values["debug/gateway_user"], "automation")
             tab.close()
 
@@ -402,6 +419,103 @@ class DebugTabTests(unittest.TestCase):
         self.assertIn(("variable", "bRUN"), session.events)
         self.assertEqual(tab._target_state, "running")
 
+        tab.stop_debug()
+        self.wait_until(lambda: tab._worker is None)
+        tab.close()
+
+    def test_live_variables_stream_into_table_and_preserve_running_target(self) -> None:
+        tab, _service, session = self.make_tab(initial="running", attach_state="halted")
+        tab.start_debug()
+        self.wait_until(lambda: tab._worker is None)
+        self.assertEqual(tab._target_state, "running")
+        self.assertTrue(tab.sample_start_button.isEnabled())
+        self.assertFalse(tab.sample_stop_button.isEnabled())
+
+        tab.sample_expressions.setText("xTickCount, motorSpeed")
+        tab.sample_cycles.setValue(3)
+        tab.sample_interval.setValue(0.1)
+        tab.start_live_sampling()
+        self.wait_until(lambda: tab._worker is None, timeout=3.0)
+
+        self.assertFalse(tab._sampling_active)
+        self.assertEqual(tab._target_state, "running")
+        self.assertEqual(tab.sample_table.rowCount(), 2)
+        self.assertEqual(len(tab._sample_buffer), 6)
+        self.assertEqual(tab.sample_table.item(0, 0).text(), "xTickCount")
+        self.assertEqual(tab.sample_table.item(0, 1).text(), "3")
+        self.assertEqual(tab.sample_table.item(1, 1).text(), "6")
+        self.assertEqual(
+            [item for item in session.events if isinstance(item, tuple) and item[0] == "variables"],
+            [
+                ("variables", ("xTickCount", "motorSpeed"), 1),
+                ("variables", ("xTickCount", "motorSpeed"), 2),
+                ("variables", ("xTickCount", "motorSpeed"), 3),
+            ],
+        )
+        self.assertTrue(tab.sample_export_button.isEnabled())
+        self.assertTrue(tab.sample_clear_button.isEnabled())
+        tab.stop_debug()
+        self.wait_until(lambda: tab._worker is None)
+        tab.close()
+
+    def test_live_sampling_stop_is_cooperative_and_export_uses_ring_buffer(self) -> None:
+        from unittest import mock
+
+        tab, _service, session = self.make_tab(initial="running", attach_state="halted")
+        tab.start_debug()
+        self.wait_until(lambda: tab._worker is None)
+        tab.sample_expressions.setText("xTickCount")
+        tab.sample_cycles.setValue(100)
+        tab.sample_interval.setValue(1.0)
+        tab.start_live_sampling()
+        self.wait_until(lambda: len(tab._sample_buffer) >= 1, timeout=2.0)
+        self.assertTrue(tab.sample_stop_button.isEnabled())
+        tab.stop_live_sampling()
+        self.wait_until(lambda: tab._worker is None, timeout=2.0)
+        self.assertFalse(tab._sampling_active)
+        self.assertGreaterEqual(len(tab._sample_buffer), 1)
+        self.assertLess(len(tab._sample_buffer), 100)
+        self.assertEqual(tab._target_state, "running")
+
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "live.csv"
+            with mock.patch(
+                "b300_gui.debug_tab.QFileDialog.getSaveFileName",
+                return_value=(str(output), "CSV (*.csv)"),
+            ):
+                tab.export_live_samples()
+            text = output.read_text(encoding="utf-8")
+        self.assertIn("xTickCount", text)
+        self.assertIn("numeric_value", text)
+
+        tab.clear_live_samples()
+        self.assertEqual(len(tab._sample_buffer), 0)
+        self.assertEqual(tab.sample_table.rowCount(), 0)
+        self.assertFalse(tab.sample_export_button.isEnabled())
+        self.assertTrue(any(
+            isinstance(item, tuple) and item[0] == "variables" for item in session.events
+        ))
+        tab.stop_debug()
+        self.wait_until(lambda: tab._worker is None)
+        tab.close()
+
+    def test_live_sampling_requires_running_connected_target_and_valid_expression_list(self) -> None:
+        tab, _service, _session = self.make_tab(initial="running", attach_state="halted")
+        tab.start_live_sampling()
+        self.assertIn("CONNECTED", tab.status_label.text())
+
+        tab.start_debug()
+        self.wait_until(lambda: tab._worker is None)
+        tab.sample_expressions.setText("")
+        tab.start_live_sampling()
+        self.assertFalse(tab._sampling_active)
+        self.assertIn("At least one", tab.status_label.text())
+        tab.halt_target()
+        self.wait_until(lambda: tab._worker is None)
+        tab.sample_expressions.setText("xTickCount")
+        tab.start_live_sampling()
+        self.assertFalse(tab._sampling_active)
+        self.assertIn("RUNNING", tab.status_label.text())
         tab.stop_debug()
         self.wait_until(lambda: tab._worker is None)
         tab.close()

@@ -7,6 +7,7 @@ import json
 import math
 import re
 import time
+from collections import deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Optional, Sequence, Tuple
@@ -35,6 +36,40 @@ class VariableSample:
 
     def to_record(self) -> dict:
         return asdict(self)
+
+
+class VariableSampleBuffer:
+    """Fixed-capacity sample history used by GUI tables and future plots."""
+
+    def __init__(self, max_samples: int = 2000) -> None:
+        if not 1 <= int(max_samples) <= 100000:
+            raise ValueError("Sample buffer capacity must be in range 1..100000.")
+        self.max_samples = int(max_samples)
+        self._samples = deque(maxlen=self.max_samples)
+
+    def append(self, sample: VariableSample) -> None:
+        if not isinstance(sample, VariableSample):
+            raise TypeError("Sample buffer accepts VariableSample values only.")
+        self._samples.append(sample)
+
+    def extend(self, samples: Sequence[VariableSample]) -> None:
+        for sample in samples:
+            self.append(sample)
+
+    def clear(self) -> None:
+        self._samples.clear()
+
+    def snapshot(self) -> Tuple[VariableSample, ...]:
+        return tuple(self._samples)
+
+    def latest_by_expression(self) -> dict:
+        latest = {}
+        for sample in self._samples:
+            latest[sample.expression] = sample
+        return latest
+
+    def __len__(self) -> int:
+        return len(self._samples)
 
 
 def parse_numeric_value(raw_value: str) -> Optional[float]:
@@ -88,14 +123,25 @@ def sample_variables(
     monotonic: Callable[[], float] = time.monotonic,
     wall_clock: Callable[[], float] = time.time,
     sleeper: Callable[[float], None] = time.sleep,
+    cancelled: Optional[Callable[[], bool]] = None,
+    waiter: Optional[Callable[[float], bool]] = None,
+    on_cycle: Optional[Callable[[Tuple[VariableSample, ...]], None]] = None,
 ) -> Tuple[VariableSample, ...]:
-    """Capture bounded samples without creating catch-up bursts when a cycle is slow."""
+    """Capture bounded samples with optional cooperative cancellation and streaming."""
     selected = validate_sampling_request(expressions, sample_cycles, interval_seconds)
     start = monotonic()
     samples = []
     for cycle in range(int(sample_cycles)):
+        if cancelled is not None and cancelled():
+            break
         if cycle:
-            sleeper(float(interval_seconds))
+            if waiter is not None:
+                if waiter(float(interval_seconds)):
+                    break
+            else:
+                sleeper(float(interval_seconds))
+        if cancelled is not None and cancelled():
+            break
         values = tuple(capture(selected))
         if len(values) != len(selected):
             raise RuntimeError(
@@ -104,6 +150,7 @@ def sample_variables(
             )
         captured_at = int(round(wall_clock() * 1000.0))
         elapsed = max(0.0, monotonic() - start)
+        cycle_samples = []
         for expected, value in zip(selected, values):
             expression = str(getattr(value, "expression", expected))
             raw_value = str(getattr(value, "value", value))
@@ -112,7 +159,7 @@ def sample_variables(
                     "Debug sampler expression mismatch: expected %s, received %s." %
                     (expected, expression)
                 )
-            samples.append(VariableSample(
+            cycle_samples.append(VariableSample(
                 cycle=cycle,
                 elapsed_seconds=elapsed,
                 captured_at_unix_ms=captured_at,
@@ -120,6 +167,10 @@ def sample_variables(
                 raw_value=raw_value,
                 numeric_value=parse_numeric_value(raw_value),
             ))
+        batch = tuple(cycle_samples)
+        samples.extend(batch)
+        if on_cycle is not None:
+            on_cycle(batch)
     return tuple(samples)
 
 
