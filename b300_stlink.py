@@ -64,6 +64,7 @@ from b300_core.policy import (
 from b300_core.service import B300Service, ProvisioningError
 from b300_core.probe import list_probes
 from b300_core.probe_selection import ProbeSelectionError, select_probe
+from b300_core.support_bundle import collect_support_snapshot, write_support_bundle
 from b300_version import __version__
 
 
@@ -853,6 +854,52 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         if args.command in {"update", "self-update"}:
             return run_update_command(args, __version__)
+
+        if args.command == "support":
+            if args.support_command is None:
+                record = {
+                    "schema_version": 1,
+                    "command": "support",
+                    "status": "error",
+                    "reason_code": "SUPPORT_SUBCOMMAND_REQUIRED",
+                    "message": "The support command requires the bundle subcommand.",
+                    "next_action": "Run support bundle <output.zip>.",
+                }
+                emit_snapshot(
+                    record, args.json, "%s: %s" % (record["reason_code"], record["message"])
+                )
+                return 1
+            service = B300Service(executable=args.openocd)
+            snapshot = collect_support_snapshot(
+                version=__version__,
+                openocd_version=OPENOCD_VERSION,
+                service=service,
+                probe_discovery=list_probes,
+                probe_serial=args.probe_serial,
+            )
+            bundle = write_support_bundle(args.output, snapshot, force=args.force)
+            health = snapshot.get("application_health") or {}
+            diagnostics = snapshot.get("diagnostics") or {}
+            record = {
+                "schema_version": 1,
+                "command": "support bundle",
+                "status": "ok",
+                "path": str(bundle.path),
+                "sha256": bundle.sha256,
+                "size_bytes": bundle.size_bytes,
+                "diagnostics_conclusion": diagnostics.get("conclusion"),
+                "application_lifecycle": health.get("lifecycle"),
+                "privacy_bounded": True,
+            }
+            emit_snapshot(
+                record, args.json,
+                "Support bundle: %s\nSHA-256: %s\nSize: %d bytes\nDiagnostics: %s\nApplication: %s" % (
+                    bundle.path, bundle.sha256, bundle.size_bytes,
+                    record["diagnostics_conclusion"] or "unavailable",
+                    record["application_lifecycle"] or "unavailable",
+                ),
+            )
+            return 0
 
         if args.command == "setup":
             def announce_setup(plan: LinuxUsbSetupReport) -> None:

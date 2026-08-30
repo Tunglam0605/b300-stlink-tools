@@ -164,6 +164,8 @@ cd b300-stlink-tools
 ```text
 b300-stlink doctor
 b300-stlink gateway doctor   # preflight cho máy Gateway: SSH/ST-Link/OpenOCD/ports/IP
+b300-stlink target health --json       # read-only AppMeta + full image CRC/vector
+b300-stlink support bundle b300-support.zip --json  # privacy-bounded support ZIP
 ```
 
 ### 4. Nạp, mở GUI hoặc debug
@@ -205,6 +207,7 @@ file HEX, probe trước khi chạy.
 | [Biên bản release/acceptance](docs/08_RELEASE_ACCEPTANCE.md) | Artifact đã build và checklist nghiệm thu phần cứng F407. |
 | [Hardware acceptance 2026-08-28](docs/09_HARDWARE_ACCEPTANCE_2026-08-28.md) | Bằng chứng Application/Factory/Debug đã PASS trên STM32F407 thật. |
 | [SSH loopback acceptance v0.9.0](docs/13_SSH_LOOPBACK_ACCEPTANCE_V0.9.0_2026-08-29.md) | GUI Client, CLI Client và VS Code/Cortex-Debug qua SSH tunnel thật trên main B300; variable/break/watch/reconnect/restore-state PASS. |
+| [Diagnostic Support Bundle](docs/14_SUPPORT_BUNDLE.md) | Xuất ZIP read-only đã redact để gửi chẩn đoán target/WRP/AppMeta/Application Health khi hỗ trợ từ xa. |
 | [Handoff GUI cho Antigravity](docs/superpowers/specs/2026-08-27-b300-stlink-gui-design.md) | Thiết kế GUI nạp code Windows/Ubuntu dùng chung lõi CLI. |
 | [AGENTS.md](AGENTS.md) | Quy tắc bắt buộc cho AI/automation. |
 

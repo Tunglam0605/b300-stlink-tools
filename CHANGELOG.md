@@ -22,6 +22,9 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 - GUI Memory/Metadata bổ sung **Application Health** read-only card dùng chung `target health` core: hiển thị lifecycle, bootable, expected/actual CRC32, vector, số byte đã kiểm và `Next action`; snapshot tự chuyển `STALE` sau mọi transaction làm thay đổi Flash. Nút Health dùng worker/cancel/interlock hiện có và không cung cấp repair/write tự động.
 
+- Bổ sung **Diagnostic Support Bundle** read-only cho CLI (`support bundle`) và GUI menu Trợ giúp: ZIP chỉ chứa `support.json` + `README.txt`, tổng hợp version/runtime, diagnostic target/WRP, metadata và Application Health. Privacy contract loại probe serial/USB identity, username/hostname, SSH identity, source/AXF path, firmware bytes, environment variables và raw command logs; absolute paths được redact trước khi ghi.
+- Hardware smoke trên B300 thật tạo support ZIP 1776 byte, Health `BOOTABLE`, CRC `0xC99ED31F`, WRP S0-S2 và metadata `CONFIRMED`; scan bundle không phát hiện local path/user/USB identity/SSH fields.
+
 ## [0.9.0] - 2026-08-30
 
 ### Added

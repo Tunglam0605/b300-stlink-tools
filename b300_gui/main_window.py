@@ -41,6 +41,7 @@ from b300_core.models import FlashPlan, ProbeRef
 from b300_core.models import TargetInfo
 from b300_core.debug_service import DebugService
 from b300_core.offline_setup import (
+    OPENOCD_VERSION,
     current_platform_name,
     find_offline_bundle,
     install_offline_bundle,
@@ -50,6 +51,7 @@ from b300_core.policy import SECTORS
 from b300_core.probe import list_probes
 from b300_core.factory_resource import load_trusted_bootloader, list_trusted_bootloaders
 from b300_core.service import B300Service, FactoryResult, FlashResult
+from b300_core.support_bundle import collect_support_snapshot, write_support_bundle
 from b300_core.updater import UpdateCheckResult, should_auto_check
 from b300_core.update_install import launch_install_plan, prepare_install
 from b300_core.update_platform import detect_update_platform
@@ -238,6 +240,9 @@ class MainWindow(QMainWindow):
         self.about_action = self.help_menu.addAction("Giới thiệu")
         self.about_action.triggered.connect(self.show_about)
         self.help_menu.addSeparator()
+        self.support_bundle_action = self.help_menu.addAction("Xuất gói chẩn đoán hỗ trợ")
+        self.support_bundle_action.triggered.connect(self.export_support_bundle)
+        self.help_menu.addSeparator()
         self.check_updates_action = self.help_menu.addAction("Kiểm tra cập nhật")
         self.check_updates_action.triggered.connect(
             lambda: self.check_for_updates(manual=True)
@@ -250,6 +255,72 @@ class MainWindow(QMainWindow):
         if event.button() == Qt.MouseButton.LeftButton:
             pos = self.brand_logo.mapToGlobal(self.brand_logo.rect().bottomLeft())
             self.help_menu.exec(pos)
+
+    def export_support_bundle(self) -> None:
+        if self._operation_state().is_hardware_busy:
+            self._set_status(
+                "Không thể xuất support bundle khi ST-Link đang bận; chờ thao tác hiện tại hoàn tất.",
+                "error",
+            )
+            return
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        suggested = "b300-support-%s.zip" % timestamp
+        path_text, _selected = QFileDialog.getSaveFileName(
+            self, "Xuất gói chẩn đoán hỗ trợ", suggested, "ZIP archive (*.zip)"
+        )
+        if not path_text:
+            return
+        destination = Path(path_text)
+        if destination.suffix.lower() != ".zip":
+            destination = destination.with_suffix(".zip")
+        force = False
+        if destination.exists():
+            answer = QMessageBox.question(
+                self, "Ghi đè support bundle?",
+                "File đã tồn tại. Ghi đè atomically bằng bundle mới?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            force = True
+        probe_serial = self.probe_combo.currentData() if hasattr(self, "probe_combo") else None
+        self.busy = True
+        self._set_status("Đang thu thập support bundle read-only…", "busy")
+        self._update_controls()
+
+        def operation(_log, _phase, _cancel):
+            snapshot = collect_support_snapshot(
+                version=__version__,
+                openocd_version=OPENOCD_VERSION,
+                service=self.service,
+                probe_discovery=self.probe_loader,
+                probe_serial=probe_serial,
+            )
+            return write_support_bundle(destination, snapshot, force=force)
+
+        self._start_worker(
+            operation, self._support_bundle_finished, cancellable=False,
+            phase_handler=lambda _event: None,
+        )
+
+    def _support_bundle_finished(self, result) -> None:
+        self.busy = False
+        health = result.snapshot.get("application_health") or {}
+        diagnostics = result.snapshot.get("diagnostics") or {}
+        self.append_log(
+            "Support bundle created: %s · SHA256=%s · diagnostics=%s · app=%s" % (
+                result.path, result.sha256, diagnostics.get("conclusion", "unavailable"),
+                health.get("lifecycle", "unavailable"),
+            )
+        )
+        self._set_status(
+            "Support bundle đã tạo · %d bytes · %s" % (
+                result.size_bytes, health.get("lifecycle", "no target health")
+            ),
+            "success",
+        )
+        self._update_controls()
 
     def show_about(self) -> None:
         if self.about_dialog is None:
@@ -1275,6 +1346,8 @@ class MainWindow(QMainWindow):
         self.probe_combo.setEnabled(not main_locked)
         self.setup_button.setVisible(not self.openocd_ready)
         self.setup_button.setEnabled(not operation.is_hardware_busy)
+        if hasattr(self, "support_bundle_action"):
+            self.support_bundle_action.setEnabled(not operation.is_hardware_busy)
         if hasattr(self, "factory_provision_button"):
             probes = self._probes
             factory_probe_ok = (

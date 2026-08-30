@@ -378,6 +378,48 @@ class B300StlinkTests(unittest.TestCase):
         for forbidden in ("erase_sector", "mass_erase", "flash protect", "mww ", "program {"):
             self.assertNotIn(forbidden, rendered)
 
+    def test_support_bundle_cli_emits_privacy_bounded_result(self) -> None:
+        module = tool()
+        snapshot = {
+            "diagnostics": {"conclusion": "READY_FOR_APPLICATION_FLASH"},
+            "application_health": {"lifecycle": "BOOTABLE"},
+        }
+        created_service = object()
+        result_object = SimpleNamespace(
+            path=Path("support.zip").resolve(),
+            sha256="A" * 64,
+            size_bytes=1234,
+        )
+        output = io.StringIO()
+        with mock.patch.object(module, "B300Service", return_value=created_service), \
+                mock.patch.object(module, "collect_support_snapshot", return_value=snapshot) as collect, \
+                mock.patch.object(module, "write_support_bundle", return_value=result_object) as write, \
+                mock.patch.object(module, "list_probes", return_value=()), \
+                redirect_stdout(output):
+            rc = module.main(["support", "bundle", "support.zip", "--json"])
+        self.assertEqual(rc, 0)
+        record = json.loads(output.getvalue())
+        self.assertEqual(record["command"], "support bundle")
+        self.assertEqual(record["status"], "ok")
+        self.assertTrue(record["privacy_bounded"])
+        self.assertEqual(record["diagnostics_conclusion"], "READY_FOR_APPLICATION_FLASH")
+        self.assertEqual(record["application_lifecycle"], "BOOTABLE")
+        self.assertEqual(record["sha256"], "A" * 64)
+        collect.assert_called_once()
+        write.assert_called_once()
+        self.assertEqual(write.call_args.args[0], Path("support.zip"))
+        self.assertFalse(write.call_args.kwargs["force"])
+
+    def test_support_without_bundle_subcommand_fails_without_hardware_access(self) -> None:
+        module = tool()
+        output = io.StringIO()
+        with mock.patch.object(module, "B300Service") as service, redirect_stdout(output):
+            rc = module.main(["support", "--json"])
+        self.assertEqual(rc, 1)
+        service.assert_not_called()
+        record = json.loads(output.getvalue())
+        self.assertEqual(record["reason_code"], "SUPPORT_SUBCOMMAND_REQUIRED")
+
     def test_target_health_returns_nonzero_for_nonbootable_evidence(self) -> None:
         module = tool()
         metadata = SimpleNamespace(

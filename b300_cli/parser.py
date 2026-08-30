@@ -243,6 +243,22 @@ def build_parser() -> argparse.ArgumentParser:
     read_sector.add_argument("--probe-serial", type=parse_probe_serial,
                              help="Select one ST-Link when multiple probes are connected.")
 
+    support = commands.add_parser(
+        "support", help="Create a privacy-bounded read-only diagnostic support bundle.",
+        parents=[json_parent],
+    )
+    support_commands = support.add_subparsers(dest="support_command")
+    support_bundle = support_commands.add_parser(
+        "bundle", help="Write support.json + README.txt to one bounded ZIP.",
+        parents=[json_parent],
+    )
+    support_bundle.add_argument("output", type=Path)
+    support_bundle.add_argument("--force", action="store_true",
+                                help="Replace an existing support ZIP atomically.")
+    support_bundle.add_argument("--openocd")
+    support_bundle.add_argument("--probe-serial", type=parse_probe_serial,
+                                help="Select one ST-Link when multiple probes are connected.")
+
     update = commands.add_parser(
         "update", help="Check for or download a signed CLI update.", parents=[json_parent],
     )
