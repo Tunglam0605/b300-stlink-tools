@@ -7,7 +7,7 @@ from typing import Callable, Optional
 
 from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
-    QComboBox, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLayout, QLineEdit,
+    QComboBox, QDialog, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLayout, QLineEdit,
     QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QVBoxLayout, QWidget,
 )
 
@@ -17,6 +17,7 @@ from b300_core.elf_matcher import discover_symbol_files, find_matching_symbol_fi
 from b300_core.gdb_mi import GdbMiBackend
 from b300_core.models import ProbeRef
 from b300_core.live_monitor import LiveSample
+from b300_core.offline_symbols import OfflineSymbolTable
 from b300_core.live_session import (
     ClientLiveMonitorConfig, LiveMonitorSession, LocalLiveMonitorConfig,
 )
@@ -34,6 +35,7 @@ from .debug_plot_panel import DebugPlotPanel
 from .debug_interactive_panel import DebugInteractivePanel
 from .debug_log_panel import DebugLogPanel
 from .remote_vscode_dialog import RemoteVsCodeDialog
+from .symbol_browser_dialog import SymbolBrowserDialog
 
 
 class DebugTab(QWidget):
@@ -156,6 +158,7 @@ class DebugTab(QWidget):
         self.sample_stop_button.clicked.connect(self.stop_live_sampling)
         self.sample_clear_button.clicked.connect(self.clear_live_samples)
         self.sample_export_button.clicked.connect(self.export_live_samples)
+        self.live_panel.symbol_browser_requested.connect(self.browse_live_symbols)
 
         # 3. Live Waveform Plot Section (Collapsible)
         self.plot_panel = DebugPlotPanel(self.scroll_content)
@@ -362,6 +365,35 @@ class DebugTab(QWidget):
         )
         if path:
             self.symbol_path.setText(str(Path(path)))
+
+    def browse_live_symbols(self) -> None:
+        """Browse symbols from the selected AXF/ELF without touching the STM32 target."""
+        symbol_text = self.symbol_path.text().strip()
+        if not symbol_text:
+            self._operation_failed_message(
+                "Choose or auto-match an AXF/ELF symbol file before browsing Live Variables."
+            )
+            return
+        path = Path(symbol_text).expanduser().resolve()
+        if path.suffix.lower() not in {".axf", ".elf"} or not path.is_file():
+            self._operation_failed_message("The selected AXF/ELF symbol file does not exist.")
+            return
+        symbols = None
+        try:
+            symbols = OfflineSymbolTable(path)
+            dialog = SymbolBrowserDialog(symbols, self)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                selected = dialog.selected_symbol_name()
+                if selected:
+                    self.live_panel.select_symbol(selected)
+                    self.log.emit(
+                        "Selected offline Live Watch symbol: %s (data type still explicit)." % selected
+                    )
+        except (OSError, RuntimeError, ValueError) as error:
+            self._operation_failed_message(str(error))
+        finally:
+            if symbols is not None:
+                symbols.close()
 
     def auto_match_symbols(self) -> None:
         root_text = QFileDialog.getExistingDirectory(

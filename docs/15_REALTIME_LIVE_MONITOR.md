@@ -32,6 +32,21 @@ Scheduler lấy mẫu được neo theo `t0 + n × interval`, tránh drift tích
 
 Không có raw-address watch ở UX mặc định. Địa chỉ được resolve từ AXF/ELF matching firmware.
 
+## GUI Symbol Browser
+
+Trong GUI, phần **Live Variables (RAM Watch)** có nút **Browse AXF Symbols…**. Browser đọc trực tiếp AXF/ELF đã chọn bằng `arm-none-eabi-nm` trên laptop; thao tác này không kết nối ST-Link/OpenOCD và không thay đổi trạng thái target.
+
+Mặc định browser chỉ hiện symbol đủ điều kiện **Watchable RAM**. Một symbol chỉ được bật `Use Symbol` khi:
+
+- được phân loại là data symbol;
+- tên resolve duy nhất, không mơ hồ giữa nhiều địa chỉ;
+- `size > 0`;
+- toàn bộ byte span nằm trong CCM/SRAM STM32F407.
+
+Có thể bỏ chọn **Watchable RAM only** để xem function/Flash data/other symbol phục vụ chẩn đoán, nhưng các dòng không an toàn vẫn không thể chọn làm Live Watch và GUI hiển thị lý do block.
+
+Browser **không suy đoán C type** từ `nm`. Sau khi chọn symbol, GUI chỉ điền tên biến; người dùng vẫn phải chọn rõ `u8/i8/u16/i16/u32/i32/f32/f64`. Điều này tránh suy diễn sai trường hợp cùng kích thước 4 byte nhưng có thể là integer hoặc `float`.
+
 ## Local
 
 ```text

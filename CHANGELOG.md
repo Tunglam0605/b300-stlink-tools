@@ -5,6 +5,14 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+### Added
+
+- Bổ sung Offline AXF/ELF Symbol Catalog + GUI Symbol Browser cho Realtime Live Monitor: phân loại function/data/other từ `arm-none-eabi-nm`, chỉ đánh dấu watchable khi toàn bộ symbol data có kích thước xác định nằm trong CCM/SRAM STM32F407 và tên resolve duy nhất. Browser mặc định chỉ hiện safe RAM symbols, có filter/search và không suy đoán C type; kiểu `u8/i8/u16/i16/u32/i32/f32/f64` vẫn do người dùng chọn rõ ràng trước khi Add Watch. Việc browse hoàn toàn offline, không mở ST-Link/OpenOCD và không halt/reset target.
+
+### Fixed
+
+- Giữ đúng `--json` khi option nằm trước/sau/nằm giữa nested subcommand trên Python 3.9+ bằng suppressed parser defaults và normalize namespace sau parse; thêm regression coverage cho các vị trí option để tránh output machine-readable bị rơi về text.
+
 ### Changed
 
 - Hợp nhất runtime `debug live` của CLI với `LiveMonitorSession` mà GUI đang dùng: Local/Client giờ chia sẻ cùng TCL-only OpenOCD, SSH forwarding, AXF matching, RUNNING-state guard, cooperative cancel và cleanup policy. Phần CSV/JSONL/reporting được tách sang `b300_cli/live_commands.py`, giúp `b300_stlink.py` trở lại vai trò entrypoint/dispatcher thay vì giữ một implementation Live Monitor thứ hai.

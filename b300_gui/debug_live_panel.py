@@ -24,6 +24,8 @@ from b300_core.live_monitor import LiveSample, validate_live_watch_specs
 class DebugLivePanel(QGroupBox):
     """Zero-halt realtime SWD monitor displaying Execution Timeline and Live Variables."""
 
+    symbol_browser_requested = Signal()
+
     TIMELINE_CAPACITY = 1000
     VARIABLES_CAPACITY = 2000
 
@@ -192,6 +194,14 @@ class DebugLivePanel(QGroupBox):
         self.expressions.setToolTip("Enter global variable name from AXF/ELF symbols.")
         add_var_row.addWidget(self.expressions, 2)
 
+        self.browse_symbols_btn = QPushButton("Browse AXF Symbols…")
+        self.browse_symbols_btn.setObjectName("debugBrowseLiveSymbolsButton")
+        self.browse_symbols_btn.setToolTip(
+            "Browse the selected AXF/ELF offline. This does not access or halt the STM32 target."
+        )
+        self.browse_symbols_btn.clicked.connect(self.symbol_browser_requested.emit)
+        add_var_row.addWidget(self.browse_symbols_btn)
+
         self.type_combo = QComboBox()
         for t in ("u32", "i32", "u16", "i16", "u8", "i8", "f32", "f64"):
             self.type_combo.addItem(t)
@@ -250,6 +260,11 @@ class DebugLivePanel(QGroupBox):
                 break
         if not matched:
             self.interval_preset_combo.setCurrentIndex(self.interval_preset_combo.count() - 1)
+
+    def select_symbol(self, name: str) -> None:
+        """Populate the manual watch field without inferring its C data type."""
+        self.expressions.setText(str(name).strip())
+        self.expressions.setFocus()
 
     def _on_add_watch_clicked(self) -> None:
         name = self.expressions.text().strip()
@@ -374,6 +389,7 @@ class DebugLivePanel(QGroupBox):
         self, *, start_enabled: bool, stop_enabled: bool, history_enabled: bool
     ) -> None:
         self.expressions.setEnabled(start_enabled)
+        self.browse_symbols_btn.setEnabled(start_enabled)
         self.type_combo.setEnabled(start_enabled)
         self.add_watch_btn.setEnabled(start_enabled)
         self.remove_watch_btn.setEnabled(start_enabled)
