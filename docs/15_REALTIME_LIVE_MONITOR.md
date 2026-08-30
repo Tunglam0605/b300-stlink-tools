@@ -130,3 +130,16 @@ Nút **Stop Live** chỉ gọi `session.cancel()`. Cancellation dùng `threading
 `ClientLiveMonitorConfig` hỗ trợ cả AXF/ELF cụ thể và bounded `symbol_roots`; backend chỉ nhận unique exact Flash match. Hardware interlock dùng mode riêng `MONITORING`, tách khỏi `DEBUGGING`, nhưng vẫn khóa độc quyền ST-Link để Flash/Factory/Interactive Debug không thể chạy đồng thời.
 
 Hardware acceptance của facade: 20 samples @ 10 Hz trên B300 F407 thật, 0 overrun, final target `RUNNING`, `f64` coherent 20/20; `xTickCount` tăng 3622787 -> 3624688 trong ~1.937 s.
+
+## Backend analytics/ring buffer
+
+`LiveMonitorSession` tích hợp `LiveMonitorStore` thread-safe trên laptop. Store giữ lịch sử bounded nhưng thống kê toàn phiên vẫn giữ đầy đủ: tổng samples, overrun, read duration, schedule lag, unknown source, incoherent value, function hit/share, variable min/max/mean và latest value.
+
+API phục vụ frontend:
+
+- `history(limit)` — raw bounded samples;
+- `execution_transitions(limit)` — nén các sample liên tiếp cùng function/file/line;
+- `variable_series(name, limit)` — series số cho plot, incoherent sample trả `value=None`;
+- `analytics_snapshot(top_functions)` — timing/function/variable statistics.
+
+Function statistics được gom theo function + file, không tách thành nhiều dòng chỉ vì DWT PC rơi vào các line khác nhau của cùng hàm. Timeline vẫn giữ line chi tiết. Toàn bộ analytics chạy offline trên laptop và không tạo thêm SWD traffic.

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable, Optional, Tuple
 
 from .elf_matcher import discover_symbol_files, find_matching_symbol_file
+from .live_analytics import LiveAnalyticsSnapshot, LiveMonitorStore, LiveSeriesPoint, LiveExecutionTransition
 from .live_monitor import (
     LiveSample, LiveSummary, run_live_monitor, validate_live_request, validate_live_watch_specs,
 )
@@ -100,13 +101,14 @@ class LiveMonitorSession:
     def __init__(self, *, openocd_executable: Optional[str] = None,
                  service_factory=LiveMonitorService, tunnel_factory=SshLiveTunnel,
                  tcl_factory=SafeTclClient, symbol_table_factory=OfflineSymbolTable,
-                 port_allocator=find_available_loopback_port) -> None:
+                 port_allocator=find_available_loopback_port, history_capacity: int = 5000) -> None:
         self._openocd_executable = openocd_executable
         self._service_factory = service_factory
         self._tunnel_factory = tunnel_factory
         self._tcl_factory = tcl_factory
         self._symbol_table_factory = symbol_table_factory
         self._port_allocator = port_allocator
+        self._store = LiveMonitorStore(history_capacity)
         self._cancel = threading.Event()
         self._lock = threading.RLock()
         self._active = False
@@ -132,6 +134,18 @@ class LiveMonitorSession:
     def cancelled(self) -> bool:
         return self._cancel.is_set()
 
+    def analytics_snapshot(self, top_functions: int = 20) -> LiveAnalyticsSnapshot:
+        return self._store.snapshot(top_functions=top_functions)
+
+    def history(self, limit: Optional[int] = None) -> Tuple[LiveSample, ...]:
+        return self._store.samples(limit)
+
+    def execution_transitions(self, limit: Optional[int] = None) -> Tuple[LiveExecutionTransition, ...]:
+        return self._store.transitions(limit)
+
+    def variable_series(self, name: str, limit: Optional[int] = None) -> Tuple[LiveSeriesPoint, ...]:
+        return self._store.variable_series(name, limit)
+
     def start_local(self, config: LocalLiveMonitorConfig) -> LiveMonitorSessionInfo:
         config.validate()
         self._require_inactive()
@@ -151,6 +165,7 @@ class LiveMonitorSession:
             service.stop()
             raise
         with self._lock:
+            self._store.clear()
             self._cancel.clear()
             self._role = "local"
             self._config = config
@@ -189,6 +204,7 @@ class LiveMonitorSession:
             tunnel.stop()
             raise
         with self._lock:
+            self._store.clear()
             self._cancel.clear()
             self._role = "client"
             self._config = config
@@ -212,11 +228,15 @@ class LiveMonitorSession:
             config = self._config
             tcl = self._tcl
             symbols = self._symbols
+        def accept(sample: LiveSample) -> None:
+            self._store.append(sample)
+            if on_sample is not None:
+                on_sample(sample)
         try:
             return run_live_monitor(
                 tcl, symbols, interval_seconds=config.interval_seconds,
                 sample_limit=config.sample_limit, watch_specs=config.watch_specs,
-                cancelled=self._cancel.is_set, wait=self._cancel.wait, on_sample=on_sample,
+                cancelled=self._cancel.is_set, wait=self._cancel.wait, on_sample=accept,
             )
         finally:
             with self._lock:
