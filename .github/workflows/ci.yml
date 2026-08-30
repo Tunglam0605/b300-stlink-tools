@@ -55,7 +55,7 @@ jobs:
           for test in $(find tests -maxdepth 1 -name 'test_*.py' -printf '%f\n' | sort); do
             module="tests.${test%.py}"
             echo "=== $module ==="
-            timeout --signal=TERM 60 python -m unittest "$module" -q
+            timeout --signal=TERM 60 python scripts/run_unittest_module.py "$module"
           done
 
       - name: Run unit tests (Windows)
@@ -71,7 +71,7 @@ jobs:
           foreach ($test in $tests) {
             $module = 'tests.' + $test.BaseName
             Write-Host "=== $module ==="
-            python -m unittest $module -q
+            python scripts/run_unittest_module.py $module
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
@@ -84,6 +84,7 @@ jobs:
           package_internal.py
           packaging/build_gui.py
           scripts/install_skill.py
+          scripts/run_unittest_module.py
 
       - name: Compile packages
         run: python -m compileall -q b300_core b300_gui
