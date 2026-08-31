@@ -446,6 +446,40 @@ def authorized_keys_target(*, system_name: Optional[str] = None, runner: Command
         )
     return user_home / ".ssh" / "authorized_keys", False
 
+
+def _windows_account_is_administrator(runner: CommandRunner) -> bool:
+    """Return membership in the local Administrators alias despite UAC filtering."""
+    ps = str(_trusted_windows_powershell_executable())
+    script = (
+        "$groups=[Security.Principal.WindowsIdentity]::GetCurrent().Groups|ForEach-Object {$_.Value};"
+        "if($groups -contains 'S-1-5-32-544'){'yes'}else{'no'}"
+    )
+    completed = runner((ps, "-NoProfile", "-NonInteractive", "-Command", script), 20.0)
+    answer = (completed.stdout or "").strip().lower()
+    if completed.returncode != 0 or answer not in {"yes", "no"}:
+        raise RuntimeError("B300 cannot safely determine whether this Windows account is an Administrator.")
+    return answer == "yes"
+
+
+def _windows_account_identity(runner: CommandRunner) -> str:
+    """Read the initiating account identity before UAC may switch credentials."""
+    ps = str(_trusted_windows_powershell_executable())
+    script = (
+        "$identity=[Security.Principal.WindowsIdentity]::GetCurrent();"
+        "[PSCustomObject]@{name=$identity.Name;sid=$identity.User.Value}|ConvertTo-Json -Compress"
+    )
+    completed = runner((ps, "-NoProfile", "-NonInteractive", "-Command", script), 20.0)
+    try:
+        result = json.loads(completed.stdout or "")
+    except ValueError as error:
+        raise RuntimeError("B300 cannot safely determine the initiating Windows account identity.") from error
+    name = result.get("name") if isinstance(result, dict) else None
+    if completed.returncode != 0 or not isinstance(name, str):
+        raise RuntimeError("B300 cannot safely determine the initiating Windows account identity.")
+    if not re.fullmatch(r"[^\\,=\r\n]{1,128}\\[^\\,=\r\n]{1,128}", name):
+        raise RuntimeError("B300 cannot safely determine the initiating Windows account identity.")
+    return name
+
 def _install_user_authorized_key(target: Path, public_key: str) -> bool:
     if _contains_key(target, public_key):
         return False
@@ -528,6 +562,128 @@ try{$p=Start-Process -FilePath '%s' -Verb RunAs -WindowStyle Hidden -Wait -PassT
     return True
 
 
+def _install_windows_gateway_key_elevated(
+        public_key: str, runner: CommandRunner, *, home: Path, program_data: Path,
+        account_name: str,
+) -> tuple[Path, bool, bool]:
+    """Authorize a Gateway key after asking elevated ``sshd`` for its real target.
+
+    A non-elevated Windows GUI can carry a UAC-filtered administrator token.
+    Running ``sshd -T`` from that token may select the ordinary user key file,
+    while the SSH service later applies ``Match Group administrators``.  The
+    same elevated child therefore queries, writes, restricts, and verifies an
+    Administrators target in one UAC operation.  If sshd selects a user target,
+    it returns without writing so the existing non-elevated user flow owns it.
+    """
+    ps = str(_trusted_windows_powershell_executable())
+    sshd = _trusted_windows_sshd_executable()
+    keygen = sshd.with_name("ssh-keygen.exe")
+    if not keygen.is_file():
+        raise RuntimeError("B300 cannot safely query Windows sshd because the trusted ssh-keygen.exe was not found.")
+    icacls = str(_trusted_windows_icacls_executable())
+    normalized_key = validate_public_key(public_key)
+    script = """$ErrorActionPreference='Stop'
+$line='%s'
+$home='%s'
+$programData='%s'
+$sshd='%s'
+$keygen='%s'
+$icacls='%s'
+$identity='%s'
+$base=Join-Path $programData 'ssh'
+$temp=Join-Path $base ('b300-sshd-config-'+[Guid]::NewGuid().ToString('N'))
+try{
+  New-Item -ItemType Directory -Force -Path $base | Out-Null
+  $baseItem=Get-Item -LiteralPath $base -Force -ErrorAction Stop
+  if(-not $baseItem.PSIsContainer -or (($baseItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)){exit 14}
+  New-Item -ItemType Directory -Force -Path $temp | Out-Null
+  $tempItem=Get-Item -LiteralPath $temp -Force -ErrorAction Stop
+  if(-not $tempItem.PSIsContainer -or (($tempItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)){exit 14}
+  $hostKey=Join-Path $temp 'ssh_host_ed25519_key'
+  & $keygen -q -t ed25519 -N '' -f $hostKey | Out-Null
+  if($LASTEXITCODE -ne 0){exit 14}
+  if($identity -notmatch '^[^\\,=\r\n]{1,128}\\[^\\,=\r\n]{1,128}$'){exit 14}
+  $output=& $sshd -T -h $hostKey -C ('user='+$identity+',host=localhost,addr=127.0.0.1')
+  if($LASTEXITCODE -ne 0){exit 14}
+  $matches=@($output | Where-Object { $_ -match '^\s*authorizedkeysfile\s+' })
+  if($matches.Count -ne 1){exit 14}
+  $configured=($matches[0] -replace '^\s*authorizedkeysfile\s+','').Trim().Trim('"')
+  $configured=($configured -replace '\\','/').ToLowerInvariant()
+  if($configured -eq '.ssh/authorized_keys' -or $configured -eq '.ssh/authorized_keys .ssh/authorized_keys2'){
+    exit 20
+  }elseif($configured -eq '__programdata__/ssh/administrators_authorized_keys'){
+    $target=Join-Path $programData 'ssh\\administrators_authorized_keys'
+    $ownerSid='S-1-5-32-544'
+    $targetKind='administrator'
+  }else{exit 14}
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+  if(-not (Test-Path -LiteralPath $target)){New-Item -ItemType File -Path $target | Out-Null}
+  $parts=$line -split '\\s+'
+  $needle=$parts[0]+' '+$parts[1]
+  $found=$false
+  foreach($existing in (Get-Content -LiteralPath $target -ErrorAction SilentlyContinue)){
+    $ep=$existing.Trim() -split '\\s+'
+    if($ep.Length -ge 2 -and ($ep[0]+' '+$ep[1]) -eq $needle){$found=$true; break}
+  }
+  $changed=(-not $found)
+  if($changed){Add-Content -LiteralPath $target -Value $line}
+  & $icacls $target '/reset' | Out-Null
+  if($LASTEXITCODE -ne 0){exit 13}
+  & $icacls $target '/inheritance:r' '/grant:r' ("*"+$ownerSid+":(F)") '*S-1-5-18:(F)' | Out-Null
+  if($LASTEXITCODE -ne 0){exit 13}
+  $keyPresent=$false
+  foreach($existing in (Get-Content -LiteralPath $target -ErrorAction Stop)){
+    $ep=$existing.Trim() -split '\\s+'
+    if($ep.Length -ge 2 -and ($ep[0]+' '+$ep[1]) -eq $needle){$keyPresent=$true; break}
+  }
+  $acl=Get-Acl -LiteralPath $target
+  $required=@($ownerSid,'S-1-5-18')
+  $seen=@{}
+  $bad=(-not $acl.AreAccessRulesProtected)
+  foreach($rule in $acl.Access){
+    if($rule.IsInherited){$bad=$true; continue}
+    try{$sid=$rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value}catch{$bad=$true; continue}
+    if($rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or $sid -notin $required -or (($rule.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -ne [Security.AccessControl.FileSystemRights]::FullControl)){$bad=$true; continue}
+    $seen[$sid]=$true
+  }
+  $aclSafe=(-not $bad -and $seen.ContainsKey($required[0]) -and $seen.ContainsKey($required[1]))
+  if(-not $keyPresent){exit 11}
+  if(-not $aclSafe){exit 12}
+  if($targetKind -eq 'administrator'){exit 21}
+  exit 20
+}finally{
+  $cleanupPaths=@()
+  if($hostKey){$cleanupPaths=@($hostKey,($hostKey+'.pub'))}
+  foreach($path in $cleanupPaths){if(Test-Path -LiteralPath $path){$item=Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue;if($item -and -not $item.PSIsContainer -and (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0)){Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue}}}
+  if(Test-Path -LiteralPath $temp){$cleanup=Get-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue;if($cleanup -and $cleanup.PSIsContainer -and (($cleanup.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0)){Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue}}
+}
+""" % (
+            normalized_key.replace("'", "''"), str(home).replace("'", "''"),
+            str(program_data).replace("'", "''"), str(sshd).replace("'", "''"),
+            str(keygen).replace("'", "''"), icacls.replace("'", "''"),
+            account_name.replace("'", "''"),
+        )
+    encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+    launch = """$ErrorActionPreference='Stop'
+try{$p=Start-Process -FilePath '%s' -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand','%s');exit $p.ExitCode}catch{if($_.Exception.HResult -eq -2147023673){exit 1223};exit 1}
+""" % (ps.replace("'", "''"), encoded)
+    completed = runner((ps, "-NoProfile", "-NonInteractive", "-Command", launch), 300.0)
+    if completed.returncode == 1223:
+        raise RuntimeError("Windows UAC approval was cancelled; the public key was not changed.")
+    if completed.returncode == 11:
+        raise RuntimeError("Windows authorized_keys verification did not find the expected public key.")
+    if completed.returncode == 12:
+        raise RuntimeError("Windows authorized_keys ACL verification failed.")
+    if completed.returncode == 13:
+        raise RuntimeError("Windows authorized_keys ACL repair with icacls.exe failed.")
+    if completed.returncode == 14:
+        raise RuntimeError("B300 cannot safely determine the elevated Windows SSH authorized-keys target.")
+    if completed.returncode == 20:
+        return home / ".ssh" / "authorized_keys", False, False
+    if completed.returncode == 21:
+        return program_data / "ssh" / "administrators_authorized_keys", True, True
+    if completed.returncode != 0:
+        raise RuntimeError("Windows authorized_keys update failed with exit code %d." % completed.returncode)
 def _windows_authorized_key_verification_script(
         target: Path, public_key: str, *, administrator_target: bool,
 ) -> str:
@@ -598,10 +754,17 @@ def install_gateway_public_key(public_key: str, *, system_name: Optional[str] = 
     target, admin_target = authorized_keys_target(
         system_name=system, runner=runner, home=user_home, program_data=root,
     )
-    if admin_target:
-        changed = _install_windows_key(target, normalized, runner, administrator_target=True)
-    elif system == "windows":
-        changed = _install_windows_key(target, normalized, runner, administrator_target=False)
+    if system == "windows":
+        if not admin_target and _windows_account_is_administrator(runner):
+            account_name = _windows_account_identity(runner)
+            target, admin_target, changed = _install_windows_gateway_key_elevated(
+                normalized, runner, home=user_home, program_data=root,
+                account_name=account_name,
+            )
+            if not admin_target:
+                changed = _install_windows_key(target, normalized, runner, administrator_target=False)
+        else:
+            changed = _install_windows_key(target, normalized, runner, administrator_target=admin_target)
     else:
         changed = _install_user_authorized_key(target, normalized)
     return AuthorizedKeyResult(target, public_key_fingerprint(normalized), changed, admin_target, True)

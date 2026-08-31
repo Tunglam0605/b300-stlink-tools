@@ -2,7 +2,7 @@
 
 import argparse
 
-__version__ = "0.13.1"
+__version__ = "0.13.2"
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", metavar="VERSION")

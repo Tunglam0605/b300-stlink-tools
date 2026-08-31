@@ -5,6 +5,10 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-08-31
+
+- Fixed Windows Gateway public-key authorization for Administrator accounts whose non-elevated GUI token resolves a user `authorized_keys` file while the SSH service applies the Administrators match rule. B300 now rechecks the effective target in the same UAC operation used to install and verify the key. It carries the initiating account identity through UAC, uses only trusted System32 OpenSSH tools, and returns a validated safe target without temporary result files.
+
 ## [0.13.1] - 2026-08-31
 
 - Fixed Windows Gateway public-key authorization where the previous .NET ACL rebuild failed with an unhelpful exit code. B300 now uses the trusted System32 `icacls.exe` with locale-independent Administrator and SYSTEM SIDs, verifies the resulting restrictive ACL, and reports UAC cancellation separately from an ACL repair failure. The change does not modify `sshd_config`, the SSH service, or SSH host keys.
