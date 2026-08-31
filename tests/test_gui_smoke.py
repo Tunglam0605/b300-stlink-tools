@@ -171,6 +171,35 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertIn("Core v%s" % __version__, window.log_view.toPlainText())
         window.close()
 
+    def test_debug_workspace_remains_simple_and_scroll_free_at_minimum_window(self) -> None:
+        window = MainWindow(service=FakeService(), probe_loader=lambda: ())
+        window.resize(760, 460)
+        window.show()
+        window.tabs.setCurrentIndex(2)
+        self.app.processEvents()
+        tab = window.debug_tab
+
+        self.assertEqual(tab.scroll_area.horizontalScrollBar().maximum(), 0)
+        self.assertFalse(tab.interactive_panel.is_expanded())
+        self.assertFalse(tab.live_panel.quality_details.is_expanded())
+        self.assertEqual(tab.live_panel.view_tabs.tabText(0), "Biến theo dõi")
+        self.assertEqual(tab.live_panel.view_tabs.currentIndex(), 0)
+        self.assertTrue(tab.sample_start_button.isVisible())
+        self.assertFalse(tab.start_button.isVisible())
+        for column in (3, 6, 7, 8):
+            self.assertTrue(tab.live_panel.table.isColumnHidden(column))
+
+        for role in ("local", "client", "gateway"):
+            tab.mode_combo.setCurrentIndex(tab.mode_combo.findData(role))
+            self.app.processEvents()
+            self.assertEqual(
+                tab.scroll_area.horizontalScrollBar().maximum(), 0,
+                "Debug must not require horizontal scrolling in %s mode" % role,
+            )
+        self.assertTrue(tab.conn_panel.gateway_actions.isVisible())
+        self.assertFalse(tab.interactive_panel.isVisible())
+        window.close()
+
     def test_valid_image_enables_dry_run_without_hardware_write(self) -> None:
         window = MainWindow(service=FakeService(), probe_loader=lambda: ())
         with tempfile.TemporaryDirectory() as directory:

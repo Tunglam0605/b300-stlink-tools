@@ -33,16 +33,20 @@ hoạt động bình thường.
 
 ## Cách A — Debug Local trên cùng máy
 
-Luồng khuyến nghị là GUI: mở tab **Debug**, để **Auto** hoặc chọn **Local**, chọn
-AXF/ELF đúng firmware rồi bấm **BẮT ĐẦU LOCAL**. Khi chỉ có một ST-Link, GUI tự
-chọn probe. GDB được tự tìm từ `B300_GDB`, STM32CubeIDE hoặc `PATH`.
+Luồng khuyến nghị trong GUI là mở **Theo dõi / Debug**, giữ **Tự động · Khuyến nghị**,
+chọn hoặc dùng lại AXF/ELF đã lưu rồi bắt đầu bằng **Theo dõi realtime**. Đường này
+chỉ mở OpenOCD TCL loopback, không mở GDB/Telnet và target phải tiếp tục `RUNNING`.
 
-Sau khi attach, GUI xác nhận target `RUNNING/HALTED`. Nếu GDB attach làm một target
+Chỉ khi cần Halt/Step/Breakpoint mới mở **Debug tương tác · Nâng cao** rồi bấm
+**Kết nối Debug tương tác**. Khi chỉ có một ST-Link, GUI tự chọn probe. GDB được tự
+tìm từ `B300_GDB`, STM32CubeIDE hoặc `PATH`.
+
+Sau khi attach Interactive Debug, GUI xác nhận target `RUNNING/HALTED`. Nếu GDB attach làm một target
 đang RUNNING bị HALT, `DebugSession` tự Resume ngay. Các thao tác Where, Call Stack,
 Registers và Variable chỉ halt tạm khi cần rồi khôi phục trạng thái trước thao tác.
 Hardware breakpoint/watchpoint là one-shot và được cleanup sau hit/timeout.
 
-Nhấn **Dừng Debug** để restore trạng thái ban đầu, đóng GDB/OpenOCD và giải phóng
+Nhấn **Ngắt Debug** để restore trạng thái ban đầu, đóng GDB/OpenOCD và giải phóng
 ST-Link. Không có lệnh flash trong flow này.
 
 ### Manual/legacy external GDB server
@@ -138,6 +142,12 @@ chỉ phản ánh background polling/TAP và không được dùng để kết l
 `running` hay `halted`.
 
 ## Realtime Live Monitor — non-halting
+
+Trong GUI đây là đường mặc định và nổi bật nhất: **Biến theo dõi** là tab đầu tiên,
+**Luồng thực thi** là tab thứ hai; thông số overrun/read-time/lag nằm trong
+**Chất lượng lấy mẫu** và mặc định đóng. Các cột kỹ thuật như Address/Min/Max/Mean
+cũng chỉ hiện khi người dùng mở chi tiết, nên màn hình vận hành thường ngày chỉ tập
+trung vào biến, giá trị, kiểu, thời gian và đồ thị.
 
 Để quan sát robot đang chạy mà không dùng chu kỳ HALT/RUN, dùng `debug live`. Backend
 đọc DWT PC sample register và các symbol RAM qua Safe TCL `mdw` khi target vẫn RUNNING;
@@ -250,24 +260,28 @@ Tab **Debug** có bốn lựa chọn:
 Gateway GUI muốn tự debug trực tiếp thì chuyển sang **Local** sau khi remote client
 đã ngắt. Tool không cho hai GDB controller cùng điều khiển một STM32.
 
-### Interactive Debug Workspace
+### Debug tương tác · Nâng cao
 
-GUI Interactive Debug tổ chức các primitive source-level hiện có thành một workspace trạng thái. Thanh trạng thái của workspace hiển thị `Target: RUNNING/HALTED/UNKNOWN/DISCONNECTED`, thao tác gần nhất và nhắc rõ `Mode: INTRUSIVE / GDB`.
+GUI đặt toàn bộ Interactive Debug trong card **Debug tương tác · Nâng cao**, mặc định
+đóng để nút attach GDB không cạnh tranh với nút **Bắt đầu** của Live Monitor. Khi mở,
+workspace hiển thị `MCU: RUNNING/HALTED/KHÔNG RÕ/CHƯA KẾT NỐI`, thao tác gần nhất và
+cảnh báo rõ chế độ này có thể halt MCU.
 
 Kết quả được giữ riêng theo các tab:
 
-- **Current Location** — kết quả `Where`;
-- **Call Stack** — stack frames;
-- **Registers** — register snapshot;
-- **Variables** — kết quả đọc biến theo yêu cầu;
-- **Diagnostic** — breakpoint/watchpoint one-shot và các kết quả tổng quát khác.
+- **Vị trí** — kết quả `Where`;
+- **Ngăn xếp** — stack frames;
+- **Thanh ghi** — register snapshot;
+- **Biến** — kết quả đọc biến theo yêu cầu;
+- **Chẩn đoán** — breakpoint/watchpoint one-shot và các kết quả tổng quát khác.
 
 Đây là thay đổi presentation/UX. Workspace không tạo thêm GDB request ngoài thao tác người dùng đã bấm, không thay đổi cơ chế auto-resume, không thêm breakpoint/watchpoint nền và không liên quan đến Realtime Live Monitor. Realtime Live vẫn là subsystem non-halting riêng.
 
 ### Client one-click
 
 Lần đầu Client cần Gateway host, SSH user và project/AXF. Các lần sau GUI ghi nhớ
-profile. Khi bấm **KẾT NỐI GATEWAY**, tool tự động:
+profile. Khi mở **Debug tương tác · Nâng cao** và bấm **Kết nối Debug tương tác**,
+tool tự động:
 
 1. chọn hai local loopback port còn trống;
 2. chạy OpenSSH với `BatchMode=yes`, `StrictHostKeyChecking=yes`,

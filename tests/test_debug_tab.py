@@ -375,7 +375,7 @@ class DebugTabTests(unittest.TestCase):
         self.assertEqual(tab.client_user.text(), "automation")
         self.assertEqual(tab.client_ssh_port.value(), 2222)
         self.assertTrue(tab._managed_profile_loaded)
-        self.assertIn("saved Gateway profile", tab.role_summary.text())
+        self.assertIn("Gateway đã lưu", tab.role_summary.text())
         self.assertIsNotNone(tab.safety_guide)
         tab.close()
 
@@ -404,6 +404,9 @@ class DebugTabTests(unittest.TestCase):
             self.assertEqual(tab._symbol_root, root.resolve())
             self.assertEqual(tab.sample_expressions.text(), "xTickCount, motorSpeed")
             self.assertEqual(tab.sample_cycles.value(), 250)
+            self.assertFalse(tab.sample_limit_enabled.isChecked())
+            self.assertIsNone(tab.live_panel.sample_limit())
+            self.assertTrue(tab.sample_cycles.isHidden())
             self.assertAlmostEqual(tab.sample_interval.value(), 0.2, places=2)
             self.assertEqual(settings.values["debug/gateway_user"], "automation")
             tab.close()
@@ -411,15 +414,20 @@ class DebugTabTests(unittest.TestCase):
     def test_debug_surface_uses_one_integrated_start_and_state_aware_controls(self) -> None:
         tab, _service, _session = self.make_tab()
         self.assertEqual(tab.gdb_port.text(), "3333")
-        self.assertEqual(tab.start_button.text(), "BẮT ĐẦU LOCAL")
-        self.assertIn("ELF/AXF", tab.symbol_browse_button.text())
+        self.assertEqual(tab.start_button.text(), "Kết nối Debug tương tác")
+        self.assertEqual(tab.symbol_browse_button.text(), "Chọn file…")
         self.assertFalse(hasattr(tab, "connect_button"))
-        self.assertEqual(tab.remote_server_button.text(), "Gateway nhanh")
+        self.assertEqual(tab.remote_server_button.text(), "Bật Gateway")
         self.assertTrue(tab.remote_server_button.isEnabled())
-        self.assertEqual(tab.remote_kit_button.text(), "Xuất VS Code Kit…")
-        self.assertTrue(tab.remote_kit_button.isHidden())
+        self.assertEqual(tab.remote_kit_button.text(), "VS Code Kit…")
+        self.assertTrue(tab.conn_panel.gateway_actions.isHidden())
         self.assertTrue(tab.connection_box.isHidden())
         self.assertFalse(tab.symbols_box.isHidden())
+        self.assertIs(tab.start_button, tab.interactive_panel.attach_button)
+        self.assertIs(tab.stop_button, tab.interactive_panel.disconnect_button)
+        self.assertFalse(tab.interactive_panel.is_expanded())
+        self.assertFalse(tab.live_panel.quality_details.is_expanded())
+        self.assertTrue(tab.conn_panel.gateway_actions.isHidden())
         self.assertFalse(tab.halt_button.isEnabled())
         self.assertFalse(tab.continue_button.isEnabled())
         self.assertFalse(tab.reset_button.isEnabled())
@@ -452,7 +460,7 @@ class DebugTabTests(unittest.TestCase):
         self.assertTrue(session.active)
         self.assertIn("continue", session.events)
         self.assertEqual(tab._target_state, "running")
-        self.assertEqual(tab.interactive_panel.workspace_target_state.text(), "Target: RUNNING")
+        self.assertEqual(tab.interactive_panel.workspace_target_state.text(), "MCU: RUNNING")
         self.assertTrue(tab.halt_button.isEnabled())
         self.assertFalse(tab.continue_button.isEnabled())
         self.assertTrue(tab.reset_button.isEnabled())
@@ -490,8 +498,8 @@ class DebugTabTests(unittest.TestCase):
         tab.continue_target()
         self.wait_until(lambda: tab._worker is None)
         self.assertEqual(tab._target_state, "running")
-        self.assertEqual(tab.interactive_panel.workspace_target_state.text(), "Target: RUNNING")
-        self.assertEqual(tab.interactive_panel.workspace_last_action.text(), "Last action: Continue")
+        self.assertEqual(tab.interactive_panel.workspace_target_state.text(), "MCU: RUNNING")
+        self.assertEqual(tab.interactive_panel.workspace_last_action.text(), "Thao tác gần nhất: Continue")
         self.assertTrue(tab.halt_button.isEnabled())
         self.assertFalse(tab.continue_button.isEnabled())
         self.assertIn("halt", session.events)
@@ -516,8 +524,8 @@ class DebugTabTests(unittest.TestCase):
         self.assertIn("main.c:42", tab.diagnostic_view.toPlainText())
         self.assertEqual(tab.interactive_panel.workspace_tabs.currentIndex(), 0)
         self.assertIn("main.c:42", tab.interactive_panel.location_view.toPlainText())
-        self.assertEqual(tab.interactive_panel.workspace_target_state.text(), "Target: RUNNING")
-        self.assertEqual(tab.interactive_panel.workspace_last_action.text(), "Last action: Where")
+        self.assertEqual(tab.interactive_panel.workspace_target_state.text(), "MCU: RUNNING")
+        self.assertEqual(tab.interactive_panel.workspace_last_action.text(), "Thao tác gần nhất: Where")
         self.assertEqual(tab._target_state, "running")
 
         tab.variable_expression.setText("bRUN")
@@ -526,7 +534,7 @@ class DebugTabTests(unittest.TestCase):
         self.assertEqual(tab.diagnostic_view.toPlainText(), "bRUN = 1")
         self.assertEqual(tab.interactive_panel.workspace_tabs.currentIndex(), 3)
         self.assertEqual(tab.interactive_panel.variables_view.toPlainText(), "bRUN = 1")
-        self.assertEqual(tab.interactive_panel.workspace_last_action.text(), "Last action: Variable")
+        self.assertEqual(tab.interactive_panel.workspace_last_action.text(), "Thao tác gần nhất: Variable")
         self.assertIn(("variable", "bRUN"), session.events)
         self.assertEqual(tab._target_state, "running")
 
@@ -544,6 +552,7 @@ class DebugTabTests(unittest.TestCase):
             self.assertTrue(tab.sample_start_button.isEnabled())
             self.assertFalse(tab.session.active)
             tab.sample_expressions.setText("xTickCount, motorSpeed")
+            tab.sample_limit_enabled.setChecked(True)
             tab.sample_cycles.setValue(3)
             tab.sample_interval.setValue(0.1)
             tab.start_live_sampling()
@@ -564,6 +573,20 @@ class DebugTabTests(unittest.TestCase):
         self.assertTrue(tab.sample_clear_button.isEnabled())
         tab.close()
 
+    def test_live_monitor_defaults_to_continuous_until_operator_stops(self) -> None:
+        tab, _service, _session = self.make_tab(initial="running", attach_state="halted")
+        with TemporaryDirectory() as directory:
+            symbols = Path(directory) / "firmware.axf"
+            symbols.write_bytes(b"fake")
+            tab.symbol_path.setText(str(symbols))
+            tab.sample_expressions.setText("xTickCount")
+            self.assertFalse(tab.sample_limit_enabled.isChecked())
+            self.assertTrue(tab.sample_cycles.isHidden())
+            role, config = tab._build_live_monitor_config(tab._live_sampling_expressions())
+            self.assertEqual(role, "local")
+            self.assertIsNone(config.sample_limit)
+        tab.close()
+
     def test_live_sampling_stop_is_cooperative_and_export_uses_ring_buffer(self) -> None:
         from unittest import mock
 
@@ -573,7 +596,9 @@ class DebugTabTests(unittest.TestCase):
             symbols.write_bytes(b"fake")
             tab.symbol_path.setText(str(symbols))
             tab.sample_expressions.setText("xTickCount")
-            tab.sample_cycles.setValue(100)
+            tab.sample_cycles.setValue(100)  # retained preference; ignored unless limit is enabled
+            self.assertFalse(tab.sample_limit_enabled.isChecked())
+            self.assertIsNone(tab.live_panel.sample_limit())
             tab.sample_interval.setValue(1.0)
             tab.start_live_sampling()
             self.wait_until(lambda: len(tab._sample_buffer) >= 1, timeout=2.0)
@@ -613,6 +638,7 @@ class DebugTabTests(unittest.TestCase):
             symbols.write_bytes(b"fake")
             tab.symbol_path.setText(str(symbols))
             tab.sample_expressions.setText("")  # timeline-only is valid
+            tab.sample_limit_enabled.setChecked(True)
             tab.sample_cycles.setValue(1)
             tab.start_live_sampling()
             self.wait_until(lambda: tab._worker is None, timeout=2.0)
@@ -747,7 +773,7 @@ class DebugTabTests(unittest.TestCase):
     def test_auto_mode_uses_client_when_no_local_probe_and_connects_one_click(self) -> None:
         tab, service, session = self.make_tab(initial="running", probe_count=0)
         self.assertEqual(tab._resolved_role(), "client")
-        self.assertEqual(tab.start_button.text(), "KẾT NỐI GATEWAY")
+        self.assertEqual(tab.start_button.text(), "Kết nối Debug tương tác")
         tab.client_host.setText("gateway.local")
         tab.client_user.setText("automation")
         from types import SimpleNamespace
@@ -872,8 +898,8 @@ class DebugTabTests(unittest.TestCase):
                 tab.auto_match_symbols()
 
         self.assertEqual(tab._symbol_root, root.resolve())
-        self.assertIn("KẾT NỐI GATEWAY", tab.start_button.text())
-        self.assertIn("KẾT NỐI GATEWAY", tab.diagnostic_view.toPlainText())
+        self.assertIn("Debug tương tác", tab.start_button.text())
+        self.assertIn("mở Debug tương tác", tab.diagnostic_view.toPlainText())
         self.assertEqual(service.state, DebugState.STOPPED)
         self.assertFalse(session.active)
         tab.close()

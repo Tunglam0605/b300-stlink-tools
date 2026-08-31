@@ -5,6 +5,10 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+- Tối ưu **Theo dõi / Debug** theo operator-first UX: Live Monitor là hành động chính duy nhất trên màn hình mặc định; nút attach GDB chuyển vào `Debug tương tác · Nâng cao`, Gateway có action riêng theo role và trạng thái safety nhấn mạnh realtime trước.
+- Làm Debug responsive thật ở cửa sổ tối thiểu `760×460`: Local/Client/Gateway đều không sinh horizontal scroll; form Connection/Client chuyển sang grid, Live Monitor chuyển từ hai pane song song sang tab `Biến theo dõi` / `Luồng thực thi`.
+- Giảm information overload của Live Monitor: `Chất lượng lấy mẫu` mặc định đóng, các cột Address/Min/Max/Mean chỉ hiện khi mở chi tiết, custom interval/sample limit chỉ xuất hiện khi người dùng chọn dùng; Technical Log chỉ hiện badge khi thực sự có INFO/WARN/ERR.
+
 ## [0.12.1] - 2026-08-31
 
 - Khắc phục collision version của chuỗi RC 0.12.0: bản public mới dùng version 0.12.1 để mọi installation 0.12.0 cũ bắt buộc nhận ra bản cập nhật mới thay vì báo nhầm “đã mới nhất”.

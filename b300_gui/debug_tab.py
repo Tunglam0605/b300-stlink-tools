@@ -8,7 +8,7 @@ from typing import Callable, Optional
 from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLayout, QLineEdit,
-    QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QVBoxLayout, QWidget,
+    QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from b300_core.debug_service import DebugConfig, DebugService, DebugState
@@ -104,7 +104,8 @@ class DebugTab(QWidget):
         layout = QVBoxLayout(self.scroll_content)
         layout.setContentsMargins(12, 10, 12, 12)
         layout.setSpacing(10)
-        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetDefaultConstraint)
+        self.scroll_content.setMinimumSize(0, 0)
         self.scroll_area.setWidget(self.scroll_content)
         root_layout.addWidget(self.scroll_area)
 
@@ -114,13 +115,10 @@ class DebugTab(QWidget):
         safety_layout = QHBoxLayout(self.safety_guide)
         safety_layout.setContentsMargins(10, 7, 10, 7)
         safety_layout.setSpacing(10)
-        safe = QLabel("● LIVE MONITOR · KHUYẾN NGHỊ · MCU tiếp tục RUNNING")
+        safe = QLabel("● Khuyến nghị: Theo dõi realtime để MCU tiếp tục chạy. Debug tương tác nằm trong Nâng cao và có thể tạm dừng MCU.")
         safe.setObjectName("debugSafeModeBadge")
-        intrusive = QLabel("▲ INTERACTIVE DEBUG · Có thể HALT/STEP/RESET MCU")
-        intrusive.setObjectName("debugIntrusiveModeBadge")
-        safety_layout.addWidget(safe)
-        safety_layout.addWidget(intrusive)
-        safety_layout.addStretch(1)
+        safe.setWordWrap(True)
+        safety_layout.addWidget(safe, 1)
         layout.addWidget(self.safety_guide)
 
         # 1. Top Section: Connection & Environment Panel
@@ -144,17 +142,15 @@ class DebugTab(QWidget):
         self.bind_address = self.conn_panel.bind_address
         self.gdb_port = self.conn_panel.gdb_port
         self.tcl_display = self.conn_panel.tcl_display
-        self.start_button = self.conn_panel.start_button
         self.remote_server_button = self.conn_panel.remote_server_button
+        self.remote_stop_button = self.conn_panel.gateway_stop_button
         self.remote_kit_button = self.conn_panel.remote_kit_button
-        self.stop_button = self.conn_panel.stop_button
 
         self.symbol_browse_button.clicked.connect(self.choose_symbol_file)
         self.symbol_auto_button.clicked.connect(self.auto_match_symbols)
-        self.start_button.clicked.connect(self.start_selected_mode)
         self.remote_server_button.clicked.connect(self.start_remote_server)
+        self.remote_stop_button.clicked.connect(self.stop_debug)
         self.remote_kit_button.clicked.connect(self.show_remote_vscode_dialog)
-        self.stop_button.clicked.connect(self.stop_debug)
 
         # 2. Realtime Live Monitor Section (Zero-Halt SWD)
         self.live_panel = DebugLivePanel(self.scroll_content)
@@ -164,6 +160,7 @@ class DebugTab(QWidget):
         # Compatibility aliases for Live Panel
         self.sample_expressions = self.live_panel.expressions
         self.sample_cycles = self.live_panel.cycles
+        self.sample_limit_enabled = self.live_panel.limit_samples
         self.sample_interval = self.live_panel.interval
         self.sample_start_button = self.live_panel.start_button
         self.sample_stop_button = self.live_panel.stop_button
@@ -208,6 +205,12 @@ class DebugTab(QWidget):
         self.watch_once_button = self.interactive_panel.watch_once_button
         self.stop_timeout = self.interactive_panel.stop_timeout
         self.diagnostic_view = self.interactive_panel.diagnostic_view
+        # Compatibility aliases: interactive attach/stop now live inside the
+        # collapsed advanced card instead of competing with Live Monitor.
+        self.start_button = self.interactive_panel.attach_button
+        self.stop_button = self.interactive_panel.disconnect_button
+        self.start_button.clicked.connect(self.start_selected_mode)
+        self.stop_button.clicked.connect(self.stop_debug)
 
         self.halt_button.clicked.connect(self.halt_target)
         self.continue_button.clicked.connect(self.continue_target)
@@ -227,6 +230,12 @@ class DebugTab(QWidget):
         self.log_view = self.log_panel.log_view
         layout.addWidget(self.log_panel)
 
+        for panel in (
+            self.safety_guide, self.conn_panel, self.live_panel,
+            self.plot_panel, self.interactive_panel, self.log_panel,
+        ):
+            panel.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+
         self.log.connect(self._append_log)
         self.mode_combo.currentIndexChanged.connect(self._mode_changed)
         self.client_host.textChanged.connect(self._save_debug_preferences)
@@ -235,6 +244,7 @@ class DebugTab(QWidget):
         self.symbol_path.textChanged.connect(self._save_debug_preferences)
         self.sample_expressions.textChanged.connect(self._save_debug_preferences)
         self.sample_cycles.valueChanged.connect(self._save_debug_preferences)
+        self.sample_limit_enabled.toggled.connect(self._save_debug_preferences)
         self.sample_interval.valueChanged.connect(self._save_debug_preferences)
         self._restore_debug_preferences()
         self._refresh_controls()
@@ -278,13 +288,14 @@ class DebugTab(QWidget):
             sample_cycles = int(self._setting_value("debug/sample_cycles", 100) or 100)
         except (TypeError, ValueError):
             sample_cycles = 100
+        sample_limit_enabled = str(self._setting_value("debug/live_limit_enabled", "false") or "false").strip().lower() in ("1", "true", "yes", "on")
         try:
             sample_interval = float(self._setting_value("debug/sample_interval", 0.5) or 0.5)
         except (TypeError, ValueError):
             sample_interval = 0.5
         widgets = (
             self.mode_combo, self.client_host, self.client_user, self.client_ssh_port, self.symbol_path,
-            self.sample_expressions, self.sample_cycles, self.sample_interval,
+            self.sample_expressions, self.sample_cycles, self.sample_limit_enabled, self.sample_interval,
         )
         for widget in widgets:
             widget.blockSignals(True)
@@ -296,6 +307,8 @@ class DebugTab(QWidget):
             self.client_ssh_port.setValue(max(1, min(65535, ssh_port)))
             self.sample_expressions.setText(sample_expressions)
             self.sample_cycles.setValue(max(1, min(100000, sample_cycles)))
+            self.sample_limit_enabled.setChecked(sample_limit_enabled)
+            self.live_panel._on_limit_samples_toggled(sample_limit_enabled)
             self.sample_interval.setValue(max(0.1, min(60.0, sample_interval)))
             if last_symbols and Path(last_symbols).is_file():
                 self.symbol_path.setText(last_symbols)
@@ -316,6 +329,7 @@ class DebugTab(QWidget):
             self._settings.setValue("debug/gateway_ssh_port", self.client_ssh_port.value())
             self._settings.setValue("debug/sample_expressions", self.sample_expressions.text().strip())
             self._settings.setValue("debug/sample_cycles", self.sample_cycles.value())
+            self._settings.setValue("debug/live_limit_enabled", self.sample_limit_enabled.isChecked())
             self._settings.setValue("debug/sample_interval", self.sample_interval.value())
             symbol_text = self.symbol_path.text().strip()
             if symbol_text:
@@ -351,33 +365,31 @@ class DebugTab(QWidget):
         selected = str(self.mode_combo.currentData() or "auto")
         if selected == "auto":
             if role == "local":
-                summary = "AUTO → Local vì phát hiện ST-Link trên máy này."
+                summary = "Tự động → dùng ST-Link trên máy này."
             else:
-                summary = "AUTO → Client vì không phát hiện ST-Link local."
+                summary = "Tự động → dùng Gateway đã lưu."
         elif role == "gateway":
-            summary = "Gateway giữ ST-Link/OpenOCD; máy khác kết nối qua SSH."
+            summary = "Máy này giữ ST-Link để máy khác kết nối từ xa."
         elif role == "client":
             if self._managed_profile_loaded:
-                summary = "Client · dùng saved Gateway profile đã xác minh · SSH strict trust + managed key."
+                summary = "Dùng Gateway đã lưu; không cần nhập lại host/user."
             else:
-                summary = "Client tự mở SSH tunnel rồi GDB/MI attach tới Gateway. Thiết lập profile ở Gateway Setup để không nhập lại endpoint."
+                summary = "Chưa có Gateway đã lưu · hãy cấu hình ở Kết nối từ xa một lần."
         else:
-            summary = "Local debug trực tiếp ST-Link trên máy này."
+            summary = "Dùng ST-Link trực tiếp trên máy này."
         self.role_summary.setText(summary)
         self.client_box.setVisible(role == "client")
         self.symbols_box.setVisible(role in {"local", "client"})
         self.connection_box.setVisible(role == "gateway")
         self.diagnostics_box.setVisible(role in {"local", "client"})
-        self.remote_kit_button.setVisible(role == "gateway")
+        self.conn_panel.gateway_actions.setVisible(role == "gateway")
         if role == "gateway":
             self.tcl_display.setText("GDB 3333 · TCL 6666 · loopback only")
         elif role == "client":
             self.tcl_display.setText("GDB/TCL: SSH tunnel tự chọn")
         else:
             self.tcl_display.setText("GDB/TCL: tự chọn loopback")
-        self.start_button.setText(
-            {"local": "BẮT ĐẦU LOCAL", "gateway": "KHỞI ĐỘNG GATEWAY", "client": "KẾT NỐI GATEWAY"}[role]
-        )
+        self.start_button.setText("Kết nối Debug tương tác")
 
     def refresh_environment(self) -> None:
         """Refresh Auto role after probe discovery without changing explicit user choice."""
@@ -454,7 +466,7 @@ class DebugTab(QWidget):
             self._status_override = None
             self.diagnostic_view.setPlainText(
                 "Đã lưu project root: %s\nTìm thấy %d AXF/ELF candidate.\n"
-                "Khi bấm KẾT NỐI GATEWAY, tool sẽ tự so Flash qua SSH và chọn đúng file." %
+                "Khi mở Debug tương tác, tool sẽ tự so Flash qua SSH và chọn đúng file." %
                 (root, len(candidates))
             )
             self.log.emit("Saved Client symbol root for automatic match: %s" % root)
@@ -614,6 +626,7 @@ class DebugTab(QWidget):
         )
         self.start_button.setEnabled(can_start)
         self.remote_server_button.setEnabled(can_start)
+        self.remote_stop_button.setEnabled(not worker_busy and server_active)
         self.remote_kit_button.setEnabled(not worker_busy)
         self.stop_button.setEnabled(not worker_busy and (server_active or active or tunnel_active))
         self.mode_combo.setEnabled(not worker_busy and not server_active and not active and not tunnel_active and not live_active)
@@ -1172,7 +1185,7 @@ class DebugTab(QWidget):
         if role == "gateway":
             raise ValueError("Realtime Live Monitor uses Local or Client mode; switch from Gateway first.")
         interval = float(self.sample_interval.value())
-        samples = int(self.sample_cycles.value())
+        samples = self.live_panel.sample_limit()
         symbol_text = self.symbol_path.text().strip()
         symbols = Path(symbol_text).expanduser().resolve() if symbol_text else None
         if role == "local":
