@@ -20,8 +20,8 @@ class DebugPlotPanel(CollapsibleCard):
 
     def __init__(self, parent: Optional[QWidget] = None, *, max_points: int = 400) -> None:
         super().__init__(
-            "Live Waveform Plot",
-            "Realtime numeric signal visualization · default collapsed",
+            "Đồ thị realtime",
+            "Hiển thị tín hiệu · mặc định đóng",
             parent,
             expanded=False,
         )

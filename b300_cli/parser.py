@@ -170,6 +170,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--live-output", type=Path,
         help="Optional .jsonl or .csv stream for zero-halt Live Monitor samples.",
     )
+    debug.add_argument(
+        "--live-preset", type=Path,
+        help="Optional JSON preset file containing watch variable definitions and settings.",
+    )
     debug.add_argument("--location",
                        help="Function or basename:line for one-shot hardware breakpoint.")
     debug.add_argument("--timeout", type=float, default=5.0,

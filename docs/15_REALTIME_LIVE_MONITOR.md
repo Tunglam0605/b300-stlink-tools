@@ -48,7 +48,7 @@ Có thể bỏ chọn **Watchable RAM only** để xem function/Flash data/other
 Browser **không suy đoán C type** từ `nm`. Sau khi chọn symbol, GUI chỉ điền tên biến; người dùng vẫn phải chọn rõ `u8/i8/u16/i16/u32/i32/f32/f64`. Điều này tránh suy diễn sai trường hợp cùng kích thước 4 byte nhưng có thể là integer hoặc `float`.
 
 ## Local
-
+ 
 ```text
 b300-stlink debug live \
   --symbols Main_V2_F407.axf \
@@ -58,6 +58,16 @@ b300-stlink debug live \
   --live-watch v_current:f64 \
   --live-output trace.csv
 ```
+
+Hoặc nạp nhanh từ file cấu hình preset:
+
+```text
+b300-stlink debug live \
+  --symbols Main_V2_F407.axf \
+  --live-preset motor_watch.json \
+  --live-output trace.csv
+```
+
 
 Local Live Monitor mở OpenOCD profile riêng:
 

@@ -5,6 +5,34 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.12.4] - 2026-08-31
+
+- Bổ sung **Lưu & Nạp nhóm biến theo dõi (Watch Presets / JSON Import & Export)** cho Realtime Live Monitor:
+  - GUI: Thêm nút `Lưu preset…` và `Nạp preset…` trong bảng Biến đang theo dõi; hỗ trợ lưu tên biến, kiểu dữ liệu, cờ vẽ đồ thị (plot state), tốc độ lấy mẫu và giới hạn số mẫu ra file `.json` chuẩn; hỗ trợ nạp lại nhanh chóng mà không cần thêm từng biến thủ công.
+  - Core & CLI: Cung cấp API `save_watch_preset()` và `load_watch_preset()` với validation kiểu dữ liệu nghiêm ngặt; CLI hỗ trợ tham số `--live-preset <path.json>` cho cả chế độ `debug live` local và `debug client --client-action live`.
+- Hoàn thiện **đọc fingerprint SSH host key** tại Gateway Setup: fingerprint luôn quét đúng SSH port đang cấu hình (kể cả port tuỳ chỉnh), chỉ chấp nhận một ED25519 key nhất quán, và chỉ fallback sang public `.pub` khi scanner thực sự không khả dụng. Dữ liệu mơ hồ, malformed hoặc mâu thuẫn đều fail-closed.
+- Trên Windows, resolver ưu tiên OpenSSH hệ thống tại `C:\Windows\System32\OpenSSH\ssh-keyscan.exe` và chạy ẩn. UI fingerprint có trạng thái rõ ràng `chưa đọc/đang đọc/sẵn sàng/lỗi`, chặn double-click và stale result khi cấu hình đổi; chỉ cho copy chuỗi `SHA256:...` sau khi xác minh thành công.
+
+## [0.12.3] - 2026-08-31
+
+- Thêm Windows **one-click fresh-machine bootstrap**: installer mang theo official STSW-LINK009 signed driver + SLA0048 notice, pin SHA-256 và từ chối package nếu payload thiếu/sai; post-install launch dùng `--first-run-setup`, tự kiểm tra/cài đúng prerequisite còn thiếu rồi ghi trạng thái setup hoàn tất. Python runtime, OpenOCD và GDB vẫn self-contained; không flash/reset/đổi Option Bytes trong machine setup.
+- Linux `.deb` thêm `openssh-client` vào dependency và tiếp tục cài udev rule trong package; OpenSSH Server/firewall vẫn chỉ được cấu hình khi người dùng chọn vai trò Gateway để tránh mở dịch vụ mạng không cần thiết.
+
+- Sửa wizard **Thiết lập máy mới** trên Windows: tách trạng thái “driver ST-Link đã được cài” khỏi trạng thái “thiết bị ST-Link đang được Windows nhận”; nếu WinUSB debug driver đã có trong Driver Store thì không bắt cài lại chỉ vì USB đang enumerate lỗi.
+- Không còn hiện UAC/PowerShell cho thao tác `scan-devices` khi chưa có gói driver thực sự để cài; nếu thiếu payload, GUI yêu cầu chọn gói STSW-LINK009 trước rồi mới xin quyền Admin để cài thật.
+- Giữ nguyên thông báo kết quả cài đặt sau khi wizard tự refresh, tránh bị ghi đè thành “Đang kiểm tra máy…”. Giao diện wizard cũng được rút gọn: checkbox thiếu driver ghi rõ `Cài`, bỏ nút cài trùng và chỉ hiện khu vực chọn driver khi thực sự cần.
+
+## [0.12.2] - 2026-08-31
+
+- Thêm **Thiết lập máy mới** trong GUI: kiểm tra ST-Link USB driver/OpenOCD/B300 Runtime và OpenSSH Client hoặc Linux udev; chỉ chọn/cài thành phần còn thiếu, có `Cài tất cả phần còn thiếu` và lựa chọn từng mục. Windows ưu tiên driver đã có/Windows PnP, tự tìm payload STSW-LINK009 local hoặc STM32CubeProgrammer; nếu vẫn thiếu thì nhận ZIP/thư mục STSW-LINK009 chính thức và cài bằng `pnputil` với UAC, PowerShell ẩn.
+- Chuẩn hóa lỗi `OpenOCD Error: open failed`: màn hình chính chỉ hiện hướng dẫn ngắn `Không kết nối được ST-Link`, raw OpenOCD traceback giữ trong Nhật ký/`Chi tiết lỗi`; probe không có serial không còn hiện chuỗi `| None`.
+- Release packaging hỗ trợ tùy chọn nhúng STSW-LINK009 đã được phê duyệt redistribution tại `vendor/stlink-driver/`; build không tự tải/vượt điều khoản ST nếu payload chưa được cấp phép.
+- Live Monitor mặc định **chạy liên tục đến khi người dùng bấm Dừng**; `Giới hạn số mẫu` chỉ là tùy chọn nâng cao và giá trị 100 mẫu cũ không còn tự kết thúc phiên monitor khi giới hạn chưa được bật.
+- Sửa chẩn đoán máy mới: kiểm tra OpenOCD và quét ST-Link/driver được tách độc lập, nên lỗi USB/PnP không còn bị báo sai thành “OpenOCD not found”. Release Windows giờ bắt buộc fresh-install installer vào thư mục sạch và chạy trực tiếp bundled `vendor/openocd/bin/openocd.exe --version` trước khi được phát hành.
+- Tối ưu **Theo dõi / Debug** theo operator-first UX: Live Monitor là hành động chính duy nhất trên màn hình mặc định; nút attach GDB chuyển vào `Debug tương tác · Nâng cao`, Gateway có action riêng theo role và trạng thái safety nhấn mạnh realtime trước.
+- Làm Debug responsive thật ở cửa sổ tối thiểu `760×460`: Local/Client/Gateway đều không sinh horizontal scroll; form Connection/Client chuyển sang grid, Live Monitor chuyển từ hai pane song song sang tab `Biến theo dõi` / `Luồng thực thi`.
+- Giảm information overload của Live Monitor: `Chất lượng lấy mẫu` mặc định đóng, các cột Address/Min/Max/Mean chỉ hiện khi mở chi tiết, custom interval/sample limit chỉ xuất hiện khi người dùng chọn dùng; Technical Log chỉ hiện badge khi thực sự có INFO/WARN/ERR.
+
 ## [0.12.1] - 2026-08-31
 
 - Khắc phục collision version của chuỗi RC 0.12.0: bản public mới dùng version 0.12.1 để mọi installation 0.12.0 cũ bắt buộc nhận ra bản cập nhật mới thay vì báo nhầm “đã mới nhất”.

@@ -27,6 +27,8 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--smoke-test", action="store_true",
                         help="Construct the GUI offscreen and exit without hardware access.")
+    parser.add_argument("--first-run-setup", action="store_true",
+                        help="Prepare a fresh workstation using bundled prerequisites.")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     app = QApplication.instance() or QApplication([])
     update_client = None
@@ -39,6 +41,7 @@ def main(argv=None) -> int:
     window = MainWindow(
         update_client=update_client,
         automatic_updates=not args.smoke_test,
+        first_run_setup=args.first_run_setup and not args.smoke_test,
     )
     if args.smoke_test:
         app.processEvents()

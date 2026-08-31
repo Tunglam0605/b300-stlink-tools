@@ -21,8 +21,8 @@ class DebugLogPanel(CollapsibleCard):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(
-            "Technical Log",
-            "OpenOCD runtime, GDB MI & TCL communication",
+            "Log kỹ thuật",
+            "OpenOCD / GDB / TCL",
             parent,
             expanded=False,
         )
@@ -36,14 +36,13 @@ class DebugLogPanel(CollapsibleCard):
         self.info_badge = QLabel("0 INFO")
         self.info_badge.setObjectName("badgeInfo")
         self.add_header_widget(self.info_badge)
-
         self.warn_badge = QLabel("0 WARN")
         self.warn_badge.setObjectName("badgeWarn")
         self.add_header_widget(self.warn_badge)
-
         self.error_badge = QLabel("0 ERR")
         self.error_badge.setObjectName("badgeError")
         self.add_header_widget(self.error_badge)
+        self._refresh_badges()
 
         content_layout = self.content_layout
         content_layout.setContentsMargins(8, 4, 8, 8)
@@ -53,15 +52,15 @@ class DebugLogPanel(CollapsibleCard):
         toolbar = QHBoxLayout()
         toolbar.setSpacing(8)
 
-        self.copy_button = QPushButton("Copy")
+        self.copy_button = QPushButton("Sao chép")
         self.copy_button.clicked.connect(self.copy_log)
         toolbar.addWidget(self.copy_button)
 
-        self.clear_button = QPushButton("Clear")
+        self.clear_button = QPushButton("Xóa")
         self.clear_button.clicked.connect(self.clear_log)
         toolbar.addWidget(self.clear_button)
 
-        self.save_button = QPushButton("Save Log…")
+        self.save_button = QPushButton("Lưu log…")
         self.save_button.clicked.connect(self.save_log)
         toolbar.addWidget(self.save_button)
 
@@ -87,9 +86,7 @@ class DebugLogPanel(CollapsibleCard):
         else:
             self._info_count += 1
 
-        self.info_badge.setText("%d INFO" % self._info_count)
-        self.warn_badge.setText("%d WARN" % self._warn_count)
-        self.error_badge.setText("%d ERR" % self._error_count)
+        self._refresh_badges()
 
         self.log_view.appendHtml(format_log_html(text))
         scroll = self.log_view.verticalScrollBar()
@@ -101,9 +98,15 @@ class DebugLogPanel(CollapsibleCard):
         self._info_count = 0
         self._warn_count = 0
         self._error_count = 0
-        self.info_badge.setText("0 INFO")
-        self.warn_badge.setText("0 WARN")
-        self.error_badge.setText("0 ERR")
+        self._refresh_badges()
+
+    def _refresh_badges(self) -> None:
+        self.info_badge.setText("%d INFO" % self._info_count)
+        self.warn_badge.setText("%d WARN" % self._warn_count)
+        self.error_badge.setText("%d ERR" % self._error_count)
+        self.info_badge.setVisible(self._info_count > 0)
+        self.warn_badge.setVisible(self._warn_count > 0)
+        self.error_badge.setVisible(self._error_count > 0)
 
     def copy_log(self) -> None:
         clipboard = QGuiApplication.clipboard()
@@ -115,7 +118,7 @@ class DebugLogPanel(CollapsibleCard):
         if not text:
             return None
         path, _selected = QFileDialog.getSaveFileName(
-            parent or self, "Save Debug Log", "b300-debug.log", "Log files (*.log *.txt)"
+            parent or self, "Lưu log Debug", "b300-debug.log", "Log files (*.log *.txt)"
         )
         if not path:
             return None

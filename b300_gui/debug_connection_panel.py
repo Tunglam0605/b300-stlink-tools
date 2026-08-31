@@ -7,7 +7,7 @@ from typing import Optional
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QSpinBox, QVBoxLayout, QWidget,
+    QPushButton, QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from .collapsible_card import CollapsibleCard
@@ -17,7 +17,7 @@ class DebugConnectionPanel(QGroupBox):
     """Clean engineering connection bar with mode selection, probe info, symbols, and collapsible settings."""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__("Kết nối thiết bị", parent)
+        super().__init__("Thiết bị & file chương trình", parent)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -25,11 +25,11 @@ class DebugConnectionPanel(QGroupBox):
         main_layout.setContentsMargins(10, 8, 10, 8)
         main_layout.setSpacing(8)
 
-        # Top row: Probe, Mode, and prominent Status Badge
-        top_row = QHBoxLayout()
-        top_row.setSpacing(10)
-
-        # Mode selector
+        # Compact responsive header. Status and probe information are allowed to
+        # wrap so a laptop-width window never forces horizontal scrolling.
+        top_grid = QGridLayout()
+        top_grid.setHorizontalSpacing(10)
+        top_grid.setVerticalSpacing(5)
         mode_box = QHBoxLayout()
         mode_box.setSpacing(6)
         mode_box.addWidget(QLabel("Kết nối:"))
@@ -45,22 +45,28 @@ class DebugConnectionPanel(QGroupBox):
         self.mode_combo.setToolTip(
             "Tự động: dùng ST-Link trên máy này nếu có; nếu không sẽ dùng Gateway đã lưu."
         )
+        self.mode_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.mode_combo.setMinimumContentsLength(10)
+        self.mode_combo.setMinimumWidth(150)
         mode_box.addWidget(self.mode_combo)
-        top_row.addLayout(mode_box)
+        top_grid.addLayout(mode_box, 0, 0)
 
-        # Probe info display
-        self.probe_display = QLabel("ST-Link: Tự động")
-        self.probe_display.setStyleSheet("font-weight: 700; color: #0F172A; font-size: 12px;")
-        top_row.addWidget(self.probe_display)
-        top_row.addStretch(1)
-
-        # Status Badge
-        self.status_label = QLabel("DISCONNECTED")
+        self.status_label = QLabel("CHƯA KẾT NỐI")
         self.status_label.setObjectName("debugStateBadge")
         self.status_label.setProperty("state", "stopped")
-        top_row.addWidget(self.status_label)
+        self.status_label.setWordWrap(True)
+        self.status_label.setMinimumWidth(120)
+        self.status_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        top_grid.addWidget(self.status_label, 0, 1)
 
-        main_layout.addLayout(top_row)
+        self.probe_display = QLabel("ST-Link: Tự động")
+        self.probe_display.setStyleSheet("font-weight: 700; color: #0F172A; font-size: 12px;")
+        self.probe_display.setWordWrap(True)
+        self.probe_display.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        top_grid.addWidget(self.probe_display, 1, 0, 1, 2)
+        top_grid.setColumnStretch(0, 2)
+        top_grid.setColumnStretch(1, 1)
+        main_layout.addLayout(top_grid)
 
         # Role explanation summary
         self.role_summary = QLabel("")
@@ -70,92 +76,89 @@ class DebugConnectionPanel(QGroupBox):
 
         # Symbol selection row
         self.symbols_box = QWidget()
-        symbols_layout = QHBoxLayout(self.symbols_box)
+        symbols_layout = QGridLayout(self.symbols_box)
         symbols_layout.setContentsMargins(0, 0, 0, 0)
-        symbols_layout.setSpacing(6)
-        symbols_layout.addWidget(QLabel("File chương trình:"))
+        symbols_layout.setHorizontalSpacing(6)
+        symbols_layout.setVerticalSpacing(5)
+        symbols_layout.addWidget(QLabel("File chương trình:"), 0, 0)
         self.symbol_path = QLineEdit()
         self.symbol_path.setObjectName("debugSymbolPath")
         self.symbol_path.setPlaceholderText("Không bắt buộc · file .AXF/.ELF")
-        symbols_layout.addWidget(self.symbol_path, 1)
+        self.symbol_path.setMinimumWidth(0)
+        symbols_layout.addWidget(self.symbol_path, 0, 1, 1, 2)
 
-        self.symbol_browse_button = QPushButton("Chọn ELF/AXF")
+        self.symbol_browse_button = QPushButton("Chọn file…")
         self.symbol_browse_button.setObjectName("debugSymbolBrowseButton")
-        symbols_layout.addWidget(self.symbol_browse_button)
+        symbols_layout.addWidget(self.symbol_browse_button, 1, 1)
 
-        self.symbol_auto_button = QPushButton("Tự tìm đúng AXF/ELF")
+        self.symbol_auto_button = QPushButton("Tự tìm")
         self.symbol_auto_button.setObjectName("debugSymbolAutoButton")
         self.symbol_auto_button.setToolTip(
             "Chọn thư mục project; tool so các mẫu Application Flash để tìm duy nhất AXF/ELF khớp."
         )
-        symbols_layout.addWidget(self.symbol_auto_button)
+        symbols_layout.addWidget(self.symbol_auto_button, 1, 2)
+        symbols_layout.setColumnStretch(1, 1)
+        symbols_layout.setColumnStretch(2, 1)
         main_layout.addWidget(self.symbols_box)
 
         # Client SSH Gateway credentials (only visible in Client mode)
         self.client_box = QWidget()
-        client_layout = QHBoxLayout(self.client_box)
+        client_layout = QGridLayout(self.client_box)
         client_layout.setContentsMargins(0, 0, 0, 0)
-        client_layout.setSpacing(6)
-        client_layout.addWidget(QLabel("Gateway:"))
+        client_layout.setHorizontalSpacing(6)
+        client_layout.setVerticalSpacing(5)
+        client_layout.addWidget(QLabel("Gateway:"), 0, 0)
         self.client_host = QLineEdit()
         self.client_host.setObjectName("debugClientHost")
         self.client_host.setPlaceholderText("IP/hostname Gateway")
-        client_layout.addWidget(self.client_host, 2)
+        self.client_host.setMinimumWidth(0)
+        client_layout.addWidget(self.client_host, 0, 1, 1, 3)
 
-        client_layout.addWidget(QLabel("SSH user:"))
+        client_layout.addWidget(QLabel("SSH user:"), 1, 0)
         self.client_user = QLineEdit()
         self.client_user.setObjectName("debugClientUser")
         self.client_user.setPlaceholderText("SSH user")
-        client_layout.addWidget(self.client_user, 1)
+        self.client_user.setMinimumWidth(0)
+        client_layout.addWidget(self.client_user, 1, 1)
 
-        client_layout.addWidget(QLabel("SSH:"))
+        client_layout.addWidget(QLabel("Port:"), 1, 2)
         self.client_ssh_port = QSpinBox()
         self.client_ssh_port.setObjectName("debugClientSshPort")
         self.client_ssh_port.setRange(1, 65535)
         self.client_ssh_port.setValue(22)
-        client_layout.addWidget(self.client_ssh_port)
+        client_layout.addWidget(self.client_ssh_port, 1, 3)
+        client_layout.setColumnStretch(1, 1)
         main_layout.addWidget(self.client_box)
 
-        # Primary Action Bar
-        action_row = QHBoxLayout()
-        action_row.setSpacing(8)
+        # Gateway-only actions. Local/Client interactive GDB controls live inside
+        # the collapsed Interactive Debug card so the default Live Monitor path
+        # never competes with another primary "Start" button.
+        self.gateway_actions = QWidget()
+        gateway_actions_layout = QHBoxLayout(self.gateway_actions)
+        gateway_actions_layout.setContentsMargins(0, 0, 0, 0)
+        gateway_actions_layout.setSpacing(8)
 
-        self.start_button = QPushButton("BẮT ĐẦU LOCAL")
-        self.start_button.setObjectName("debugStartButton")
-        self.start_button.setStyleSheet(
-            "QPushButton { min-height: 32px; font-weight: 700; color: #FFFFFF; background-color: #0284C7; border: 1px solid #0369A1; border-radius: 6px; padding: 4px 18px; }"
-            "QPushButton:hover { background-color: #0369A1; }"
-            "QPushButton:disabled { background-color: #E2E8F0; color: #94A3B8; border-color: #CBD5E1; }"
-        )
-        action_row.addWidget(self.start_button)
+        self.remote_server_button = QPushButton("Bật Gateway")
+        self.remote_server_button.setObjectName("debugRemoteServerButton")
+        gateway_actions_layout.addWidget(self.remote_server_button)
 
-        self.remote_kit_button = QPushButton("Xuất VS Code Kit…")
+        self.gateway_stop_button = QPushButton("Dừng")
+        self.gateway_stop_button.setObjectName("debugGatewayStopButton")
+        self.gateway_stop_button.setEnabled(False)
+        gateway_actions_layout.addWidget(self.gateway_stop_button)
+
+        self.remote_kit_button = QPushButton("VS Code Kit…")
         self.remote_kit_button.setObjectName("debugRemoteKitButton")
         self.remote_kit_button.setToolTip(
             "Sinh launch.json, Cortex-Debug recommendation, SSH tunnel và checklist remote debug."
         )
-        action_row.addWidget(self.remote_kit_button)
-
-
-        self.stop_button = QPushButton("Stop Debug")
-        self.stop_button.setObjectName("debugStopButton")
-        self.stop_button.setStyleSheet(
-            "QPushButton { min-height: 32px; font-weight: 600; color: #991B1B; background-color: #FEF2F2; border: 1px solid #FECACA; border-radius: 6px; padding: 4px 14px; }"
-            "QPushButton:hover { background-color: #FEE2E2; border-color: #DC2626; color: #DC2626; }"
-            "QPushButton:disabled { background-color: #F1F5F9; color: #94A3B8; border-color: #E2E8F0; }"
-        )
-        action_row.addWidget(self.stop_button)
-
-        self.remote_server_button = QPushButton("Gateway nhanh")
-        self.remote_server_button.setObjectName("debugRemoteServerButton")
-        self.remote_server_button.setVisible(False)
-        action_row.addWidget(self.remote_server_button)
-
-        action_row.addStretch(1)
-        main_layout.addLayout(action_row)
+        gateway_actions_layout.addWidget(self.remote_kit_button)
+        gateway_actions_layout.addStretch(1)
+        self.gateway_actions.setVisible(False)
+        main_layout.addWidget(self.gateway_actions)
 
         # Advanced Settings (Collapsible)
-        self.advanced_card = CollapsibleCard("Chi tiết kết nối", "Port, loopback và thông tin runtime", expanded=False)
+        self.advanced_card = CollapsibleCard("Chi tiết kết nối", "Port & runtime", expanded=False)
         advanced_layout = QGridLayout()
         advanced_layout.setContentsMargins(4, 4, 4, 4)
         advanced_layout.setHorizontalSpacing(10)

@@ -21,6 +21,7 @@ from typing import Optional
 
 from b300_version import __version__ as TOOL_VERSION
 from b300_core.factory_resource import load_trusted_bootloader
+from b300_core.machine_setup import BUNDLED_STLINK_DRIVER_NAME, BUNDLED_STLINK_DRIVER_SHA256
 from b300_core.offline_setup import (
     TRUSTED_OPENOCD_PACKAGES,
     extract_trusted_openocd_package,
@@ -107,6 +108,20 @@ def gui_resources(platform_name: str):
             ROOT / "packaging" / "linux" / "b300-stlink-gui.desktop",
             ROOT / "packaging" / "linux" / "b300-stlink-gui.svg",
         ])
+    elif platform_name == "windows-x64":
+        driver_root = ROOT / "vendor" / "stlink-driver"
+        driver_archive = driver_root / BUNDLED_STLINK_DRIVER_NAME
+        license_notice = driver_root / "SLA0048_STSW-LINK009.txt"
+        notice = driver_root / "README.md"
+        missing = [str(path) for path in (driver_archive, license_notice, notice) if not path.is_file()]
+        if missing:
+            raise RuntimeError(
+                "Windows one-click GUI build requires bundled STSW-LINK009 + license: %s" % ", ".join(missing)
+            )
+        digest = hash_file(driver_archive, maximum_bytes=64 * 1024 * 1024)
+        if digest.lower() != BUNDLED_STLINK_DRIVER_SHA256:
+            raise RuntimeError("Bundled STSW-LINK009 archive does not match the pinned SHA-256.")
+        resources.extend((driver_archive, license_notice, notice))
     return resources
 
 

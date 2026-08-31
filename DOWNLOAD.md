@@ -104,9 +104,10 @@ Cách dùng:
 2. Chạy installer.
 3. Mở **B300 ST-Link Tools** từ Start Menu/Desktop shortcut nếu có.
 4. Kết nối ST-Link và board.
-5. Dùng **Inspect Target** trước khi flash.
+5. Lần chạy đầu, installer tự mở **Chuẩn bị máy**: kiểm tra runtime/OpenOCD và tự cài driver ST-Link chính thức nếu Windows còn thiếu; chỉ UAC của Windows có thể cần người dùng xác nhận.
+6. Khi trạng thái READY, kết nối ST-Link/board và dùng **Kiểm tra target** trước khi nạp.
 
-Nếu không muốn cài, dùng `B300-STLink-GUI-Windows-x64.zip`, giải nén rồi chạy executable trong bundle.
+Bộ cài Windows đã mang theo Python runtime, OpenOCD/GDB và STSW-LINK009 đã pin SHA-256; máy mới không cần cài Python/OpenOCD/driver thủ công. Nếu không muốn cài, dùng `B300-STLink-GUI-Windows-x64.zip`, giải nén rồi chạy executable trong bundle; portable vẫn có payload driver nhưng không tự kích hoạt first-run bootstrap như installer.
 
 ### Ubuntu x64 — khuyến nghị `.deb`
 

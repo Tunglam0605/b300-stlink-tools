@@ -75,6 +75,25 @@ jobs:
       - name: Enforce Windows installer size budget
         shell: pwsh
         run: python scripts/release/check_size_budget.py release\B300-STLink-GUI-Windows-x64.exe --max-mib 90
+      - name: Smoke-test fresh Windows install with bundled OpenOCD
+        shell: pwsh
+        run: |
+          $installer = (Resolve-Path release\B300-STLink-GUI-Windows-x64.exe).Path
+          $installRoot = Join-Path $env:RUNNER_TEMP "b300-stlink-fresh-install"
+          if (Test-Path $installRoot) { Remove-Item -Recurse -Force $installRoot }
+          $setup = Start-Process -FilePath $installer `
+            -ArgumentList /VERYSILENT,/SUPPRESSMSGBOXES,/NORESTART,/SP-,/NOICONS,"/DIR=$installRoot" `
+            -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { exit $setup.ExitCode }
+          $installed = Join-Path $installRoot "b300-stlink-gui.exe"
+          $openocd = Join-Path $installRoot "vendor\openocd\bin\openocd.exe"
+          if (-not (Test-Path $installed)) { throw "Installed GUI executable missing" }
+          if (-not (Test-Path $openocd)) { throw "Fresh install is missing bundled OpenOCD" }
+          & $openocd --version
+          if ($LASTEXITCODE -ne 0) { throw "Bundled OpenOCD cannot execute after fresh install" }
+          $process = Start-Process -FilePath $installed `
+            -ArgumentList --smoke-test -Wait -PassThru -WindowStyle Hidden
+          exit $process.ExitCode
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dry-run-windows

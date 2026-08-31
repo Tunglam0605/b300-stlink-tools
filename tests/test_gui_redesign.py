@@ -145,22 +145,23 @@ class GuiRedesignTests(unittest.TestCase):
 
         panel.apply_analytics(snapshot)
 
+        self.assertFalse(panel.quality_details.is_expanded())
         self.assertEqual(panel.table.columnCount(), 9)
-        self.assertEqual(panel.stats_samples.text(), "Samples: 3")
-        self.assertEqual(panel.stats_overruns.text(), "Overruns: 1")
-        self.assertEqual(panel.stats_mean_read.text(), "Mean read: 12.50 ms")
-        self.assertEqual(panel.stats_max_lag.text(), "Max lag: 4.00 ms")
-        self.assertEqual(panel.stats_incoherent.text(), "Incoherent: 2")
-        self.assertEqual(panel.stats_variables.text(), "Variables: 1")
+        self.assertEqual(panel.stats_samples.text(), "Mẫu: 3")
+        self.assertEqual(panel.stats_overruns.text(), "Trễ nhịp: 1")
+        self.assertEqual(panel.stats_mean_read.text(), "Đọc TB: 12.50 ms")
+        self.assertEqual(panel.stats_max_lag.text(), "Trễ max: 4.00 ms")
+        self.assertEqual(panel.stats_incoherent.text(), "Không nhất quán: 2")
+        self.assertEqual(panel.stats_variables.text(), "Biến: 1")
         row = panel.rows["xTickCount"]
         self.assertEqual(panel.table.item(row, 6).text(), "100")
         self.assertEqual(panel.table.item(row, 7).text(), "104")
         self.assertEqual(panel.table.item(row, 8).text(), "102")
 
         panel.clear_history()
-        self.assertEqual(panel.stats_samples.text(), "Samples: 0")
-        self.assertEqual(panel.stats_overruns.text(), "Overruns: 0")
-        self.assertEqual(panel.stats_variables.text(), "Variables: 0")
+        self.assertEqual(panel.stats_samples.text(), "Mẫu: 0")
+        self.assertEqual(panel.stats_overruns.text(), "Trễ nhịp: 0")
+        self.assertEqual(panel.stats_variables.text(), "Biến: 0")
         panel.close()
 
     def test_live_monitor_timeline_update_and_follow_latest(self) -> None:
@@ -230,6 +231,43 @@ class GuiRedesignTests(unittest.TestCase):
         self.assertEqual(panel.table.rowCount(), 0)
         panel.close()
 
+    def test_live_variables_save_and_load_preset(self) -> None:
+        panel = DebugLivePanel()
+        panel.expressions.setText("xTickCount")
+        panel.type_combo.setCurrentText("u32")
+        panel.add_watch_btn.click()
+
+        panel.expressions.setText("bRUN")
+        panel.type_combo.setCurrentText("u8")
+        panel.add_watch_btn.click()
+        panel.table.item(1, 5).setCheckState(Qt.CheckState.Unchecked)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            preset_file = Path(tmpdir) / "test_preset.json"
+            saved_path = panel.export_preset(preset_file, name="Custom Watch Group")
+            self.assertEqual(saved_path, preset_file)
+            self.assertTrue(preset_file.is_file())
+
+            # Clear table
+            panel.table.setRowCount(0)
+            panel.rows.clear()
+            self.assertEqual(panel.table.rowCount(), 0)
+
+            # Import preset
+            result = panel.import_preset(preset_file)
+            self.assertEqual(result["name"], "Custom Watch Group")
+            self.assertEqual(panel.table.rowCount(), 2)
+            self.assertEqual(panel.table.item(0, 0).text(), "xTickCount")
+            self.assertEqual(panel.table.item(0, 2).text(), "u32")
+            self.assertEqual(panel.table.item(0, 5).checkState(), Qt.CheckState.Checked)
+            self.assertEqual(panel.table.item(1, 0).text(), "bRUN")
+            self.assertEqual(panel.table.item(1, 2).text(), "u8")
+            self.assertEqual(panel.table.item(1, 5).checkState(), Qt.CheckState.Unchecked)
+            self.assertEqual(panel.watch_specs(), ("xTickCount:u32", "bRUN:u8"))
+
+        panel.close()
+
+
     def test_live_plot_panel_pause_clear_export(self) -> None:
         plot_panel = DebugPlotPanel(max_points=100)
         samples = [
@@ -259,8 +297,8 @@ class GuiRedesignTests(unittest.TestCase):
         self.assertTrue(panel.is_expanded())
         warn = panel.findChild(QLabel, "interactiveDebugWarningText")
         self.assertIsNotNone(warn)
-        self.assertIn("Interactive Debug", warn.text())
-        self.assertIn("May halt the MCU", warn.text())
+        self.assertIn("Cảnh báo", warn.text())
+        self.assertIn("tạm dừng MCU", warn.text())
 
         self.assertIsNotNone(panel.halt_button)
         self.assertIsNotNone(panel.continue_button)
@@ -311,21 +349,23 @@ class GuiRedesignTests(unittest.TestCase):
         self.assertFalse(tab.symbols_box.isHidden())
         self.assertTrue(tab.client_box.isHidden())
         self.assertTrue(tab.connection_box.isHidden())
-        self.assertIn("LOCAL", tab.start_button.text())
+        self.assertIn("Debug tương tác", tab.start_button.text())
 
         # Client mode
         tab.mode_combo.setCurrentIndex(tab.mode_combo.findData("client"))
         self.assertFalse(tab.symbols_box.isHidden())
         self.assertFalse(tab.client_box.isHidden())
         self.assertTrue(tab.connection_box.isHidden())
-        self.assertIn("GATEWAY", tab.start_button.text())
+        self.assertIn("Debug tương tác", tab.start_button.text())
 
         # Gateway mode
         tab.mode_combo.setCurrentIndex(tab.mode_combo.findData("gateway"))
         self.assertTrue(tab.symbols_box.isHidden())
         self.assertTrue(tab.client_box.isHidden())
         self.assertFalse(tab.connection_box.isHidden())
-        self.assertIn("GATEWAY", tab.start_button.text())
+        self.assertTrue(tab.interactive_panel.isHidden())
+        self.assertFalse(tab.conn_panel.gateway_actions.isHidden())
+        self.assertEqual(tab.remote_server_button.text(), "Bật Gateway")
 
         tab.close()
 

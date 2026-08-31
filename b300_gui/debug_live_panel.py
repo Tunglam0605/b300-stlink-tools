@@ -5,20 +5,22 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame, QGridLayout,
     QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton,
-    QSpinBox, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QSizePolicy, QSpinBox, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from b300_core.debug_sampling import (
     VariableSample, VariableSampleBuffer, validate_sampling_request, write_samples,
 )
-from b300_core.live_monitor import LiveSample, validate_live_watch_specs
+from b300_core.live_monitor import LiveSample, validate_live_watch_specs, save_watch_preset, load_watch_preset
+
+from .collapsible_card import CollapsibleCard
 
 
 class DebugLivePanel(QGroupBox):
@@ -52,21 +54,25 @@ class DebugLivePanel(QGroupBox):
         subtitle.setStyleSheet("color: #059669; font-weight: 700; font-size: 12px;")
         sub_info.addWidget(subtitle)
 
+        self.workflow_hint = QLabel("Chọn file → thêm biến nếu cần → Bắt đầu")
+        self.workflow_hint.setWordWrap(True)
+        self.workflow_hint.setStyleSheet("color: #64748B; font-size: 11px;")
+        sub_info.addWidget(self.workflow_hint)
         self.statistical_notice = QLabel(
-            "ℹ DWT PC sampling is statistical. Very short functions may not appear in every sample."
+            "DWT PC sampling là lấy mẫu thống kê; hàm chạy rất ngắn có thể không xuất hiện ở mọi mẫu."
         )
         self.statistical_notice.setStyleSheet("color: #64748B; font-size: 11px;")
         self.statistical_notice.setWordWrap(True)
-        sub_info.addWidget(self.statistical_notice)
         header_row.addLayout(sub_info, 1)
 
         panel_layout.addLayout(header_row)
 
-        # Controls Toolbar: Interval, Cycles, Start, Stop, Clear, Export
-        toolbar = QHBoxLayout()
-        toolbar.setSpacing(8)
-
-        toolbar.addWidget(QLabel("Tốc độ:"))
+        # Responsive controls: settings and actions use separate rows so the
+        # workstation remains usable in a narrow laptop window.
+        controls = QGridLayout()
+        controls.setHorizontalSpacing(8)
+        controls.setVerticalSpacing(6)
+        controls.addWidget(QLabel("Tốc độ:"), 0, 0)
         self.interval_preset_combo = QComboBox()
         self.interval_preset_combo.addItem("0.1 s", 0.1)
         self.interval_preset_combo.addItem("0.2 s", 0.2)
@@ -74,10 +80,10 @@ class DebugLivePanel(QGroupBox):
         self.interval_preset_combo.addItem("1.0 s", 1.0)
         self.interval_preset_combo.addItem("2.0 s", 2.0)
         self.interval_preset_combo.addItem("5.0 s", 5.0)
-        self.interval_preset_combo.addItem("Custom", -1.0)
+        self.interval_preset_combo.addItem("Tùy chỉnh", -1.0)
         self.interval_preset_combo.setCurrentIndex(2)  # default 0.5s
         self.interval_preset_combo.currentIndexChanged.connect(self._on_interval_preset_changed)
-        toolbar.addWidget(self.interval_preset_combo)
+        controls.addWidget(self.interval_preset_combo, 0, 1)
 
         self.interval = QDoubleSpinBox()
         self.interval.setObjectName("debugSampleInterval")
@@ -86,46 +92,57 @@ class DebugLivePanel(QGroupBox):
         self.interval.setSingleStep(0.1)
         self.interval.setValue(0.5)
         self.interval.setSuffix(" s")
+        self.interval.setVisible(False)
         self.interval.valueChanged.connect(self._on_custom_interval_changed)
-        toolbar.addWidget(self.interval)
+        controls.addWidget(self.interval, 0, 2)
 
-        toolbar.addWidget(QLabel("Số mẫu:"))
+        self.limit_samples = QCheckBox("Giới hạn số mẫu")
+        self.limit_samples.setObjectName("debugLimitSamples")
+        self.limit_samples.setChecked(False)
+        self.limit_samples.setToolTip("Mặc định chạy liên tục đến khi bấm Dừng.")
+        controls.addWidget(self.limit_samples, 0, 3)
+
+        self.cycles_label = QLabel("Số mẫu:")
         self.cycles = QSpinBox()
         self.cycles.setObjectName("debugSampleCycles")
         self.cycles.setRange(1, 100000)
         self.cycles.setValue(100)
-        toolbar.addWidget(self.cycles)
+        self.cycles_label.setVisible(False)
+        self.cycles.setVisible(False)
+        self.limit_samples.toggled.connect(self._on_limit_samples_toggled)
+        controls.addWidget(self.cycles_label, 0, 4)
+        controls.addWidget(self.cycles, 0, 5)
+        controls.setColumnStretch(6, 1)
 
         self.start_button = QPushButton("▶ Bắt đầu")
         self.start_button.setObjectName("debugSampleStartButton")
         self.start_button.setStyleSheet(
-            "QPushButton { min-height: 28px; font-weight: 700; color: #FFFFFF; background-color: #059669; border: 1px solid #047857; border-radius: 6px; padding: 2px 14px; }"
+            "QPushButton { min-height: 30px; font-weight: 700; color: #FFFFFF; background-color: #059669; border: 1px solid #047857; border-radius: 6px; padding: 2px 14px; }"
             "QPushButton:hover { background-color: #047857; }"
             "QPushButton:disabled { background-color: #E2E8F0; color: #94A3B8; border-color: #CBD5E1; }"
         )
-        toolbar.addWidget(self.start_button)
+        controls.addWidget(self.start_button, 1, 0, 1, 2)
 
         self.stop_button = QPushButton("⏹ Dừng")
         self.stop_button.setObjectName("debugSampleStopButton")
         self.stop_button.setEnabled(False)
-        toolbar.addWidget(self.stop_button)
+        controls.addWidget(self.stop_button, 1, 2)
 
         self.clear_button = QPushButton("Xóa")
         self.clear_button.setObjectName("debugSampleClearButton")
-        toolbar.addWidget(self.clear_button)
+        controls.addWidget(self.clear_button, 1, 3)
 
         self.export_button = QPushButton("Xuất…")
         self.export_button.setObjectName("debugSampleExportButton")
-        toolbar.addWidget(self.export_button)
+        controls.addWidget(self.export_button, 1, 4)
 
-        toolbar.addStretch(1)
-
-        self.status = QLabel("Ready · 0 samples")
+        self.status = QLabel("Sẵn sàng · 0 mẫu")
         self.status.setObjectName("debugSampleStatus")
         self.status.setStyleSheet("color: #64748B; font-size: 11px; font-weight: 600;")
-        toolbar.addWidget(self.status)
-
-        panel_layout.addLayout(toolbar)
+        self.status.setWordWrap(True)
+        self.status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        controls.addWidget(self.status, 1, 5, 1, 2)
+        panel_layout.addLayout(controls)
 
         self.stats_frame = QFrame()
         self.stats_frame.setObjectName("debugLiveStatsFrame")
@@ -133,12 +150,12 @@ class DebugLivePanel(QGroupBox):
         stats.setContentsMargins(8, 5, 8, 5)
         stats.setHorizontalSpacing(18)
         stats.setVerticalSpacing(2)
-        self.stats_samples = QLabel("Samples: 0")
-        self.stats_overruns = QLabel("Overruns: 0")
-        self.stats_mean_read = QLabel("Mean read: —")
-        self.stats_max_lag = QLabel("Max lag: —")
-        self.stats_incoherent = QLabel("Incoherent: 0")
-        self.stats_variables = QLabel("Variables: 0")
+        self.stats_samples = QLabel("Mẫu: 0")
+        self.stats_overruns = QLabel("Trễ nhịp: 0")
+        self.stats_mean_read = QLabel("Đọc TB: —")
+        self.stats_max_lag = QLabel("Trễ max: —")
+        self.stats_incoherent = QLabel("Không nhất quán: 0")
+        self.stats_variables = QLabel("Biến: 0")
         for label in (self.stats_samples, self.stats_overruns, self.stats_mean_read,
                       self.stats_max_lag, self.stats_incoherent, self.stats_variables):
             label.setStyleSheet("color: #334155; font-size: 11px; font-weight: 600;")
@@ -149,13 +166,21 @@ class DebugLivePanel(QGroupBox):
         stats.addWidget(self.stats_incoherent, 0, 4)
         stats.addWidget(self.stats_variables, 0, 5)
         stats.setColumnStretch(6, 1)
-        panel_layout.addWidget(self.stats_frame)
+        self.quality_details = CollapsibleCard(
+            "Chất lượng lấy mẫu",
+            "Overrun · độ trễ",
+            expanded=False,
+        )
+        self.quality_details.content_layout.addWidget(self.statistical_notice)
+        self.quality_details.content_layout.addWidget(self.stats_frame)
+        panel_layout.addWidget(self.quality_details)
 
-        # Workstation Splitter: Left = Execution Timeline, Right = Live Variables
-        self.splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.splitter.setChildrenCollapsible(False)
+        # Focused views use tabs instead of side-by-side panes. This cuts visual
+        # density and removes the wide minimum size imposed by two live tables.
+        self.view_tabs = QTabWidget()
+        self.view_tabs.setObjectName("debugLiveViewTabs")
 
-        # Left Pane: Execution Timeline
+        # Execution Timeline
         timeline_container = QWidget()
         timeline_layout = QVBoxLayout(timeline_container)
         timeline_layout.setContentsMargins(0, 0, 0, 0)
@@ -166,7 +191,7 @@ class DebugLivePanel(QGroupBox):
         timeline_title.setStyleSheet("font-weight: 700; color: #0F172A; font-size: 12px;")
         timeline_header.addWidget(timeline_title)
 
-        self.follow_latest_check = QCheckBox("Follow latest")
+        self.follow_latest_check = QCheckBox("Theo mẫu mới nhất")
         self.follow_latest_check.setChecked(True)
         self.follow_latest_check.setStyleSheet("font-size: 11px; color: #334155;")
         timeline_header.addWidget(self.follow_latest_check)
@@ -175,7 +200,7 @@ class DebugLivePanel(QGroupBox):
 
         self.timeline_table = QTableWidget(0, 5)
         self.timeline_table.setObjectName("timelineTable")
-        self.timeline_table.setHorizontalHeaderLabels(("Time", "PC", "Function", "File", "Line"))
+        self.timeline_table.setHorizontalHeaderLabels(("Thời gian", "PC", "Hàm", "File", "Dòng"))
         self.timeline_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.timeline_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.timeline_table.verticalHeader().setVisible(False)
@@ -193,9 +218,8 @@ class DebugLivePanel(QGroupBox):
         self.timeline_table.setMinimumHeight(140)
         timeline_layout.addWidget(self.timeline_table)
 
-        self.splitter.addWidget(timeline_container)
 
-        # Right Pane: Live Variables
+        # Live Variables
         variables_container = QWidget()
         variables_layout = QVBoxLayout(variables_container)
         variables_layout.setContentsMargins(0, 0, 0, 0)
@@ -208,43 +232,56 @@ class DebugLivePanel(QGroupBox):
         var_header.addStretch(1)
         variables_layout.addLayout(var_header)
 
-        # Add variable row
-        add_var_row = QHBoxLayout()
-        add_var_row.setSpacing(6)
-
+        # Add-variable controls are split into two compact rows for laptop widths.
+        add_var_grid = QGridLayout()
+        add_var_grid.setHorizontalSpacing(6)
+        add_var_grid.setVerticalSpacing(5)
         self.expressions = QLineEdit()
         self.expressions.setObjectName("debugSampleExpressions")
-        self.expressions.setPlaceholderText("Symbol name (e.g. xTickCount)")
-        self.expressions.setToolTip("Enter global variable name from AXF/ELF symbols.")
-        add_var_row.addWidget(self.expressions, 2)
-
-        self.browse_symbols_btn = QPushButton("Browse AXF Symbols…")
-        self.browse_symbols_btn.setObjectName("debugBrowseLiveSymbolsButton")
-        self.browse_symbols_btn.setToolTip(
-            "Browse the selected AXF/ELF offline. This does not access or halt the STM32 target."
-        )
-        self.browse_symbols_btn.clicked.connect(self.symbol_browser_requested.emit)
-        add_var_row.addWidget(self.browse_symbols_btn)
+        self.expressions.setPlaceholderText("Tên biến, ví dụ xTickCount")
+        self.expressions.setToolTip("Nhập tên biến global có trong file AXF/ELF.")
+        self.expressions.setMinimumWidth(0)
+        add_var_grid.addWidget(self.expressions, 0, 0, 1, 3)
 
         self.type_combo = QComboBox()
         for t in ("u32", "i32", "u16", "i16", "u8", "i8", "f32", "f64"):
             self.type_combo.addItem(t)
-        add_var_row.addWidget(self.type_combo)
+        add_var_grid.addWidget(self.type_combo, 0, 3)
 
-        self.add_watch_btn = QPushButton("+ Add")
+        self.add_watch_btn = QPushButton("+ Thêm")
         self.add_watch_btn.clicked.connect(self._on_add_watch_clicked)
-        add_var_row.addWidget(self.add_watch_btn)
+        add_var_grid.addWidget(self.add_watch_btn, 0, 4)
 
-        self.remove_watch_btn = QPushButton("Remove")
+        self.browse_symbols_btn = QPushButton("Chọn từ AXF…")
+        self.browse_symbols_btn.setObjectName("debugBrowseLiveSymbolsButton")
+        self.browse_symbols_btn.setToolTip(
+            "Duyệt symbol offline từ AXF/ELF; thao tác này không truy cập hoặc halt STM32."
+        )
+        self.browse_symbols_btn.clicked.connect(self.symbol_browser_requested.emit)
+        add_var_grid.addWidget(self.browse_symbols_btn, 1, 0)
+
+        self.load_preset_btn = QPushButton("Nạp preset…")
+        self.load_preset_btn.setObjectName("debugLoadLivePresetButton")
+        self.load_preset_btn.setToolTip("Nạp danh sách biến theo dõi từ file JSON.")
+        self.load_preset_btn.clicked.connect(self._on_load_preset_clicked)
+        add_var_grid.addWidget(self.load_preset_btn, 1, 1)
+
+        self.save_preset_btn = QPushButton("Lưu preset…")
+        self.save_preset_btn.setObjectName("debugSaveLivePresetButton")
+        self.save_preset_btn.setToolTip("Lưu danh sách biến hiện tại ra file JSON.")
+        self.save_preset_btn.clicked.connect(self._on_save_preset_clicked)
+        add_var_grid.addWidget(self.save_preset_btn, 1, 2)
+
+        self.remove_watch_btn = QPushButton("Xóa biến")
         self.remove_watch_btn.clicked.connect(self._on_remove_watch_clicked)
-        add_var_row.addWidget(self.remove_watch_btn)
-
-        variables_layout.addLayout(add_var_row)
+        add_var_grid.addWidget(self.remove_watch_btn, 1, 4)
+        add_var_grid.setColumnStretch(3, 1)
+        variables_layout.addLayout(add_var_grid)
 
         self.table = QTableWidget(0, 9)
         self.table.setObjectName("debugSampleTable")
         self.table.setHorizontalHeaderLabels((
-            "Variable", "Value", "Type", "Address", "Time (s)", "Plot",
+            "Biến", "Giá trị", "Kiểu", "Địa chỉ", "Thời gian", "Đồ thị",
             "Min", "Max", "Mean",
         ))
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -263,19 +300,39 @@ class DebugLivePanel(QGroupBox):
         self.table.setMinimumHeight(140)
         variables_layout.addWidget(self.table)
 
-
-        self.splitter.addWidget(variables_container)
-        self.splitter.setStretchFactor(0, 3)
-        self.splitter.setStretchFactor(1, 2)
-
-        panel_layout.addWidget(self.splitter)
+        self.view_tabs.addTab(variables_container, "Biến theo dõi")
+        self.view_tabs.addTab(timeline_container, "Luồng thực thi")
+        self.view_tabs.setCurrentIndex(0)
+        panel_layout.addWidget(self.view_tabs)
+        # Backward-compatible attribute name for code that only expects a
+        # container; no production code relies on QSplitter-specific methods.
+        self.splitter = self.view_tabs
+        self.quality_details.expanded_changed.connect(self._on_quality_details_changed)
+        self._on_quality_details_changed(False)
 
         # Legacy compatibility alias
         self.impact = self.statistical_notice
 
+    def _on_limit_samples_toggled(self, enabled: bool) -> None:
+        self.cycles_label.setVisible(bool(enabled))
+        self.cycles.setVisible(bool(enabled))
+        self.cycles.setEnabled(bool(enabled) and self.start_button.isEnabled())
+
+    def _on_quality_details_changed(self, expanded: bool) -> None:
+        # Keep the normal operator table focused on value/type/time/plot. Raw
+        # address and statistical columns appear only with technical details.
+        for column in (3, 6, 7, 8):
+            self.table.setColumnHidden(column, not bool(expanded))
+
+    def sample_limit(self):
+        """Return None for continuous mode or the explicit bounded sample count."""
+        return int(self.cycles.value()) if self.limit_samples.isChecked() else None
+
     def _on_interval_preset_changed(self, index: int) -> None:
         val = self.interval_preset_combo.itemData(index)
-        if val > 0:
+        is_custom = val is None or float(val) <= 0
+        self.interval.setVisible(is_custom)
+        if not is_custom:
             self.interval.blockSignals(True)
             self.interval.setValue(float(val))
             self.interval.blockSignals(False)
@@ -384,10 +441,11 @@ class DebugLivePanel(QGroupBox):
         self.buffer.extend(converted)
         coherence_failures = sum(1 for value in sample.values if not value.coherent)
         suffix = " · incoherent %d" % coherence_failures if coherence_failures else ""
+        limit = self.sample_limit()
+        progress = "%d/%d mẫu" % (sample.cycle + 1, limit) if limit is not None else "%d mẫu · Liên tục" % (sample.cycle + 1)
         self.status.setText(
-            "%d/%d samples · %d vars · read %.1f ms%s" % (
-                sample.cycle + 1, self.cycles.value(), len(sample.values),
-                sample.read_duration_seconds * 1000.0, suffix,
+            "%s · %d biến · đọc %.1f ms%s" % (
+                progress, len(sample.values), sample.read_duration_seconds * 1000.0, suffix,
             )
         )
         return tuple(converted)
@@ -405,18 +463,18 @@ class DebugLivePanel(QGroupBox):
         """Render already-collected LiveMonitorStore statistics without new target reads."""
         timing = snapshot.timing
         variables = tuple(getattr(snapshot, "variables", ()) or ())
-        self.stats_samples.setText("Samples: %d" % int(getattr(timing, "total_samples", 0)))
-        self.stats_overruns.setText("Overruns: %d" % int(getattr(timing, "overruns", 0)))
+        self.stats_samples.setText("Mẫu: %d" % int(getattr(timing, "total_samples", 0)))
+        self.stats_overruns.setText("Trễ nhịp: %d" % int(getattr(timing, "overruns", 0)))
         self.stats_mean_read.setText(
-            "Mean read: %.2f ms" % (float(getattr(timing, "mean_read_duration_seconds", 0.0)) * 1000.0)
+            "Đọc TB: %.2f ms" % (float(getattr(timing, "mean_read_duration_seconds", 0.0)) * 1000.0)
         )
         self.stats_max_lag.setText(
-            "Max lag: %.2f ms" % (float(getattr(timing, "max_schedule_lag_seconds", 0.0)) * 1000.0)
+            "Trễ max: %.2f ms" % (float(getattr(timing, "max_schedule_lag_seconds", 0.0)) * 1000.0)
         )
         self.stats_incoherent.setText(
-            "Incoherent: %d" % int(getattr(timing, "incoherent_values", 0))
+            "Không nhất quán: %d" % int(getattr(timing, "incoherent_values", 0))
         )
-        self.stats_variables.setText("Variables: %d" % len(variables))
+        self.stats_variables.setText("Biến: %d" % len(variables))
         for stat in variables:
             row = self.rows.get(stat.name)
             if row is None:
@@ -426,17 +484,18 @@ class DebugLivePanel(QGroupBox):
             self.table.setItem(row, 8, QTableWidgetItem(self._format_stat_value(stat.mean)))
 
     def reset_analytics(self) -> None:
-        self.stats_samples.setText("Samples: 0")
-        self.stats_overruns.setText("Overruns: 0")
-        self.stats_mean_read.setText("Mean read: —")
-        self.stats_max_lag.setText("Max lag: —")
-        self.stats_incoherent.setText("Incoherent: 0")
-        self.stats_variables.setText("Variables: 0")
+        self.stats_samples.setText("Mẫu: 0")
+        self.stats_overruns.setText("Trễ nhịp: 0")
+        self.stats_mean_read.setText("Đọc TB: —")
+        self.stats_max_lag.setText("Trễ max: —")
+        self.stats_incoherent.setText("Không nhất quán: 0")
+        self.stats_variables.setText("Biến: 0")
 
     def mark_live_completed(self, summary) -> None:
+        action = "Đã dừng" if getattr(summary, "cancelled", False) else "Đã hoàn tất"
         self.status.setText(
-            "Completed %d samples · overruns %d · target %s" % (
-                summary.samples, summary.overruns, str(summary.final_target_state).upper(),
+            "%s · %d mẫu · overrun %d · target %s" % (
+                action, summary.samples, summary.overruns, str(summary.final_target_state).upper(),
             )
         )
 
@@ -461,12 +520,15 @@ class DebugLivePanel(QGroupBox):
     ) -> None:
         self.expressions.setEnabled(start_enabled)
         self.browse_symbols_btn.setEnabled(start_enabled)
+        self.load_preset_btn.setEnabled(start_enabled)
+        self.save_preset_btn.setEnabled(start_enabled)
         self.type_combo.setEnabled(start_enabled)
         self.add_watch_btn.setEnabled(start_enabled)
         self.remove_watch_btn.setEnabled(start_enabled)
         self.interval_preset_combo.setEnabled(start_enabled)
         self.interval.setEnabled(start_enabled)
-        self.cycles.setEnabled(start_enabled)
+        self.limit_samples.setEnabled(start_enabled)
+        self.cycles.setEnabled(start_enabled and self.limit_samples.isChecked())
         self.start_button.setEnabled(start_enabled)
         self.stop_button.setEnabled(stop_enabled)
         self.clear_button.setEnabled(history_enabled)
@@ -479,10 +541,11 @@ class DebugLivePanel(QGroupBox):
         self.timeline_table.setRowCount(0)
         self._timeline_samples.clear()
         self.reset_analytics()
-        self.status.setText("Sampling 0/%d cycles..." % self.cycles.value())
+        limit = self.sample_limit()
+        self.status.setText("Đang theo dõi · 0/%d mẫu" % limit if limit is not None else "Đang theo dõi liên tục · 0 mẫu")
 
     def mark_stopping(self) -> None:
-        self.status.setText("Stopping live monitor safely...")
+        self.status.setText("Đang dừng an toàn...")
         self.stop_button.setEnabled(False)
 
     def append_batch(self, batch: Sequence[VariableSample]) -> None:
@@ -508,9 +571,11 @@ class DebugLivePanel(QGroupBox):
             self.table.setItem(row, 4, QTableWidgetItem("%.3f" % sample.elapsed_seconds))
 
         last_cycle = max(sample.cycle for sample in selected) + 1
+        limit = self.sample_limit()
+        progress = "%d/%d mẫu" % (last_cycle, limit) if limit is not None else "%d mẫu · Liên tục" % last_cycle
         self.status.setText(
-            "%d/%d cycles · %d vars · buffer %d/%d" % (
-                last_cycle, self.cycles.value(), len(selected), len(self.buffer), self.VARIABLES_CAPACITY,
+            "%s · %d biến · buffer %d/%d" % (
+                progress, len(selected), len(self.buffer), self.VARIABLES_CAPACITY,
             )
         )
 
@@ -573,14 +638,14 @@ class DebugLivePanel(QGroupBox):
         self.timeline_table.setRowCount(0)
         self._timeline_samples.clear()
         self.reset_analytics()
-        self.status.setText("Ready · 0 samples")
+        self.status.setText("Sẵn sàng · 0 mẫu")
 
     def export_samples(self, parent: Optional[QWidget] = None) -> Optional[Path]:
         samples = self.buffer.snapshot()
         if not samples and not self._timeline_samples:
             raise ValueError("Chưa có sample để export.")
         path, _selected = QFileDialog.getSaveFileName(
-            parent or self, "Export Live Variables", "b300-debug-samples.csv",
+            parent or self, "Xuất dữ liệu theo dõi", "b300-debug-samples.csv",
             "CSV (*.csv);;JSON Lines (*.jsonl)",
         )
         if not path:
@@ -591,7 +656,7 @@ class DebugLivePanel(QGroupBox):
 
         if samples and not self._timeline_samples:
             saved = write_samples(destination, samples)
-            self.status.setText("Đã export %d điểm → %s" % (len(samples), saved.name))
+            self.status.setText("Đã xuất %d điểm → %s" % (len(samples), saved.name))
             return saved
 
         if destination.suffix.lower() == ".jsonl":
@@ -612,6 +677,125 @@ class DebugLivePanel(QGroupBox):
                 for s in samples:
                     writer.writerow(["VARIABLE", "%.3f" % s.elapsed_seconds, s.expression, s.raw_value, type(s.numeric_value).__name__, s.numeric_value])
 
-        self.status.setText("Đã export %d điểm → %s" % (len(samples) + len(self._timeline_samples), destination.name))
+        self.status.setText("Đã xuất %d điểm → %s" % (len(samples) + len(self._timeline_samples), destination.name))
         return destination
+
+    def export_preset(self, path: Optional[Union[str, Path]] = None, name: Optional[str] = None) -> Optional[Path]:
+        """Export current watch variables and settings to a JSON preset file."""
+        specs = []
+        plot_flags = {}
+        for row in range(self.table.rowCount()):
+            name_item = self.table.item(row, 0)
+            type_item = self.table.item(row, 2)
+            check_item = self.table.item(row, 5)
+            if not name_item or not name_item.text().strip():
+                continue
+            v_name = name_item.text().strip()
+            v_type = type_item.text().strip() if type_item and type_item.text().strip() else self.type_combo.currentText()
+            specs.append("%s:%s" % (v_name, v_type))
+            plot_flags[v_name] = check_item.checkState() == Qt.CheckState.Checked if check_item else True
+        if not specs:
+            raw = self.expressions.text().strip()
+            if raw:
+                import re
+                for item in (part.strip() for part in re.split(r"[,;\n]+", raw) if part.strip()):
+                    v_name = item.split(":", 1)[0].strip() if ":" in item else item
+                    specs.append(item if ":" in item else "%s:%s" % (item, self.type_combo.currentText()))
+                    plot_flags[v_name] = True
+        if not specs:
+            raise ValueError("Không có biến nào trong danh sách để lưu preset.")
+
+        interval_val = float(self.interval.value())
+        sample_lim = int(self.cycles.value()) if self.limit_samples.isChecked() else None
+
+        if path is None:
+            file_path, _ = QFileDialog.getSaveFileName(
+                self, "Lưu danh sách biến (Preset)", "b300-watch-preset.json",
+                "JSON Preset (*.json);;All Files (*)",
+            )
+            if not file_path:
+                return None
+            target_path = Path(file_path)
+        else:
+            target_path = Path(path)
+
+        if target_path.suffix.lower() != ".json":
+            target_path = target_path.with_suffix(".json")
+
+        saved = save_watch_preset(
+            target_path, specs, name=name or "B300 Live Watch Preset",
+            interval_seconds=interval_val, sample_limit=sample_lim,
+            plot_flags=plot_flags,
+        )
+        self.status.setText("Đã lưu preset %d biến → %s" % (len(specs), saved.name))
+        return saved
+
+    def import_preset(self, path: Optional[Union[str, Path]] = None, mode: str = "replace") -> Optional[dict]:
+        """Import watch variables from a JSON preset file."""
+        if path is None:
+            file_path, _ = QFileDialog.getOpenFileName(
+                self, "Nạp danh sách biến (Preset)", "",
+                "JSON Preset (*.json);;All Files (*)",
+            )
+            if not file_path:
+                return None
+            target_path = Path(file_path)
+        else:
+            target_path = Path(path)
+
+        data = load_watch_preset(target_path)
+        if mode == "replace":
+            self.table.setRowCount(0)
+            self.rows.clear()
+
+        # Update interval if specified in preset
+        if data.get("interval_seconds") is not None:
+            self._set_interval_value(data["interval_seconds"])
+
+        # Update sample limit if specified
+        if data.get("sample_limit") is not None:
+            self.limit_samples.setChecked(True)
+            self.cycles.setValue(int(data["sample_limit"]))
+
+        # Populate rows
+        for watch in data.get("watches", []):
+            name = watch["name"]
+            val_type = watch["type"]
+            plot_state = watch.get("plot", True)
+            if name in self.rows:
+                row = self.rows[name]
+            else:
+                row = self.table.rowCount()
+                self.table.insertRow(row)
+                self.rows[name] = row
+
+            self.table.setItem(row, 0, QTableWidgetItem(name))
+            self.table.setItem(row, 1, QTableWidgetItem("—"))
+            self.table.setItem(row, 2, QTableWidgetItem(val_type))
+            self.table.setItem(row, 3, QTableWidgetItem("—"))
+            self.table.setItem(row, 4, QTableWidgetItem("—"))
+            check_item = QTableWidgetItem()
+            check_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            check_item.setCheckState(Qt.CheckState.Checked if plot_state else Qt.CheckState.Unchecked)
+            self.table.setItem(row, 5, check_item)
+
+        self.status.setText("Đã nạp preset %d biến từ %s" % (len(data.get("watches", [])), target_path.name))
+        return data
+
+    def _set_interval_value(self, val: float) -> None:
+        self.interval.setValue(float(val))
+        self._on_custom_interval_changed(float(val))
+
+    def _on_save_preset_clicked(self) -> None:
+        try:
+            self.export_preset()
+        except Exception as exc:
+            self.status.setText("Lỗi lưu preset: %s" % exc)
+
+    def _on_load_preset_clicked(self) -> None:
+        try:
+            self.import_preset()
+        except Exception as exc:
+            self.status.setText("Lỗi nạp preset: %s" % exc)
+
 

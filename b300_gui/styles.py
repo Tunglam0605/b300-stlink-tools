@@ -1050,7 +1050,8 @@ QScrollArea#workflowScroll > QWidget > QWidget {
     background-color: #F8FAFC;
 }
 
-QLabel#gatewaySetupStatus, QLabel#clientProfileStatus, QLabel#clientConnectionStatus {
+QLabel#gatewaySetupStatus, QLabel#gatewayHostKeyStatus,
+QLabel#clientProfileStatus, QLabel#clientConnectionStatus {
     background-color: #F8FAFC;
     color: #475569;
     border: 1px solid #E2E8F0;
@@ -1060,6 +1061,7 @@ QLabel#gatewaySetupStatus, QLabel#clientProfileStatus, QLabel#clientConnectionSt
 }
 
 QLabel#gatewaySetupStatus[state="ready"],
+QLabel#gatewayHostKeyStatus[state="ready"],
 QLabel#clientProfileStatus[state="ready"],
 QLabel#clientConnectionStatus[state="ready"] {
     background-color: #ECFDF5;
@@ -1074,11 +1076,18 @@ QLabel#gatewaySetupStatus[state="warning"] {
 }
 
 QLabel#gatewaySetupStatus[state="error"],
+QLabel#gatewayHostKeyStatus[state="error"],
 QLabel#clientProfileStatus[state="error"],
 QLabel#clientConnectionStatus[state="error"] {
     background-color: #FEF2F2;
     color: #991B1B;
     border-color: #FECACA;
+}
+
+QLabel#gatewayHostKeyStatus[state="busy"] {
+    background-color: #EFF6FF;
+    color: #1E40AF;
+    border-color: #BFDBFE;
 }
 
 QLabel#safetyNote, QLabel#infoNote {
@@ -1244,4 +1253,42 @@ QProgressBar#gatewayProgress {
     min-height: 8px;
     max-height: 12px;
 }
+/* Fresh-machine setup */
+QPushButton#navUtilityButton {
+    min-height: 34px;
+    text-align: left;
+    padding: 7px 10px;
+    background-color: #F8FAFC;
+    color: #334155;
+    border: 1px solid #E2E8F0;
+    border-radius: 6px;
+    font-weight: 700;
+}
+QPushButton#navUtilityButton:hover {
+    background-color: #EFF6FF;
+    color: #1D4ED8;
+    border-color: #BFDBFE;
+}
+QFrame#setupComponentRow {
+    background-color: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-radius: 8px;
+}
+QLabel#setupComponentTitle {
+    color: #0F172A;
+    font-size: 13px;
+    font-weight: 750;
+}
+QLabel#setupStateBadge {
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-size: 11px;
+    font-weight: 750;
+    background-color: #F1F5F9;
+    color: #475569;
+}
+QLabel#setupStateBadge[state="ready"] { background-color: #ECFDF5; color: #065F46; }
+QLabel#setupStateBadge[state="missing"] { background-color: #FFF7ED; color: #9A3412; }
+QLabel#setupStateBadge[state="optional"] { background-color: #F8FAFC; color: #64748B; }
+
 """

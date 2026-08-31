@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -22,7 +23,7 @@ from tests.test_ssh_identity import key_line
 from b300_gui.gateway_setup_tab import GatewaySetupTab
 
 
-def report(ready=True, private=True):
+def report(ready=True, private=True, port=22):
     checks = (
         GatewayHostCheck("ssh_install", "PASS" if ready else "FAIL", "SSH", "OpenSSH status"),
         GatewayHostCheck("debug_ports", "PASS" if private else "FAIL", "DEBUG", "Debug ports status"),
@@ -32,7 +33,7 @@ def report(ready=True, private=True):
         ssh_service_running=ready, ssh_startup_enabled=ready,
         ssh_firewall_ready=ready, ssh_port_listening=ready,
         debug_ports_private=private, ready=ready and private,
-        conclusion="READY" if ready and private else "BLOCKED", ssh_port=22,
+        conclusion="READY" if ready and private else "BLOCKED", ssh_port=port,
         username="automation", hostname="gateway", ipv4_addresses=("192.168.1.109",),
     )
 
@@ -108,13 +109,165 @@ class GatewaySetupTabTests(unittest.TestCase):
         )
         tab = GatewaySetupTab(
             identity_inspector=lambda: identity_report(False),
-            host_key_reader=lambda: host_key, profile_loader=lambda: None, auto_refresh=False,
+            host_key_reader=lambda **_kwargs: host_key, profile_loader=lambda: None, auto_refresh=False,
         )
         tab.show_local_host_key()
         self.wait_until(lambda: not tab.has_active_operation)
         self.assertIn("SHA256:GATEWAYHOST", tab.host_key_status.text())
         self.assertTrue(tab.copy_host_fingerprint_button.isEnabled())
         self.assertNotIn("PRIVATE", tab.host_key_status.text())
+        tab.close()
+
+    def test_fingerprint_idle_state_enables_read_and_disables_copy(self):
+        tab = GatewaySetupTab(
+            identity_inspector=lambda: identity_report(False),
+            profile_loader=lambda: None, auto_refresh=False,
+        )
+        self.assertEqual(tab.host_key_status.property("state"), "idle")
+        self.assertEqual(tab.host_key_status.text(), "Fingerprint: chưa đọc")
+        self.assertTrue(tab.show_host_key_button.isEnabled())
+        self.assertFalse(tab.copy_host_fingerprint_button.isEnabled())
+        tab.close()
+
+    def test_fingerprint_button_passes_current_gateway_port_to_backend(self):
+        host_key = GatewayHostKey(
+            "localhost", 2222, "[localhost]:2222", key_line(96), "SHA256:CUSTOMPORT"
+        )
+        reader = mock.Mock(return_value=host_key)
+        tab = GatewaySetupTab(
+            identity_inspector=lambda: identity_report(False), host_key_reader=reader,
+            profile_loader=lambda: None, auto_refresh=False,
+        )
+        tab._render(report(True, port=2222))
+        tab.show_host_key_button.click()
+        self.wait_until(lambda: not tab.has_active_operation)
+        reader.assert_called_once_with(port=2222)
+        self.assertIn("SHA256:CUSTOMPORT", tab.host_key_status.text())
+        tab.close()
+
+    def test_fingerprint_busy_state_disables_read_and_copy(self):
+        release = threading.Event()
+        started = threading.Event()
+
+        def reader(**_kwargs):
+            started.set()
+            release.wait(2.0)
+            return GatewayHostKey(
+                "localhost", 22, "localhost", key_line(97), "SHA256:BUSY"
+            )
+
+        tab = GatewaySetupTab(
+            identity_inspector=lambda: identity_report(False), host_key_reader=reader,
+            profile_loader=lambda: None, auto_refresh=False,
+        )
+        tab.show_host_key_button.click()
+        self.wait_until(started.is_set)
+        self.assertEqual(tab.host_key_status.property("state"), "busy")
+        self.assertEqual(tab.host_key_status.text(), "Đang đọc fingerprint...")
+        self.assertFalse(tab.show_host_key_button.isEnabled())
+        self.assertFalse(tab.copy_host_fingerprint_button.isEnabled())
+        release.set()
+        self.wait_until(lambda: not tab.has_active_operation)
+        tab.close()
+
+    def test_fingerprint_error_state_is_local_and_retryable(self):
+        def reader(**_kwargs):
+            raise RuntimeError("SSH Server did not respond on localhost:2222")
+
+        tab = GatewaySetupTab(
+            identity_inspector=lambda: identity_report(False), host_key_reader=reader,
+            profile_loader=lambda: None, auto_refresh=False,
+        )
+        tab._render(report(True, port=2222))
+        gateway_status_before = tab.status.text()
+        tab.show_host_key_button.click()
+        self.wait_until(lambda: not tab.has_active_operation)
+        self.assertEqual(tab.host_key_status.property("state"), "error")
+        self.assertIn("Không đọc được fingerprint", tab.host_key_status.text())
+        self.assertIn("localhost:2222", tab.host_key_status.text())
+        self.assertEqual(tab.status.text(), gateway_status_before)
+        self.assertTrue(tab.show_host_key_button.isEnabled())
+        self.assertFalse(tab.copy_host_fingerprint_button.isEnabled())
+        tab.close()
+
+    def test_fingerprint_ready_state_and_clipboard_contain_only_sha256(self):
+        private_sentinel = "PRIVATE-HOST-KEY-MUST-NOT-LEAK"
+        host_key = GatewayHostKey(
+            "localhost", 22, "localhost", key_line(98, private_sentinel),
+            "SHA256:READYONLY",
+        )
+        logs = []
+        tab = GatewaySetupTab(
+            identity_inspector=lambda: identity_report(False),
+            host_key_reader=lambda **_kwargs: host_key,
+            profile_loader=lambda: None, auto_refresh=False,
+        )
+        tab.log.connect(logs.append)
+        QApplication.clipboard().setText("stale clipboard")
+        tab.show_host_key_button.click()
+        self.wait_until(lambda: not tab.has_active_operation)
+        self.assertEqual(tab.host_key_status.property("state"), "ready")
+        self.assertEqual(
+            tab.host_key_status.text(),
+            "SSH host key\nED25519\nSHA256:READYONLY",
+        )
+        self.assertTrue(tab.copy_host_fingerprint_button.isEnabled())
+        tab.copy_host_fingerprint_button.click()
+        self.assertEqual(QApplication.clipboard().text(), "SHA256:READYONLY")
+        exposed = "\n".join([tab.host_key_status.text(), tab.host_key_status.toolTip()] + logs)
+        self.assertNotIn(private_sentinel, exposed)
+        tab.close()
+
+    def test_fingerprint_result_is_rejected_if_gateway_port_changes(self):
+        release = threading.Event()
+        started = threading.Event()
+
+        def reader(**_kwargs):
+            started.set()
+            release.wait(2.0)
+            return GatewayHostKey(
+                "localhost", 2222, "[localhost]:2222", key_line(99), "SHA256:STALE"
+            )
+
+        tab = GatewaySetupTab(
+            identity_inspector=lambda: identity_report(False), host_key_reader=reader,
+            profile_loader=lambda: None, auto_refresh=False,
+        )
+        tab._render(report(True, port=2222))
+        tab.show_host_key_button.click()
+        self.wait_until(started.is_set)
+        tab._render(report(True, port=2200))
+        release.set()
+        self.wait_until(lambda: not tab.has_active_operation)
+        self.assertEqual(tab.host_key_status.property("state"), "error")
+        self.assertNotIn("SHA256:STALE", tab.host_key_status.text())
+        self.assertFalse(tab.copy_host_fingerprint_button.isEnabled())
+        tab.close()
+
+    def test_fingerprint_double_click_starts_only_one_worker(self):
+        release = threading.Event()
+        started = threading.Event()
+        calls = []
+
+        def reader(**kwargs):
+            calls.append(kwargs)
+            started.set()
+            release.wait(2.0)
+            return GatewayHostKey(
+                "localhost", 22, "localhost", key_line(100), "SHA256:ONCE"
+            )
+
+        tab = GatewaySetupTab(
+            identity_inspector=lambda: identity_report(False), host_key_reader=reader,
+            profile_loader=lambda: None, auto_refresh=False,
+        )
+        tab.show_host_key_button.click()
+        self.wait_until(started.is_set)
+        tab.show_host_key_button.click()
+        self.app.processEvents()
+        self.assertEqual(len(calls), 1)
+        release.set()
+        self.wait_until(lambda: not tab.has_active_operation)
         tab.close()
 
     def test_remote_host_trust_requires_exact_fingerprint_before_write(self):

@@ -120,7 +120,7 @@ def stage_deb_root(bundle: Path, output: Path, architecture: str, version: str) 
         "Maintainer: TungLamAutomation\n"
         "Section: devel\n"
         "Priority: optional\n"
-        "Depends: libdbus-1-3, libegl1, libgl1, libglib2.0-0, libx11-xcb1, "
+        "Depends: openssh-client, libdbus-1-3, libegl1, libgl1, libglib2.0-0, libx11-xcb1, "
         "libxcb1, libxcb-cursor0, libxcb-icccm4, libxcb-image0, libxcb-keysyms1, "
         "libxcb-render-util0, libxcb-shape0, libxcb-xkb1, libxkbcommon-x11-0\n"
         "Description: Safe B300 STM32F407 ST-Link provisioning GUI\n" %

@@ -78,9 +78,14 @@ Windows và Ubuntu.
 | `provision-bootloader` | Factory-only: nạp Bootloader đã được trust vào Sector 0–2, sau đó restore/verify WRP. |
 | `debug` | Gateway/Local/Client debug qua GDB/MI + Safe TCL; có `debug selftest` để nghiệm thu đường Gateway→external Client trên một máy, không ghi flash. |
 | GUI PySide6 | Application provisioning, Factory Bootloader one-click có preflight tự động, Debug, updater và đọc memory/metadata. |
+| Thiết lập máy mới | GUI kiểm tra và chỉ cài phần còn thiếu: ST-Link driver/OpenOCD/runtime, OpenSSH Client hoặc Linux udev; hỗ trợ `Cài tất cả` hoặc chọn từng mục. |
 | Setup offline | Cài OpenOCD từ archive xPack gốc có SHA-256 tin cậy cố định; runtime portable/user-local cũng được kiểm toàn bộ cây file. |
 | Agent Skill | Cung cấp skill `b300-ota-stlink` và playbook cho AI agent. |
 | Native bundle | Đóng gói CLI và OpenOCD cho đúng hệ điều hành/kiến trúc đích. |
+
+## Thiết lập máy mới
+
+Sau khi cài GUI trên một laptop/PC mới, mở **⚙ Thiết lập máy mới** ở sidebar. Tool tự kiểm tra thành phần cần thiết và không cài lại mục đã sẵn sàng. Trên Windows, driver ST-Link dùng package chính thức **STSW-LINK009**; B300 không tự vượt license/export flow của ST. Nếu Windows không tự resolve driver và release chưa bundle payload được phép phân phối, người dùng chọn ZIP/thư mục STSW-LINK009 chính thức một lần, sau đó B300 tự cài bằng `pnputil` với UAC và backend ẩn. OpenSSH Client là tùy chọn, không được kéo vào `Cài tất cả phần còn thiếu` trừ khi người dùng chủ động chọn.
 
 ## Engineering diagnostics foundation
 

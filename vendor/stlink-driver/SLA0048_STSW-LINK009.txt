@@ -1,0 +1,27 @@
+STSW-LINK009 — STMicroelectronics software package license notice
+
+Source product: STSW-LINK009, ST-LINK USB driver signed for Windows.
+Official product page: https://www.st.com/en/development-tools/stsw-link009.html
+License family: SLA0048 (Mix Ultimate Liberty + OSS + 3rd-party).
+
+The bundled binary driver remains the property of STMicroelectronics and its licensors.
+Redistribution and use are permitted subject to the STMicroelectronics SLA0048 terms, including:
+
+1. Source redistributions must retain copyright notices, these conditions and the disclaimer.
+2. Binary redistributions must reproduce the copyright notice, these conditions and disclaimer in documentation/materials, except where the SLA expressly provides otherwise.
+3. STMicroelectronics and contributor names may not be used to endorse/promote derived products without written permission.
+4. The package and derivatives must be used solely with or in combination with microcontroller/microprocessor devices manufactured by or for STMicroelectronics.
+5. Redistribution must not subject the package to incompatible Open Source Terms as defined by SLA0048.
+6. Open-source portions, when present, remain governed by their applicable open-source terms.
+7. Third-party portions, when present, remain governed by their applicable third-party terms.
+8. STMicroelectronics has no obligation to provide maintenance, support or updates.
+9. The package remains the property of STMicroelectronics and its licensors; no rights are acquired except those expressly granted.
+10. Recipients must comply with applicable laws and regulations, including export-control rules.
+11. Redistribution or use outside the license terminates the rights granted by the license.
+
+DISCLAIMER
+THE SOFTWARE PACKAGE IS PROVIDED BY STMICROELECTRONICS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS, IMPLIED OR STATUTORY WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT OF THIRD PARTY INTELLECTUAL PROPERTY RIGHTS ARE DISCLAIMED TO THE FULLEST EXTENT PERMITTED BY LAW. IN NO EVENT SHALL STMICROELECTRONICS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE PACKAGE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+EXCEPT AS EXPRESSLY PERMITTED UNDER THE APPLICABLE SLA0048 TERMS AND SUBJECT TO APPLICABLE THIRD-PARTY AND OPEN-SOURCE TERMS, NO LICENSE OR OTHER RIGHTS, WHETHER EXPRESS OR IMPLIED, ARE GRANTED UNDER ANY PATENT OR OTHER INTELLECTUAL PROPERTY RIGHTS OF STMICROELECTRONICS OR ANY THIRD PARTY.
+
+For the authoritative current terms, use the official STMicroelectronics SLA0048 document associated with STSW-LINK009.

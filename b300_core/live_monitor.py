@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import math
 import struct
 import time
 from dataclasses import dataclass
-from typing import Callable, Iterable, Optional, Sequence, Tuple
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, Optional, Sequence, Tuple, Union
 
 from .offline_symbols import OfflineSymbolTable, SourceLocation
 from .tcl_client import SafeTclClient
@@ -279,3 +281,114 @@ def run_live_monitor(
     if final_state != "running":
         raise RuntimeError("Realtime Live Monitor ended with target state %s; refusing to hide it." % final_state)
     return LiveSummary(cycle, float(interval_seconds), clock() - start, overruns, was_cancelled, final_state)
+
+
+def save_watch_preset(
+    path: Union[str, Path],
+    specs: Iterable[str],
+    *,
+    name: Optional[str] = None,
+    interval_seconds: Optional[float] = None,
+    sample_limit: Optional[int] = None,
+    plot_flags: Optional[Dict[str, bool]] = None,
+) -> Path:
+    validated_specs = validate_live_watch_specs(specs)
+    if interval_seconds is not None:
+        interval = float(interval_seconds)
+        if not MIN_LIVE_INTERVAL_SECONDS <= interval <= MAX_LIVE_INTERVAL_SECONDS:
+            raise ValueError("Live interval must be in range 0.1..60.0 seconds.")
+    if sample_limit is not None:
+        if not 1 <= int(sample_limit) <= MAX_LIVE_SAMPLES:
+            raise ValueError("Live sample limit must be in range 1..%d." % MAX_LIVE_SAMPLES)
+    plot_map = dict(plot_flags or {})
+    watches = []
+    for var_name, var_type in validated_specs:
+        watches.append({
+            "name": var_name,
+            "type": var_type,
+            "plot": bool(plot_map.get(var_name, True)),
+        })
+    data = {
+        "schema_version": 1,
+        "name": str(name or "B300 Live Watch Preset").strip(),
+        "interval_seconds": float(interval_seconds) if interval_seconds is not None else None,
+        "sample_limit": int(sample_limit) if sample_limit is not None else None,
+        "watches": watches,
+    }
+    target_path = Path(path)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return target_path
+
+
+def load_watch_preset(path: Union[str, Path]) -> dict:
+    target_path = Path(path)
+    if not target_path.is_file():
+        raise ValueError("Watch preset file not found: %s" % target_path)
+    try:
+        content = target_path.read_text(encoding="utf-8")
+        data = json.loads(content)
+    except Exception as exc:
+        raise ValueError("Invalid JSON in watch preset: %s" % exc) from exc
+
+    specs = []
+    plot_flags = {}
+    name = "B300 Live Watch Preset"
+    interval_seconds = None
+    sample_limit = None
+
+    if isinstance(data, list):
+        raw_items = data
+    elif isinstance(data, dict):
+        name = str(data.get("name") or name).strip()
+        raw_interval = data.get("interval_seconds")
+        if raw_interval is not None:
+            interval_seconds = float(raw_interval)
+            if not MIN_LIVE_INTERVAL_SECONDS <= interval_seconds <= MAX_LIVE_INTERVAL_SECONDS:
+                raise ValueError("Live interval in preset must be in range 0.1..60.0 seconds.")
+        raw_limit = data.get("sample_limit")
+        if raw_limit is not None:
+            sample_limit = int(raw_limit)
+            if not 1 <= sample_limit <= MAX_LIVE_SAMPLES:
+                raise ValueError("Live sample limit in preset must be in range 1..%d." % MAX_LIVE_SAMPLES)
+        raw_items = data.get("watches") or data.get("variables") or []
+        if not isinstance(raw_items, list):
+            raise ValueError("Watch preset must contain a list of watches.")
+    else:
+        raise ValueError("Watch preset root must be a JSON object or list.")
+
+    for item in raw_items:
+        if isinstance(item, str):
+            spec_str = item.strip()
+            if not spec_str:
+                continue
+            specs.append(spec_str)
+            var_name = spec_str.split(":", 1)[0].strip() if ":" in spec_str else spec_str
+            plot_flags[var_name] = True
+        elif isinstance(item, dict):
+            var_name = str(item.get("name") or "").strip()
+            var_type = str(item.get("type") or "").strip()
+            if not var_name or not var_type:
+                raise ValueError("Each watch item must have 'name' and 'type'.")
+            specs.append("%s:%s" % (var_name, var_type))
+            plot_flags[var_name] = bool(item.get("plot", True))
+        else:
+            raise ValueError("Unsupported watch item in preset: %r" % item)
+
+    validated = validate_live_watch_specs(specs)
+    normalized_specs = tuple("%s:%s" % (n, t) for n, t in validated)
+    watches_list = [
+        {"name": n, "type": t, "plot": plot_flags.get(n, True)}
+        for n, t in validated
+    ]
+
+    return {
+        "schema_version": 1,
+        "name": name,
+        "interval_seconds": interval_seconds,
+        "sample_limit": sample_limit,
+        "specs": normalized_specs,
+        "plot_flags": {n: plot_flags.get(n, True) for n, _ in validated},
+        "watches": watches_list,
+    }
+

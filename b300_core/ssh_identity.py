@@ -63,12 +63,12 @@ def _windows_openssh_binary(name: str) -> Optional[Path]:
 
 
 def resolve_ssh_client_executable(name: str = "ssh") -> Optional[Path]:
-    resolved = shutil.which(name)
-    if resolved:
-        return Path(resolved)
     if platform.system().lower() == "windows":
-        return _windows_openssh_binary(name)
-    return None
+        system_binary = _windows_openssh_binary(name)
+        if system_binary is not None:
+            return system_binary
+    resolved = shutil.which(name)
+    return Path(resolved) if resolved else None
 
 
 def inspect_ssh_client_prerequisites(

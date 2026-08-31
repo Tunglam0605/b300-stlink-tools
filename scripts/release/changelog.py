@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from b300_core.release_notes import extract_release_notes
@@ -21,6 +22,8 @@ def main(argv=None) -> int:
     except ValueError as error:
         parser.error(str(error))
     if args.output is None:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         print(notes)
     else:
         args.output.write_bytes((notes + "\n").encode("utf-8"))

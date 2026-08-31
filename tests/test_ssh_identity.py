@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import os
 import struct
 import subprocess
 import tempfile
@@ -22,6 +23,33 @@ def key_line(seed: int = 1, comment: str = "client") -> str:
 
 
 class SshIdentityTests(unittest.TestCase):
+    def test_windows_resolver_prefers_system_openssh_then_uses_path_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            system_binary = Path(directory) / "System32" / "OpenSSH" / "ssh-keyscan.exe"
+            system_binary.parent.mkdir(parents=True)
+            system_binary.write_bytes(b"")
+            with mock.patch.dict(os.environ, {"WINDIR": directory}), \
+                    mock.patch.object(ssh_identity.platform, "system", return_value="Windows"), \
+                    mock.patch.object(
+                        ssh_identity.shutil, "which",
+                        return_value=r"C:\PortableOpenSSH\ssh-keyscan.exe",
+                    ):
+                self.assertEqual(
+                    ssh_identity.resolve_ssh_client_executable("ssh-keyscan"), system_binary,
+                )
+
+            system_binary.unlink()
+            with mock.patch.dict(os.environ, {"WINDIR": directory}), \
+                    mock.patch.object(ssh_identity.platform, "system", return_value="Windows"), \
+                    mock.patch.object(
+                        ssh_identity.shutil, "which",
+                        return_value=r"C:\PortableOpenSSH\ssh-keyscan.exe",
+                    ):
+                self.assertEqual(
+                    ssh_identity.resolve_ssh_client_executable("ssh-keyscan"),
+                    Path(r"C:\PortableOpenSSH\ssh-keyscan.exe"),
+                )
+
     def test_valid_key_normalizes_and_fingerprint_is_comment_independent(self):
         first = key_line(3, "first")
         second = key_line(3, "second comment")

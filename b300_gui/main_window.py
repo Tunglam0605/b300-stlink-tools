@@ -75,6 +75,7 @@ from .update_worker import UpdateCheckWorker, UpdateDownloadWorker
 from .whats_new_dialog import WhatsNewDialog
 from .collapsible_card import CollapsibleCard
 from .operator_dialogs import SafetyActionDialog, TechnicalDetailsDialog
+from .machine_setup_dialog import MachineSetupDialog
 from . import __version__
 
 
@@ -88,7 +89,8 @@ class MainWindow(QMainWindow):
                  setup_installer: Callable[[Path], Path] = install_offline_bundle,
                  update_client=None, automatic_updates: bool = True,
                  update_installer=None, settings=None,
-                 debug_service: Optional[DebugService] = None) -> None:
+                 debug_service: Optional[DebugService] = None,
+                 first_run_setup: bool = False) -> None:
         super().__init__()
         self.service = service or B300Service()
         self.debug_service = debug_service or DebugService(
@@ -112,11 +114,13 @@ class MainWindow(QMainWindow):
         self._cancellable_worker = None
         self._update_workers = []
         self.update_dialog = None
+        self.machine_setup_dialog = None
         self.about_dialog = None
         self.whats_new_dialog = None
         self._update_result = None
         self._downloaded_update = None
         self._automatic_updates = bool(automatic_updates)
+        self._first_run_setup_requested = bool(first_run_setup)
         self._update_poll_timer = QTimer(self)
         self._update_poll_timer.setInterval(15 * 60 * 1000)
         self._update_poll_timer.timeout.connect(self._automatic_update_tick)
@@ -144,6 +148,8 @@ class MainWindow(QMainWindow):
         )
         self.refresh_probes()
         self._restore_last_image()
+        if self._first_run_setup_requested:
+            QTimer.singleShot(600, self._show_first_run_setup_if_needed)
         if self._automatic_updates:
             QTimer.singleShot(0, self._show_whats_new_if_needed)
             if self._automatic_updates_enabled():
@@ -233,10 +239,17 @@ class MainWindow(QMainWindow):
         sidebar_layout.addWidget(self.nav_gateway_btn)
         self.nav_buttons.append(self.nav_gateway_btn)
 
+        sidebar_layout.addSpacing(8)
+        self.machine_setup_button = QPushButton("⚙  Thiết lập máy mới")
+        self.machine_setup_button.setObjectName("navUtilityButton")
+        self.machine_setup_button.setToolTip("Kiểm tra và cài các thành phần còn thiếu: ST-Link driver, OpenOCD, OpenSSH/udev")
+        self.machine_setup_button.clicked.connect(self.show_machine_setup)
+        sidebar_layout.addWidget(self.machine_setup_button)
+
         sidebar_layout.addStretch(1)
 
-        # Setup Button (when OpenOCD missing)
-        self.setup_button = QPushButton("Thiết lập môi trường")
+        # Legacy OpenOCD offline action; machine setup wizard is the user-facing entry point.
+        self.setup_button = QPushButton("OpenOCD offline…")
         self.setup_button.setObjectName("setupButton")
         self.setup_button.setAccessibleName("Thiết lập OpenOCD offline")
         self.setup_button.setAccessibleDescription(
@@ -391,6 +404,43 @@ class MainWindow(QMainWindow):
             "success",
         )
         self._update_controls()
+
+    def _show_first_run_setup_if_needed(self) -> None:
+        if self.settings.value("machine/setup_completed", False, type=bool):
+            return
+        self.show_machine_setup(auto_run=True)
+
+    def _machine_setup_ready(self) -> None:
+        self.settings.setValue("machine/setup_completed", True)
+        self._set_status("Máy đã sẵn sàng · có thể bắt đầu sử dụng B300 ST-Link Tools", "success")
+        self.refresh_probes()
+
+    def show_machine_setup(self, auto_run: bool = False) -> None:
+        """Open the fresh-machine setup workflow; installer may request automatic bootstrap."""
+        if self._operation_state().is_hardware_busy:
+            self._set_status("Chờ thao tác ST-Link hiện tại hoàn tất trước khi thiết lập máy.", "error")
+            return
+
+        def openocd_checker() -> bool:
+            try:
+                return bool(self.service.doctor()[0])
+            except Exception:
+                return False
+
+        if self.machine_setup_dialog is None:
+            self.machine_setup_dialog = MachineSetupDialog(
+                openocd_checker, self, auto_run_required=auto_run
+            )
+            self.machine_setup_dialog.openocd_setup_requested.connect(self.setup_environment)
+            self.machine_setup_dialog.setup_changed.connect(self.refresh_probes)
+            self.machine_setup_dialog.setup_ready.connect(self._machine_setup_ready)
+        else:
+            if auto_run:
+                self.machine_setup_dialog.enable_auto_run()
+            self.machine_setup_dialog.refresh_status()
+        self.machine_setup_dialog.show()
+        self.machine_setup_dialog.raise_()
+        self.machine_setup_dialog.activateWindow()
 
     def show_about(self) -> None:
         if self.about_dialog is None:
@@ -1310,13 +1360,21 @@ class MainWindow(QMainWindow):
             if hasattr(self, "factory_probe_combo") and self.factory_probe_combo.count()
             else None
         )
+        probe_error = None
         try:
             probes = tuple(self.probe_loader())
-            available, executable = self.service.doctor()
         except Exception as error:
             probes = ()
+            probe_error = error
+            self.append_log("ST-Link discovery failed: %s" % error)
+
+        openocd_error = None
+        try:
+            available, executable = self.service.doctor()
+        except Exception as error:
             available, executable = False, ""
-            self.append_log("Probe check failed: %s" % error)
+            openocd_error = error
+            self.append_log("OpenOCD check failed: %s" % error)
 
         self._probes = tuple(probes)
         if hasattr(self, "debug_tab"):
@@ -1330,7 +1388,9 @@ class MainWindow(QMainWindow):
         else:
             self.probe_combo.addItem("Tự động chọn (ST-Link duy nhất)", None)
         for probe in probes:
-            self.probe_combo.addItem("%s | %s" % (probe.name, probe.serial), probe.serial)
+            serial_text = str(probe.serial).strip() if probe.serial else ""
+            display_text = "%s · %s" % (probe.name, serial_text) if serial_text else probe.name
+            self.probe_combo.addItem(display_text, probe.serial)
         restore_index = self.probe_combo.findData(current)
         self.probe_combo.setCurrentIndex(max(0, restore_index))
         self.probe_combo.blockSignals(False)
@@ -1343,9 +1403,9 @@ class MainWindow(QMainWindow):
             else:
                 self.factory_probe_combo.addItem("Tự động chọn ST-Link", None)
             for probe in probes:
-                self.factory_probe_combo.addItem(
-                    "%s | %s" % (probe.name, probe.serial), probe.serial
-                )
+                serial_text = str(probe.serial).strip() if probe.serial else ""
+                display_text = "%s · %s" % (probe.name, serial_text) if serial_text else probe.name
+                self.factory_probe_combo.addItem(display_text, probe.serial)
             restore_factory = self.factory_probe_combo.findData(factory_current)
             if factory_current is None and len(probes) == 1:
                 restore_factory = 1
@@ -1362,13 +1422,16 @@ class MainWindow(QMainWindow):
                 "Sẵn sàng one-click Factory; target/WRP sẽ được tự kiểm tra trước khi ghi"
             )
         if available:
-            detail = "%d probe(s) found" % len(probes) if probes else "OpenOCD ready"
+            if probe_error is not None:
+                detail = "OpenOCD ready · ST-Link scan unavailable"
+            else:
+                detail = "%d probe(s) found" % len(probes) if probes else "OpenOCD ready"
             self._set_status("%s | %s" % (detail, executable), "normal")
         else:
-            self._set_status(
-                "OpenOCD not found; use offline environment setup",
-                "error",
-            )
+            detail = "OpenOCD not found; use offline environment setup"
+            if openocd_error is not None:
+                detail = "OpenOCD check failed; use offline environment setup"
+            self._set_status(detail, "error")
         self._rebuild_plan()
 
     def _select_offline_bundle(self) -> Optional[Path]:
@@ -1528,7 +1591,9 @@ class MainWindow(QMainWindow):
             return
         probe = self._selected_probe()
         self.busy = True
-        self._set_status("Đang đọc chip/điện áp/flash/WRP qua SWD…", "busy")
+        if hasattr(self, "flash_log_button"):
+            self.flash_log_button.setText("Nhật ký…")
+        self._set_status("Đang kiểm tra thiết bị qua ST-Link…", "busy", notify=False)
         self._update_controls()
         self._start_worker(
             lambda log, phase, cancel: self.service.inspect_target(
@@ -1646,8 +1711,10 @@ class MainWindow(QMainWindow):
         )
         self.probe_combo.setEnabled(not main_locked)
         self.progress.setVisible(self.busy)
-        self.setup_button.setVisible(not self.openocd_ready)
+        self.setup_button.setVisible(False)
         self.setup_button.setEnabled(not operation.is_hardware_busy)
+        if hasattr(self, "machine_setup_button"):
+            self.machine_setup_button.setEnabled(not operation.is_hardware_busy)
         if hasattr(self, "support_bundle_action"):
             self.support_bundle_action.setEnabled(not operation.is_hardware_busy)
         if hasattr(self, "factory_provision_button"):
@@ -1833,13 +1900,22 @@ class MainWindow(QMainWindow):
         phase = getattr(failure, "phase", "operation")
         message = getattr(failure, "message", str(failure))
         next_action = getattr(
-            failure, "next_action", "Xem log; không tự retry."
+            failure, "next_action", "Kiểm tra kết nối rồi thử lại."
         )
         detail = getattr(failure, "traceback", str(failure))
         self.append_log(detail)
+        phase_labels = {
+            "target_check": "Kiểm tra target",
+            "operation": "Thao tác",
+        }
+        phase_label = phase_labels.get(phase, str(phase).replace("_", " "))
+        if hasattr(self, "flash_log_button"):
+            self.flash_log_button.setText("Chi tiết lỗi…")
+            self.flash_log_button.setToolTip("Xem log OpenOCD đầy đủ và thông tin chẩn đoán.")
         self._set_status(
-            "Phase %s · %s · Tiếp theo: %s" % (phase, message, next_action),
+            "%s: %s  •  %s" % (phase_label, message, next_action),
             "error",
+            notify=False,
         )
         self._update_controls()
 
