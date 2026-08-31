@@ -5,6 +5,10 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.13.3] - 2026-08-31
+
+- Fixed Windows Gateway public-key authorization for local Administrator accounts running B300 without elevation. The GUI token may mark Administrators membership deny-only, which .NET hides from `WindowsIdentity.Groups`; B300 now reads the trusted System32 `whoami.exe /groups /fo csv` membership record, then rechecks the real `sshd` target inside UAC before writing or reporting success. The elevated script now preserves an empty `ssh-keygen` passphrase, avoids PowerShell's reserved `$HOME` variable, and sends valid regular expressions. It continues to write only the target selected by `sshd` and fails closed if membership output is unavailable or malformed.
+
 ## [0.13.2] - 2026-08-31
 
 - Fixed Windows Gateway public-key authorization for Administrator accounts whose non-elevated GUI token resolves a user `authorized_keys` file while the SSH service applies the Administrators match rule. B300 now rechecks the effective target in the same UAC operation used to install and verify the key. It carries the initiating account identity through UAC, uses only trusted System32 OpenSSH tools, and returns a validated safe target without temporary result files.

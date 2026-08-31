@@ -502,9 +502,11 @@ class B300StlinkTests(unittest.TestCase):
             self.assertNotIn(forbidden, rendered)
 
     def test_debug_client_requires_explicit_ssh_identity(self) -> None:
+        module = tool()
         output = io.StringIO()
-        with redirect_stdout(output):
-            result = tool().main(["debug", "client", "--dry-run", "--json"])
+        with mock.patch.object(module.gateway_workflows, "apply_saved_remote_profile", return_value=None):
+            with redirect_stdout(output):
+                result = module.main(["debug", "client", "--dry-run", "--json"])
         self.assertEqual(result, 1)
         record = json.loads(output.getvalue())
         self.assertIn("--ssh-host", record["message"])

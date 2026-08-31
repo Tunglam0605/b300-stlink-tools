@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import csv
 import hashlib
 import json
 import os
@@ -126,6 +127,24 @@ def _trusted_windows_icacls_executable() -> Path:
     candidate = Path(buffer.value) / "icacls.exe"
     if not candidate.is_file():
         raise RuntimeError("Trusted Windows icacls.exe was not found.")
+    return candidate
+
+
+def _trusted_windows_whoami_executable() -> Path:
+    """Return the OS identity tool; PATH must not decide an elevation boundary."""
+    if os.name != "nt":
+        return Path(r"C:\Windows\System32\whoami.exe")
+    try:
+        import ctypes
+        buffer = ctypes.create_unicode_buffer(32768)
+        length = ctypes.windll.kernel32.GetSystemDirectoryW(buffer, len(buffer))
+    except (AttributeError, OSError) as error:
+        raise RuntimeError("B300 cannot locate trusted Windows whoami.exe.") from error
+    if not length or length >= len(buffer):
+        raise RuntimeError("B300 cannot locate trusted Windows whoami.exe.")
+    candidate = Path(buffer.value) / "whoami.exe"
+    if not candidate.is_file():
+        raise RuntimeError("Trusted Windows whoami.exe was not found.")
     return candidate
 
 
@@ -448,17 +467,31 @@ def authorized_keys_target(*, system_name: Optional[str] = None, runner: Command
 
 
 def _windows_account_is_administrator(runner: CommandRunner) -> bool:
-    """Return membership in the local Administrators alias despite UAC filtering."""
-    ps = str(_trusted_windows_powershell_executable())
-    script = (
-        "$groups=[Security.Principal.WindowsIdentity]::GetCurrent().Groups|ForEach-Object {$_.Value};"
-        "if($groups -contains 'S-1-5-32-544'){'yes'}else{'no'}"
-    )
-    completed = runner((ps, "-NoProfile", "-NonInteractive", "-Command", script), 20.0)
-    answer = (completed.stdout or "").strip().lower()
-    if completed.returncode != 0 or answer not in {"yes", "no"}:
+    """Detect local-admin membership even when UAC marks the group deny-only."""
+    whoami = _trusted_windows_whoami_executable()
+    completed = runner((str(whoami), "/groups", "/fo", "csv"), 20.0)
+    if completed.returncode != 0:
         raise RuntimeError("B300 cannot safely determine whether this Windows account is an Administrator.")
-    return answer == "yes"
+    try:
+        rows = list(csv.reader((completed.stdout or "").splitlines(), strict=True))
+    except csv.Error as error:
+        raise RuntimeError("B300 cannot safely determine whether this Windows account is an Administrator.") from error
+    group_sids = set()
+    for row in rows:
+        if not any(field.strip() for field in row):
+            continue
+        if len(row) != 4:
+            raise RuntimeError("B300 cannot safely determine whether this Windows account is an Administrator.")
+        sid = row[2].strip().lower()
+        if sid == "sid" and not group_sids:
+            continue
+        if not re.fullmatch(r"s-\d+(?:-\d+)+", sid):
+            raise RuntimeError("B300 cannot safely determine whether this Windows account is an Administrator.")
+        group_sids.add(sid)
+    if not group_sids:
+        raise RuntimeError("B300 cannot safely determine whether this Windows account is an Administrator.")
+    administrator_sids = {"s-1-5-32-544", "s-1-5-114"}
+    return bool(group_sids & administrator_sids)
 
 
 def _windows_account_identity(runner: CommandRunner) -> str:
@@ -584,7 +617,6 @@ def _install_windows_gateway_key_elevated(
     normalized_key = validate_public_key(public_key)
     script = """$ErrorActionPreference='Stop'
 $line='%s'
-$home='%s'
 $programData='%s'
 $sshd='%s'
 $keygen='%s'
@@ -600,15 +632,15 @@ try{
   $tempItem=Get-Item -LiteralPath $temp -Force -ErrorAction Stop
   if(-not $tempItem.PSIsContainer -or (($tempItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)){exit 14}
   $hostKey=Join-Path $temp 'ssh_host_ed25519_key'
-  & $keygen -q -t ed25519 -N '' -f $hostKey | Out-Null
+  & $keygen -q -t ed25519 -N '""' -f $hostKey | Out-Null
   if($LASTEXITCODE -ne 0){exit 14}
-  if($identity -notmatch '^[^\\,=\r\n]{1,128}\\[^\\,=\r\n]{1,128}$'){exit 14}
+  if($identity -notmatch '^[^\\\\,=\\r\\n]{1,128}\\\\[^\\\\,=\\r\\n]{1,128}$'){exit 14}
   $output=& $sshd -T -h $hostKey -C ('user='+$identity+',host=localhost,addr=127.0.0.1')
   if($LASTEXITCODE -ne 0){exit 14}
   $matches=@($output | Where-Object { $_ -match '^\s*authorizedkeysfile\s+' })
   if($matches.Count -ne 1){exit 14}
   $configured=($matches[0] -replace '^\s*authorizedkeysfile\s+','').Trim().Trim('"')
-  $configured=($configured -replace '\\','/').ToLowerInvariant()
+  $configured=($configured -replace '\\\\','/').ToLowerInvariant()
   if($configured -eq '.ssh/authorized_keys' -or $configured -eq '.ssh/authorized_keys .ssh/authorized_keys2'){
     exit 20
   }elseif($configured -eq '__programdata__/ssh/administrators_authorized_keys'){
@@ -658,8 +690,8 @@ try{
   if(Test-Path -LiteralPath $temp){$cleanup=Get-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue;if($cleanup -and $cleanup.PSIsContainer -and (($cleanup.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0)){Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue}}
 }
 """ % (
-            normalized_key.replace("'", "''"), str(home).replace("'", "''"),
-            str(program_data).replace("'", "''"), str(sshd).replace("'", "''"),
+            normalized_key.replace("'", "''"), str(program_data).replace("'", "''"),
+            str(sshd).replace("'", "''"),
             str(keygen).replace("'", "''"), icacls.replace("'", "''"),
             account_name.replace("'", "''"),
         )

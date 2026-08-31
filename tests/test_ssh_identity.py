@@ -206,17 +206,19 @@ class SshIdentityTests(unittest.TestCase):
             self.assertEqual(target, Path(directory) / "ProgramData" / "ssh" / "administrators_authorized_keys")
 
     def test_windows_gateway_authorization_uses_elevated_effective_target_for_administrator(self):
-        """A UAC-filtered GUI must not put an Administrator key in the user file."""
+        """A deny-only local Administrator token must still use sshd's admin key file."""
         with tempfile.TemporaryDirectory() as directory:
             system32 = Path(directory) / "System32" / "OpenSSH"
             system32.mkdir(parents=True)
             sshd = system32 / "sshd.exe"
             keygen = system32 / "ssh-keygen.exe"
             powershell = Path(directory) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+            whoami = Path(directory) / "System32" / "whoami.exe"
             powershell.parent.mkdir(parents=True)
             sshd.write_bytes(b"")
             keygen.write_bytes(b"")
             powershell.write_bytes(b"")
+            whoami.write_bytes(b"")
             program_data = Path(directory) / "ProgramData"
 
             def runner(argv, timeout):
@@ -225,7 +227,17 @@ class SshIdentityTests(unittest.TestCase):
                     return subprocess.CompletedProcess(
                         argv, 0, "authorizedkeysfile .ssh/authorized_keys\n", "",
                     )
+                if Path(argv[0]) == whoami:
+                    self.assertEqual(tuple(argv[1:]), ("/groups", "/fo", "csv"))
+                    return subprocess.CompletedProcess(
+                        argv, 0,
+                        '"Group Name","Type","SID","Attributes"\n'
+                        '"NT AUTHORITY\\Local account and member of Administrators group","Well-known group","S-1-5-114","Group used for deny only"\n',
+                        "",
+                    )
                 self.assertEqual(Path(argv[0]), powershell)
+                if "Get-Acl" in rendered:
+                    return subprocess.CompletedProcess(argv, 0, '{"key_present":true,"acl_safe":true}', "")
                 if "ConvertTo-Json -Compress" in rendered:
                     return subprocess.CompletedProcess(
                         argv, 0, '{"name":"DESKTOP\\\\caller","sid":"S-1-5-21-1000"}', "",
@@ -233,21 +245,31 @@ class SshIdentityTests(unittest.TestCase):
                 if "WindowsIdentity]::GetCurrent().Name" in rendered:
                     return subprocess.CompletedProcess(argv, 0, "DESKTOP\\admin\n", "")
                 if "WindowsIdentity]::GetCurrent().Groups" in rendered:
-                    return subprocess.CompletedProcess(argv, 0, "yes\n", "")
+                    return subprocess.CompletedProcess(argv, 0, "no\n", "")
+                if "Start-Process" not in rendered:
+                    return subprocess.CompletedProcess(argv, 0, "", "")
                 self.assertIn("Start-Process", rendered)
                 self.assertIn("-Verb RunAs", rendered)
                 self.assertNotIn("-RedirectStandardOutput", rendered)
                 encoded = re.search(r"'-EncodedCommand','([^']+)'", rendered).group(1)
                 child = base64.b64decode(encoded).decode("utf-16le")
                 self.assertIn("$identity='DESKTOP\\caller'", child)
+                self.assertNotIn("$home=", child)
                 self.assertNotIn("$resultPath", child)
                 self.assertIn("exit 21", child)
                 self.assertNotIn("Remove-Item -LiteralPath $temp -Recurse", child)
                 self.assertIn("if($hostKey){$cleanupPaths", child)
+                self.assertIn("-N '\"\"'", child)
+                self.assertIn(
+                    r"if($identity -notmatch '^[^\\,=\r\n]{1,128}\\[^\\,=\r\n]{1,128}$'){exit 14}",
+                    child,
+                )
+                self.assertIn(r"$configured=($configured -replace '\\','/').ToLowerInvariant()", child)
                 return subprocess.CompletedProcess(argv, 21, "", "")
 
             with mock.patch.object(ssh_identity, "_trusted_windows_sshd_executable", return_value=sshd), \
-                    mock.patch.object(ssh_identity, "_trusted_windows_powershell_executable", return_value=powershell):
+                    mock.patch.object(ssh_identity, "_trusted_windows_powershell_executable", return_value=powershell), \
+                    mock.patch.object(ssh_identity, "_trusted_windows_whoami_executable", return_value=whoami, create=True):
                 result = ssh_identity.install_gateway_public_key(
                     key_line(43), system_name="windows", runner=runner,
                     home=Path(directory) / "home", program_data=program_data,
@@ -256,6 +278,24 @@ class SshIdentityTests(unittest.TestCase):
             self.assertEqual(result.target, program_data / "ssh" / "administrators_authorized_keys")
             self.assertTrue(result.administrator_target)
             self.assertTrue(result.target_verified)
+
+    def test_windows_admin_membership_fails_closed_for_malformed_group_csv(self):
+        """Do not infer admin rights when trusted whoami output is malformed."""
+        whoami = Path(r"C:\Windows\System32\whoami.exe")
+
+        def runner(argv, timeout):
+            if Path(argv[0]) == whoami:
+                return subprocess.CompletedProcess(
+                    argv, 0,
+                    '"BUILTIN\\Administrators","Alias","S-1-5-32-544","unterminated\n',
+                    "",
+                )
+            return subprocess.CompletedProcess(argv, 0, "yes\n", "")
+
+        with mock.patch.object(
+                ssh_identity, "_trusted_windows_whoami_executable", return_value=whoami, create=True):
+            with self.assertRaisesRegex(RuntimeError, "cannot safely determine"):
+                ssh_identity._windows_account_is_administrator(runner)
 
     def test_windows_target_retries_sshd_config_with_disposable_host_key_when_host_keys_are_private(self):
         """Prevent a Windows Gateway from rejecting authorization only because sshd host keys are protected."""
@@ -370,6 +410,12 @@ class SshIdentityTests(unittest.TestCase):
                         argv, 0, "authorizedkeysfile .ssh/authorized_keys\n", "",
                     )
                 rendered = " ".join(argv)
+                if Path(argv[0]).name.lower() == "whoami.exe":
+                    return subprocess.CompletedProcess(
+                        argv, 0,
+                        '"BUILTIN\\Users","Alias","S-1-5-32-545","Mandatory group"\n',
+                        "",
+                    )
                 if "WindowsIdentity]::GetCurrent().Name" in rendered:
                     return subprocess.CompletedProcess(argv, 0, "DESKTOP\\admin\n", "")
                 if "WindowsIdentity]::GetCurrent().Groups" in rendered:
