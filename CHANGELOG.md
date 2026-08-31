@@ -5,6 +5,10 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.12.8] - 2026-08-31
+
+- Fixed Windows Gateway Client-key authorization when a normal Administrator session cannot inspect OpenSSH's protected host keys. B300 now repeats only the effective AuthorizedKeysFile query in the same UAC-protected process that writes and verifies the key. It supports only the standard user or Windows Administrators targets and still fails closed for unsupported or ambiguous server configuration; it never treats the personal ~/.ssh/authorized_keys file as a substitute for an Administrator target.
+
 ## [0.12.7] - 2026-08-31
 
 - Fixed Windows Gateway Client-key authorization: B300 now asks the running `sshd` for the effective `AuthorizedKeysFile` of the current account, supports only the standard user or Windows Administrators targets, and fails closed for a custom/unmanaged target. Re-authorizing an existing key repairs the Windows ACL instead of reporting a misleading no-op. The UI now distinguishes installing a key for `sshd` from a successful Client SSH login, which remains verified by the Client connection check.

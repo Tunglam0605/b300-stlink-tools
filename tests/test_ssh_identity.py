@@ -286,6 +286,55 @@ class SshIdentityTests(unittest.TestCase):
             self.assertTrue(result.changed)
             self.assertTrue(result.target_verified)
 
+    def test_windows_authorization_discovers_effective_target_elevated_when_hostkeys_are_private(self):
+        with tempfile.TemporaryDirectory() as directory:
+            attacker_sshd = Path(directory) / "attacker" / "sshd.exe"
+            attacker_sshd.parent.mkdir()
+            attacker_sshd.write_bytes(b"")
+            trusted_sshd = Path(directory) / "System32" / "OpenSSH" / "sshd.exe"
+            trusted_sshd.parent.mkdir(parents=True)
+            trusted_sshd.write_bytes(b"")
+            home = Path(directory) / "home"
+            program_data = Path(directory) / "ProgramData"
+
+            def runner(argv, timeout):
+                rendered = " ".join(argv)
+                if Path(argv[0]) == attacker_sshd:
+                    return subprocess.CompletedProcess(argv, 1, "", "sshd: no hostkeys available -- exiting.\n")
+                if "WindowsIdentity]::GetCurrent().Name" in rendered:
+                    return subprocess.CompletedProcess(argv, 0, "DESKTOP\\caller\n", "")
+                if "Start-Process" in rendered:
+                    self.assertNotIn("'-File'", rendered)
+                    encoded = re.search(r"'-EncodedCommand','([^']+)'", rendered).group(1)
+                    script = base64.b64decode(encoded).decode("utf-16le")
+                    self.assertIn("$config=& $sshd -T -C", script)
+                    self.assertIn("$sshd='%s'" % trusted_sshd, script)
+                    self.assertNotIn(str(attacker_sshd), script)
+                    self.assertIn("$user='DESKTOP\\caller'", script)
+                    self.assertNotIn("WindowsIdentity]::GetCurrent().Name", script)
+                    self.assertIn("[Security.Principal.NTAccount]::new($user)", script)
+                    self.assertIn("else{$callerSid}", script)
+                    self.assertIn("$userTarget='%s'" % (home / ".ssh" / "authorized_keys"), script)
+                    self.assertIn("$adminTargetPath='%s'" % (program_data / "ssh" / "administrators_authorized_keys"), script)
+                    self.assertNotIn(str(Path(directory) / "poisoned"), script)
+                    self.assertIn("__programdata__/ssh/administrators_authorized_keys", script.lower())
+                    self.assertIn("exit 21", script)
+                    return subprocess.CompletedProcess(argv, 21, "", "")
+                self.fail("unexpected command: %s" % rendered)
+
+            with mock.patch.object(ssh_identity, "resolve_ssh_client_executable", return_value=attacker_sshd), \
+                    mock.patch.object(ssh_identity, "_trusted_windows_sshd_executable", return_value=trusted_sshd), \
+                    mock.patch.object(ssh_identity, "_trusted_windows_profile_directory", return_value=home), \
+                    mock.patch.object(ssh_identity, "_trusted_windows_program_data_directory", return_value=program_data), \
+                    mock.patch.dict(os.environ, {"USERPROFILE": str(Path(directory) / "poisoned"), "PROGRAMDATA": str(Path(directory) / "poisoned")}, clear=False):
+                result = ssh_identity.install_gateway_public_key(key_line(31), system_name="windows", runner=runner)
+
+            self.assertEqual(
+                result.target, program_data / "ssh" / "administrators_authorized_keys",
+            )
+            self.assertTrue(result.administrator_target)
+            self.assertTrue(result.target_verified)
+
     def test_windows_authorization_fails_closed_when_acl_verification_finds_extra_writer(self):
         with tempfile.TemporaryDirectory() as directory:
             sshd = Path(directory) / "sshd.exe"
