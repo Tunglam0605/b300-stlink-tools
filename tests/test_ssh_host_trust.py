@@ -77,10 +77,48 @@ class SshHostTrustTests(unittest.TestCase):
             root.mkdir()
             public = key_line(87, "gateway-host")
             (root / "ssh_host_ed25519_key.pub").write_text(public + "\n", encoding="utf-8")
-            result = local_gateway_host_key(system_name="linux", etc_ssh=root)
+            result = local_gateway_host_key(
+                system_name="linux", etc_ssh=root, keyscan_executable="",
+            )
             self.assertTrue(result.public_key.startswith("ssh-ed25519 "))
             self.assertTrue(result.fingerprint.startswith("SHA256:"))
             self.assertNotIn("PRIVATE", repr(result))
+
+    def test_local_gateway_host_key_prefers_loopback_scan_without_programdata_read(self):
+        public = key_line(88, "gateway-loopback").split()
+        output = "localhost %s %s\n" % (public[0], public[1])
+        calls = []
+
+        def runner(argv, timeout):
+            calls.append(tuple(argv))
+            return subprocess.CompletedProcess(argv, 0, output, "")
+
+        with tempfile.TemporaryDirectory() as directory:
+            # Deliberately do not create ProgramData/ssh or any public-key file.
+            result = local_gateway_host_key(
+                system_name="windows", program_data=Path(directory),
+                runner=runner, keyscan_executable="ssh-keyscan",
+            )
+        self.assertTrue(calls)
+        self.assertEqual(calls[0][-1], "localhost")
+        self.assertTrue(result.public_key.startswith("ssh-ed25519 "))
+        self.assertTrue(result.fingerprint.startswith("SHA256:"))
+
+    def test_local_gateway_host_key_falls_back_to_public_file_when_loopback_scan_fails(self):
+        def runner(argv, timeout):
+            return subprocess.CompletedProcess(argv, 1, "", "")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "ssh"
+            root.mkdir()
+            public = key_line(89, "gateway-file-fallback")
+            (root / "ssh_host_ed25519_key.pub").write_text(public + "\n", encoding="utf-8")
+            result = local_gateway_host_key(
+                system_name="windows", program_data=Path(directory),
+                runner=runner, keyscan_executable="ssh-keyscan",
+            )
+        self.assertTrue(result.public_key.startswith("ssh-ed25519 "))
+        self.assertTrue(result.fingerprint.startswith("SHA256:"))
 
 
 if __name__ == "__main__":
