@@ -5,6 +5,12 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.12.5] - 2026-08-31
+
+- Gateway Setup now verifies the effective B300-owned Windows SSH firewall policy instead of trusting a rule name alone. With administrator confirmation, it repairs only the B300 rule for TCP/22 on Domain/Private `LocalSubnet`; it does not alter `sshd_config`, existing OpenSSH rules, or debug ports.
+- Client enrollment performs a bounded TCP preflight on the configured Gateway host and SSH port. An unreachable Gateway is reported as a clear network/setup problem before host-key scanning; host-key validation remains fail-closed.
+- Gateway/Client action buttons now provide visible hover, pressed, and keyboard-focus feedback while disabled controls remain non-interactive.
+
 ## [0.12.4] - 2026-08-31
 
 - Bổ sung **Lưu & Nạp nhóm biến theo dõi (Watch Presets / JSON Import & Export)** cho Realtime Live Monitor:

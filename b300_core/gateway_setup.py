@@ -95,6 +95,23 @@ def _windows_debug_ports_private(runner: CommandRunner) -> bool:
     script = "$items=Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { @(%s) -contains $_.LocalPort }; $bad=$items | Where-Object { $_.LocalAddress -notin @('127.0.0.1','::1') }; if($bad){'EXPOSED'}else{'PRIVATE'}" % ports
     return _windows_value(script, runner) == "PRIVATE"
 
+
+def _windows_ssh_firewall_ready(ssh_port: int, runner: CommandRunner) -> bool:
+    """Require the B300-owned, LAN-scoped rule instead of trusting a rule name.
+
+    A present but disabled/wrong-profile OpenSSH rule was previously reported as
+    READY even though another LAN machine could not reach TCP/22.
+    """
+    script = (
+        "$r=Get-NetFirewallRule -Name 'B300-OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue | "
+        "Where-Object {$_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' -and $_.Action -eq 'Allow' -and (($_.Profile -band 1) -ne 0 -or ($_.Profile -band 2) -ne 0)}; "
+        "$p=$r | Get-NetFirewallPortFilter | Where-Object {$_.Protocol -eq 'TCP' -and $_.LocalPort -eq '%d'}; "
+        "$a=$r | Get-NetFirewallAddressFilter | Where-Object {@($_.RemoteAddress) -contains 'LocalSubnet'}; "
+        "$n=Get-NetConnectionProfile -ErrorAction SilentlyContinue | Where-Object {$_.NetworkCategory -in @('Private','DomainAuthenticated')}; "
+        "if($p -and $a -and $n){'READY'}else{'MISSING'}"
+    ) % int(ssh_port)
+    return _windows_value(script, runner) == "READY"
+
 def _inspect_windows(ssh_port: int, runner: CommandRunner) -> GatewayHostReport:
     capability = _windows_value("$c=Get-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0' -ErrorAction SilentlyContinue; if($c){$c.State}else{'NotPresent'}", runner)
     service = _windows_value("$s=Get-Service -Name sshd -ErrorAction SilentlyContinue; if($s){$s.Status}else{'Missing'}", runner)
@@ -103,7 +120,7 @@ def _inspect_windows(ssh_port: int, runner: CommandRunner) -> GatewayHostReport:
     running = service.lower() == "running"
     start_mode = _windows_value("$s=Get-CimInstance Win32_Service -Filter \"Name='sshd'\" -ErrorAction SilentlyContinue; if($s){$s.StartMode}else{'Missing'}", runner)
     startup = start_mode.lower() in {"auto", "automatic"}
-    firewall = _windows_value("$r=Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' -and $_.Name -in @('OpenSSH-Server-In-TCP','B300-OpenSSH-Server-In-TCP') }; if($r){'READY'}else{'MISSING'}", runner) == "READY"
+    firewall = _windows_ssh_firewall_ready(ssh_port, runner)
     return _build_report("windows", installed, running, startup, firewall, _tcp_connectable(ssh_port), _windows_debug_ports_private(runner), ssh_port, custom_port=(int(ssh_port) != DEFAULT_SSH_PORT))
 
 def _linux_debug_ports_private(runner: CommandRunner) -> bool:
@@ -149,7 +166,7 @@ def _build_report(system: str, installed: bool, running: bool, startup: bool, fi
         GatewayHostCheck("ssh_install", "PASS" if installed else "FAIL", "SSH_SERVER_INSTALLED" if installed else "SSH_SERVER_MISSING", "OpenSSH Server is installed." if installed else "OpenSSH Server is not installed.", "No action is required." if installed else "Run Gateway Prepare to install OpenSSH Server."),
         GatewayHostCheck("ssh_service", "PASS" if running else "FAIL", "SSH_SERVICE_RUNNING" if running else "SSH_SERVICE_STOPPED", "SSH service is running." if running else "SSH service is not running.", "No action is required." if running else "Run Gateway Prepare to start the SSH service."),
         GatewayHostCheck("ssh_startup", "PASS" if startup else "FAIL", "SSH_STARTUP_ENABLED" if startup else "SSH_STARTUP_DISABLED", "SSH service starts automatically." if startup else "SSH service is not enabled for automatic startup.", "No action is required." if startup else "Run Gateway Prepare to enable SSH at boot."),
-        GatewayHostCheck("ssh_firewall", "PASS" if firewall else "FAIL", "SSH_FIREWALL_READY" if firewall else "SSH_FIREWALL_BLOCKED", "Host firewall permits SSH TCP/%d." % ssh_port if firewall else "Host firewall does not have an enabled SSH TCP/%d allow rule." % ssh_port, "No action is required." if firewall else "Run Gateway Prepare to allow only the SSH port."),
+        GatewayHostCheck("ssh_firewall", "PASS" if firewall else "FAIL", "SSH_FIREWALL_READY" if firewall else "SSH_FIREWALL_BLOCKED", "Host firewall permits SSH TCP/%d." % ssh_port if firewall else "Host firewall does not have an enabled B300 SSH TCP/%d rule for the active Private/Domain LAN." % ssh_port, "No action is required." if firewall else "Run Gateway Prepare. If it remains blocked, use a Private/Domain LAN; B300 never exposes SSH on a Public network."),
         GatewayHostCheck("ssh_listener", "PASS" if listening else "FAIL", "SSH_PORT_LISTENING" if listening else "SSH_PORT_NOT_LISTENING", "Local SSH server accepts TCP/%d connections." % ssh_port if listening else "Local SSH server is not reachable on TCP/%d." % ssh_port, "No action is required." if listening else "Verify sshd is running and listening on the configured port."),
         GatewayHostCheck("debug_ports", "PASS" if private else "FAIL", "DEBUG_PORTS_PRIVATE" if private else "DEBUG_PORTS_EXPOSED", "GDB/Telnet/TCL debug ports are not exposed on non-loopback listeners." if private else "One or more debug ports (3333/4444/6666) are listening on a non-loopback address.", "No action is required." if private else "Stop/reconfigure the conflicting service. B300 Gateway requires debug ports to remain loopback-only."),
     ]
@@ -196,7 +213,10 @@ def _windows_prepare_script(plan: GatewayPreparePlan) -> str:
     if "start_ssh_service" in actions:
         lines.append("Start-Service -Name sshd")
     if "allow_ssh_firewall" in actions:
-        lines += ["$fw=Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP','B300-OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue | Where-Object {$_.Enabled -eq 'True'}", "if(-not $fw){New-NetFirewallRule -Name 'B300-OpenSSH-Server-In-TCP' -DisplayName 'B300 OpenSSH Server (sshd)' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 | Out-Null}"]
+        lines += [
+            "Remove-NetFirewallRule -Name 'B300-OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue",
+            "New-NetFirewallRule -Name 'B300-OpenSSH-Server-In-TCP' -DisplayName 'B300 OpenSSH Server (sshd)' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 -Profile Domain,Private -RemoteAddress LocalSubnet | Out-Null",
+        ]
     lines.append("exit 0")
     return "\n".join(lines) + "\n"
 

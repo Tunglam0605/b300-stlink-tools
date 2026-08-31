@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from b300_core.gateway_readiness import inspect_gateway_readiness
+from b300_core.gateway_network import GatewayEndpointProbe, probe_gateway_ssh_endpoint
 from b300_core.gateway_setup import (
     DEFAULT_SSH_PORT, GatewayHostReport, GatewayPrepareResult, build_gateway_prepare_plan,
     client_connection_text, inspect_gateway_host, prepare_gateway_host,
@@ -57,6 +58,7 @@ class GatewaySetupTab(QWidget):
             host_key_reader: Callable[..., GatewayHostKey] = local_gateway_host_key,
             host_key_scanner: Callable[..., GatewayHostKey] = scan_gateway_host_key,
             host_truster: Callable[..., HostTrustResult] = trust_gateway_host_key,
+            endpoint_prober: Callable[..., GatewayEndpointProbe] = probe_gateway_ssh_endpoint,
             profile_loader: Callable[..., Optional[RemoteGatewayProfile]] = load_remote_profile,
             profile_saver: Callable[..., object] = save_remote_profile,
             connectivity_checker: Callable[..., RemoteConnectivityResult] = check_remote_connectivity,
@@ -74,10 +76,12 @@ class GatewaySetupTab(QWidget):
         self.host_key_reader = host_key_reader
         self.host_key_scanner = host_key_scanner
         self.host_truster = host_truster
+        self.endpoint_prober = endpoint_prober
         self.profile_loader = profile_loader
         self.profile_saver = profile_saver
         self.connectivity_checker = connectivity_checker
         self._remote_profile: Optional[RemoteGatewayProfile] = None
+        self._client_network_problem: Optional[GatewayEndpointProbe] = None
         self._connectivity_ready = False
         self._identity: Optional[SshIdentityReport] = None
         self._local_host_key: Optional[GatewayHostKey] = None
@@ -493,6 +497,12 @@ class GatewaySetupTab(QWidget):
             if self._identity is None or not self._identity.ready:
                 text = "Bước tiếp theo · Client: tạo/reuse B300 Client Key. Private key luôn ở lại máy này."
                 state = "info"
+            elif self._client_network_problem is not None:
+                text = (
+                    "Client chưa tới được Gateway %s. Trên Gateway bấm “Chuẩn bị Gateway”; "
+                    "nếu vẫn lỗi, kiểm tra hai máy không ở mạng Guest/AP isolation."
+                ) % self._client_network_problem.endpoint
+                state = "warning"
             elif self._remote_profile is None:
                 text = "Bước tiếp theo · Client: nhập Host/User/Fingerprint từ Gateway rồi “Verify Gateway & Lưu Profile”."
                 state = "info"
@@ -599,7 +609,16 @@ class GatewaySetupTab(QWidget):
             self.status.style().unpolish(self.status)
             self.status.style().polish(self.status)
         else:
-            self.client_connection_status.setText("Client operation FAILED · %s" % message)
+            if message.startswith("SSH_TCP_UNREACHABLE:"):
+                problem = self._client_network_problem
+                endpoint = problem.endpoint if problem is not None else "Gateway SSH"
+                display = (
+                    "Không thể tới %s. Trên Gateway bấm “Chuẩn bị Gateway”; "
+                    "nếu Gateway đã READY, kiểm tra firewall Wi-Fi hoặc Guest/AP isolation."
+                ) % endpoint
+            else:
+                display = "Client operation FAILED · %s" % message
+            self.client_connection_status.setText(display)
             self.client_connection_status.setProperty("state", "error")
             self.client_connection_status.style().unpolish(self.client_connection_status)
             self.client_connection_status.style().polish(self.client_connection_status)
@@ -857,6 +876,11 @@ class GatewaySetupTab(QWidget):
         )
 
     def _scan_verify_trust_host(self, host: str, port: int, expected_fingerprint: str) -> HostTrustResult:
+        probe = self.endpoint_prober(host, port)
+        if not probe.ready:
+            self._client_network_problem = probe
+            raise RuntimeError("%s: %s" % (probe.reason_code, probe.message))
+        self._client_network_problem = None
         scanned = self.host_key_scanner(host, port)
         if scanned.fingerprint != expected_fingerprint:
             raise RuntimeError(
