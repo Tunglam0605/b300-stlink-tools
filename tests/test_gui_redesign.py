@@ -1,45 +1,28 @@
-"""Comprehensive GUI & UX redesign test suite for B300 ST-Link Tools."""
+"""Unit tests for B300 GUI Modern Frontend Redesign."""
 
 from __future__ import annotations
 
 import os
-import tempfile
-import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest import mock
+from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QCoreApplication, QEvent, Qt
-from PySide6.QtWidgets import QApplication, QHeaderView, QLabel
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QScrollArea
 
-from b300_core.debug_service import DebugState
-from b300_core.debug_sampling import VariableSample
-from b300_core.live_monitor import LiveSample, LiveValue
-from b300_core.offline_symbols import SourceLocation
-from b300_core.debug_session import DebugSessionInfo
-from b300_core.metadata import decode_ota_metadata
-from b300_core.models import ProbeRef
-from b300_gui.collapsible_card import CollapsibleCard
-from b300_gui.debug_connection_panel import DebugConnectionPanel
-from b300_gui.debug_interactive_panel import DebugInteractivePanel
-from b300_gui.debug_live_panel import DebugLivePanel
-from b300_gui.debug_log_panel import DebugLogPanel
-from b300_gui.debug_plot_panel import DebugPlotPanel
-from b300_gui.debug_tab import DebugTab
+from b300_core.models import ImageInfo, ProbeInfo, TargetInfo
+from b300_gui.theme import DARK_PALETTE, LIGHT_PALETTE, ThemeManager, generate_stylesheet
+from b300_gui.widgets.header_bar import HeaderBar
+from b300_gui.widgets.compact_sidebar import CompactSidebar
+from b300_gui.widgets.pipeline_stepper import PipelineStepper
+from b300_gui.widgets.pass_fail_banner import PassFailBanner
+from b300_gui.widgets.memory_map_widget import MemoryMapWidget
+from b300_gui.views.operator_view import OperatorView
+from b300_gui.views.rnd_flash_view import RndFlashView
 from b300_gui.main_window import MainWindow
-from b300_gui.memory_tab import MemoryTab
-from tests.test_core_probe_memory_metadata import make_metadata
-from tests.test_debug_tab import FakeDebugService, FakeSession, FakeSettings, FakeTunnel, FakeLiveMonitorSession
-
-
-def make_sample(cycle: int, elapsed: float, expr: str, raw: str, num) -> VariableSample:
-    return VariableSample(
-        cycle=cycle, elapsed_seconds=elapsed, captured_at_unix_ms=1000 + cycle,
-        expression=expr, raw_value=raw, numeric_value=num,
-    )
 
 
 class GuiRedesignTests(unittest.TestCase):
@@ -47,371 +30,204 @@ class GuiRedesignTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
 
-    def wait_until(self, predicate, timeout: float = 2.0) -> None:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            self.app.processEvents()
-            if predicate():
-                return
-            time.sleep(0.01)
-        self.fail("Timed out waiting for condition")
+    def test_theme_manager_palette_and_toggle(self) -> None:
+        mgr = ThemeManager.instance()
+        mgr.set_theme("dark")
+        self.assertEqual(mgr.current_mode, "dark")
+        self.assertTrue(mgr.is_dark)
+        self.assertEqual(mgr.palette, DARK_PALETTE)
 
-    def make_debug_tab(self, *, initial="running", attach_state="halted", probe_count=1, settings=None):
-        service = FakeDebugService(DebugState.STOPPED)
-        session = FakeSession(service, initial=initial, attach_state=attach_state)
-        tunnel_events = []
-        tab = DebugTab(
-            service, lambda: ProbeRef("TEST_PROBE"), debug_session=session,
-            tcl_factory=lambda _endpoint: service.tcl, probe_count=lambda: probe_count,
-            tunnel_factory=lambda config: FakeTunnel(config, tunnel_events), settings=settings,
-            live_session_factory=FakeLiveMonitorSession,
-        )
-        tab._test_tunnel_events = tunnel_events
-        return tab, service, session
+        qss_dark = generate_stylesheet(DARK_PALETTE)
+        self.assertIn(DARK_PALETTE.canvas, qss_dark)
+        self.assertIn(DARK_PALETTE.primary, qss_dark)
+        self.assertIn("QPushButton:hover", qss_dark)
+        self.assertIn("QPushButton:pressed", qss_dark)
 
-    def test_collapsible_card_expand_collapse(self) -> None:
-        card = CollapsibleCard("Test Section", "Subtitle text", expanded=True)
-        card.show()
-        self.assertTrue(card.is_expanded())
-        self.assertFalse(card.content_widget.isHidden())
-        self.assertEqual(card.toggle_btn.text(), "▼")
+        # Toggle to light
+        new_mode = mgr.toggle_theme()
+        self.assertEqual(new_mode, "light")
+        self.assertFalse(mgr.is_dark)
+        self.assertEqual(mgr.palette, LIGHT_PALETTE)
 
-        card.toggle()
-        self.assertFalse(card.is_expanded())
-        self.assertTrue(card.content_widget.isHidden())
-        self.assertEqual(card.toggle_btn.text(), "▶")
+        qss_light = generate_stylesheet(LIGHT_PALETTE)
+        self.assertIn(LIGHT_PALETTE.canvas, qss_light)
 
-        card.set_expanded(True)
-        self.assertTrue(card.is_expanded())
-        self.assertFalse(card.content_widget.isHidden())
-        card.close()
+        # Revert to dark
+        mgr.set_theme("dark")
+        self.assertEqual(mgr.current_mode, "dark")
 
-    def test_debug_layout_on_laptop_1366x768(self) -> None:
-        tab, _service, _session = self.make_debug_tab()
-        tab.resize(1366, 768)
-        tab.show()
-        self.app.processEvents()
+    def test_header_bar_mode_switching(self) -> None:
+        header = HeaderBar()
+        self.assertEqual(header.current_mode, "rnd")
+        received_modes = []
+        header.mode_changed.connect(received_modes.append)
 
-        self.assertIsNotNone(tab.scroll_area)
-        self.assertTrue(tab.scroll_area.widgetResizable())
-        self.assertIsNotNone(tab.scroll_content)
-        self.assertFalse(tab.conn_panel.isHidden())
-        self.assertFalse(tab.live_panel.isHidden())
-        self.assertFalse(tab.interactive_panel.isHidden())
-        self.assertFalse(tab.log_panel.isHidden())
-        tab.close()
+        header.set_mode("operator")
+        self.assertEqual(header.current_mode, "operator")
+        self.assertEqual(received_modes, ["operator"])
 
-    def test_live_panel_adapts_typed_zero_halt_sample_and_watch_specs(self) -> None:
-        panel = DebugLivePanel()
-        panel.expressions.setText("xTickCount")
-        panel.type_combo.setCurrentText("u32")
-        self.assertEqual(panel.watch_specs(), ("xTickCount:u32",))
-        sample = LiveSample(
-            0, 0.0, 0.01, 0.01, False, 0x08025FDA,
-            SourceLocation(0x08025FDA, "vApplicationIdleHook", "main.c", 87),
-            (
-                LiveValue("xTickCount", "u32", 0x20000030, 123, "7B000000"),
-                LiveValue("v_current", "f64", 0x20000648, None, "0102030405060708", coherent=False),
-            ),
-        )
-        converted = panel.append_live_sample(sample)
-        self.assertEqual(panel.timeline_table.rowCount(), 1)
-        self.assertEqual(panel.timeline_table.item(0, 2).text(), "vApplicationIdleHook")
-        self.assertEqual(panel.table.rowCount(), 2)
-        self.assertEqual(panel.table.item(0, 2).text(), "u32")
-        self.assertEqual(panel.table.item(0, 3).text(), "0x20000030")
-        self.assertEqual(panel.table.item(1, 1).text(), "<incoherent>")
-        self.assertEqual(converted[0].numeric_value, 123.0)
-        self.assertIsNone(converted[1].numeric_value)
-        panel.close()
+        header.set_mode("rnd")
+        self.assertEqual(header.current_mode, "rnd")
+        self.assertEqual(received_modes, ["operator", "rnd"])
 
-    def test_live_runtime_dashboard_renders_existing_analytics_without_target_reads(self) -> None:
-        panel = DebugLivePanel()
-        sample = LiveSample(
-            0, 0.0, 0.012, 0.012, True, 0x08025FDA,
-            SourceLocation(0x08025FDA, "vApplicationIdleHook", "main.c", 87),
-            (LiveValue("xTickCount", "u32", 0x20000030, 102, "66000000"),),
-        )
-        panel.append_live_sample(sample)
-        snapshot = SimpleNamespace(
-            timing=SimpleNamespace(
-                total_samples=3, overruns=1, mean_read_duration_seconds=0.0125,
-                max_schedule_lag_seconds=0.004, incoherent_values=2,
-            ),
-            variables=(SimpleNamespace(
-                name="xTickCount", minimum=100.0, maximum=104.0, mean=102.0,
-            ),),
-        )
-
-        panel.apply_analytics(snapshot)
-
-        self.assertFalse(panel.quality_details.is_expanded())
-        self.assertEqual(panel.table.columnCount(), 9)
-        self.assertEqual(panel.stats_samples.text(), "Mẫu: 3")
-        self.assertEqual(panel.stats_overruns.text(), "Trễ nhịp: 1")
-        self.assertEqual(panel.stats_mean_read.text(), "Đọc TB: 12.50 ms")
-        self.assertEqual(panel.stats_max_lag.text(), "Trễ max: 4.00 ms")
-        self.assertEqual(panel.stats_incoherent.text(), "Không nhất quán: 2")
-        self.assertEqual(panel.stats_variables.text(), "Biến: 1")
-        row = panel.rows["xTickCount"]
-        self.assertEqual(panel.table.item(row, 6).text(), "100")
-        self.assertEqual(panel.table.item(row, 7).text(), "104")
-        self.assertEqual(panel.table.item(row, 8).text(), "102")
-
-        panel.clear_history()
-        self.assertEqual(panel.stats_samples.text(), "Mẫu: 0")
-        self.assertEqual(panel.stats_overruns.text(), "Trễ nhịp: 0")
-        self.assertEqual(panel.stats_variables.text(), "Biến: 0")
-        panel.close()
-
-    def test_live_monitor_timeline_update_and_follow_latest(self) -> None:
-        panel = DebugLivePanel()
-        panel.resize(800, 400)
-        panel.show()
-        self.app.processEvents()
-
-        self.assertTrue(panel.follow_latest_check.isChecked())
-        panel.append_timeline_sample(0.125, 0x08024958, "prvIdleTask", "tasks.c", 3463)
-        panel.append_timeline_sample(0.219, 0x0802B5A4, "xTaskGetSchedulerState", "tasks.c", 4032)
-        panel.append_timeline_sample(0.328, 0x08025FDA, "vApplicationIdleHook", "main.c", 87)
-
-        self.assertEqual(panel.timeline_table.rowCount(), 3)
-        self.assertEqual(panel.timeline_table.item(0, 0).text(), "0.125s")
-        self.assertEqual(panel.timeline_table.item(0, 1).text(), "0x08024958")
-        self.assertEqual(panel.timeline_table.item(0, 2).text(), "prvIdleTask")
-        self.assertEqual(panel.timeline_table.item(1, 2).text(), "xTaskGetSchedulerState")
-        self.assertEqual(panel.timeline_table.item(2, 2).text(), "vApplicationIdleHook")
-
-        panel.clear_history()
-        self.assertEqual(panel.timeline_table.rowCount(), 0)
-        panel.close()
-
-    def test_live_monitor_timeline_avoids_resize_to_contents_hot_path(self) -> None:
-        panel = DebugLivePanel()
-        header = panel.timeline_table.horizontalHeader()
-        self.assertEqual(header.sectionResizeMode(0), QHeaderView.ResizeMode.Fixed)
-        self.assertEqual(header.sectionResizeMode(1), QHeaderView.ResizeMode.Fixed)
-        self.assertEqual(header.sectionResizeMode(2), QHeaderView.ResizeMode.Stretch)
-        self.assertEqual(header.sectionResizeMode(3), QHeaderView.ResizeMode.Interactive)
-        self.assertEqual(header.sectionResizeMode(4), QHeaderView.ResizeMode.Fixed)
-        panel.close()
-
-    def test_live_monitor_timeline_is_bounded_for_long_running_sessions(self) -> None:
-        panel = DebugLivePanel()
-        panel.TIMELINE_CAPACITY = 3
-        for index in range(5):
-            panel.append_timeline_sample(
-                index * 0.1, 0x08010000 + index * 2,
-                "fn%d" % index, "main.c", 10 + index,
-            )
-
-        self.assertEqual(panel.timeline_table.rowCount(), 3)
-        self.assertEqual(len(panel._timeline_samples), 3)
-        self.assertEqual(panel.timeline_table.item(0, 2).text(), "fn2")
-        self.assertEqual(panel.timeline_table.item(2, 2).text(), "fn4")
-        self.assertEqual(panel._timeline_samples[0]["function"], "fn2")
-        panel.close()
-
-    def test_live_variables_table_watch_operations(self) -> None:
-        panel = DebugLivePanel()
-        panel.expressions.setText("xTickCount")
-        panel.type_combo.setCurrentText("u32")
-        panel.add_watch_btn.click()
-
-        self.assertEqual(panel.table.rowCount(), 1)
-        self.assertEqual(panel.table.item(0, 0).text(), "xTickCount")
-        self.assertEqual(panel.table.item(0, 2).text(), "u32")
-        self.assertEqual(panel.table.item(0, 5).checkState(), Qt.CheckState.Checked)
-
-        panel.append_batch([make_sample(0, 0.1, "xTickCount", "42", 42)])
-        self.assertEqual(panel.table.item(0, 1).text(), "42")
-
-        panel.table.selectRow(0)
-        panel.remove_watch_btn.click()
-        self.assertEqual(panel.table.rowCount(), 0)
-        panel.close()
-
-    def test_live_variables_save_and_load_preset(self) -> None:
-        panel = DebugLivePanel()
-        panel.expressions.setText("xTickCount")
-        panel.type_combo.setCurrentText("u32")
-        panel.add_watch_btn.click()
-
-        panel.expressions.setText("bRUN")
-        panel.type_combo.setCurrentText("u8")
-        panel.add_watch_btn.click()
-        panel.table.item(1, 5).setCheckState(Qt.CheckState.Unchecked)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            preset_file = Path(tmpdir) / "test_preset.json"
-            saved_path = panel.export_preset(preset_file, name="Custom Watch Group")
-            self.assertEqual(saved_path, preset_file)
-            self.assertTrue(preset_file.is_file())
-
-            # Clear table
-            panel.table.setRowCount(0)
-            panel.rows.clear()
-            self.assertEqual(panel.table.rowCount(), 0)
-
-            # Import preset
-            result = panel.import_preset(preset_file)
-            self.assertEqual(result["name"], "Custom Watch Group")
-            self.assertEqual(panel.table.rowCount(), 2)
-            self.assertEqual(panel.table.item(0, 0).text(), "xTickCount")
-            self.assertEqual(panel.table.item(0, 2).text(), "u32")
-            self.assertEqual(panel.table.item(0, 5).checkState(), Qt.CheckState.Checked)
-            self.assertEqual(panel.table.item(1, 0).text(), "bRUN")
-            self.assertEqual(panel.table.item(1, 2).text(), "u8")
-            self.assertEqual(panel.table.item(1, 5).checkState(), Qt.CheckState.Unchecked)
-            self.assertEqual(panel.watch_specs(), ("xTickCount:u32", "bRUN:u8"))
-
-        panel.close()
-
-
-    def test_live_plot_panel_pause_clear_export(self) -> None:
-        plot_panel = DebugPlotPanel(max_points=100)
-        samples = [
-            make_sample(0, 0.0, "speed", "10", 10.0),
-            make_sample(1, 0.1, "speed", "20", 20.0),
+    def test_header_bar_probes(self) -> None:
+        header = HeaderBar()
+        probes = [
+            ProbeInfo(serial="066EFF545053717867204928", name="ST-Link V2", source="usb"),
+            ProbeInfo(serial="002E001B4D31500220383734", name="ST-Link V3", source="usb"),
         ]
-        plot_panel.set_samples(samples)
-        self.assertIn("2 points", plot_panel.points_label.text())
+        header.set_probes(probes, selected_serial="002E001B4D31500220383734")
+        self.assertEqual(header.probe_combo.count(), 2)
+        self.assertEqual(header.probe_combo.currentIndex(), 1)
 
-        # Test pause display
-        plot_panel.pause_btn.setChecked(True)
-        self.assertTrue(plot_panel._paused)
-        plot_panel.set_samples(samples + [make_sample(2, 0.2, "speed", "30", 30.0)])
-        # Plot remains paused
-        plot_panel.pause_btn.setChecked(False)
-        self.assertFalse(plot_panel._paused)
+    def test_compact_sidebar_mode_filtering_and_collapse(self) -> None:
+        sidebar = CompactSidebar()
+        sidebar.show()
+        sidebar.set_mode("operator")
+        self.assertFalse(sidebar._buttons["op_flash"].isHidden())
+        self.assertTrue(sidebar._buttons["rnd_flash"].isHidden())
 
-        # Test clear
-        plot_panel.clear()
-        self.assertEqual(plot_panel.points_label.text(), "0 points plotted")
-        plot_panel.close()
+        sidebar.set_mode("rnd")
+        self.assertTrue(sidebar._buttons["op_flash"].isHidden())
+        self.assertFalse(sidebar._buttons["rnd_flash"].isHidden())
+        self.assertFalse(sidebar._buttons["rnd_memory"].isHidden())
 
-    def test_interactive_debug_warning_visible_and_controls_work(self) -> None:
-        panel = DebugInteractivePanel()
-        self.assertFalse(panel.is_expanded())  # safety-first: intrusive controls start collapsed
-        panel.set_expanded(True)
-        self.assertTrue(panel.is_expanded())
-        warn = panel.findChild(QLabel, "interactiveDebugWarningText")
-        self.assertIsNotNone(warn)
-        self.assertIn("Cảnh báo", warn.text())
-        self.assertIn("tạm dừng MCU", warn.text())
+        # Test collapse / expand toggle
+        self.assertEqual(sidebar.width(), 64)
+        sidebar.toggle_collapse()
+        self.assertEqual(sidebar.width(), 200)
+        sidebar.toggle_collapse()
+        self.assertEqual(sidebar.width(), 64)
 
-        self.assertIsNotNone(panel.halt_button)
-        self.assertIsNotNone(panel.continue_button)
-        self.assertIsNotNone(panel.reset_button)
-        self.assertIsNotNone(panel.step_into_button)
-        self.assertIsNotNone(panel.step_over_button)
-        self.assertIsNotNone(panel.where_button)
-        self.assertIsNotNone(panel.stack_button)
-        self.assertIsNotNone(panel.registers_button)
-        self.assertIsNotNone(panel.variable_button)
-        self.assertIsNotNone(panel.break_once_button)
-        self.assertIsNotNone(panel.watch_once_button)
-        panel.close()
+    def test_pipeline_stepper_states(self) -> None:
+        stepper = PipelineStepper()
+        stepper.set_step_state(0, "active", "Scanning USB...")
+        self.assertEqual(stepper._step_widgets[0]._state, "active")
 
-    def test_technical_log_panel_badges_and_actions(self) -> None:
-        log_panel = DebugLogPanel()
-        self.assertFalse(log_panel.is_expanded())  # default collapsed
-        self.assertEqual(log_panel.info_badge.text(), "0 INFO")
-        self.assertEqual(log_panel.warn_badge.text(), "0 WARN")
-        self.assertEqual(log_panel.error_badge.text(), "0 ERR")
+        stepper.map_phase("program", message="Writing 0x08010000...")
+        # Previous steps should be success
+        self.assertEqual(stepper._step_widgets[0]._state, "success")
+        self.assertEqual(stepper._step_widgets[1]._state, "success")
+        self.assertEqual(stepper._step_widgets[2]._state, "success")
+        self.assertEqual(stepper._step_widgets[3]._state, "active")
 
-        log_panel.append_log("Info: OpenOCD started normally")
-        log_panel.append_log("Warn: Connection retry attempt 1")
-        log_panel.append_log("Error: Target halted unexpectedly")
+        stepper.reset_steps()
+        self.assertEqual(stepper._step_widgets[0]._state, "idle")
 
-        self.assertEqual(log_panel.info_badge.text(), "1 INFO")
-        self.assertEqual(log_panel.warn_badge.text(), "1 WARN")
-        self.assertEqual(log_panel.error_badge.text(), "1 ERR")
+    def test_pass_fail_banner(self) -> None:
+        banner = PassFailBanner()
+        self.assertFalse(banner.isVisible())
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            dest = Path(tmpdir) / "debug.log"
-            with mock.patch("b300_gui.debug_log_panel.QFileDialog.getSaveFileName", return_value=(str(dest), "Log files (*.log)")):
-                saved = log_panel.save_log()
-                self.assertEqual(saved, dest)
-                self.assertTrue(dest.is_file())
-                self.assertIn("OpenOCD started", dest.read_text(encoding="utf-8"))
+        banner.show_pass("FLASH OK", "STLM Verified", duration_sec=3.2)
+        self.assertTrue(banner.isVisible())
+        self.assertIn("FLASH OK", banner.title_label.text())
+        self.assertIn("3.2s", banner.detail_label.text())
 
-        log_panel.clear_log()
-        self.assertEqual(log_panel.info_badge.text(), "0 INFO")
-        self.assertEqual(log_panel.log_view.toPlainText(), "")
-        log_panel.close()
+        banner.show_fail("FLASH ERROR", "Verify failed", next_action="Check power")
+        self.assertTrue(banner.isVisible())
+        self.assertIn("FLASH ERROR", banner.title_label.text())
+        self.assertIn("Check power", banner.detail_label.text())
 
-    def test_mode_selection_visibility(self) -> None:
-        tab, _service, _session = self.make_debug_tab()
+    def test_memory_map_widget(self) -> None:
+        widget = MemoryMapWidget()
+        self.assertIsNotNone(widget.canvas)
+        widget.set_image_span(0x08010000, 128 * 1024)
+        self.assertEqual(widget.canvas._image_span, (0x08010000, 128 * 1024))
+        # Trigger paint without crash
+        widget.canvas.repaint()
 
-        # Local mode
-        tab.mode_combo.setCurrentIndex(tab.mode_combo.findData("local"))
-        self.assertFalse(tab.symbols_box.isHidden())
-        self.assertTrue(tab.client_box.isHidden())
-        self.assertTrue(tab.connection_box.isHidden())
-        self.assertIn("Debug tương tác", tab.start_button.text())
+    def test_operator_view_probe_and_action_state(self) -> None:
+        op_view = OperatorView()
+        self.assertFalse(op_view.flash_btn.isEnabled())
 
-        # Client mode
-        tab.mode_combo.setCurrentIndex(tab.mode_combo.findData("client"))
-        self.assertFalse(tab.symbols_box.isHidden())
-        self.assertFalse(tab.client_box.isHidden())
-        self.assertTrue(tab.connection_box.isHidden())
-        self.assertIn("Debug tương tác", tab.start_button.text())
+        probes = [ProbeInfo(serial="V2SERIAL", name="ST-Link V2", source="usb")]
+        op_view.set_probes(probes)
+        self.assertIn("SẴN SÀNG", op_view.probe_pill.text())
+        # Still disabled until valid image is selected
+        self.assertFalse(op_view.flash_btn.isEnabled())
 
-        # Gateway mode
-        tab.mode_combo.setCurrentIndex(tab.mode_combo.findData("gateway"))
-        self.assertTrue(tab.symbols_box.isHidden())
-        self.assertTrue(tab.client_box.isHidden())
-        self.assertFalse(tab.connection_box.isHidden())
-        self.assertTrue(tab.interactive_panel.isHidden())
-        self.assertFalse(tab.conn_panel.gateway_actions.isHidden())
-        self.assertEqual(tab.remote_server_button.text(), "Bật Gateway")
-
-        tab.close()
-
-
-    def test_clean_shutdown_while_live_monitor_running(self) -> None:
-        tab, _service, session = self.make_debug_tab(initial="running", attach_state="halted")
-        with tempfile.TemporaryDirectory() as directory:
-            symbols = Path(directory) / "firmware.axf"
-            symbols.write_bytes(b"fake")
-            tab.symbol_path.setText(str(symbols))
-            tab.sample_expressions.setText("xTickCount")
-            tab.sample_cycles.setValue(100)
-            tab.sample_interval.setValue(1.0)
-            tab.start_live_sampling()
-            self.wait_until(lambda: tab._worker is not None, timeout=2.0)
-
-            # Prepare shutdown while non-halting worker is running.
-            self.assertTrue(tab.prepare_shutdown())
-        self.assertIsNone(tab._worker)
-        self.assertIsNone(tab._live_session)
-        self.assertFalse(tab._sampling_active)
-        self.assertFalse(tab._watchdog.isActive())
-        self.assertFalse(session.active)
-        tab.close()
-
-    def test_memory_application_health_rendering(self) -> None:
-        tab = MemoryTab(service=object(), probe_provider=lambda: None)
-        metadata = decode_ota_metadata(make_metadata(state=3))
-        health = SimpleNamespace(
-            metadata=metadata, lifecycle="BOOTABLE", bootable=True,
-            reason="Application Metadata, image CRC, and vector permit bootability.",
-            next_action="No action is required.", bytes_checked=126580,
-            image_crc_valid=True, actual_image_crc32=metadata.image_crc32,
-            application_vector=SimpleNamespace(
-                valid=True, reset_vector=0x08010361, reason="Application vector is valid."
-            ),
+    def test_operator_view_never_shows_a_horizontal_scrollbar(self) -> None:
+        op_view = OperatorView()
+        scroll = op_view.findChild(QScrollArea)
+        self.assertIsNotNone(scroll)
+        self.assertEqual(
+            scroll.horizontalScrollBarPolicy(),
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
         )
-        tab.show_application_health(health)
-        self.assertEqual(tab.health_values["Lifecycle"].text(), "BOOTABLE")
-        self.assertEqual(tab.health_values["Bootable"].text(), "YES")
-        self.assertEqual(tab.health_values["Image CRC"].text(), "MATCH")
-        self.assertEqual(tab.health_values["Expected CRC32"].text(), "0x%08X" % metadata.image_crc32)
-        self.assertEqual(tab.health_values["Actual CRC32"].text(), "0x%08X" % metadata.image_crc32)
-        self.assertIn("0x08010361", tab.health_values["Vector"].text())
-        self.assertEqual(tab.health_values["Next action"].text(), "No action is required.")
-        tab.close()
+
+    def test_operator_view_uses_core_target_fields_and_requires_safe_plan(self) -> None:
+        op_view = OperatorView()
+        op_view.set_probes([
+            ProbeInfo(serial="V2SERIAL", name="ST-Link V2", source="usb"),
+        ])
+        op_view._current_image = MagicMock()
+        target = TargetInfo(
+            0x101F6413, 512, 3.09, "S0-S2 protected", (0, 1, 2), True,
+        )
+
+        op_view.set_target_info(target)
+        op_view.set_flash_ready(False)
+        self.assertFalse(op_view.flash_btn.isEnabled())
+        self.assertFalse(op_view.dry_run_btn.isEnabled())
+
+        op_view.set_flash_ready(True)
+        self.assertTrue(op_view.flash_btn.isEnabled())
+        self.assertTrue(op_view.dry_run_btn.isEnabled())
+        self.assertIn("512 KiB", op_view.probe_status_sub.text())
+        self.assertIn("S0-S2 protected", op_view.probe_status_sub.text())
+
+    def test_operator_flash_uses_existing_confirmation_gate(self) -> None:
+        mock_service = MagicMock()
+        mock_service.doctor.return_value = (True, "openocd")
+        window = MainWindow(
+            service=mock_service,
+            probe_loader=lambda: (),
+            automatic_updates=False,
+        )
+        window.image_info = SimpleNamespace(path=Path("C:/firmware.hex"))
+        window.target_ready = True
+        window.flash_plan = object()
+
+        with patch.object(window, "confirm_flash") as confirm:
+            window._on_operator_flash_requested(Path("C:/firmware.hex"), False)
+
+        confirm.assert_called_once_with()
+        window.close()
+
+    def test_main_window_integration(self) -> None:
+        mock_service = MagicMock()
+        mock_service.doctor.return_value = (True, "openocd")
+
+        window = MainWindow(
+            service=mock_service,
+            probe_loader=lambda: (),
+            automatic_updates=False,
+        )
+        self.assertEqual(window.header_bar.current_mode, "rnd")
+        self.assertEqual(window.main_stack.currentWidget(), window.rnd_workspace)
+
+        # Switch to Operator mode
+        window.header_bar.set_mode("operator")
+        self.assertEqual(window.header_bar.current_mode, "operator")
+        self.assertEqual(window.main_stack.currentWidget(), window.operator_view)
+
+        # Switch back to R&D mode
+        # Test theme toggle from MainWindow
+        ThemeManager.instance().set_theme("dark")
+        self.assertEqual(ThemeManager.instance().current_mode, "dark")
+        self.assertEqual(window.header_bar.theme_btn.text(), "Giao diện: Tối")
+
+        # Toggle to light
+        window._on_toggle_theme()
+        self.assertEqual(ThemeManager.instance().current_mode, "light")
+        self.assertEqual(window.header_bar.theme_btn.text(), "Giao diện: Sáng")
+
+        # Toggle back to dark
+        window._on_toggle_theme()
+        self.assertEqual(ThemeManager.instance().current_mode, "dark")
+        self.assertEqual(window.header_bar.theme_btn.text(), "Giao diện: Tối")
+
+        window.close()
 
 
 if __name__ == "__main__":

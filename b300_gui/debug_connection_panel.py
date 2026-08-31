@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
@@ -15,6 +15,7 @@ from .collapsible_card import CollapsibleCard
 
 class DebugConnectionPanel(QGroupBox):
     """Clean engineering connection bar with mode selection, probe info, symbols, and collapsible settings."""
+    open_gateway_requested = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__("Thiết bị & file chương trình", parent)
@@ -32,12 +33,12 @@ class DebugConnectionPanel(QGroupBox):
         top_grid.setVerticalSpacing(5)
         mode_box = QHBoxLayout()
         mode_box.setSpacing(6)
-        mode_box.addWidget(QLabel("Kết nối:"))
+        mode_box.addWidget(QLabel("Nguồn:"))
         self.mode_combo = QComboBox()
         self.mode_combo.setObjectName("debugModeSelector")
         for label, value in (
             ("Tự động · Khuyến nghị", "auto"),
-            ("Máy này · ST-Link", "local"),
+            ("Máy này · ST-Link USB", "local"),
             ("Máy Gateway · ST-Link", "gateway"),
             ("Máy Client · Từ xa", "client"),
         ):
@@ -49,6 +50,13 @@ class DebugConnectionPanel(QGroupBox):
         self.mode_combo.setMinimumContentsLength(10)
         self.mode_combo.setMinimumWidth(150)
         mode_box.addWidget(self.mode_combo)
+
+        self.btn_open_gateway = QPushButton("Cầu nối Từ xa…")
+        self.btn_open_gateway.setObjectName("ghostButton")
+        self.btn_open_gateway.setToolTip("Mở tab Cầu nối Từ xa (SSH Gateway) để cấu hình máy chủ/client.")
+        self.btn_open_gateway.clicked.connect(self.open_gateway_requested.emit)
+        mode_box.addWidget(self.btn_open_gateway)
+
         top_grid.addLayout(mode_box, 0, 0)
 
         self.status_label = QLabel("CHƯA KẾT NỐI")
@@ -60,7 +68,7 @@ class DebugConnectionPanel(QGroupBox):
         top_grid.addWidget(self.status_label, 0, 1)
 
         self.probe_display = QLabel("ST-Link: Tự động")
-        self.probe_display.setStyleSheet("font-weight: 700; color: #0F172A; font-size: 12px;")
+        self.probe_display.setObjectName("pageContextTitle")
         self.probe_display.setWordWrap(True)
         self.probe_display.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         top_grid.addWidget(self.probe_display, 1, 0, 1, 2)
