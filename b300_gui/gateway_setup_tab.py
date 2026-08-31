@@ -437,6 +437,13 @@ class GatewaySetupTab(QWidget):
         self.client_connect_button.clicked.connect(self.check_client_connection)
         connection_layout.addWidget(self.client_connection_status, 1)
         connection_layout.addWidget(self.client_connect_button)
+
+        self.btn_open_debug = QPushButton("📈 Mở Debug Studio")
+        self.btn_open_debug.setObjectName("gatewayOpenDebugButton")
+        self.btn_open_debug.setMinimumHeight(34)
+        self.btn_open_debug.setToolTip("Chuyển sang Studio Theo dõi & Debug để xem biến và đồ thị realtime.")
+        self.btn_open_debug.clicked.connect(self._on_open_debug_clicked)
+        connection_layout.addWidget(self.btn_open_debug)
         layout.addWidget(connection_group)
 
         self.client_help_details = CollapsibleCard(
@@ -445,7 +452,7 @@ class GatewaySetupTab(QWidget):
             expanded=False,
         )
         client_note = QLabel(
-            "Sau khi kết nối PASS, Theo dõi / Debug tự dùng Gateway đã lưu; không cần nhập lại host/user."
+            "Sau khi kết nối PASS, Studio Theo dõi & Debug tự động dùng Gateway đã lưu; không cần nhập lại host/user."
         )
         client_note.setObjectName("infoNote")
         client_note.setWordWrap(True)
@@ -453,6 +460,11 @@ class GatewaySetupTab(QWidget):
         layout.addWidget(self.client_help_details)
         layout.addStretch(1)
         return self._scroll_page(content)
+
+    def _on_open_debug_clicked(self) -> None:
+        window = self.window()
+        if hasattr(window, "tabs"):
+            window.tabs.setCurrentIndex(2)
 
     def _select_role(self, index: int) -> None:
         self.role_stack.setCurrentIndex(index)

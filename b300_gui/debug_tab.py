@@ -152,6 +152,7 @@ class DebugTab(QWidget):
         self.remote_server_button.clicked.connect(self.start_remote_server)
         self.remote_stop_button.clicked.connect(self.stop_debug)
         self.remote_kit_button.clicked.connect(self.show_remote_vscode_dialog)
+        self.conn_panel.open_gateway_requested.connect(self._on_open_gateway_clicked)
 
         # 2. Realtime Live Monitor Section (Zero-Halt SWD)
         self.live_panel = DebugLivePanel(self.scroll_content)
@@ -249,6 +250,11 @@ class DebugTab(QWidget):
         self.sample_interval.valueChanged.connect(self._save_debug_preferences)
         self._restore_debug_preferences()
         self._refresh_controls()
+
+    def _on_open_gateway_clicked(self) -> None:
+        window = self.window()
+        if hasattr(window, "tabs"):
+            window.tabs.setCurrentIndex(3)
 
     def _setting_value(self, key: str, default=None):
         if self._settings is None:
