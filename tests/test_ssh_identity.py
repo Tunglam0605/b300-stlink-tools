@@ -410,7 +410,7 @@ class SshIdentityTests(unittest.TestCase):
                         argv, 0, "authorizedkeysfile .ssh/authorized_keys\n", "",
                     )
                 rendered = " ".join(argv)
-                if Path(argv[0]).name.lower() == "whoami.exe":
+                if str(argv[0]).lower().endswith("whoami.exe"):
                     return subprocess.CompletedProcess(
                         argv, 0,
                         '"BUILTIN\\Users","Alias","S-1-5-32-545","Mandatory group"\n',
