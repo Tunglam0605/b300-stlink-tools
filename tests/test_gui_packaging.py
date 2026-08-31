@@ -168,6 +168,8 @@ class GuiPackagingTests(unittest.TestCase):
         self.assertIn("COLLECT(", windows_spec)
         self.assertIn("load_trusted_bootloader", windows_spec)
         self.assertNotIn("v00050001.hex", windows_spec)
+        self.assertIn("FOREIGN_ICU_BINARY_NAMES", windows_spec)
+        self.assertIn("_is_foreign_icu_binary", windows_spec)
         self.assertIn('ROOT / "b300_gui_windows.spec"', native_builder)
         self.assertIn('"--application-root"', native_builder)
         self.assertIn("Verify packaged Windows onedir runtime", workflow)

@@ -97,7 +97,7 @@ class GuiSmokeTests(unittest.TestCase):
         # Qt teardown crash after unittest has already reported OK on Windows.
         # Entry-point finalization is covered in an isolated subprocess below.
 
-    def test_smoke_entry_point_finalizes_qapplication(self) -> None:
+    def test_smoke_entry_point_returns_without_qt_global_teardown(self) -> None:
         result = subprocess.run(
             [
                 sys.executable,
@@ -105,13 +105,50 @@ class GuiSmokeTests(unittest.TestCase):
                 "from b300_gui.__main__ import main; "
                 "from PySide6.QtWidgets import QApplication; "
                 "assert main(['--smoke-test']) == 0; "
-                "assert QApplication.instance() is None",
+                "assert QApplication.instance() is not None",
             ],
             capture_output=True,
             text=True,
             env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_smoke_entry_point_does_not_require_console_stdout(self) -> None:
+        """A PyInstaller windowed GUI runs without a console-backed stdout."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.stdout = None; "
+                "from b300_gui.__main__ import main; "
+                "from PySide6.QtWidgets import QApplication; "
+                "assert main(['--smoke-test']) == 0; "
+                "assert QApplication.instance() is not None",
+            ],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_smoke_entry_point_does_not_destroy_process_global_qapplication(self) -> None:
+        """Windowed executables must return from smoke mode without Qt global teardown."""
+        app = QApplication.instance()
+        self.assertIsNotNone(app)
+        with mock.patch.object(QApplication, "shutdown") as shutdown:
+            from b300_gui.__main__ import main
+
+            self.assertEqual(main(["--smoke-test"]), 0)
+        shutdown.assert_not_called()
+        self.assertIs(QApplication.instance(), app)
+
+    def test_smoke_entry_point_does_not_write_to_console(self) -> None:
+        """The windowed PyInstaller launcher has no safe console output stream."""
+        with mock.patch("builtins.print") as print_output:
+            from b300_gui.__main__ import main
+
+            self.assertEqual(main(["--smoke-test"]), 0)
+        print_output.assert_not_called()
 
     def test_main_window_starts_safe_and_has_no_com_selector(self) -> None:
         window = MainWindow(service=FakeService(), probe_loader=lambda: ())

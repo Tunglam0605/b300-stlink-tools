@@ -34,6 +34,27 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+
+# Qt6Core on Windows imports the generic ``icuuc.dll``.  PyInstaller can pick
+# up an unrelated ICU runtime from a tool installed on PATH (for example
+# Poppler), which then shadows Windows' compatible ICU and prevents PySide6
+# from loading.  Preserve an ICU shipped by PySide6 itself, but discard foreign
+# runtime copies.
+FOREIGN_ICU_BINARY_NAMES = frozenset({"icuuc.dll", "icudt78.dll"})
+
+
+def _is_foreign_icu_binary(entry):
+    destination, source, _kind = entry
+    return (
+        Path(destination).name.lower() in FOREIGN_ICU_BINARY_NAMES
+        and "pyside6" not in str(source).lower()
+    )
+
+
+a.binaries = [
+    entry for entry in a.binaries if not _is_foreign_icu_binary(entry)
+]
+
 pyz = PYZ(a.pure)
 
 exe = EXE(

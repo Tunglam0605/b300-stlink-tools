@@ -47,8 +47,10 @@ def main(argv=None) -> int:
         app.processEvents()
         window.close()
         app.processEvents()
-        app.shutdown()
-        print("B300 GUI smoke test OK")
+        # Do not tear down Qt's process-global application object here.  The
+        # Windows PyInstaller windowed launcher can hang during that global
+        # teardown even though this smoke invocation is already returning.
+        app.quit()
         return 0
     window.show()
     return app.exec()
