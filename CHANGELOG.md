@@ -5,6 +5,10 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.12.6] - 2026-08-31
+
+- Gateway Setup separates the active Windows network profile from the SSH firewall check. When exactly one active profile is Public, the confirmed/UAC-protected Gateway Prepare flow changes only that profile to Private and then repairs the B300 TCP/22 `LocalSubnet` rule. Private/Domain profiles are never changed; ambiguous multi-network/VPN cases remain fail-closed with an operator instruction.
+
 ## [0.12.5] - 2026-08-31
 
 - Gateway Setup now verifies the effective B300-owned Windows SSH firewall policy instead of trusting a rule name alone. With administrator confirmation, it repairs only the B300 rule for TCP/22 on Domain/Private `LocalSubnet`; it does not alter `sshd_config`, existing OpenSSH rules, or debug ports.

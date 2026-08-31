@@ -36,6 +36,8 @@ _ACTION_TEXT = {
     "install_openssh_server": "Cài OpenSSH Server",
     "enable_ssh_startup": "Bật SSH tự khởi động cùng hệ điều hành",
     "start_ssh_service": "Khởi động dịch vụ SSH",
+    "set_active_network_private": "Đổi mạng Windows đang dùng từ Public sang Private (chỉ profile đang hoạt động)",
+    "manual_fix_network_profile": "DỪNG: không xác định duy nhất mạng Windows đang hoạt động",
     "allow_ssh_firewall": "Cho phép duy nhất SSH TCP/22 qua host firewall",
     "manual_fix_debug_exposure": "DỪNG: debug port 3333/4444/6666 đang bị expose ra ngoài loopback",
 }
@@ -679,6 +681,14 @@ class GatewaySetupTab(QWidget):
                 self, "Unsafe debug exposure",
                 "TCP 3333/4444/6666 đang có listener ngoài loopback. Tool sẽ không tự sửa hoặc tiếp tục. "
                 "Hãy đóng/reconfigure process đó trước."
+            )
+            return
+        if "manual_fix_network_profile" in plan.actions:
+            QMessageBox.critical(
+                self, "Network profile needs attention",
+                "B300 thấy nhiều mạng/VPN đang hoạt động hoặc không xác định được mạng LAN cần dùng. "
+                "Tool sẽ không tự đổi profile, không mở firewall và không yêu cầu UAC. "
+                "Hãy ngắt mạng/VPN phụ hoặc đặt đúng mạng LAN thành Private, rồi bấm Kiểm tra lại.",
             )
             return
         if not plan.changes_required:

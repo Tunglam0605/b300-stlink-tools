@@ -1,5 +1,6 @@
 import subprocess
 import unittest
+import json
 from unittest import mock
 
 from b300_core.gateway_setup import (
@@ -9,9 +10,10 @@ from b300_core.gateway_setup import (
 
 
 def report(*, platform="windows", installed=True, running=True, startup=True,
-           firewall=True, listening=True, private=True, port=22, ready=None):
+           firewall=True, listening=True, private=True, network_profile=True,
+           network_profile_state=None, port=22, ready=None):
     if ready is None:
-        ready = all((installed, running, startup, firewall, listening, private))
+        ready = all((installed, running, startup, firewall, listening, private, network_profile))
     return GatewayHostReport(
         platform=platform, checks=(), ssh_installed=installed,
         ssh_service_running=running, ssh_startup_enabled=startup,
@@ -20,6 +22,8 @@ def report(*, platform="windows", installed=True, running=True, startup=True,
         conclusion="READY" if ready else "BLOCKED", ssh_port=port,
         username="automation", hostname="b300-gateway",
         ipv4_addresses=("192.168.1.109",),
+        ssh_network_profile_ready=network_profile,
+        ssh_network_profile_state=network_profile_state or ("READY" if network_profile else "PUBLIC"),
     )
 
 
@@ -60,19 +64,120 @@ class GatewaySetupTests(unittest.TestCase):
         self.assertIn("-RemoteAddress LocalSubnet", script)
         self.assertIn("-LocalPort 22", script)
 
+    def test_public_network_profile_is_a_separate_prepare_action(self):
+        plan = build_gateway_prepare_plan(report(network_profile=False, firewall=False))
+
+        self.assertEqual(plan.actions, (
+            "set_active_network_private", "allow_ssh_firewall",
+        ))
+
+    def test_windows_prepare_changes_exactly_one_active_public_profile(self):
+        plan = build_gateway_prepare_plan(report(network_profile=False, firewall=False))
+        script = _windows_prepare_script(plan)
+
+        self.assertIn("Get-NetConnectionProfile", script)
+        self.assertIn("$active.Count -ne 1", script)
+        self.assertIn("$active[0].NetworkCategory -ne 'Public'", script)
+        self.assertIn("Set-NetConnectionProfile -InterfaceIndex $active[0].InterfaceIndex -NetworkCategory Private", script)
+
+    def test_windows_public_profile_guard_runs_before_every_system_mutation(self):
+        plan = build_gateway_prepare_plan(report(
+            installed=False, running=False, startup=False, network_profile=False,
+            firewall=False, listening=False,
+        ))
+        script = _windows_prepare_script(plan)
+
+        guard = script.index("$active.Count -ne 1")
+        for mutation in (
+            "Add-WindowsCapability", "Set-Service", "Start-Service",
+            "Set-NetConnectionProfile", "Remove-NetFirewallRule", "New-NetFirewallRule",
+        ):
+            self.assertLess(guard, script.index(mutation), mutation)
+
+    def test_private_network_profile_is_never_changed_by_prepare(self):
+        plan = build_gateway_prepare_plan(report(network_profile=True, firewall=False))
+        script = _windows_prepare_script(plan)
+
+        self.assertNotIn("Set-NetConnectionProfile", script)
+
+    def test_ambiguous_network_profile_blocks_prepare_before_firewall_or_uac(self):
+        blocked = report(
+            network_profile=False, network_profile_state="AMBIGUOUS", firewall=False,
+        )
+        plan = build_gateway_prepare_plan(blocked)
+
+        self.assertEqual(plan.actions, ("manual_fix_network_profile",))
+        runner = mock.Mock(side_effect=AssertionError("must not request UAC"))
+        result = prepare_gateway_host(runner=runner, inspector=mock.Mock(return_value=blocked))
+
+        self.assertFalse(result.succeeded)
+        self.assertFalse(result.changed)
+        runner.assert_not_called()
+
     def test_windows_firewall_readiness_validates_lan_scope_not_only_rule_name(self):
         from b300_core.gateway_setup import _windows_ssh_firewall_ready
+
+        def runner(argv, timeout):
+            rule = {
+                "Enabled": True, "Direction": "Inbound", "Action": "Allow",
+                "Profile": 3, "Protocol": "TCP", "LocalPort": "22",
+                "RemoteAddress": ["LocalSubnet"],
+            }
+            return subprocess.CompletedProcess(argv, 0, json.dumps(rule), "")
+
+        self.assertTrue(_windows_ssh_firewall_ready(22, runner))
+
+    def test_windows_firewall_readiness_rejects_public_or_broad_address_scope(self):
+        from b300_core.gateway_setup import _windows_ssh_firewall_ready
+
+        unsafe_rules = (
+            {"Enabled": True, "Direction": "Inbound", "Action": "Allow", "Profile": 7,
+             "Protocol": "TCP", "LocalPort": "22", "RemoteAddress": ["LocalSubnet"]},
+            {"Enabled": True, "Direction": "Inbound", "Action": "Allow", "Profile": 3,
+             "Protocol": "TCP", "LocalPort": "22", "RemoteAddress": ["LocalSubnet", "Any"]},
+        )
+        for rule in unsafe_rules:
+            runner = lambda argv, timeout, value=rule: subprocess.CompletedProcess(
+                argv, 0, json.dumps(value), ""
+            )
+            self.assertFalse(_windows_ssh_firewall_ready(22, runner))
+
+    def test_windows_firewall_readiness_rejects_disabled_rule_without_boolean_string_cast(self):
+        from b300_core.gateway_setup import _windows_ssh_firewall_ready
+
+        disabled_rule = {
+            "Enabled": False, "Direction": "Inbound", "Action": "Allow", "Profile": 3,
+            "Protocol": "TCP", "LocalPort": "22", "RemoteAddress": ["LocalSubnet"],
+        }
+        seen = []
+
+        def runner(argv, timeout):
+            seen.append(argv[-1])
+            return subprocess.CompletedProcess(argv, 0, json.dumps(disabled_rule), "")
+
+        self.assertFalse(_windows_ssh_firewall_ready(22, runner))
+        self.assertIn("[string]$rule.Enabled -eq 'True'", seen[0])
+        self.assertNotIn("[bool]$rule.Enabled", seen[0])
+
+    def test_linux_report_does_not_add_a_windows_network_profile_check(self):
+        from b300_core.gateway_setup import _build_report
+
+        result = _build_report("linux", True, True, True, True, True, True, 22)
+
+        self.assertNotIn("network_profile", [check.name for check in result.checks])
+
+    def test_windows_network_profile_inspection_classifies_public_profile(self):
+        from b300_core.gateway_setup import _windows_network_profile_state
 
         scripts = []
 
         def runner(argv, timeout):
             scripts.append(argv[-1])
-            return subprocess.CompletedProcess(argv, 0, "READY", "")
+            return subprocess.CompletedProcess(argv, 0, "PUBLIC", "")
 
-        self.assertTrue(_windows_ssh_firewall_ready(22, runner))
-        self.assertIn("Get-NetFirewallAddressFilter", scripts[0])
+        self.assertEqual(_windows_network_profile_state(runner), "PUBLIC")
         self.assertIn("Get-NetConnectionProfile", scripts[0])
-        self.assertIn("LocalSubnet", scripts[0])
+        self.assertIn("AMBIGUOUS", scripts[0])
 
     def test_windows_elevated_prepare_keeps_uac_but_hides_powershell_console(self):
         plan = build_gateway_prepare_plan(report(
