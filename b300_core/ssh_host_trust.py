@@ -190,8 +190,16 @@ def trusted_known_hosts_file(
 
 def local_gateway_host_key(
         *, system_name: Optional[str] = None, program_data: Optional[Path] = None,
-        etc_ssh: Optional[Path] = None,
+        etc_ssh: Optional[Path] = None, runner: CommandRunner = _run,
+        keyscan_executable: Optional[str] = None,
 ) -> GatewayHostKey:
+    """Read the local Gateway public host key without touching private-key material.
+
+    Prefer querying the running SSH service over loopback. This avoids Windows
+    ProgramData\\ssh ACL issues in a normal non-elevated GUI and returns the exact
+    public host key that a remote Client will observe. Direct `.pub` file access is
+    retained only as a fallback for systems without a usable ssh-keyscan binary.
+    """
     system = (system_name or platform.system()).strip().lower()
     if system == "windows":
         root = Path(program_data or os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "ssh"
@@ -199,10 +207,36 @@ def local_gateway_host_key(
         root = Path(etc_ssh or "/etc/ssh")
     else:
         raise RuntimeError("Gateway host-key inspection supports Windows and Ubuntu/Linux only.")
+
+    resolved_keyscan = keyscan_executable
+    if resolved_keyscan is None:
+        resolved = resolve_ssh_client_executable("ssh-keyscan")
+        resolved_keyscan = str(resolved) if resolved is not None else None
+
+    scan_error: Optional[Exception] = None
+    if resolved_keyscan:
+        try:
+            return scan_gateway_host_key(
+                "localhost", 22, runner=runner, executable=resolved_keyscan,
+            )
+        except Exception as error:
+            scan_error = error
+
     public_path = root / "ssh_host_ed25519_key.pub"
-    if not public_path.is_file():
-        raise RuntimeError("Gateway ssh-ed25519 host public key was not found: %s" % public_path)
-    public_key = validate_public_key(public_path.read_text(encoding="utf-8"))
+    try:
+        public_key = validate_public_key(public_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as file_error:
+        details = []
+        if resolved_keyscan is None:
+            details.append("ssh-keyscan is unavailable")
+        elif scan_error is not None:
+            details.append("loopback scan failed: %s" % scan_error)
+        details.append("public-key file fallback failed: %s" % file_error)
+        raise RuntimeError(
+            "Gateway SSH host fingerprint could not be read without private-key access. %s" %
+            "; ".join(details)
+        ) from file_error
+
     return GatewayHostKey(
         host="localhost", port=22, host_field="localhost",
         public_key=public_key, fingerprint=public_key_fingerprint(public_key),
