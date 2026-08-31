@@ -56,35 +56,35 @@ class ThemePalette:
 DARK_PALETTE = ThemePalette(
     name="dark",
     is_dark=True,
-    canvas="#0B0F17",           # Deep obsidian slate
-    surface="#121A26",          # Elevated dark card
-    surface_raised="#1A2637",   # Active panel / header surface
-    surface_sunken="#070B10",   # Depressed container
-    input_bg="#0E1522",         # Input fields
-    terminal_bg="#05080C",      # Terminal console
+    canvas="#101722",           # Neutral slate canvas; avoids a crushed-black work area
+    surface="#172231",          # Elevated dark card
+    surface_raised="#202F42",   # Active panel / header surface
+    surface_sunken="#0B111A",   # Depressed container
+    input_bg="#111C2A",         # Input fields
+    terminal_bg="#0B1220",      # Terminal console
 
-    border="#1E2B3E",           # Subdued structural border
-    border_strong="#2C3D56",    # Control border
+    border="#2C3A4D",           # Subdued structural border
+    border_strong="#465A73",    # Control border
     border_active="#38BDF8",    # Active focus border (Electric Sky)
-    border_muted="#162030",     # Subtle separator
+    border_muted="#1E293B",     # Subtle separator
 
-    text="#F1F5F9",             # Slate 100 high contrast
-    text_secondary="#94A3B8",   # Slate 400 secondary
-    text_muted="#64748B",       # Slate 500 captions
+    text="#F8FAFC",             # Slate 50 high contrast
+    text_secondary="#CBD5E1",   # Slate 300 secondary; legible in dense workspaces
+    text_muted="#94A3B8",       # Slate 400 captions
     text_on_accent="#FFFFFF",   # High-contrast text on bright backgrounds
 
-    primary="#0EA5E9",          # Vibrant Sky 500
-    primary_hover="#38BDF8",    # Electric Sky 400
-    primary_light="#0C253C",    # Sky tint for badges
-    accent_cyan="#38BDF8",      # Electric Cyan for hex addresses
-    accent_purple="#C084FC",    # Electric Purple for memory sizes
-    accent_amber="#FBBF24",     # Electric Amber for registers
+    primary="#0284C7",          # Controlled Sky 600: interaction only
+    primary_hover="#0EA5E9",    # Clear but restrained hover
+    primary_light="#123551",    # Sky tint for badges
+    accent_cyan="#93C5FD",      # Technical values, not general body text
+    accent_purple="#C4B5FD",    # Memory sizes
+    accent_amber="#FCD34D",     # Registers
 
-    success="#10B981",          # Emerald 500
-    success_hover="#34D399",    # Emerald 400
+    success="#059669",          # Emerald 600
+    success_hover="#10B981",    # Emerald 500
     success_light="#064E3B",    # Dark emerald tint
-    danger="#EF4444",           # Red 500
-    danger_hover="#F87171",     # Red 400
+    danger="#DC2626",           # Red 600
+    danger_hover="#EF4444",     # Red 500
     danger_light="#450A0A",     # Dark red tint
     warning="#F59E0B",          # Amber 500
     warning_light="#451A03",    # Dark amber tint
@@ -360,6 +360,12 @@ def generate_stylesheet(p: ThemePalette) -> str:
 
     QPushButton:pressed {{
         background-color: {p.surface_sunken};
+        border-color: {p.border_active};
+    }}
+
+    QPushButton:focus {{
+        border: 2px solid {p.border_active};
+        padding: 5px 13px;
     }}
 
     QPushButton:disabled {{
@@ -381,6 +387,11 @@ def generate_stylesheet(p: ThemePalette) -> str:
         border-color: {p.primary_hover};
     }}
 
+    QPushButton#primaryButton:pressed {{
+        background-color: {p.primary};
+        border-color: {p.text_on_accent};
+    }}
+
     QPushButton#operatorFlashBtn {{
         background-color: {p.success};
         color: {p.text_on_accent};
@@ -394,6 +405,11 @@ def generate_stylesheet(p: ThemePalette) -> str:
 
     QPushButton#operatorFlashBtn:hover {{
         background-color: {p.success_hover};
+    }}
+
+    QPushButton#operatorFlashBtn:pressed {{
+        background-color: {p.success};
+        border-color: {p.text_on_accent};
     }}
 
     QPushButton#operatorFlashBtn:disabled {{
@@ -575,7 +591,7 @@ def generate_stylesheet(p: ThemePalette) -> str:
 
     QHeaderView::section {{
         background-color: {p.surface_raised};
-        color: {p.accent_cyan};
+        color: {p.text_secondary};
         font-weight: 800;
         font-size: 11px;
         text-transform: uppercase;

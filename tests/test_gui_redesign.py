@@ -56,6 +56,19 @@ class GuiRedesignTests(unittest.TestCase):
         mgr.set_theme("dark")
         self.assertEqual(mgr.current_mode, "dark")
 
+    def test_dark_theme_uses_neutral_readable_data_colors_and_visible_focus(self) -> None:
+        self.assertEqual(DARK_PALETTE.canvas, "#101722")
+        self.assertEqual(DARK_PALETTE.text, "#F8FAFC")
+        self.assertEqual(DARK_PALETTE.text_secondary, "#CBD5E1")
+        self.assertNotEqual(DARK_PALETTE.primary, DARK_PALETTE.text)
+        self.assertNotEqual(DARK_PALETTE.accent_cyan, DARK_PALETTE.text)
+
+        qss = generate_stylesheet(DARK_PALETTE)
+        self.assertIn("QPushButton:focus", qss)
+        self.assertIn("QPushButton#primaryButton:pressed", qss)
+        self.assertIn("QPushButton#operatorFlashBtn:pressed", qss)
+        self.assertIn("color: #CBD5E1;", qss)
+
     def test_header_bar_mode_switching(self) -> None:
         header = HeaderBar()
         self.assertEqual(header.current_mode, "rnd")
