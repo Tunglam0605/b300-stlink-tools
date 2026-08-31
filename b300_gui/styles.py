@@ -1050,7 +1050,8 @@ QScrollArea#workflowScroll > QWidget > QWidget {
     background-color: #F8FAFC;
 }
 
-QLabel#gatewaySetupStatus, QLabel#clientProfileStatus, QLabel#clientConnectionStatus {
+QLabel#gatewaySetupStatus, QLabel#gatewayHostKeyStatus,
+QLabel#clientProfileStatus, QLabel#clientConnectionStatus {
     background-color: #F8FAFC;
     color: #475569;
     border: 1px solid #E2E8F0;
@@ -1060,6 +1061,7 @@ QLabel#gatewaySetupStatus, QLabel#clientProfileStatus, QLabel#clientConnectionSt
 }
 
 QLabel#gatewaySetupStatus[state="ready"],
+QLabel#gatewayHostKeyStatus[state="ready"],
 QLabel#clientProfileStatus[state="ready"],
 QLabel#clientConnectionStatus[state="ready"] {
     background-color: #ECFDF5;
@@ -1074,11 +1076,18 @@ QLabel#gatewaySetupStatus[state="warning"] {
 }
 
 QLabel#gatewaySetupStatus[state="error"],
+QLabel#gatewayHostKeyStatus[state="error"],
 QLabel#clientProfileStatus[state="error"],
 QLabel#clientConnectionStatus[state="error"] {
     background-color: #FEF2F2;
     color: #991B1B;
     border-color: #FECACA;
+}
+
+QLabel#gatewayHostKeyStatus[state="busy"] {
+    background-color: #EFF6FF;
+    color: #1E40AF;
+    border-color: #BFDBFE;
 }
 
 QLabel#safetyNote, QLabel#infoNote {

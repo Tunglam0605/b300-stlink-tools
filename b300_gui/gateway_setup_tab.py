@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 
 from b300_core.gateway_readiness import inspect_gateway_readiness
 from b300_core.gateway_setup import (
-    GatewayHostReport, GatewayPrepareResult, build_gateway_prepare_plan,
+    DEFAULT_SSH_PORT, GatewayHostReport, GatewayPrepareResult, build_gateway_prepare_plan,
     client_connection_text, inspect_gateway_host, prepare_gateway_host,
 )
 from b300_core.ssh_identity import (
@@ -81,6 +81,8 @@ class GatewaySetupTab(QWidget):
         self._connectivity_ready = False
         self._identity: Optional[SshIdentityReport] = None
         self._local_host_key: Optional[GatewayHostKey] = None
+        self._gateway_ssh_port = DEFAULT_SSH_PORT
+        self._pending_host_key_port: Optional[int] = None
         self._worker: Optional[FunctionWorker] = None
         self._retired_workers = []
         self._report: Optional[GatewayHostReport] = None
@@ -264,6 +266,7 @@ class GatewaySetupTab(QWidget):
         details_layout.addWidget(self.client_config)
         self.host_key_status = QLabel("Fingerprint: chưa đọc")
         self.host_key_status.setObjectName("gatewayHostKeyStatus")
+        self.host_key_status.setProperty("state", "idle")
         self.host_key_status.setWordWrap(True)
         details_layout.addWidget(self.host_key_status)
         config_actions = QHBoxLayout()
@@ -557,15 +560,19 @@ class GatewaySetupTab(QWidget):
             button.setEnabled(not busy)
         self.copy_button.setEnabled(not busy and self._report is not None)
         self.identity_copy_button.setEnabled(not busy and self._identity is not None and self._identity.ready)
+        self.copy_host_fingerprint_button.setEnabled(
+            not busy and self._local_host_key is not None and
+            self.host_key_status.property("state") == "ready"
+        )
         self.operation_state_changed.emit()
 
-    def _start(self, operation, completed, busy_text: str) -> None:
+    def _start(self, operation, completed, busy_text: str, failed=None) -> None:
         if self._worker is not None:
             return
         self._set_busy(True, busy_text)
         worker = FunctionWorker(lambda _log, _phase, _cancel: operation(), self)
         worker.completed.connect(completed)
-        worker.failed.connect(self._failed)
+        worker.failed.connect(failed or self._failed)
         worker.finished.connect(self._worker_finished)
         self._worker = worker
         worker.start()
@@ -581,6 +588,7 @@ class GatewaySetupTab(QWidget):
             # owning tab lifetime instead of mixing deleteLater with parent teardown.
             self._retired_workers.append(worker)
         self._set_busy(False)
+        self._pending_host_key_port = None
         self._update_next_action()
 
     def _failed(self, failure) -> None:
@@ -599,13 +607,20 @@ class GatewaySetupTab(QWidget):
         self._update_next_action()
 
     def refresh_host(self) -> None:
-        self._start(lambda: self.inspector(ssh_port=22), self._host_refreshed, "Checking host…")
+        port = self._gateway_ssh_port
+        self._start(lambda: self.inspector(ssh_port=port), self._host_refreshed, "Checking host…")
 
     def _host_refreshed(self, report: GatewayHostReport) -> None:
         self._render(report)
         self.log.emit("Gateway host inspection: %s" % report.conclusion)
 
     def _render(self, report: GatewayHostReport) -> None:
+        previous_port = self._gateway_ssh_port
+        self._gateway_ssh_port = int(report.ssh_port)
+        if previous_port != self._gateway_ssh_port and self._local_host_key is not None:
+            self._local_host_key = None
+            self._set_host_key_state("idle", "Fingerprint: chưa đọc")
+            self.copy_host_fingerprint_button.setEnabled(False)
         self._report = report
         if report.ready:
             self.status.setText("GATEWAY SSH READY ✓ · %s · TCP/%d" % (report.platform.upper(), report.ssh_port))
@@ -661,7 +676,8 @@ class GatewaySetupTab(QWidget):
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
-        self._start(lambda: self.preparer(ssh_port=22), self._prepare_finished, "Preparing Gateway…")
+        port = self._gateway_ssh_port
+        self._start(lambda: self.preparer(ssh_port=port), self._prepare_finished, "Preparing Gateway…")
 
     def _prepare_finished(self, result: GatewayPrepareResult) -> None:
         self._render(result.after)
@@ -767,17 +783,59 @@ class GatewaySetupTab(QWidget):
         )
 
     def show_local_host_key(self) -> None:
-        self._start(self.host_key_reader, self._local_host_key_loaded, "Reading Gateway host fingerprint…")
+        if self._worker is not None:
+            return
+        port = self._gateway_ssh_port
+        self._pending_host_key_port = port
+        self._local_host_key = None
+        self._set_host_key_state("busy", "Đang đọc fingerprint...")
+        self.copy_host_fingerprint_button.setEnabled(False)
+        self._start(
+            lambda: self.host_key_reader(port=port), self._local_host_key_loaded,
+            "Reading Gateway host fingerprint…", failed=self._local_host_key_failed,
+        )
+
+    def _set_host_key_state(self, state: str, text: str) -> None:
+        self.host_key_status.setText(text)
+        self.host_key_status.setProperty("state", state)
+        self.host_key_status.style().unpolish(self.host_key_status)
+        self.host_key_status.style().polish(self.host_key_status)
 
     def _local_host_key_loaded(self, host_key: GatewayHostKey) -> None:
+        expected_port = self._pending_host_key_port
+        if (
+                expected_port is None or host_key.port != expected_port or
+                self._gateway_ssh_port != expected_port
+        ):
+            self._local_host_key_failed(RuntimeError(
+                "Gateway SSH port changed while reading the host fingerprint."
+            ))
+            return
         self._local_host_key = host_key
-        self.host_key_status.setText("Gateway host fingerprint · ssh-ed25519 · %s" % host_key.fingerprint)
-        self.copy_host_fingerprint_button.setEnabled(True)
+        self._set_host_key_state(
+            "ready", "SSH host key\nED25519\n%s" % host_key.fingerprint,
+        )
         self.log.emit("Gateway SSH host fingerprint loaded: %s; private host key was not read/exported." % host_key.fingerprint)
         self._update_next_action()
 
+    def _local_host_key_failed(self, failure) -> None:
+        self._local_host_key = None
+        message = getattr(failure, "message", str(failure))
+        port = self._pending_host_key_port or self._gateway_ssh_port
+        security_markers = ("multiple different", "malformed", "untrusted", "conflict", "ambigu")
+        if any(marker in message.lower() for marker in security_markers):
+            summary = "Dữ liệu public host key từ localhost:%d không hợp lệ hoặc mâu thuẫn." % port
+        elif "port changed" in message.lower():
+            summary = "Cấu hình SSH port đã thay đổi; hãy đọc lại fingerprint."
+        else:
+            summary = "SSH Server chưa phản hồi trên localhost:%d hoặc không tìm thấy public host key." % port
+        self._set_host_key_state("error", "Không đọc được fingerprint\n%s" % summary)
+        self.copy_host_fingerprint_button.setEnabled(False)
+        self.log.emit("Gateway SSH host fingerprint read failed: %s" % message)
+        self._update_next_action()
+
     def copy_host_fingerprint(self) -> None:
-        if self._local_host_key is None:
+        if self._local_host_key is None or self.host_key_status.property("state") != "ready":
             return
         QApplication.clipboard().setText(self._local_host_key.fingerprint)
         self.log.emit("Gateway SSH host-key fingerprint copied.")
@@ -830,9 +888,11 @@ class GatewaySetupTab(QWidget):
         )
 
     def run_selftest(self) -> None:
+        port = self._gateway_ssh_port
+
         def operation():
-            host = self.inspector(ssh_port=22)
-            full = self.full_inspector(ssh_port=22, gdb_port=3333, tcl_port=6666)
+            host = self.inspector(ssh_port=port)
+            full = self.full_inspector(ssh_port=port, gdb_port=3333, tcl_port=6666)
             return host, full
         self._start(operation, self._selftest_finished, "Running self-test…")
 

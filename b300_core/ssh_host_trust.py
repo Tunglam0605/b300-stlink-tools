@@ -38,6 +38,14 @@ class HostTrustResult:
 CommandRunner = Callable[[Sequence[str], float], subprocess.CompletedProcess]
 
 
+class _HostKeyScanUnavailable(RuntimeError):
+    """The scanner could not obtain a host key, so public-file fallback is safe."""
+
+
+class _HostKeyScanSecurityError(RuntimeError):
+    """The scanner returned untrusted data that must never be hidden by fallback."""
+
+
 def _run(argv: Sequence[str], timeout: float = 15.0) -> subprocess.CompletedProcess:
     return subprocess.run(
         tuple(str(item) for item in argv), capture_output=True, text=True,
@@ -91,11 +99,17 @@ def scan_gateway_host_key(
         resolved = resolve_ssh_client_executable("ssh-keyscan")
         keyscan = str(resolved) if resolved is not None else None
     if not keyscan:
-        raise RuntimeError("ssh-keyscan was not found. Prepare OpenSSH Client first.")
+        raise _HostKeyScanUnavailable("ssh-keyscan was not found. Prepare OpenSSH Client first.")
     command = (keyscan, "-T", "5", "-p", str(selected_port), "-t", "ed25519", selected_host)
-    result = runner(command, 15.0)
+    try:
+        result = runner(command, 15.0)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise _HostKeyScanUnavailable(
+            "ssh-keyscan could not connect to %s:%d: %s" %
+            (selected_host, selected_port, error)
+        ) from error
     if result.returncode not in (0, 1):
-        raise RuntimeError("ssh-keyscan failed with exit code %d: %s" % (
+        raise _HostKeyScanUnavailable("ssh-keyscan failed with exit code %d: %s" % (
             result.returncode, (result.stderr or "").strip()
         ))
     candidates = []
@@ -105,14 +119,23 @@ def scan_gateway_host_key(
             continue
         parts = line.split()
         if len(parts) < 3 or not _host_field_matches(parts[0], selected_host, selected_port):
-            continue
-        public_key = validate_public_key("%s %s" % (parts[1], parts[2]))
+            raise _HostKeyScanSecurityError(
+                "ssh-keyscan returned malformed or untrusted host-key data; refusing enrollment."
+            )
+        try:
+            public_key = validate_public_key("%s %s" % (parts[1], parts[2]))
+        except ValueError as error:
+            raise _HostKeyScanSecurityError(
+                "ssh-keyscan returned malformed or untrusted host-key data; refusing enrollment."
+            ) from error
         candidates.append((parts[0], public_key, public_key_fingerprint(public_key)))
     unique = {(public, fingerprint) for _field, public, fingerprint in candidates}
     if not candidates:
-        raise RuntimeError("No ssh-ed25519 host key was returned by the Gateway.")
+        raise _HostKeyScanUnavailable("No ssh-ed25519 host key was returned by the Gateway.")
     if len(unique) != 1:
-        raise RuntimeError("Gateway returned multiple different ssh-ed25519 host keys; refusing enrollment.")
+        raise _HostKeyScanSecurityError(
+            "Gateway returned multiple different ssh-ed25519 host keys; refusing enrollment."
+        )
     field, public_key, fingerprint = candidates[0]
     return GatewayHostKey(selected_host, selected_port, field, public_key, fingerprint)
 
@@ -189,7 +212,7 @@ def trusted_known_hosts_file(
 
 
 def local_gateway_host_key(
-        *, system_name: Optional[str] = None, program_data: Optional[Path] = None,
+        port: int = 22, *, system_name: Optional[str] = None, program_data: Optional[Path] = None,
         etc_ssh: Optional[Path] = None, runner: CommandRunner = _run,
         keyscan_executable: Optional[str] = None,
 ) -> GatewayHostKey:
@@ -200,6 +223,7 @@ def local_gateway_host_key(
     public host key that a remote Client will observe. Direct `.pub` file access is
     retained only as a fallback for systems without a usable ssh-keyscan binary.
     """
+    selected_port = validate_ssh_port(port)
     system = (system_name or platform.system()).strip().lower()
     if system == "windows":
         root = Path(program_data or os.environ.get("PROGRAMDATA", r"C:\ProgramData")) / "ssh"
@@ -217,9 +241,9 @@ def local_gateway_host_key(
     if resolved_keyscan:
         try:
             return scan_gateway_host_key(
-                "localhost", 22, runner=runner, executable=resolved_keyscan,
+                "localhost", selected_port, runner=runner, executable=resolved_keyscan,
             )
-        except Exception as error:
+        except _HostKeyScanUnavailable as error:
             scan_error = error
 
     public_path = root / "ssh_host_ed25519_key.pub"
@@ -227,7 +251,7 @@ def local_gateway_host_key(
         public_key = validate_public_key(public_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, ValueError) as file_error:
         details = []
-        if resolved_keyscan is None:
+        if not resolved_keyscan:
             details.append("ssh-keyscan is unavailable")
         elif scan_error is not None:
             details.append("loopback scan failed: %s" % scan_error)
@@ -238,6 +262,7 @@ def local_gateway_host_key(
         ) from file_error
 
     return GatewayHostKey(
-        host="localhost", port=22, host_field="localhost",
+        host="localhost", port=selected_port,
+        host_field=expected_known_hosts_field("localhost", selected_port),
         public_key=public_key, fingerprint=public_key_fingerprint(public_key),
     )

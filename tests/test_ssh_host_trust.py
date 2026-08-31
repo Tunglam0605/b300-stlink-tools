@@ -120,6 +120,87 @@ class SshHostTrustTests(unittest.TestCase):
         self.assertTrue(result.public_key.startswith("ssh-ed25519 "))
         self.assertTrue(result.fingerprint.startswith("SHA256:"))
 
+    def test_local_gateway_host_key_scans_the_requested_custom_port(self):
+        public = key_line(90, "gateway-custom-port").split()
+        output = "[localhost]:2222 %s %s\n" % (public[0], public[1])
+        calls = []
+
+        def runner(argv, timeout):
+            calls.append(tuple(argv))
+            return subprocess.CompletedProcess(argv, 0, output, "")
+
+        result = local_gateway_host_key(
+            port=2222, system_name="windows", runner=runner,
+            keyscan_executable="ssh-keyscan",
+        )
+        self.assertEqual(
+            calls,
+            [("ssh-keyscan", "-T", "5", "-p", "2222", "-t", "ed25519", "localhost")],
+        )
+        self.assertEqual(result.port, 2222)
+        self.assertEqual(result.host_field, "[localhost]:2222")
+
+    def test_local_gateway_host_key_does_not_fallback_on_ambiguous_scan(self):
+        first = key_line(91, "gateway-first").split()
+        second = key_line(92, "gateway-second").split()
+        output = (
+            "localhost %s %s\n" % (first[0], first[1]) +
+            "localhost %s %s\n" % (second[0], second[1])
+        )
+
+        def runner(argv, timeout):
+            return subprocess.CompletedProcess(argv, 0, output, "")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "ssh"
+            root.mkdir()
+            (root / "ssh_host_ed25519_key.pub").write_text(
+                key_line(93, "fallback-must-not-win") + "\n", encoding="utf-8",
+            )
+            with self.assertRaisesRegex(RuntimeError, "multiple different"):
+                local_gateway_host_key(
+                    system_name="windows", program_data=Path(directory),
+                    runner=runner, keyscan_executable="ssh-keyscan",
+                )
+
+    def test_local_gateway_host_key_does_not_fallback_on_malformed_scan(self):
+        def runner(argv, timeout):
+            return subprocess.CompletedProcess(argv, 0, "localhost malformed\n", "")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "ssh"
+            root.mkdir()
+            (root / "ssh_host_ed25519_key.pub").write_text(
+                key_line(94, "fallback-must-not-win") + "\n", encoding="utf-8",
+            )
+            with self.assertRaisesRegex(RuntimeError, "malformed|untrusted"):
+                local_gateway_host_key(
+                    system_name="windows", program_data=Path(directory),
+                    runner=runner, keyscan_executable="ssh-keyscan",
+                )
+
+    def test_local_gateway_host_key_falls_back_when_scanner_is_unavailable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "ssh"
+            root.mkdir()
+            public = key_line(95, "gateway-no-scanner")
+            (root / "ssh_host_ed25519_key.pub").write_text(public + "\n", encoding="utf-8")
+            result = local_gateway_host_key(
+                system_name="windows", program_data=Path(directory),
+                keyscan_executable="",
+            )
+        self.assertEqual(result.public_key, public)
+        self.assertTrue(result.fingerprint.startswith("SHA256:"))
+
+    def test_local_gateway_host_key_reports_scanner_and_public_file_unavailable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(
+                    RuntimeError, "ssh-keyscan is unavailable.*public-key file fallback failed"):
+                local_gateway_host_key(
+                    system_name="windows", program_data=Path(directory),
+                    keyscan_executable="",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
