@@ -111,6 +111,24 @@ def _trusted_windows_sshd_executable() -> Path:
     return candidate
 
 
+def _trusted_windows_icacls_executable() -> Path:
+    """Return the OS-provided ACL tool without relying on PATH."""
+    if os.name != "nt":
+        return Path(r"C:\Windows\System32\icacls.exe")
+    try:
+        import ctypes
+        buffer = ctypes.create_unicode_buffer(32768)
+        length = ctypes.windll.kernel32.GetSystemDirectoryW(buffer, len(buffer))
+    except (AttributeError, OSError) as error:
+        raise RuntimeError("B300 cannot locate trusted Windows icacls.exe.") from error
+    if not length or length >= len(buffer):
+        raise RuntimeError("B300 cannot locate trusted Windows icacls.exe.")
+    candidate = Path(buffer.value) / "icacls.exe"
+    if not candidate.is_file():
+        raise RuntimeError("Trusted Windows icacls.exe was not found.")
+    return candidate
+
+
 def _windows_authorized_keys_target_from_sshd_output(
         output: str, *, home: Path, program_data: Path,
 ) -> tuple[Path, bool]:
@@ -447,6 +465,7 @@ def _install_windows_key(
 ) -> bool:
     """Install/reconcile one key and its sshd-required Windows ACL without a console."""
     ps = str(_trusted_windows_powershell_executable())
+    icacls = str(_trusted_windows_icacls_executable())
     owner_sid = "S-1-5-32-544" if administrator_target else ""
     script = """$ErrorActionPreference='Stop'
 $line='%s'
@@ -461,18 +480,16 @@ foreach($existing in (Get-Content -LiteralPath $target -ErrorAction SilentlyCont
   if($ep.Length -ge 2 -and ($ep[0]+' '+$ep[1]) -eq $needle){$found=$true; break}
 }
 if(-not $found){Add-Content -LiteralPath $target -Value $line}
+$icacls='%s'
 $ownerSid='%s'
 if(-not $ownerSid){$ownerSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value}
-$owner=[Security.Principal.SecurityIdentifier]::new($ownerSid)
-$system=[Security.Principal.SecurityIdentifier]::new('S-1-5-18')
-$acl=New-Object Security.AccessControl.FileSecurity
-$acl.SetOwner($owner)
-$acl.SetAccessRuleProtection($true,$false)
-$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($owner,[Security.AccessControl.FileSystemRights]::FullControl,[Security.AccessControl.AccessControlType]::Allow))
-$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($system,[Security.AccessControl.FileSystemRights]::FullControl,[Security.AccessControl.AccessControlType]::Allow))
-Set-Acl -LiteralPath $target -AclObject $acl
+& $icacls $target '/reset' | Out-Null
+if($LASTEXITCODE -ne 0){exit 13}
+& $icacls $target '/inheritance:r' '/grant:r' ("*"+$ownerSid+":(F)") '*S-1-5-18:(F)' | Out-Null
+if($LASTEXITCODE -ne 0){exit 13}
 """ % (
-        validate_public_key(public_key).replace("'", "''"), str(target).replace("'", "''"), owner_sid,
+        validate_public_key(public_key).replace("'", "''"), str(target).replace("'", "''"),
+        icacls.replace("'", "''"), owner_sid,
     )
     script += _windows_authorized_key_verification_script(
         target, public_key, administrator_target=administrator_target,
@@ -484,13 +501,17 @@ exit 0
 """
         encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
         launch = """$ErrorActionPreference='Stop'
-try{$p=Start-Process -FilePath '%s' -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand','%s');exit $p.ExitCode}catch{exit 1}
+try{$p=Start-Process -FilePath '%s' -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand','%s');exit $p.ExitCode}catch{if($_.Exception.HResult -eq -2147023673){exit 1223};exit 1}
 """ % (ps.replace("'", "''"), encoded)
         result = runner((ps, "-NoProfile", "-NonInteractive", "-Command", launch), 300.0)
+        if result.returncode == 1223:
+            raise RuntimeError("Windows UAC approval was cancelled; the public key was not changed.")
         if result.returncode == 11:
             raise RuntimeError("Windows authorized_keys verification did not find the expected public key.")
         if result.returncode == 12:
             raise RuntimeError("Windows authorized_keys ACL verification failed.")
+        if result.returncode == 13:
+            raise RuntimeError("Windows authorized_keys ACL repair with icacls.exe failed.")
         if result.returncode != 0:
             raise RuntimeError("Windows authorized_keys update failed with exit code %d." % result.returncode)
     else:
@@ -530,9 +551,8 @@ if(Test-Path -LiteralPath $target){
 $aclSafe=$false
 if(Test-Path -LiteralPath $target){
   $acl=Get-Acl -LiteralPath $target
-  $owner=$acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
   $seen=@{}
-  $bad=($owner -ne $ownerSid -or -not $acl.AreAccessRulesProtected)
+  $bad=(-not $acl.AreAccessRulesProtected)
   foreach($rule in $acl.Access){
     if($rule.IsInherited){$bad=$true; continue}
     try{$sid=$rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value}catch{$bad=$true; continue}

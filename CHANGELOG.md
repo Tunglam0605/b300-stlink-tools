@@ -5,6 +5,10 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-08-31
+
+- Fixed Windows Gateway public-key authorization where the previous .NET ACL rebuild failed with an unhelpful exit code. B300 now uses the trusted System32 `icacls.exe` with locale-independent Administrator and SYSTEM SIDs, verifies the resulting restrictive ACL, and reports UAC cancellation separately from an ACL repair failure. The change does not modify `sshd_config`, the SSH service, or SSH host keys.
+
 ## [0.13.0] - 2026-08-31
 
 - Fixed Windows Gateway public-key authorization on systems where `sshd -T` cannot read the production host keys, including after UAC. B300 now uses a one-time disposable ED25519 host key only for the effective-config query, removes it immediately, and continues to accept only the standard user or Windows Administrators authorized-keys targets. It does not modify `sshd_config`, the running SSH service, or any production host key.

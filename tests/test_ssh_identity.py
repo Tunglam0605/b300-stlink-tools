@@ -456,6 +456,66 @@ class SshIdentityTests(unittest.TestCase):
                         home=Path(directory) / "home", program_data=Path(directory) / "ProgramData",
                     )
 
+    def test_windows_admin_authorization_reports_cancelled_uac_and_uses_sid_icacls_acl(self):
+        """An operator can distinguish declining UAC from an SSH authorization failure."""
+        with tempfile.TemporaryDirectory() as directory:
+            sshd = Path(directory) / "sshd.exe"
+            sshd.write_bytes(b"")
+
+            def runner(argv, timeout):
+                rendered = " ".join(argv)
+                if Path(argv[0]) == sshd:
+                    return subprocess.CompletedProcess(
+                        argv, 0,
+                        "authorizedkeysfile __PROGRAMDATA__/ssh/administrators_authorized_keys\n", "",
+                    )
+                if "WindowsIdentity]::GetCurrent().Name" in rendered:
+                    return subprocess.CompletedProcess(argv, 0, "DESKTOP\\admin\n", "")
+                if "Start-Process" in rendered:
+                    encoded = re.search(r"'-EncodedCommand','([^']+)'", rendered).group(1)
+                    script = base64.b64decode(encoded).decode("utf-16le")
+                    self.assertIn("icacls.exe", script.lower())
+                    self.assertIn("$ownerSid='S-1-5-32-544'", script)
+                    self.assertIn("$icacls $target '/reset'", script)
+                    self.assertIn("(\"*\"+$ownerSid+\":(F)\")", script)
+                    self.assertIn("*S-1-5-18:(F)", script)
+                    self.assertNotIn("New-Object Security.AccessControl.FileSecurity", script)
+                    self.assertIn("exit 1223", rendered)
+                    return subprocess.CompletedProcess(argv, 1223, "", "")
+                self.fail("unexpected command: %s" % rendered)
+
+            with mock.patch.object(ssh_identity, "_trusted_windows_sshd_executable", return_value=sshd):
+                with self.assertRaisesRegex(RuntimeError, "UAC approval was cancelled"):
+                    ssh_identity.install_gateway_public_key(
+                        key_line(41), system_name="windows", runner=runner,
+                        home=Path(directory) / "home", program_data=Path(directory) / "ProgramData",
+                    )
+
+    def test_windows_admin_authorization_reports_icacls_acl_repair_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            sshd = Path(directory) / "sshd.exe"
+            sshd.write_bytes(b"")
+
+            def runner(argv, timeout):
+                rendered = " ".join(argv)
+                if Path(argv[0]) == sshd:
+                    return subprocess.CompletedProcess(
+                        argv, 0,
+                        "authorizedkeysfile __PROGRAMDATA__/ssh/administrators_authorized_keys\n", "",
+                    )
+                if "WindowsIdentity]::GetCurrent().Name" in rendered:
+                    return subprocess.CompletedProcess(argv, 0, "DESKTOP\\admin\n", "")
+                if "Start-Process" in rendered:
+                    return subprocess.CompletedProcess(argv, 13, "", "")
+                self.fail("unexpected command: %s" % rendered)
+
+            with mock.patch.object(ssh_identity, "_trusted_windows_sshd_executable", return_value=sshd):
+                with self.assertRaisesRegex(RuntimeError, "ACL repair with icacls.exe failed"):
+                    ssh_identity.install_gateway_public_key(
+                        key_line(42), system_name="windows", runner=runner,
+                        home=Path(directory) / "home", program_data=Path(directory) / "ProgramData",
+                    )
+
     def test_windows_client_prerequisite_detects_ready_and_missing_states(self):
         def installed_runner(argv, timeout):
             return subprocess.CompletedProcess(argv, 0, "Installed\n", "")
