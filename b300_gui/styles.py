@@ -1202,6 +1202,25 @@ QPushButton#memoryCancelButton {
     font-weight: 650;
 }
 
+QPushButton#cancelOperationButton:hover:enabled,
+QPushButton#memoryCancelButton:hover:enabled {
+    background-color: #FEE2E2;
+    color: #B91C1C;
+    border-color: #F87171;
+}
+
+QPushButton#cancelOperationButton:pressed:enabled,
+QPushButton#memoryCancelButton:pressed:enabled {
+    background-color: #FECACA;
+    color: #7F1D1D;
+    border-color: #DC2626;
+}
+
+QPushButton#cancelOperationButton:focus:enabled,
+QPushButton#memoryCancelButton:focus:enabled {
+    border: 2px solid #DC2626;
+}
+
 /* RC3 compact action hierarchy */
 QPushButton#gatewayPrepareButton,
 QPushButton#gatewayTrustHostButton,
@@ -1235,6 +1254,42 @@ QPushButton#gatewayAuthorizeKeyButton {
     color: #334155;
     border: 1px solid #CBD5E1;
     font-weight: 650;
+}
+
+/* Explicit interaction feedback: these ID selectors otherwise override the
+   generic QPushButton hover/pressed/focus rules. Disabled controls stay calm. */
+QPushButton#gatewayRefreshButton:hover:enabled,
+QPushButton#gatewaySelfTestButton:hover:enabled,
+QPushButton#gatewayCopyClientButton:hover:enabled,
+QPushButton#gatewayShowHostKeyButton:hover:enabled,
+QPushButton#gatewayCopyHostFingerprintButton:hover:enabled,
+QPushButton#gatewayIdentityCopyButton:hover:enabled,
+QPushButton#gatewayAuthorizeKeyButton:hover:enabled {
+    background-color: #F0F9FF;
+    color: #0369A1;
+    border-color: #38BDF8;
+}
+
+QPushButton#gatewayRefreshButton:pressed:enabled,
+QPushButton#gatewaySelfTestButton:pressed:enabled,
+QPushButton#gatewayCopyClientButton:pressed:enabled,
+QPushButton#gatewayShowHostKeyButton:pressed:enabled,
+QPushButton#gatewayCopyHostFingerprintButton:pressed:enabled,
+QPushButton#gatewayIdentityCopyButton:pressed:enabled,
+QPushButton#gatewayAuthorizeKeyButton:pressed:enabled {
+    background-color: #E0F2FE;
+    color: #075985;
+    border-color: #0284C7;
+}
+
+QPushButton#gatewayRefreshButton:focus:enabled,
+QPushButton#gatewaySelfTestButton:focus:enabled,
+QPushButton#gatewayCopyClientButton:focus:enabled,
+QPushButton#gatewayShowHostKeyButton:focus:enabled,
+QPushButton#gatewayCopyHostFingerprintButton:focus:enabled,
+QPushButton#gatewayIdentityCopyButton:focus:enabled,
+QPushButton#gatewayAuthorizeKeyButton:focus:enabled {
+    border: 2px solid #0284C7;
 }
 
 QTableWidget#gatewaySetupCheckTable {

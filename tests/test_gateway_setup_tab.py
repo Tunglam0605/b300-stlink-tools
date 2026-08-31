@@ -10,17 +10,21 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtCore import QPoint
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton, QWidget
 
 from b300_core.gateway_setup import GatewayHostCheck, GatewayHostReport
 from b300_core.ssh_identity import (
     AuthorizedKeyResult, SshClientPrepareResult, SshClientPrerequisiteReport, SshIdentityReport,
 )
 from b300_core.ssh_host_trust import GatewayHostKey, HostTrustResult
+from b300_core.gateway_network import GatewayEndpointProbe
 from b300_core.remote_profile import RemoteGatewayProfile
 from b300_core.remote_connectivity import RemoteConnectivityResult
 from tests.test_ssh_identity import key_line
 from b300_gui.gateway_setup_tab import GatewaySetupTab
+from b300_gui.styles import APP_STYLE
 
 
 def report(ready=True, private=True, port=22):
@@ -35,6 +39,13 @@ def report(ready=True, private=True, port=22):
         debug_ports_private=private, ready=ready and private,
         conclusion="READY" if ready and private else "BLOCKED", ssh_port=port,
         username="automation", hostname="gateway", ipv4_addresses=("192.168.1.109",),
+    )
+
+
+def reachable_gateway_endpoint(host, port):
+    return GatewayEndpointProbe(
+        host, port, True, "SSH_TCP_REACHABLE",
+        "TCP connection to %s:%d is reachable." % (host, port),
     )
 
 
@@ -128,6 +139,67 @@ class GatewaySetupTabTests(unittest.TestCase):
         self.assertTrue(tab.show_host_key_button.isEnabled())
         self.assertFalse(tab.copy_host_fingerprint_button.isEnabled())
         tab.close()
+
+    def test_fingerprint_action_buttons_show_hover_feedback_when_enabled(self):
+        tab = GatewaySetupTab(
+            identity_inspector=lambda: identity_report(False),
+            profile_loader=lambda: None, auto_refresh=False,
+        )
+        tab.setStyleSheet(APP_STYLE)
+        tab.resize(760, 1200)
+        tab.gateway_connection_details.set_expanded(True)
+        tab.show()
+        tab.copy_host_fingerprint_button.setEnabled(True)
+        self.app.processEvents()
+
+        for button in (tab.show_host_key_button, tab.copy_host_fingerprint_button):
+            QTest.mouseMove(tab, QPoint(0, 0))
+            self.app.processEvents()
+            normal = button.grab().toImage().pixelColor(
+                button.width() - 5, button.height() // 2
+            )
+
+            QTest.mouseMove(button, QPoint(button.width() - 5, button.height() // 2))
+            self.app.processEvents()
+            hovered = button.grab().toImage().pixelColor(
+                button.width() - 5, button.height() // 2
+            )
+
+            self.assertNotEqual(
+                normal, hovered,
+                "%s must visibly react to hover" % button.objectName(),
+            )
+        tab.close()
+
+    def test_destructive_action_buttons_show_hover_feedback_when_enabled(self):
+        for object_name in ("cancelOperationButton", "memoryCancelButton"):
+            container = QWidget()
+            container.setStyleSheet(APP_STYLE)
+            container.resize(180, 60)
+            button = QPushButton("Cancel", container)
+            button.setObjectName(object_name)
+            button.resize(140, 34)
+            button.move(20, 13)
+            container.show()
+            self.app.processEvents()
+
+            QTest.mouseMove(container, QPoint(2, 2))
+            self.app.processEvents()
+            normal = button.grab().toImage().pixelColor(
+                button.width() - 5, button.height() // 2
+            )
+
+            QTest.mouseMove(button, QPoint(button.width() - 5, button.height() // 2))
+            self.app.processEvents()
+            hovered = button.grab().toImage().pixelColor(
+                button.width() - 5, button.height() // 2
+            )
+
+            self.assertNotEqual(
+                normal, hovered,
+                "%s must visibly react to hover" % object_name,
+            )
+            container.close()
 
     def test_fingerprint_button_passes_current_gateway_port_to_backend(self):
         host_key = GatewayHostKey(
@@ -277,6 +349,7 @@ class GatewaySetupTabTests(unittest.TestCase):
         truster = mock.Mock()
         tab = GatewaySetupTab(
             identity_inspector=lambda: identity_report(False),
+            endpoint_prober=reachable_gateway_endpoint,
             host_key_scanner=lambda host, port: scanned, host_truster=truster,
             profile_loader=lambda: None, auto_refresh=False,
         )
@@ -296,12 +369,49 @@ class GatewaySetupTabTests(unittest.TestCase):
         truster = mock.Mock(return_value=trusted)
         tab = GatewaySetupTab(
             identity_inspector=lambda: identity_report(False),
+            endpoint_prober=reachable_gateway_endpoint,
             host_key_scanner=lambda host, port: scanned, host_truster=truster,
             profile_loader=lambda: None, auto_refresh=False,
         )
         result = tab._scan_verify_trust_host("gateway.local", 22, "SHA256:MATCH")
         self.assertEqual(result, trusted)
         truster.assert_called_once_with(scanned)
+        tab.close()
+
+    def test_unreachable_client_gateway_is_reported_before_host_key_scan(self):
+        scanner = mock.Mock()
+        unreachable = GatewayEndpointProbe(
+            "192.168.1.145", 22, False, "SSH_TCP_UNREACHABLE",
+            "TCP connection to 192.168.1.145:22 is unavailable.",
+        )
+        tab = GatewaySetupTab(
+            identity_inspector=lambda: identity_report(False),
+            endpoint_prober=lambda host, port: unreachable,
+            host_key_scanner=scanner, profile_loader=lambda: None, auto_refresh=False,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "SSH_TCP_UNREACHABLE"):
+            tab._scan_verify_trust_host("192.168.1.145", 22, "SHA256:EXPECTED")
+
+        scanner.assert_not_called()
+        tab.close()
+
+    def test_client_network_failure_shows_an_actionable_primary_message(self):
+        problem = GatewayEndpointProbe(
+            "192.168.1.145", 22, False, "SSH_TCP_UNREACHABLE",
+            "TCP connection to 192.168.1.145:22 is unavailable.",
+        )
+        tab = GatewaySetupTab(
+            identity_inspector=lambda: identity_report(True), profile_loader=lambda: None,
+            auto_refresh=False,
+        )
+        tab._select_role(1)
+        tab._client_network_problem = problem
+        tab._failed(SimpleNamespace(message="SSH_TCP_UNREACHABLE: %s" % problem.message))
+
+        self.assertIn("Không thể tới 192.168.1.145:22", tab.client_connection_status.text())
+        self.assertIn("Chuẩn bị Gateway", tab.client_connection_status.text())
+        self.assertIn("Guest/AP isolation", tab.next_action.text())
         tab.close()
 
     def test_selftest_uses_host_and_full_gateway_doctor(self):
@@ -344,6 +454,7 @@ class GatewaySetupTabTests(unittest.TestCase):
         saved = []
         tab = GatewaySetupTab(
             identity_inspector=lambda: identity_report(True),
+            endpoint_prober=reachable_gateway_endpoint,
             host_key_scanner=lambda host, port: scanned,
             host_truster=lambda key: trusted,
             profile_loader=lambda: None,
@@ -369,6 +480,7 @@ class GatewaySetupTabTests(unittest.TestCase):
         saver = mock.Mock()
         tab = GatewaySetupTab(
             identity_inspector=lambda: identity_report(True),
+            endpoint_prober=reachable_gateway_endpoint,
             host_key_scanner=lambda host, port: scanned,
             host_truster=mock.Mock(), profile_loader=lambda: None,
             profile_saver=saver, auto_refresh=False,

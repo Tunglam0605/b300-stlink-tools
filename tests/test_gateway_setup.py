@@ -51,6 +51,29 @@ class GatewaySetupTests(unittest.TestCase):
         for port in DEBUG_PORTS:
             self.assertNotIn("LocalPort %d" % port, script)
 
+    def test_windows_prepare_replaces_only_its_own_lan_scoped_ssh_rule(self):
+        plan = build_gateway_prepare_plan(report(firewall=False, ready=False))
+        script = _windows_prepare_script(plan)
+
+        self.assertIn("Remove-NetFirewallRule -Name 'B300-OpenSSH-Server-In-TCP'", script)
+        self.assertIn("-Profile Domain,Private", script)
+        self.assertIn("-RemoteAddress LocalSubnet", script)
+        self.assertIn("-LocalPort 22", script)
+
+    def test_windows_firewall_readiness_validates_lan_scope_not_only_rule_name(self):
+        from b300_core.gateway_setup import _windows_ssh_firewall_ready
+
+        scripts = []
+
+        def runner(argv, timeout):
+            scripts.append(argv[-1])
+            return subprocess.CompletedProcess(argv, 0, "READY", "")
+
+        self.assertTrue(_windows_ssh_firewall_ready(22, runner))
+        self.assertIn("Get-NetFirewallAddressFilter", scripts[0])
+        self.assertIn("Get-NetConnectionProfile", scripts[0])
+        self.assertIn("LocalSubnet", scripts[0])
+
     def test_windows_elevated_prepare_keeps_uac_but_hides_powershell_console(self):
         plan = build_gateway_prepare_plan(report(
             installed=False, running=False, startup=False, firewall=False, listening=False
