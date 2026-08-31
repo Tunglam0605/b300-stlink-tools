@@ -10,11 +10,11 @@
 
 [Setup]
 AppId={{B300-STLINK-GUI-0605}}
-AppName=B300 ST-Link Provisioning
+AppName=B300 ST-Link Tools
 AppVersion={#AppVersion}
 AppPublisher=TungLamAutomation
 DefaultDirName={localappdata}\B300-STLink
-DefaultGroupName=B300 ST-Link
+DefaultGroupName=B300 ST-Link Tools
 OutputDir={#OutputDir}
 OutputBaseFilename=B300-STLink-GUI-Windows-x64
 Compression=lzma2
@@ -30,11 +30,11 @@ UninstallDisplayIcon={app}\b300-stlink-gui.exe
 Source: "{#SourceRoot}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\B300 ST-Link Provisioning"; Filename: "{app}\b300-stlink-gui.exe"; WorkingDir: "{app}"
-Name: "{autodesktop}\B300 ST-Link Provisioning"; Filename: "{app}\b300-stlink-gui.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{group}\B300 ST-Link Tools"; Filename: "{app}\b300-stlink-gui.exe"; WorkingDir: "{app}"
+Name: "{autodesktop}\B300 ST-Link Tools"; Filename: "{app}\b300-stlink-gui.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"
 
 [Run]
-Filename: "{app}\b300-stlink-gui.exe"; Description: "Launch B300 ST-Link Provisioning"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\b300-stlink-gui.exe"; Parameters: "--first-run-setup"; Description: "Mở B300 ST-Link Tools và tự chuẩn bị máy"; Flags: nowait postinstall skipifsilent

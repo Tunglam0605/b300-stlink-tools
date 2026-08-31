@@ -7,6 +7,7 @@ approved.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
@@ -25,6 +26,8 @@ from .process_startup import child_process_kwargs
 from .ssh_identity import inspect_ssh_client_prerequisites, prepare_ssh_client_prerequisites
 
 STLINK_OFFICIAL_URL = "https://www.st.com/en/development-tools/stsw-link009.html"
+BUNDLED_STLINK_DRIVER_NAME = "STSW-LINK009-v3.zip"
+BUNDLED_STLINK_DRIVER_SHA256 = "05dd53ce0edcec56625e9ea6fd1b979d03a89fedb1aaeb917454d0ee662be833"
 _STLINK_VID_RE = re.compile(r"VID[_ ]?0483", re.IGNORECASE)
 _STLINK_PID_RE = re.compile(r"PID[_ ]?374[0-9A-F]?", re.IGNORECASE)
 _ALLOWED_INF_NAMES = {
@@ -97,6 +100,11 @@ def _parse_json_records(text: str) -> tuple[dict, ...]:
     return ()
 
 
+def _driver_store_has_stlink(text: str) -> bool:
+    """Return True only when the WinUSB debug driver required by OpenOCD is installed."""
+    return "stlink_dbg_winusb.inf" in str(text or "").lower()
+
+
 def inspect_windows_stlink_driver(*, runner: Callable = _run) -> SetupComponent:
     ps = _powershell()
     script = (
@@ -109,6 +117,7 @@ def inspect_windows_stlink_driver(*, runner: Callable = _run) -> SetupComponent:
         records = _parse_json_records(current.stdout or "")
     except Exception:
         records = ()
+
     if records:
         statuses = {str(item.get("Status") or "").strip().lower() for item in records}
         names = [str(item.get("FriendlyName") or "ST-Link") for item in records]
@@ -117,20 +126,31 @@ def inspect_windows_stlink_driver(*, runner: Callable = _run) -> SetupComponent:
                 "stlink_driver", "ST-Link USB Driver", "ready", True, False,
                 "Driver hoạt động · %s" % ", ".join(names[:2]),
             )
-        return SetupComponent(
-            "stlink_driver", "ST-Link USB Driver", "missing", True, True,
-            "Windows nhìn thấy ST-Link nhưng driver chưa hoạt động đúng.", "install_stlink_driver",
-        )
 
     try:
         store = runner(("pnputil.exe", "/enum-drivers"), 30.0)
-        text = ((store.stdout or "") + "\n" + (store.stderr or "")).lower()
+        store_text = (store.stdout or "") + "\n" + (store.stderr or "")
     except Exception:
-        text = ""
-    if "stlink" in text or "stmicroelectronics" in text or "stlink_dbg_winusb.inf" in text:
+        store_text = ""
+    driver_installed = _driver_store_has_stlink(store_text)
+
+    if records:
+        if driver_installed:
+            return SetupComponent(
+                "stlink_driver", "ST-Link USB Driver", "ready", True, False,
+                "Driver ST-Link chính thức đã được cài. Windows đang chưa khởi tạo ổn định thiết bị; "
+                "nếu OpenOCD chưa nhận ST-Link, hãy rút/cắm lại USB rồi Kiểm tra target.",
+            )
+        return SetupComponent(
+            "stlink_driver", "ST-Link USB Driver", "missing", True, True,
+            "Windows nhìn thấy ST-Link nhưng chưa có driver ST-Link chính thức phù hợp.",
+            "install_stlink_driver",
+        )
+
+    if driver_installed:
         return SetupComponent(
             "stlink_driver", "ST-Link USB Driver", "ready", True, False,
-            "Driver ST-Link đã có trong Windows Driver Store; cắm ST-Link để xác nhận thiết bị.",
+            "Driver ST-Link chính thức đã có trong Windows; cắm ST-Link để kiểm tra kết nối.",
         )
     return SetupComponent(
         "stlink_driver", "ST-Link USB Driver", "missing", True, True,
@@ -208,6 +228,9 @@ def find_local_stlink_driver_package() -> Optional[Path]:
         candidates.append(Path(override).expanduser())
     executable_root = Path(sys.executable).resolve().parent
     candidates.extend([
+        executable_root / "vendor" / "stlink-driver" / BUNDLED_STLINK_DRIVER_NAME,
+        executable_root.parent / "vendor" / "stlink-driver" / BUNDLED_STLINK_DRIVER_NAME,
+        Path(__file__).resolve().parents[1] / "vendor" / "stlink-driver" / BUNDLED_STLINK_DRIVER_NAME,
         executable_root / "vendor" / "stlink-driver",
         executable_root.parent / "vendor" / "stlink-driver",
         Path(__file__).resolve().parents[1] / "vendor" / "stlink-driver",
@@ -238,6 +261,16 @@ def find_local_stlink_driver_package() -> Optional[Path]:
     return None
 
 
+def validate_bundled_stlink_driver_archive(path: Path) -> Path:
+    selected = Path(path).resolve(strict=True)
+    if selected.name != BUNDLED_STLINK_DRIVER_NAME:
+        raise ValueError("Bundled ST-Link driver filename is unexpected.")
+    digest = hashlib.sha256(selected.read_bytes()).hexdigest()
+    if digest.lower() != BUNDLED_STLINK_DRIVER_SHA256:
+        raise ValueError("Bundled ST-Link driver checksum does not match the trusted package.")
+    return selected
+
+
 def validate_stlink_driver_package(root: Path) -> tuple[Path, ...]:
     files = _safe_driver_inf_files(Path(root))
     if not files:
@@ -256,30 +289,6 @@ def _extract_driver_zip(archive: Path, destination: Path) -> Path:
                 raise ValueError("Driver ZIP chứa đường dẫn không an toàn.") from error
         package.extractall(str(destination))
     return destination
-
-
-def _elevated_scan_devices(*, runner: Callable = _run) -> bool:
-    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8-sig", suffix=".ps1", delete=False) as script:
-        script.write("$ErrorActionPreference='Stop'\n")
-        script.write("pnputil.exe /scan-devices | Out-Null\n")
-        script.write("exit $LASTEXITCODE\n")
-        script_path = Path(script.name)
-    try:
-        ps = _powershell()
-        escaped_ps = ps.replace("'", "''")
-        escaped_script = str(script_path.resolve()).replace("'", "''")
-        argv = (
-            ps, "-NoProfile", "-NonInteractive", "-Command",
-            "$p=Start-Process -FilePath '%s' -Verb RunAs -WindowStyle Hidden -Wait -PassThru "
-            "-ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File','%s'); exit $p.ExitCode" %
-            (escaped_ps, escaped_script),
-        )
-        return runner(argv, 180.0).returncode == 0
-    finally:
-        try:
-            script_path.unlink()
-        except OSError:
-            pass
 
 
 def _elevated_pnputil_install(inf_files: Sequence[Path], *, runner: Callable = _run) -> None:
@@ -318,19 +327,18 @@ def install_windows_stlink_driver(package: Optional[Path] = None, *, runner: Cal
     if before.state == "ready":
         return SetupInstallResult("stlink_driver", False, True, "ST-Link driver đã sẵn sàng; không thay đổi hệ thống.")
     if package is None:
-        # Give Windows Plug-and-Play one safe chance before requiring the vendor package.
-        try:
-            if _elevated_scan_devices(runner=runner) and inspect_windows_stlink_driver(runner=runner).state == "ready":
-                return SetupInstallResult("stlink_driver", True, True, "Windows đã tự hoàn tất driver ST-Link.")
-        except Exception:
-            pass
         local_package = find_local_stlink_driver_package()
         if local_package is None:
+            # Do not show an elevation/UAC prompt when there is no actual driver
+            # payload to install. The operator should select the official package
+            # first; the next UAC prompt then corresponds to a real installation.
             raise DriverPackageRequired(
-                "Windows chưa tự resolve được driver. Hãy chọn ZIP/thư mục STSW-LINK009 chính thức từ STMicroelectronics."
+                "Chưa có gói driver để cài. Hãy chọn ZIP/thư mục STSW-LINK009 chính thức từ STMicroelectronics."
             )
         package = local_package
     selected = Path(package)
+    if selected.name == BUNDLED_STLINK_DRIVER_NAME:
+        selected = validate_bundled_stlink_driver_archive(selected)
     with tempfile.TemporaryDirectory(prefix="b300-stlink-driver-") as temporary:
         root = Path(temporary)
         if selected.is_file() and selected.suffix.lower() == ".zip":

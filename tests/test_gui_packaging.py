@@ -155,6 +155,10 @@ class GuiPackagingTests(unittest.TestCase):
         self.assertGreaterEqual(native_builder.count('"--workpath"'), 2)
         self.assertNotIn('ROOT / "build"', native_builder)
         self.assertIn("SetupIconFile={#SourceRoot}\\b300-stlink-icon.ico", installer)
+        self.assertIn("AppName=B300 ST-Link Tools", installer)
+        self.assertIn('Parameters: "--first-run-setup"', installer)
+        self.assertIn("STSW-LINK009-v3.zip", windows_resources)
+        self.assertIn("SLA0048_STSW-LINK009.txt", windows_resources)
 
     def test_windows_gui_release_uses_onedir_runtime(self) -> None:
         windows_spec = (ROOT / "b300_gui_windows.spec").read_text(encoding="utf-8")

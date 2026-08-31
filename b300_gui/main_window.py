@@ -89,7 +89,8 @@ class MainWindow(QMainWindow):
                  setup_installer: Callable[[Path], Path] = install_offline_bundle,
                  update_client=None, automatic_updates: bool = True,
                  update_installer=None, settings=None,
-                 debug_service: Optional[DebugService] = None) -> None:
+                 debug_service: Optional[DebugService] = None,
+                 first_run_setup: bool = False) -> None:
         super().__init__()
         self.service = service or B300Service()
         self.debug_service = debug_service or DebugService(
@@ -119,6 +120,7 @@ class MainWindow(QMainWindow):
         self._update_result = None
         self._downloaded_update = None
         self._automatic_updates = bool(automatic_updates)
+        self._first_run_setup_requested = bool(first_run_setup)
         self._update_poll_timer = QTimer(self)
         self._update_poll_timer.setInterval(15 * 60 * 1000)
         self._update_poll_timer.timeout.connect(self._automatic_update_tick)
@@ -146,6 +148,8 @@ class MainWindow(QMainWindow):
         )
         self.refresh_probes()
         self._restore_last_image()
+        if self._first_run_setup_requested:
+            QTimer.singleShot(600, self._show_first_run_setup_if_needed)
         if self._automatic_updates:
             QTimer.singleShot(0, self._show_whats_new_if_needed)
             if self._automatic_updates_enabled():
@@ -401,8 +405,18 @@ class MainWindow(QMainWindow):
         )
         self._update_controls()
 
-    def show_machine_setup(self) -> None:
-        """Open the single fresh-machine setup workflow."""
+    def _show_first_run_setup_if_needed(self) -> None:
+        if self.settings.value("machine/setup_completed", False, type=bool):
+            return
+        self.show_machine_setup(auto_run=True)
+
+    def _machine_setup_ready(self) -> None:
+        self.settings.setValue("machine/setup_completed", True)
+        self._set_status("Máy đã sẵn sàng · có thể bắt đầu sử dụng B300 ST-Link Tools", "success")
+        self.refresh_probes()
+
+    def show_machine_setup(self, auto_run: bool = False) -> None:
+        """Open the fresh-machine setup workflow; installer may request automatic bootstrap."""
         if self._operation_state().is_hardware_busy:
             self._set_status("Chờ thao tác ST-Link hiện tại hoàn tất trước khi thiết lập máy.", "error")
             return
@@ -414,10 +428,15 @@ class MainWindow(QMainWindow):
                 return False
 
         if self.machine_setup_dialog is None:
-            self.machine_setup_dialog = MachineSetupDialog(openocd_checker, self)
+            self.machine_setup_dialog = MachineSetupDialog(
+                openocd_checker, self, auto_run_required=auto_run
+            )
             self.machine_setup_dialog.openocd_setup_requested.connect(self.setup_environment)
             self.machine_setup_dialog.setup_changed.connect(self.refresh_probes)
+            self.machine_setup_dialog.setup_ready.connect(self._machine_setup_ready)
         else:
+            if auto_run:
+                self.machine_setup_dialog.enable_auto_run()
             self.machine_setup_dialog.refresh_status()
         self.machine_setup_dialog.show()
         self.machine_setup_dialog.raise_()

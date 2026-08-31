@@ -14,8 +14,8 @@ from PySide6.QtWidgets import (
 
 from b300_core.machine_setup import (
     DriverPackageRequired, MachineSetupReport, STLINK_OFFICIAL_URL,
-    inspect_machine_setup, install_linux_udev, install_openssh_client,
-    install_windows_stlink_driver,
+    find_local_stlink_driver_package, inspect_machine_setup, install_linux_udev,
+    install_openssh_client, install_windows_stlink_driver,
 )
 from .workers import FunctionWorker
 
@@ -32,15 +32,20 @@ class MachineSetupDialog(QDialog):
 
     openocd_setup_requested = Signal()
     setup_changed = Signal()
+    setup_ready = Signal()
 
-    def __init__(self, openocd_checker: Callable[[], bool], parent=None) -> None:
+    def __init__(self, openocd_checker: Callable[[], bool], parent=None,
+                 auto_run_required: bool = False) -> None:
         super().__init__(parent)
         self._openocd_checker = openocd_checker
         self._report: Optional[MachineSetupReport] = None
-        self._driver_package: Optional[Path] = None
+        self._driver_package: Optional[Path] = find_local_stlink_driver_package()
         self._worker: Optional[FunctionWorker] = None
+        self._auto_run_required = bool(auto_run_required)
+        self._auto_run_started = False
+        self._auto_close_when_ready = bool(auto_run_required)
         self._checks: dict[str, QCheckBox] = {}
-        self.setWindowTitle("Thiết lập máy mới")
+        self.setWindowTitle("Chuẩn bị máy")
         self.setMinimumSize(720, 560)
         self.resize(780, 620)
         self._build_ui()
@@ -51,11 +56,11 @@ class MachineSetupDialog(QDialog):
         root.setContentsMargins(18, 16, 18, 16)
         root.setSpacing(10)
 
-        title = QLabel("Thiết lập máy mới")
+        title = QLabel("Chuẩn bị máy tự động")
         title.setObjectName("pageContextTitle")
         root.addWidget(title)
         subtitle = QLabel(
-            "B300 kiểm tra những thành phần cần thiết và chỉ cài phần còn thiếu. "
+            "B300 tự kiểm tra và chuẩn bị những thành phần cần thiết. "
             "Máy đã sẵn sàng sẽ không bị thay đổi."
         )
         subtitle.setWordWrap(True)
@@ -79,13 +84,15 @@ class MachineSetupDialog(QDialog):
         root.addWidget(scroll, 1)
 
         package_row = QHBoxLayout()
-        self.driver_package_label = QLabel("Gói ST-Link driver: tự động / chưa chọn")
+        self.driver_package_label = QLabel(
+            "Driver ST-Link: đã đóng kèm" if self._driver_package else "Driver ST-Link: chưa có gói cài đặt"
+        )
         self.driver_package_label.setWordWrap(True)
         package_row.addWidget(self.driver_package_label, 1)
-        self.select_driver_button = QPushButton("Chọn STSW-LINK009…")
+        self.select_driver_button = QPushButton("Chọn gói driver…")
         self.select_driver_button.clicked.connect(self.select_driver_package)
         package_row.addWidget(self.select_driver_button)
-        self.official_driver_button = QPushButton("Trang ST chính thức")
+        self.official_driver_button = QPushButton("Tải từ ST")
         self.official_driver_button.clicked.connect(
             lambda: QDesktopServices.openUrl(QUrl(STLINK_OFFICIAL_URL))
         )
@@ -104,9 +111,10 @@ class MachineSetupDialog(QDialog):
         buttons.addWidget(self.refresh_button)
         buttons.addStretch(1)
         self.install_selected_button = QPushButton("Cài các mục đã chọn")
+        self.install_selected_button.setVisible(False)
         self.install_selected_button.clicked.connect(self.install_selected)
         buttons.addWidget(self.install_selected_button)
-        self.install_all_button = QPushButton("Cài tất cả phần còn thiếu")
+        self.install_all_button = QPushButton("Chuẩn bị tự động")
         self.install_all_button.setObjectName("primaryButton")
         self.install_all_button.clicked.connect(self.install_all_missing)
         buttons.addWidget(self.install_all_button)
@@ -129,10 +137,12 @@ class MachineSetupDialog(QDialog):
         layout = QHBoxLayout(row)
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(10)
-        check = QCheckBox()
-        check.setEnabled(component.installable and component.state != "ready")
+        selectable = component.installable and component.state != "ready"
+        check = QCheckBox("Cài" if selectable else "")
+        check.setEnabled(selectable)
         check.setChecked(component.required and component.state != "ready")
-        check.setAccessibleName("Chọn %s" % component.title)
+        check.setVisible(selectable)
+        check.setAccessibleName("Chọn cài %s" % component.title)
         self._checks[component.component_id] = check
         layout.addWidget(check)
         text = QVBoxLayout()
@@ -150,10 +160,18 @@ class MachineSetupDialog(QDialog):
         layout.addWidget(state)
         return row
 
+    def enable_auto_run(self) -> None:
+        self._auto_run_required = True
+        self._auto_close_when_ready = True
+        self._auto_run_started = False
+
     def refresh_status(self) -> None:
+        self._refresh_status(preserve_operation_status=False)
+
+    def _refresh_status(self, *, preserve_operation_status: bool) -> None:
         if self._worker is not None and self._worker.isRunning():
             return
-        self._set_busy(True, "Đang kiểm tra máy…")
+        self._set_busy(True, "" if preserve_operation_status else "Đang kiểm tra máy…")
 
         def operation(_log, _phase, _cancel):
             return inspect_machine_setup(openocd_ready=bool(self._openocd_checker()))
@@ -174,12 +192,26 @@ class MachineSetupDialog(QDialog):
             self.summary.setProperty("state", "ready")
         else:
             missing = ", ".join(item.title for item in report.missing_required)
-            self.summary.setText("Còn thiếu: %s. Có thể bấm Cài tất cả phần còn thiếu." % missing)
+            self.summary.setText("Còn thiếu: %s. B300 có thể tự chuẩn bị." % missing)
             self.summary.setProperty("state", "warning")
         self.summary.style().unpolish(self.summary)
         self.summary.style().polish(self.summary)
-        self.driver_package_widget.setVisible(report.platform == "windows")
+        driver_missing = any(
+            item.component_id == "stlink_driver" and item.state != "ready"
+            for item in report.components
+        )
+        bundled_driver = self._driver_package is not None
+        self.driver_package_widget.setVisible(
+            report.platform == "windows" and driver_missing and not bundled_driver
+        )
         self.install_all_button.setEnabled(not report.required_ready)
+        if report.required_ready:
+            self.setup_ready.emit()
+            if self._auto_close_when_ready:
+                QTimer.singleShot(450, self.accept)
+        elif self._auto_run_required and not self._auto_run_started:
+            self._auto_run_started = True
+            QTimer.singleShot(0, lambda: self.install_all_missing(confirm=False))
 
     def _status_failed(self, failure) -> None:
         self.operation_status.setText("Không kiểm tra được máy: %s" % getattr(failure, "message", failure))
@@ -207,18 +239,18 @@ class MachineSetupDialog(QDialog):
         if not path:
             return
         self._driver_package = Path(path)
-        self.driver_package_label.setText("Gói ST-Link driver: %s" % self._driver_package.name)
+        self.driver_package_label.setText("Driver ST-Link: %s" % self._driver_package.name)
 
-    def install_all_missing(self) -> None:
+    def install_all_missing(self, confirm: bool = True) -> None:
         if self._report is None:
             return
         for component in self._report.components:
             check = self._checks.get(component.component_id)
             if check is not None:
                 check.setChecked(component.required and component.state != "ready" and component.installable)
-        self.install_selected()
+        self.install_selected(confirm=confirm)
 
-    def install_selected(self) -> None:
+    def install_selected(self, confirm: bool = True) -> None:
         if self._report is None:
             return
         selected = [
@@ -230,9 +262,9 @@ class MachineSetupDialog(QDialog):
         if not selected:
             self.operation_status.setText("Không có thành phần nào được chọn để cài.")
             return
-        if QMessageBox.question(
+        if confirm and QMessageBox.question(
             self, "Xác nhận thiết lập máy",
-            "Chỉ những thành phần đang thiếu và được chọn mới được cài. Windows có thể hiện UAC. Tiếp tục?",
+            "B300 sẽ chỉ cài những thành phần còn thiếu. Windows có thể hiện UAC. Tiếp tục?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
         ) != QMessageBox.StandardButton.Yes:
@@ -264,7 +296,9 @@ class MachineSetupDialog(QDialog):
 
     def _install_worker_finished(self) -> None:
         self._set_busy(False, "")
-        QTimer.singleShot(0, self.refresh_status)
+        # Refresh component badges after installation without hiding the actual
+        # install result/error behind a transient "Đang kiểm tra máy…" message.
+        QTimer.singleShot(0, lambda: self._refresh_status(preserve_operation_status=True))
 
     def _install_finished(self, result) -> None:
         marker, messages = result
@@ -278,8 +312,7 @@ class MachineSetupDialog(QDialog):
         message = getattr(failure, "message", str(failure))
         if "STSW-LINK009" in message:
             self.operation_status.setText(
-                "Cần gói STSW-LINK009 chính thức. Bấm Trang ST chính thức, tải gói theo điều khoản ST, "
-                "sau đó chọn ZIP/thư mục và bấm cài lại."
+                "Không tìm thấy driver ST-Link đóng kèm. Có thể chọn gói STSW-LINK009 chính thức để khắc phục."
             )
         else:
             self.operation_status.setText("Thiết lập chưa hoàn tất: %s" % message)

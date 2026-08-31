@@ -13,7 +13,7 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QCoreApplication, QEvent
+from PySide6.QtCore import QCoreApplication, QEvent, QSettings
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QWidget
 
@@ -215,6 +215,24 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertNotIn("marker", window.log_view.toPlainText().lower())
         self.assertNotIn("53544C4B", window.log_view.toPlainText())
         window.close()
+
+    def test_first_run_setup_is_idempotent_and_persists_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            settings = QSettings(str(Path(temp) / "settings.ini"), QSettings.Format.IniFormat)
+            window = MainWindow(
+                service=FakeService(), probe_loader=lambda: (), automatic_updates=False, settings=settings
+            )
+            with mock.patch.object(window, "show_machine_setup") as show_setup:
+                window._show_first_run_setup_if_needed()
+                show_setup.assert_called_once_with(auto_run=True)
+                settings.setValue("machine/setup_completed", True)
+                show_setup.reset_mock()
+                window._show_first_run_setup_if_needed()
+                show_setup.assert_not_called()
+            settings.setValue("machine/setup_completed", False)
+            window._machine_setup_ready()
+            self.assertTrue(settings.value("machine/setup_completed", False, type=bool))
+            window.close()
 
     def test_missing_openocd_uses_single_fresh_machine_setup_entry(self) -> None:
         window = MainWindow(service=MissingOpenOcdService(), probe_loader=lambda: ())
