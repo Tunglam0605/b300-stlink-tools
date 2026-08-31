@@ -10,6 +10,8 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 - Bổ sung **Lưu & Nạp nhóm biến theo dõi (Watch Presets / JSON Import & Export)** cho Realtime Live Monitor:
   - GUI: Thêm nút `Lưu preset…` và `Nạp preset…` trong bảng Biến đang theo dõi; hỗ trợ lưu tên biến, kiểu dữ liệu, cờ vẽ đồ thị (plot state), tốc độ lấy mẫu và giới hạn số mẫu ra file `.json` chuẩn; hỗ trợ nạp lại nhanh chóng mà không cần thêm từng biến thủ công.
   - Core & CLI: Cung cấp API `save_watch_preset()` và `load_watch_preset()` với validation kiểu dữ liệu nghiêm ngặt; CLI hỗ trợ tham số `--live-preset <path.json>` cho cả chế độ `debug live` local và `debug client --client-action live`.
+- Hoàn thiện **đọc fingerprint SSH host key** tại Gateway Setup: fingerprint luôn quét đúng SSH port đang cấu hình (kể cả port tuỳ chỉnh), chỉ chấp nhận một ED25519 key nhất quán, và chỉ fallback sang public `.pub` khi scanner thực sự không khả dụng. Dữ liệu mơ hồ, malformed hoặc mâu thuẫn đều fail-closed.
+- Trên Windows, resolver ưu tiên OpenSSH hệ thống tại `C:\Windows\System32\OpenSSH\ssh-keyscan.exe` và chạy ẩn. UI fingerprint có trạng thái rõ ràng `chưa đọc/đang đọc/sẵn sàng/lỗi`, chặn double-click và stale result khi cấu hình đổi; chỉ cho copy chuỗi `SHA256:...` sau khi xác minh thành công.
 
 ## [0.12.3] - 2026-08-31
 
