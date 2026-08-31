@@ -48,6 +48,8 @@ def resource_archive_name(resource: Path) -> str:
     """Preserve the runtime lookup path for trusted firmware resources."""
     if resource.parent.name == "firmware" and resource.parent.parent.name == "resources":
         return "resources/firmware/" + resource.name
+    if resource.parent.name == "stlink-driver" and resource.parent.parent.name == "vendor":
+        return "vendor/stlink-driver/" + resource.name
     return resource.name
 
 

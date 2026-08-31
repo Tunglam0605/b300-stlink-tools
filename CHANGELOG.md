@@ -7,6 +7,9 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [0.12.2] - 2026-08-31
 
+- Thêm **Thiết lập máy mới** trong GUI: kiểm tra ST-Link USB driver/OpenOCD/B300 Runtime và OpenSSH Client hoặc Linux udev; chỉ chọn/cài thành phần còn thiếu, có `Cài tất cả phần còn thiếu` và lựa chọn từng mục. Windows ưu tiên driver đã có/Windows PnP, tự tìm payload STSW-LINK009 local hoặc STM32CubeProgrammer; nếu vẫn thiếu thì nhận ZIP/thư mục STSW-LINK009 chính thức và cài bằng `pnputil` với UAC, PowerShell ẩn.
+- Chuẩn hóa lỗi `OpenOCD Error: open failed`: màn hình chính chỉ hiện hướng dẫn ngắn `Không kết nối được ST-Link`, raw OpenOCD traceback giữ trong Nhật ký/`Chi tiết lỗi`; probe không có serial không còn hiện chuỗi `| None`.
+- Release packaging hỗ trợ tùy chọn nhúng STSW-LINK009 đã được phê duyệt redistribution tại `vendor/stlink-driver/`; build không tự tải/vượt điều khoản ST nếu payload chưa được cấp phép.
 - Live Monitor mặc định **chạy liên tục đến khi người dùng bấm Dừng**; `Giới hạn số mẫu` chỉ là tùy chọn nâng cao và giá trị 100 mẫu cũ không còn tự kết thúc phiên monitor khi giới hạn chưa được bật.
 - Sửa chẩn đoán máy mới: kiểm tra OpenOCD và quét ST-Link/driver được tách độc lập, nên lỗi USB/PnP không còn bị báo sai thành “OpenOCD not found”. Release Windows giờ bắt buộc fresh-install installer vào thư mục sạch và chạy trực tiếp bundled `vendor/openocd/bin/openocd.exe --version` trước khi được phát hành.
 - Tối ưu **Theo dõi / Debug** theo operator-first UX: Live Monitor là hành động chính duy nhất trên màn hình mặc định; nút attach GDB chuyển vào `Debug tương tác · Nâng cao`, Gateway có action riêng theo role và trạng thái safety nhấn mạnh realtime trước.

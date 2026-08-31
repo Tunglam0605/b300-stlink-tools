@@ -79,6 +79,16 @@ class ProvisioningError(ValueError):
         self.next_action = next_action
 
 
+class TargetInspectionError(RuntimeError):
+    """Structured read-only ST-Link failure with friendly UX and technical text."""
+
+    def __init__(self, reason: str, next_action: str, technical_message: str = "") -> None:
+        super().__init__(technical_message or reason)
+        self.phase = "target_check"
+        self.reason = reason
+        self.next_action = next_action
+
+
 @dataclass(frozen=True)
 class FactoryResult:
     status: str
@@ -187,24 +197,50 @@ class B300Service:
                 cancel_event=cancel_event,
             )
             if result.returncode != 0:
-                if result.timed_out:
-                    raise RuntimeError("OpenOCD target inspection timed out.")
-                if result.cancelled:
-                    raise RuntimeError("OpenOCD target inspection was cancelled.")
                 output_lower = result.output.lower()
+                if result.timed_out:
+                    error = TargetInspectionError(
+                        "ST-Link không phản hồi trong thời gian cho phép.",
+                        "Kiểm tra cáp USB, nguồn board và đóng ứng dụng khác đang dùng ST-Link rồi thử lại.",
+                        "OpenOCD target inspection timed out.",
+                    )
+                    raise error from RuntimeError(result.output)
+                if result.cancelled:
+                    raise TargetInspectionError(
+                        "Đã hủy kiểm tra target.",
+                        "Khi sẵn sàng, bấm Kiểm tra target để chạy lại.",
+                        "OpenOCD target inspection was cancelled.",
+                    )
                 if (
                     "libusb_error_access" in output_lower or
                     "permission denied" in output_lower or
                     "access denied" in output_lower or
                     ("libusb" in output_lower and "access" in output_lower)
                 ):
-                    raise RuntimeError(
-                        "OpenOCD cannot access the ST-Link USB device. On Ubuntu, install/reload "
-                        "the B300 udev rule for VID 0483 / PID 374x, reconnect ST-Link, and run "
-                        "the GUI as your normal user (do not use sudo). Raw OpenOCD log: %s" %
-                        result.output
+                    error = TargetInspectionError(
+                        "Không có quyền truy cập ST-Link qua USB.",
+                        "Trên Ubuntu, cài/reload B300 udev rule cho VID 0483 / PID 374x, cắm lại ST-Link và chạy GUI bằng user thường.",
+                        "OpenOCD cannot access ST-Link USB; install/reload the B300 udev rule for VID 0483 / PID 374x and do not use sudo.",
                     )
-                raise RuntimeError("OpenOCD target inspection failed: %s" % result.output)
+                    raise error from RuntimeError(result.output)
+                if (
+                    "error: open failed" in output_lower or
+                    "unable to find" in output_lower and "st-link" in output_lower or
+                    "unable to find a matching" in output_lower or
+                    "no device found" in output_lower
+                ):
+                    error = TargetInspectionError(
+                        "Không kết nối được ST-Link.",
+                        "Kiểm tra cáp USB/nguồn board, đóng STM32CubeProgrammer hoặc IDE khác đang giữ ST-Link, rồi bấm Làm mới → Kiểm tra target.",
+                        "OpenOCD target inspection failed: %s" % result.output,
+                    )
+                    raise error from RuntimeError(result.output)
+                error = TargetInspectionError(
+                    "Không thể kiểm tra thiết bị bằng ST-Link.",
+                    "Kiểm tra kết nối rồi thử lại; mở Chi tiết lỗi nếu cần xem log OpenOCD.",
+                    "OpenOCD target inspection failed: %s" % result.output,
+                )
+                raise error from RuntimeError(result.output)
             return parse_target_info(result.output)
 
     def verify_boot(self, probe: ProbeRef,

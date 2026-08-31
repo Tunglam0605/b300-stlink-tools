@@ -107,6 +107,12 @@ def gui_resources(platform_name: str):
             ROOT / "packaging" / "linux" / "b300-stlink-gui.desktop",
             ROOT / "packaging" / "linux" / "b300-stlink-gui.svg",
         ])
+    elif platform_name == "windows-x64":
+        driver_root = ROOT / "vendor" / "stlink-driver"
+        if driver_root.is_dir():
+            # STSW-LINK009 has its own license/export terms. Only packages placed
+            # here after explicit redistribution approval are embedded.
+            resources.extend(sorted(driver_root.glob("*.zip")))
     return resources
 
 

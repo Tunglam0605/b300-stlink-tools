@@ -1244,4 +1244,42 @@ QProgressBar#gatewayProgress {
     min-height: 8px;
     max-height: 12px;
 }
+/* Fresh-machine setup */
+QPushButton#navUtilityButton {
+    min-height: 34px;
+    text-align: left;
+    padding: 7px 10px;
+    background-color: #F8FAFC;
+    color: #334155;
+    border: 1px solid #E2E8F0;
+    border-radius: 6px;
+    font-weight: 700;
+}
+QPushButton#navUtilityButton:hover {
+    background-color: #EFF6FF;
+    color: #1D4ED8;
+    border-color: #BFDBFE;
+}
+QFrame#setupComponentRow {
+    background-color: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-radius: 8px;
+}
+QLabel#setupComponentTitle {
+    color: #0F172A;
+    font-size: 13px;
+    font-weight: 750;
+}
+QLabel#setupStateBadge {
+    border-radius: 5px;
+    padding: 4px 8px;
+    font-size: 11px;
+    font-weight: 750;
+    background-color: #F1F5F9;
+    color: #475569;
+}
+QLabel#setupStateBadge[state="ready"] { background-color: #ECFDF5; color: #065F46; }
+QLabel#setupStateBadge[state="missing"] { background-color: #FFF7ED; color: #9A3412; }
+QLabel#setupStateBadge[state="optional"] { background-color: #F8FAFC; color: #64748B; }
+
 """

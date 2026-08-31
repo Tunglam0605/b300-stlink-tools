@@ -216,12 +216,12 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertNotIn("53544C4B", window.log_view.toPlainText())
         window.close()
 
-    def test_missing_openocd_shows_accessible_offline_setup_action(self) -> None:
+    def test_missing_openocd_uses_single_fresh_machine_setup_entry(self) -> None:
         window = MainWindow(service=MissingOpenOcdService(), probe_loader=lambda: ())
-        self.assertFalse(window.setup_button.isHidden())
-        self.assertTrue(window.setup_button.isEnabled())
-        self.assertEqual(window.setup_button.text(), "Thiết lập môi trường")
-        self.assertIn("offline", window.setup_button.accessibleDescription().lower())
+        self.assertFalse(window.machine_setup_button.isHidden())
+        self.assertTrue(window.machine_setup_button.isEnabled())
+        self.assertEqual(window.machine_setup_button.text(), "⚙  Thiết lập máy mới")
+        self.assertTrue(window.setup_button.isHidden())
         window.close()
 
     def test_probe_discovery_failure_does_not_hide_bundled_openocd(self) -> None:
@@ -247,7 +247,7 @@ class GuiSmokeTests(unittest.TestCase):
         with mock.patch.object(
             QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes
         ):
-            window.setup_button.click()
+            window.setup_environment()
         deadline = time.monotonic() + 1.0
         while window.busy and time.monotonic() < deadline:
             self.app.processEvents()
@@ -354,7 +354,7 @@ class GuiSmokeTests(unittest.TestCase):
             traceback="trace detail",
         ))
         status = window.status_banner.text()
-        self.assertIn("target_check", status)
+        self.assertIn("Kiểm tra target", status)
         self.assertIn("Unsupported target", status)
         self.assertIn("Select the F407 board", status)
         window.close()
