@@ -7,6 +7,7 @@ ports remain loopback-only and are never added to a host firewall rule here.
 from __future__ import annotations
 
 import getpass
+import json
 import os
 import platform
 import shutil
@@ -44,6 +45,8 @@ class GatewayHostReport:
     username: str
     hostname: str
     ipv4_addresses: Tuple[str, ...]
+    ssh_network_profile_ready: bool = True
+    ssh_network_profile_state: str = "READY"
 
 @dataclass(frozen=True)
 class GatewayPreparePlan:
@@ -90,6 +93,16 @@ def _windows_value(script: str, runner: CommandRunner) -> str:
     completed = runner((_powershell(), "-NoProfile", "-NonInteractive", "-Command", script), 30.0)
     return (completed.stdout or "").strip()
 
+
+def _windows_json(script: str, runner: CommandRunner):
+    completed = runner((_powershell(), "-NoProfile", "-NonInteractive", "-Command", script), 30.0)
+    if completed.returncode != 0 or not (completed.stdout or "").strip():
+        return None
+    try:
+        return json.loads(completed.stdout)
+    except ValueError:
+        return None
+
 def _windows_debug_ports_private(runner: CommandRunner) -> bool:
     ports = ",".join(str(port) for port in DEBUG_PORTS)
     script = "$items=Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { @(%s) -contains $_.LocalPort }; $bad=$items | Where-Object { $_.LocalAddress -notin @('127.0.0.1','::1') }; if($bad){'EXPOSED'}else{'PRIVATE'}" % ports
@@ -103,14 +116,55 @@ def _windows_ssh_firewall_ready(ssh_port: int, runner: CommandRunner) -> bool:
     READY even though another LAN machine could not reach TCP/22.
     """
     script = (
-        "$r=Get-NetFirewallRule -Name 'B300-OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue | "
-        "Where-Object {$_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' -and $_.Action -eq 'Allow' -and (($_.Profile -band 1) -ne 0 -or ($_.Profile -band 2) -ne 0)}; "
-        "$p=$r | Get-NetFirewallPortFilter | Where-Object {$_.Protocol -eq 'TCP' -and $_.LocalPort -eq '%d'}; "
-        "$a=$r | Get-NetFirewallAddressFilter | Where-Object {@($_.RemoteAddress) -contains 'LocalSubnet'}; "
-        "$n=Get-NetConnectionProfile -ErrorAction SilentlyContinue | Where-Object {$_.NetworkCategory -in @('Private','DomainAuthenticated')}; "
-        "if($p -and $a -and $n){'READY'}else{'MISSING'}"
-    ) % int(ssh_port)
-    return _windows_value(script, runner) == "READY"
+        "$rules=@(Get-NetFirewallRule -Name 'B300-OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue | "
+        "ForEach-Object {$rule=$_; $port=@($rule | Get-NetFirewallPortFilter); $address=@($rule | Get-NetFirewallAddressFilter); "
+        "$remote=@($address | ForEach-Object {$_.RemoteAddress} | ForEach-Object {$_}); "
+        "[PSCustomObject]@{Enabled=([string]$rule.Enabled -eq 'True');Direction=[string]$rule.Direction;Action=[string]$rule.Action;Profile=[int]$rule.Profile;Protocol=[string]$port[0].Protocol;LocalPort=[string]$port[0].LocalPort;RemoteAddress=$remote}}); "
+        "$rules | ConvertTo-Json -Compress"
+    )
+    parsed = _windows_json(script, runner)
+    if isinstance(parsed, dict):
+        rules = (parsed,)
+    elif isinstance(parsed, list):
+        rules = tuple(item for item in parsed if isinstance(item, dict))
+    else:
+        return False
+    if len(rules) != 1:
+        return False
+    rule = rules[0]
+    remote = rule.get("RemoteAddress", ())
+    if isinstance(remote, str):
+        remote = (remote,)
+    elif isinstance(remote, list):
+        remote = tuple(str(item) for item in remote)
+    else:
+        return False
+    return (
+        rule.get("Enabled") is True and
+        rule.get("Direction") == "Inbound" and
+        rule.get("Action") == "Allow" and
+        rule.get("Profile") == 3 and
+        rule.get("Protocol") == "TCP" and
+        str(rule.get("LocalPort")) == str(int(ssh_port)) and
+        remote == ("LocalSubnet",)
+    )
+
+
+def _windows_network_profile_state(runner: CommandRunner) -> str:
+    """Return a conservative state for the one network B300 may promote.
+
+    More than one active profile is intentionally not guessed: changing an
+    unrelated VPN/Ethernet connection would be a security surprise.
+    """
+    script = (
+        "$active=@(Get-NetConnectionProfile -ErrorAction SilentlyContinue | "
+        "Where-Object {$_.IPv4Connectivity -notin @('Disconnected','NoTraffic')}); "
+        "if($active.Count -ne 1){'AMBIGUOUS'} "
+        "elseif($active[0].NetworkCategory -in @('Private','DomainAuthenticated')){'READY'} "
+        "elseif($active[0].NetworkCategory -eq 'Public'){'PUBLIC'}else{'BLOCKED'}"
+    )
+    state = _windows_value(script, runner).upper()
+    return state if state in {"READY", "PUBLIC", "AMBIGUOUS", "BLOCKED"} else "BLOCKED"
 
 def _inspect_windows(ssh_port: int, runner: CommandRunner) -> GatewayHostReport:
     capability = _windows_value("$c=Get-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0' -ErrorAction SilentlyContinue; if($c){$c.State}else{'NotPresent'}", runner)
@@ -120,8 +174,9 @@ def _inspect_windows(ssh_port: int, runner: CommandRunner) -> GatewayHostReport:
     running = service.lower() == "running"
     start_mode = _windows_value("$s=Get-CimInstance Win32_Service -Filter \"Name='sshd'\" -ErrorAction SilentlyContinue; if($s){$s.StartMode}else{'Missing'}", runner)
     startup = start_mode.lower() in {"auto", "automatic"}
+    network_state = _windows_network_profile_state(runner)
     firewall = _windows_ssh_firewall_ready(ssh_port, runner)
-    return _build_report("windows", installed, running, startup, firewall, _tcp_connectable(ssh_port), _windows_debug_ports_private(runner), ssh_port, custom_port=(int(ssh_port) != DEFAULT_SSH_PORT))
+    return _build_report("windows", installed, running, startup, firewall, _tcp_connectable(ssh_port), _windows_debug_ports_private(runner), ssh_port, network_profile_state=network_state, custom_port=(int(ssh_port) != DEFAULT_SSH_PORT))
 
 def _linux_debug_ports_private(runner: CommandRunner) -> bool:
     completed = runner((shutil.which("ss") or "ss", "-ltnH"), 10.0)
@@ -161,7 +216,20 @@ def _inspect_linux(ssh_port: int, runner: CommandRunner) -> GatewayHostReport:
             )
     return _build_report("linux", installed, running, startup, firewall, _tcp_connectable(ssh_port), _linux_debug_ports_private(runner), ssh_port, custom_port=(int(ssh_port) != DEFAULT_SSH_PORT))
 
-def _build_report(system: str, installed: bool, running: bool, startup: bool, firewall: bool, listening: bool, private: bool, ssh_port: int, *, custom_port: bool = False) -> GatewayHostReport:
+def _build_report(system: str, installed: bool, running: bool, startup: bool, firewall: bool, listening: bool, private: bool, ssh_port: int, *, network_profile_state: str = "READY", custom_port: bool = False) -> GatewayHostReport:
+    network_ready = network_profile_state == "READY"
+    if network_profile_state == "PUBLIC":
+        network_message = "The active Windows network is Public; B300 will change this one profile to Private only after confirmation."
+        network_next_action = "Run Gateway Prepare and approve the displayed network-profile change."
+    elif network_profile_state == "AMBIGUOUS":
+        network_message = "B300 found zero or multiple active Windows network profiles and will not guess which one to change."
+        network_next_action = "Disconnect extra VPN/network adapters or set the intended LAN profile to Private, then refresh."
+    elif network_ready:
+        network_message = "Active network profile is Private or Domain."
+        network_next_action = "No action is required."
+    else:
+        network_message = "The active Windows network profile cannot be safely prepared automatically."
+        network_next_action = "Set the intended LAN profile to Private, then refresh."
     checks = [
         GatewayHostCheck("ssh_install", "PASS" if installed else "FAIL", "SSH_SERVER_INSTALLED" if installed else "SSH_SERVER_MISSING", "OpenSSH Server is installed." if installed else "OpenSSH Server is not installed.", "No action is required." if installed else "Run Gateway Prepare to install OpenSSH Server."),
         GatewayHostCheck("ssh_service", "PASS" if running else "FAIL", "SSH_SERVICE_RUNNING" if running else "SSH_SERVICE_STOPPED", "SSH service is running." if running else "SSH service is not running.", "No action is required." if running else "Run Gateway Prepare to start the SSH service."),
@@ -170,11 +238,13 @@ def _build_report(system: str, installed: bool, running: bool, startup: bool, fi
         GatewayHostCheck("ssh_listener", "PASS" if listening else "FAIL", "SSH_PORT_LISTENING" if listening else "SSH_PORT_NOT_LISTENING", "Local SSH server accepts TCP/%d connections." % ssh_port if listening else "Local SSH server is not reachable on TCP/%d." % ssh_port, "No action is required." if listening else "Verify sshd is running and listening on the configured port."),
         GatewayHostCheck("debug_ports", "PASS" if private else "FAIL", "DEBUG_PORTS_PRIVATE" if private else "DEBUG_PORTS_EXPOSED", "GDB/Telnet/TCL debug ports are not exposed on non-loopback listeners." if private else "One or more debug ports (3333/4444/6666) are listening on a non-loopback address.", "No action is required." if private else "Stop/reconfigure the conflicting service. B300 Gateway requires debug ports to remain loopback-only."),
     ]
+    if system == "windows":
+        checks.insert(3, GatewayHostCheck("network_profile", "PASS" if network_ready else "FAIL", "NETWORK_PROFILE_READY" if network_ready else "NETWORK_PROFILE_%s" % network_profile_state, network_message, network_next_action))
     if custom_port:
         checks.append(GatewayHostCheck("custom_ssh_port", "LIMITED", "CUSTOM_SSH_PORT_NOT_MANAGED", "Gateway Setup will not modify sshd_config for custom SSH ports.", "Keep the existing SSH configuration or use TCP/22 for managed setup."))
     failed = any(check.status == "FAIL" for check in checks)
     limited = any(check.status == "LIMITED" for check in checks)
-    return GatewayHostReport(system, tuple(checks), installed, running, startup, firewall, listening, private, not failed, "BLOCKED" if failed else ("READY_WITH_WARNINGS" if limited else "READY"), int(ssh_port), getpass.getuser(), socket.gethostname(), _nonloopback_ipv4())
+    return GatewayHostReport(system, tuple(checks), installed, running, startup, firewall, listening, private, not failed, "BLOCKED" if failed else ("READY_WITH_WARNINGS" if limited else "READY"), int(ssh_port), getpass.getuser(), socket.gethostname(), _nonloopback_ipv4(), network_ready, network_profile_state)
 
 def inspect_gateway_host(ssh_port: int = DEFAULT_SSH_PORT, *, runner: CommandRunner = _run, system_name: Optional[str] = None) -> GatewayHostReport:
     if not 1 <= int(ssh_port) <= 65535:
@@ -190,12 +260,18 @@ def build_gateway_prepare_plan(report: GatewayHostReport) -> GatewayPreparePlan:
     actions = []
     if report.ssh_port != DEFAULT_SSH_PORT and not report.ready:
         raise ValueError("Managed Gateway Prepare supports TCP/22 only and never rewrites sshd_config. Use gateway doctor for an existing custom-port SSH server.")
+    if report.platform == "windows" and report.ssh_network_profile_state in {"AMBIGUOUS", "BLOCKED"}:
+        return GatewayPreparePlan(
+            report.platform, ("manual_fix_network_profile",), False, False, report.ssh_port,
+        )
     if not report.ssh_installed:
         actions.append("install_openssh_server")
     if not report.ssh_startup_enabled:
         actions.append("enable_ssh_startup")
     if not report.ssh_service_running:
         actions.append("start_ssh_service")
+    if report.platform == "windows" and report.ssh_network_profile_state == "PUBLIC":
+        actions.append("set_active_network_private")
     if not report.ssh_firewall_ready:
         actions.append("allow_ssh_firewall")
     if not report.debug_ports_private:
@@ -206,12 +282,24 @@ def build_gateway_prepare_plan(report: GatewayHostReport) -> GatewayPreparePlan:
 def _windows_prepare_script(plan: GatewayPreparePlan) -> str:
     lines = ["$ErrorActionPreference='Stop'"]
     actions = set(plan.actions)
+    if "set_active_network_private" in actions:
+        # Verify the exact profile again before *any* privileged mutation.  A
+        # VPN/adapter change while the user reviews the UAC plan must leave the
+        # host untouched rather than partially prepared on an unknown network.
+        lines += [
+            "$active=@(Get-NetConnectionProfile -ErrorAction Stop | Where-Object {$_.IPv4Connectivity -notin @('Disconnected','NoTraffic')})",
+            "if($active.Count -ne 1 -or $active[0].NetworkCategory -ne 'Public'){throw 'B300 requires exactly one active Public network profile before it can safely change the profile.'}",
+        ]
     if "install_openssh_server" in actions:
         lines += ["$cap=Get-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0'", "if($cap.State -ne 'Installed'){Add-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0' | Out-Null}"]
     if "enable_ssh_startup" in actions:
         lines.append("Set-Service -Name sshd -StartupType Automatic")
     if "start_ssh_service" in actions:
         lines.append("Start-Service -Name sshd")
+    if "set_active_network_private" in actions:
+        lines += [
+            "Set-NetConnectionProfile -InterfaceIndex $active[0].InterfaceIndex -NetworkCategory Private",
+        ]
     if "allow_ssh_firewall" in actions:
         lines += [
             "Remove-NetFirewallRule -Name 'B300-OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue",
@@ -269,7 +357,7 @@ def _run_linux_prepare(plan: GatewayPreparePlan, runner: CommandRunner) -> None:
 def prepare_gateway_host(ssh_port: int = DEFAULT_SSH_PORT, *, runner: CommandRunner = _run, system_name: Optional[str] = None, inspector: Callable[..., GatewayHostReport] = inspect_gateway_host) -> GatewayPrepareResult:
     before = inspector(ssh_port=ssh_port, runner=runner, system_name=system_name)
     plan = build_gateway_prepare_plan(before)
-    if "manual_fix_debug_exposure" in plan.actions:
+    if any(action.startswith("manual_fix_") for action in plan.actions):
         return GatewayPrepareResult(plan, before, before, False, False)
     if plan.changes_required:
         if before.platform == "windows":

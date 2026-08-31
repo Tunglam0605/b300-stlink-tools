@@ -27,18 +27,21 @@ from b300_gui.gateway_setup_tab import GatewaySetupTab
 from b300_gui.styles import APP_STYLE
 
 
-def report(ready=True, private=True, port=22):
+def report(ready=True, private=True, port=22, network_profile=True, network_profile_state=None):
     checks = (
         GatewayHostCheck("ssh_install", "PASS" if ready else "FAIL", "SSH", "OpenSSH status"),
+        GatewayHostCheck("network_profile", "PASS" if network_profile else "FAIL", "NETWORK", "Network profile status"),
         GatewayHostCheck("debug_ports", "PASS" if private else "FAIL", "DEBUG", "Debug ports status"),
     )
     return GatewayHostReport(
         platform="windows", checks=checks, ssh_installed=ready,
         ssh_service_running=ready, ssh_startup_enabled=ready,
         ssh_firewall_ready=ready, ssh_port_listening=ready,
-        debug_ports_private=private, ready=ready and private,
-        conclusion="READY" if ready and private else "BLOCKED", ssh_port=port,
+        debug_ports_private=private, ready=ready and private and network_profile,
+        conclusion="READY" if ready and private and network_profile else "BLOCKED", ssh_port=port,
         username="automation", hostname="gateway", ipv4_addresses=("192.168.1.109",),
+        ssh_network_profile_ready=network_profile,
+        ssh_network_profile_state=network_profile_state or ("READY" if network_profile else "PUBLIC"),
     )
 
 
@@ -85,7 +88,7 @@ class GatewaySetupTabTests(unittest.TestCase):
         tab = GatewaySetupTab(identity_inspector=lambda: identity_report(False), profile_loader=lambda: None, auto_refresh=False)
         tab._render(report(True))
         self.assertIn("GATEWAY SSH READY", tab.status.text())
-        self.assertEqual(tab.check_table.rowCount(), 2)
+        self.assertEqual(tab.check_table.rowCount(), 3)
         self.assertIn("192.168.1.109", tab.client_config.toPlainText())
         self.assertTrue(tab.copy_button.isEnabled())
         self.assertFalse(tab.gateway_check_details.is_expanded())
@@ -112,6 +115,23 @@ class GatewaySetupTabTests(unittest.TestCase):
             tab.prepare_host()
         dialog.assert_called_once()
         preparer.assert_not_called()
+        tab.close()
+
+    def test_ambiguous_network_profile_blocks_prepare_with_guidance(self):
+        blocked = report(ready=False, network_profile=False, network_profile_state="AMBIGUOUS")
+        preparer = mock.Mock()
+        tab = GatewaySetupTab(
+            preparer=preparer, identity_inspector=lambda: identity_report(False),
+            profile_loader=lambda: None, auto_refresh=False,
+        )
+        tab._render(blocked)
+
+        with mock.patch("b300_gui.gateway_setup_tab.QMessageBox.critical") as message, \
+             mock.patch("b300_gui.gateway_setup_tab.QMessageBox.question", return_value=QMessageBox.StandardButton.Cancel):
+            tab.prepare_host()
+
+        preparer.assert_not_called()
+        self.assertIn("Network profile", message.call_args.args[1])
         tab.close()
 
     def test_show_local_gateway_host_fingerprint_exposes_only_fingerprint(self):
