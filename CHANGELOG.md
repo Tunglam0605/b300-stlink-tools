@@ -8,6 +8,7 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 ## [0.12.2] - 2026-08-31
 
 - Live Monitor mặc định **chạy liên tục đến khi người dùng bấm Dừng**; `Giới hạn số mẫu` chỉ là tùy chọn nâng cao và giá trị 100 mẫu cũ không còn tự kết thúc phiên monitor khi giới hạn chưa được bật.
+- Sửa chẩn đoán máy mới: kiểm tra OpenOCD và quét ST-Link/driver được tách độc lập, nên lỗi USB/PnP không còn bị báo sai thành “OpenOCD not found”. Release Windows giờ bắt buộc fresh-install installer vào thư mục sạch và chạy trực tiếp bundled `vendor/openocd/bin/openocd.exe --version` trước khi được phát hành.
 - Tối ưu **Theo dõi / Debug** theo operator-first UX: Live Monitor là hành động chính duy nhất trên màn hình mặc định; nút attach GDB chuyển vào `Debug tương tác · Nâng cao`, Gateway có action riêng theo role và trạng thái safety nhấn mạnh realtime trước.
 - Làm Debug responsive thật ở cửa sổ tối thiểu `760×460`: Local/Client/Gateway đều không sinh horizontal scroll; form Connection/Client chuyển sang grid, Live Monitor chuyển từ hai pane song song sang tab `Biến theo dõi` / `Luồng thực thi`.
 - Giảm information overload của Live Monitor: `Chất lượng lấy mẫu` mặc định đóng, các cột Address/Min/Max/Mean chỉ hiện khi mở chi tiết, custom interval/sample limit chỉ xuất hiện khi người dùng chọn dùng; Technical Log chỉ hiện badge khi thực sự có INFO/WARN/ERR.

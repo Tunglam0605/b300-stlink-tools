@@ -1310,13 +1310,21 @@ class MainWindow(QMainWindow):
             if hasattr(self, "factory_probe_combo") and self.factory_probe_combo.count()
             else None
         )
+        probe_error = None
         try:
             probes = tuple(self.probe_loader())
-            available, executable = self.service.doctor()
         except Exception as error:
             probes = ()
+            probe_error = error
+            self.append_log("ST-Link discovery failed: %s" % error)
+
+        openocd_error = None
+        try:
+            available, executable = self.service.doctor()
+        except Exception as error:
             available, executable = False, ""
-            self.append_log("Probe check failed: %s" % error)
+            openocd_error = error
+            self.append_log("OpenOCD check failed: %s" % error)
 
         self._probes = tuple(probes)
         if hasattr(self, "debug_tab"):
@@ -1362,13 +1370,16 @@ class MainWindow(QMainWindow):
                 "Sẵn sàng one-click Factory; target/WRP sẽ được tự kiểm tra trước khi ghi"
             )
         if available:
-            detail = "%d probe(s) found" % len(probes) if probes else "OpenOCD ready"
+            if probe_error is not None:
+                detail = "OpenOCD ready · ST-Link scan unavailable"
+            else:
+                detail = "%d probe(s) found" % len(probes) if probes else "OpenOCD ready"
             self._set_status("%s | %s" % (detail, executable), "normal")
         else:
-            self._set_status(
-                "OpenOCD not found; use offline environment setup",
-                "error",
-            )
+            detail = "OpenOCD not found; use offline environment setup"
+            if openocd_error is not None:
+                detail = "OpenOCD check failed; use offline environment setup"
+            self._set_status(detail, "error")
         self._rebuild_plan()
 
     def _select_offline_bundle(self) -> Optional[Path]:

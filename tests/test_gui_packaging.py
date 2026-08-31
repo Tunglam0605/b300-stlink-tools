@@ -167,7 +167,9 @@ class GuiPackagingTests(unittest.TestCase):
         self.assertIn('ROOT / "b300_gui_windows.spec"', native_builder)
         self.assertIn('"--application-root"', native_builder)
         self.assertIn("Verify packaged Windows onedir runtime", workflow)
-        self.assertIn("Smoke-test installed Windows GUI", workflow)
+        self.assertIn("Smoke-test fresh Windows install with bundled OpenOCD", workflow)
+        self.assertIn("vendor\\openocd\\bin\\openocd.exe", workflow)
+        self.assertIn("& $openocd --version", workflow)
         self.assertIn("VCRUNTIME140*.dll", workflow)
 
     def test_application_root_packaging_preserves_windows_onedir_files(self) -> None:

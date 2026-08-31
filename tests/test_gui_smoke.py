@@ -224,6 +224,18 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertIn("offline", window.setup_button.accessibleDescription().lower())
         window.close()
 
+    def test_probe_discovery_failure_does_not_hide_bundled_openocd(self) -> None:
+        def broken_probe_discovery():
+            raise RuntimeError("USB/PnP discovery unavailable")
+
+        window = MainWindow(service=FakeService(), probe_loader=broken_probe_discovery)
+        self.assertTrue(window.openocd_ready)
+        self.assertTrue(window.setup_button.isHidden())
+        self.assertIn("OpenOCD ready", window.status_banner.text())
+        self.assertIn("ST-Link scan unavailable", window.status_banner.text())
+        self.assertIn("ST-Link discovery failed", window.log_view.toPlainText())
+        window.close()
+
     def test_offline_setup_button_installs_then_rechecks_environment(self) -> None:
         service = MissingOpenOcdService()
         window = MainWindow(
