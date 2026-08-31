@@ -231,6 +231,43 @@ class GuiRedesignTests(unittest.TestCase):
         self.assertEqual(panel.table.rowCount(), 0)
         panel.close()
 
+    def test_live_variables_save_and_load_preset(self) -> None:
+        panel = DebugLivePanel()
+        panel.expressions.setText("xTickCount")
+        panel.type_combo.setCurrentText("u32")
+        panel.add_watch_btn.click()
+
+        panel.expressions.setText("bRUN")
+        panel.type_combo.setCurrentText("u8")
+        panel.add_watch_btn.click()
+        panel.table.item(1, 5).setCheckState(Qt.CheckState.Unchecked)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            preset_file = Path(tmpdir) / "test_preset.json"
+            saved_path = panel.export_preset(preset_file, name="Custom Watch Group")
+            self.assertEqual(saved_path, preset_file)
+            self.assertTrue(preset_file.is_file())
+
+            # Clear table
+            panel.table.setRowCount(0)
+            panel.rows.clear()
+            self.assertEqual(panel.table.rowCount(), 0)
+
+            # Import preset
+            result = panel.import_preset(preset_file)
+            self.assertEqual(result["name"], "Custom Watch Group")
+            self.assertEqual(panel.table.rowCount(), 2)
+            self.assertEqual(panel.table.item(0, 0).text(), "xTickCount")
+            self.assertEqual(panel.table.item(0, 2).text(), "u32")
+            self.assertEqual(panel.table.item(0, 5).checkState(), Qt.CheckState.Checked)
+            self.assertEqual(panel.table.item(1, 0).text(), "bRUN")
+            self.assertEqual(panel.table.item(1, 2).text(), "u8")
+            self.assertEqual(panel.table.item(1, 5).checkState(), Qt.CheckState.Unchecked)
+            self.assertEqual(panel.watch_specs(), ("xTickCount:u32", "bRUN:u8"))
+
+        panel.close()
+
+
     def test_live_plot_panel_pause_clear_export(self) -> None:
         plot_panel = DebugPlotPanel(max_points=100)
         samples = [

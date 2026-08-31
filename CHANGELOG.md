@@ -5,6 +5,12 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.12.4] - 2026-08-31
+
+- Bổ sung **Lưu & Nạp nhóm biến theo dõi (Watch Presets / JSON Import & Export)** cho Realtime Live Monitor:
+  - GUI: Thêm nút `Lưu preset…` và `Nạp preset…` trong bảng Biến đang theo dõi; hỗ trợ lưu tên biến, kiểu dữ liệu, cờ vẽ đồ thị (plot state), tốc độ lấy mẫu và giới hạn số mẫu ra file `.json` chuẩn; hỗ trợ nạp lại nhanh chóng mà không cần thêm từng biến thủ công.
+  - Core & CLI: Cung cấp API `save_watch_preset()` và `load_watch_preset()` với validation kiểu dữ liệu nghiêm ngặt; CLI hỗ trợ tham số `--live-preset <path.json>` cho cả chế độ `debug live` local và `debug client --client-action live`.
+
 ## [0.12.3] - 2026-08-31
 
 - Thêm Windows **one-click fresh-machine bootstrap**: installer mang theo official STSW-LINK009 signed driver + SLA0048 notice, pin SHA-256 và từ chối package nếu payload thiếu/sai; post-install launch dùng `--first-run-setup`, tự kiểm tra/cài đúng prerequisite còn thiếu rồi ghi trạng thái setup hoàn tất. Python runtime, OpenOCD và GDB vẫn self-contained; không flash/reset/đổi Option Bytes trong machine setup.

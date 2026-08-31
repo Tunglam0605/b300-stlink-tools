@@ -14,7 +14,9 @@ from typing import Callable, Optional
 
 from b300_cli.reporting import Reporter
 from b300_cli.output_paths import validated_output_path
-from b300_core.live_monitor import validate_live_request, validate_live_watch_specs
+from b300_core.live_monitor import (
+    load_watch_preset, validate_live_request, validate_live_watch_specs,
+)
 from b300_core.live_service import LiveMonitorService
 from b300_core.live_session import (
     ClientLiveMonitorConfig, LiveMonitorSession, LocalLiveMonitorConfig,
@@ -31,6 +33,23 @@ def validate_live_output(path) -> None:
 
 def validate_live_options(args) -> None:
     """Validate all Live Monitor options before hardware/tunnel access."""
+    if getattr(args, "live_preset", None) is not None:
+        preset_data = load_watch_preset(args.live_preset)
+        if not args.live_watch and preset_data.get("specs"):
+            args.live_watch = list(preset_data["specs"])
+        elif preset_data.get("specs"):
+            combined = list(args.live_watch)
+            for spec in preset_data["specs"]:
+                spec_name = spec.split(":", 1)[0].strip()
+                if not any(existing.split(":", 1)[0].strip() == spec_name for existing in combined):
+                    combined.append(spec)
+            args.live_watch = combined
+
+        if getattr(args, "live_interval", None) == 0.5 and preset_data.get("interval_seconds") is not None:
+            args.live_interval = preset_data["interval_seconds"]
+        if getattr(args, "live_samples", None) is None and preset_data.get("sample_limit") is not None:
+            args.live_samples = preset_data["sample_limit"]
+
     validate_live_output(args.live_output)
     validate_live_watch_specs(args.live_watch)
     validate_live_request(args.live_interval, args.live_samples, ())

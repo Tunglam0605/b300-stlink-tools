@@ -139,6 +139,62 @@ class LiveMonitorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicated"):
             validate_live_watch_specs(("xTickCount:u32", "xTickCount:i32"))
 
+    def test_save_and_load_watch_preset_roundtrip(self):
+        from b300_core.live_monitor import save_watch_preset, load_watch_preset
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            preset_path = Path(tmpdir) / "motor_watch.json"
+            specs = ("xTickCount:u32", "bRUN:u8", "v_current:f64")
+            plot_flags = {"xTickCount": True, "bRUN": False, "v_current": True}
+            saved = save_watch_preset(
+                preset_path, specs, name="Motor Diagnostics",
+                interval_seconds=0.2, sample_limit=500, plot_flags=plot_flags,
+            )
+            self.assertEqual(saved, preset_path)
+            self.assertTrue(preset_path.is_file())
+
+            loaded = load_watch_preset(preset_path)
+            self.assertEqual(loaded["name"], "Motor Diagnostics")
+            self.assertEqual(loaded["interval_seconds"], 0.2)
+            self.assertEqual(loaded["sample_limit"], 500)
+            self.assertEqual(loaded["specs"], ("xTickCount:u32", "bRUN:u8", "v_current:f64"))
+            self.assertEqual(loaded["plot_flags"], {"xTickCount": True, "bRUN": False, "v_current": True})
+            self.assertEqual(len(loaded["watches"]), 3)
+            self.assertEqual(loaded["watches"][0], {"name": "xTickCount", "type": "u32", "plot": True})
+            self.assertEqual(loaded["watches"][1], {"name": "bRUN", "type": "u8", "plot": False})
+
+    def test_load_watch_preset_supports_simple_array_format(self):
+        from b300_core.live_monitor import load_watch_preset
+        import tempfile
+        import json
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            preset_path = Path(tmpdir) / "simple.json"
+            preset_path.write_text(json.dumps(["xTickCount:u32", "bRUN:u8"]), encoding="utf-8")
+            loaded = load_watch_preset(preset_path)
+            self.assertEqual(loaded["specs"], ("xTickCount:u32", "bRUN:u8"))
+            self.assertEqual(loaded["plot_flags"], {"xTickCount": True, "bRUN": True})
+
+    def test_load_watch_preset_rejects_invalid_json_or_specs(self):
+        from b300_core.live_monitor import load_watch_preset
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            corrupt_path = Path(tmpdir) / "corrupt.json"
+            corrupt_path.write_text("{not valid json", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "JSON"):
+                load_watch_preset(corrupt_path)
+
+            invalid_spec_path = Path(tmpdir) / "invalid.json"
+            invalid_spec_path.write_text('["xTickCount:invalid_type"]', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Unsupported"):
+                load_watch_preset(invalid_spec_path)
+
 
 if __name__ == "__main__":
     unittest.main()
+

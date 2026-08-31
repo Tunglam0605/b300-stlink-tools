@@ -115,8 +115,35 @@ class CliLiveMonitorTests(unittest.TestCase):
             with self.assertRaisesRegex(FileExistsError, "--force"):
                 live_commands._open_live_output(output, (), False)
             handle, writer = live_commands._open_live_output(output, (), True)
+            self.assertIsNotNone(handle)
             self.assertIsNone(writer)
             handle.close()
+
+    def test_live_preset_populates_watches_and_settings(self):
+        module = tool()
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch("b300_core.live_service.resolve_openocd", return_value="openocd"), \
+                redirect_stdout(output):
+            preset_file = Path(directory) / "preset.json"
+            preset_file.write_text(json.dumps({
+                "schema_version": 1,
+                "name": "Test Group",
+                "interval_seconds": 0.2,
+                "sample_limit": 10,
+                "watches": [
+                    {"name": "xTickCount", "type": "u32"},
+                    {"name": "bRUN", "type": "u8"},
+                ],
+            }), encoding="utf-8")
+            result = module.main([
+                "debug", "live", "--symbols", str(fake_axf(directory)),
+                "--live-preset", str(preset_file),
+                "--dry-run", "--json",
+            ])
+        self.assertEqual(result, 0)
+        record = json.loads(output.getvalue().strip())
+        self.assertTrue(record["zero_halt"])
 
 
 if __name__ == "__main__":

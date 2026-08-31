@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont
@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 from b300_core.debug_sampling import (
     VariableSample, VariableSampleBuffer, validate_sampling_request, write_samples,
 )
-from b300_core.live_monitor import LiveSample, validate_live_watch_specs
+from b300_core.live_monitor import LiveSample, validate_live_watch_specs, save_watch_preset, load_watch_preset
 
 from .collapsible_card import CollapsibleCard
 
@@ -258,12 +258,24 @@ class DebugLivePanel(QGroupBox):
             "Duyệt symbol offline từ AXF/ELF; thao tác này không truy cập hoặc halt STM32."
         )
         self.browse_symbols_btn.clicked.connect(self.symbol_browser_requested.emit)
-        add_var_grid.addWidget(self.browse_symbols_btn, 1, 0, 1, 2)
+        add_var_grid.addWidget(self.browse_symbols_btn, 1, 0)
+
+        self.load_preset_btn = QPushButton("Nạp preset…")
+        self.load_preset_btn.setObjectName("debugLoadLivePresetButton")
+        self.load_preset_btn.setToolTip("Nạp danh sách biến theo dõi từ file JSON.")
+        self.load_preset_btn.clicked.connect(self._on_load_preset_clicked)
+        add_var_grid.addWidget(self.load_preset_btn, 1, 1)
+
+        self.save_preset_btn = QPushButton("Lưu preset…")
+        self.save_preset_btn.setObjectName("debugSaveLivePresetButton")
+        self.save_preset_btn.setToolTip("Lưu danh sách biến hiện tại ra file JSON.")
+        self.save_preset_btn.clicked.connect(self._on_save_preset_clicked)
+        add_var_grid.addWidget(self.save_preset_btn, 1, 2)
 
         self.remove_watch_btn = QPushButton("Xóa biến")
         self.remove_watch_btn.clicked.connect(self._on_remove_watch_clicked)
         add_var_grid.addWidget(self.remove_watch_btn, 1, 4)
-        add_var_grid.setColumnStretch(2, 1)
+        add_var_grid.setColumnStretch(3, 1)
         variables_layout.addLayout(add_var_grid)
 
         self.table = QTableWidget(0, 9)
@@ -508,6 +520,8 @@ class DebugLivePanel(QGroupBox):
     ) -> None:
         self.expressions.setEnabled(start_enabled)
         self.browse_symbols_btn.setEnabled(start_enabled)
+        self.load_preset_btn.setEnabled(start_enabled)
+        self.save_preset_btn.setEnabled(start_enabled)
         self.type_combo.setEnabled(start_enabled)
         self.add_watch_btn.setEnabled(start_enabled)
         self.remove_watch_btn.setEnabled(start_enabled)
@@ -665,4 +679,123 @@ class DebugLivePanel(QGroupBox):
 
         self.status.setText("Đã xuất %d điểm → %s" % (len(samples) + len(self._timeline_samples), destination.name))
         return destination
+
+    def export_preset(self, path: Optional[Union[str, Path]] = None, name: Optional[str] = None) -> Optional[Path]:
+        """Export current watch variables and settings to a JSON preset file."""
+        specs = []
+        plot_flags = {}
+        for row in range(self.table.rowCount()):
+            name_item = self.table.item(row, 0)
+            type_item = self.table.item(row, 2)
+            check_item = self.table.item(row, 5)
+            if not name_item or not name_item.text().strip():
+                continue
+            v_name = name_item.text().strip()
+            v_type = type_item.text().strip() if type_item and type_item.text().strip() else self.type_combo.currentText()
+            specs.append("%s:%s" % (v_name, v_type))
+            plot_flags[v_name] = check_item.checkState() == Qt.CheckState.Checked if check_item else True
+        if not specs:
+            raw = self.expressions.text().strip()
+            if raw:
+                import re
+                for item in (part.strip() for part in re.split(r"[,;\n]+", raw) if part.strip()):
+                    v_name = item.split(":", 1)[0].strip() if ":" in item else item
+                    specs.append(item if ":" in item else "%s:%s" % (item, self.type_combo.currentText()))
+                    plot_flags[v_name] = True
+        if not specs:
+            raise ValueError("Không có biến nào trong danh sách để lưu preset.")
+
+        interval_val = float(self.interval.value())
+        sample_lim = int(self.cycles.value()) if self.limit_samples.isChecked() else None
+
+        if path is None:
+            file_path, _ = QFileDialog.getSaveFileName(
+                self, "Lưu danh sách biến (Preset)", "b300-watch-preset.json",
+                "JSON Preset (*.json);;All Files (*)",
+            )
+            if not file_path:
+                return None
+            target_path = Path(file_path)
+        else:
+            target_path = Path(path)
+
+        if target_path.suffix.lower() != ".json":
+            target_path = target_path.with_suffix(".json")
+
+        saved = save_watch_preset(
+            target_path, specs, name=name or "B300 Live Watch Preset",
+            interval_seconds=interval_val, sample_limit=sample_lim,
+            plot_flags=plot_flags,
+        )
+        self.status.setText("Đã lưu preset %d biến → %s" % (len(specs), saved.name))
+        return saved
+
+    def import_preset(self, path: Optional[Union[str, Path]] = None, mode: str = "replace") -> Optional[dict]:
+        """Import watch variables from a JSON preset file."""
+        if path is None:
+            file_path, _ = QFileDialog.getOpenFileName(
+                self, "Nạp danh sách biến (Preset)", "",
+                "JSON Preset (*.json);;All Files (*)",
+            )
+            if not file_path:
+                return None
+            target_path = Path(file_path)
+        else:
+            target_path = Path(path)
+
+        data = load_watch_preset(target_path)
+        if mode == "replace":
+            self.table.setRowCount(0)
+            self.rows.clear()
+
+        # Update interval if specified in preset
+        if data.get("interval_seconds") is not None:
+            self._set_interval_value(data["interval_seconds"])
+
+        # Update sample limit if specified
+        if data.get("sample_limit") is not None:
+            self.limit_samples.setChecked(True)
+            self.cycles.setValue(int(data["sample_limit"]))
+
+        # Populate rows
+        for watch in data.get("watches", []):
+            name = watch["name"]
+            val_type = watch["type"]
+            plot_state = watch.get("plot", True)
+            if name in self.rows:
+                row = self.rows[name]
+            else:
+                row = self.table.rowCount()
+                self.table.insertRow(row)
+                self.rows[name] = row
+
+            self.table.setItem(row, 0, QTableWidgetItem(name))
+            self.table.setItem(row, 1, QTableWidgetItem("—"))
+            self.table.setItem(row, 2, QTableWidgetItem(val_type))
+            self.table.setItem(row, 3, QTableWidgetItem("—"))
+            self.table.setItem(row, 4, QTableWidgetItem("—"))
+            check_item = QTableWidgetItem()
+            check_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            check_item.setCheckState(Qt.CheckState.Checked if plot_state else Qt.CheckState.Unchecked)
+            self.table.setItem(row, 5, check_item)
+
+        self.status.setText("Đã nạp preset %d biến từ %s" % (len(data.get("watches", [])), target_path.name))
+        return data
+
+    def _set_interval_value(self, val: float) -> None:
+        self.interval.setValue(float(val))
+        self._on_custom_interval_changed(float(val))
+
+    def _on_save_preset_clicked(self) -> None:
+        try:
+            self.export_preset()
+        except Exception as exc:
+            self.status.setText("Lỗi lưu preset: %s" % exc)
+
+    def _on_load_preset_clicked(self) -> None:
+        try:
+            self.import_preset()
+        except Exception as exc:
+            self.status.setText("Lỗi nạp preset: %s" % exc)
+
 
