@@ -103,6 +103,11 @@ class GatewaySetupTab(QWidget):
     def has_active_operation(self) -> bool:
         return self._worker is not None
 
+    def request_shutdown(self) -> None:
+        """Request cooperative cancellation so the owning window can close later."""
+        if self._worker is not None:
+            self._worker.cancel()
+
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 10, 12, 10)

@@ -273,6 +273,18 @@ class FakeSession:
         self.service.state = DebugState.STOPPED
 
 
+class BlockingStartSession(FakeSession):
+    def __init__(self, service: FakeDebugService) -> None:
+        super().__init__(service)
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def start(self, config, event_sink=None):
+        self.started.set()
+        self.release.wait(timeout=2)
+        return super().start(config, event_sink=event_sink)
+
+
 class FakeSettings:
     def __init__(self, values=None):
         self.values = dict(values or {})
@@ -318,7 +330,7 @@ class DebugTabTests(unittest.TestCase):
             try:
                 widget.close()
                 widget.deleteLater()
-            except RuntimeError:
+            except (RuntimeError, AttributeError):
                 pass
         self.app.processEvents()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
@@ -334,9 +346,9 @@ class DebugTabTests(unittest.TestCase):
         self.fail("Timed out waiting for Qt worker completion")
 
     def make_tab(self, *, initial="running", attach_state="halted", fail_start=None,
-                 probe_count=1, settings=None, profile_loader=lambda: None):
+                 probe_count=1, settings=None, profile_loader=lambda: None, session=None):
         service = FakeDebugService(DebugState.STOPPED)
-        session = FakeSession(
+        session = session or FakeSession(
             service, initial=initial, attach_state=attach_state, fail_start=fail_start,
         )
         tunnel_events = []
@@ -990,6 +1002,22 @@ class DebugTabTests(unittest.TestCase):
         self.assertFalse(session.active)
         self.assertTrue(tab.start_button.isEnabled())
         self.assertFalse(tab.stop_button.isEnabled())
+        tab.close()
+
+    def test_shutdown_requested_during_start_stops_session_after_start_completes(self) -> None:
+        service = FakeDebugService(DebugState.STOPPED)
+        session = BlockingStartSession(service)
+        tab, _service, _session = self.make_tab(session=session)
+
+        tab.start_debug()
+        self.assertTrue(session.started.wait(timeout=1))
+        tab.request_shutdown()
+        self.assertTrue(tab._shutdown_requested)
+        session.release.set()
+
+        self.wait_until(lambda: tab._worker is None and not tab.has_active_operation)
+        self.assertIn("stop", session.events)
+        self.assertFalse(session.active)
         tab.close()
 
     def test_external_interlock_blocks_start_but_not_offline_symbol_selection(self) -> None:

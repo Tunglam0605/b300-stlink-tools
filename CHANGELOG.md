@@ -5,6 +5,10 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.12.9] - 2026-08-31
+
+- Fixed the Windows close button while a cancellable Gateway, Debug, or read-only operation is active. The close action now asks whether to cancel safely, requests cooperative cleanup without blocking the GUI, and closes automatically after the worker releases its resources. Flash and Bootloader Factory provisioning remain non-cancellable and cannot be force-closed.
+
 ## [0.12.8] - 2026-08-31
 
 - Fixed Windows Gateway Client-key authorization when a normal Administrator session cannot inspect OpenSSH's protected host keys. B300 now repeats only the effective AuthorizedKeysFile query in the same UAC-protected process that writes and verifies the key. It supports only the standard user or Windows Administrators targets and still fails closed for unsupported or ambiguous server configuration; it never treats the personal ~/.ssh/authorized_keys file as a substitute for an Administrator target.

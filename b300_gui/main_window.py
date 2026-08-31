@@ -112,6 +112,7 @@ class MainWindow(QMainWindow):
         self._probes = ()
         self._threads = []
         self._cancellable_worker = None
+        self._close_after_active_operation = False
         self._update_workers = []
         self.update_dialog = None
         self.machine_setup_dialog = None
@@ -309,6 +310,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.debug_tab, "Debug")
         self.gateway_tab = GatewaySetupTab(self, auto_refresh=False)
         self.gateway_tab.log.connect(self.append_log)
+        self.gateway_tab.operation_state_changed.connect(self._hardware_activity_changed)
         self.tabs.addTab(self.gateway_tab, "Gateway Setup")
         self.tabs.currentChanged.connect(self._tab_changed)
         content_v_layout.addWidget(self.tabs, 1)
@@ -660,6 +662,7 @@ class MainWindow(QMainWindow):
     def _hardware_activity_changed(self, _busy: bool = False) -> None:
         """Reflect shared ST-Link ownership immediately across every GUI surface."""
         self._update_controls()
+        self._finish_pending_close()
 
     def _refresh_update_install_state(self) -> None:
         if self.update_dialog is None or self.update_dialog.ready_package is None:
@@ -1806,6 +1809,7 @@ class MainWindow(QMainWindow):
         # physically free but the GUI remains latched busy until another UI event
         # (or an application restart) happens.
         self._update_controls()
+        self._finish_pending_close()
 
     def cancel_operation(self) -> None:
         if self._cancellable_worker is None:
@@ -1919,15 +1923,52 @@ class MainWindow(QMainWindow):
         )
         self._update_controls()
 
+    def _has_active_operation(self) -> bool:
+        return bool(
+            self.busy or self._threads or self.memory_tab.has_active_operation or
+            self.debug_tab.has_active_operation or self.gateway_tab.has_active_operation
+        )
+
+    def _finish_pending_close(self) -> None:
+        if self._close_after_active_operation and not self._has_active_operation():
+            self._close_after_active_operation = False
+            QTimer.singleShot(0, self.close)
+
+    def _request_cancel_and_close(self) -> None:
+        self._close_after_active_operation = True
+        if self._cancellable_worker is not None:
+            self.cancel_operation()
+        if self.memory_tab.has_active_operation:
+            self.memory_tab.cancel_current()
+        if self.gateway_tab.has_active_operation:
+            self.gateway_tab.request_shutdown()
+        if self.debug_tab.has_active_operation:
+            self.debug_tab.request_shutdown()
+        self._set_status("Đang hủy an toàn các thao tác có thể hủy; cửa sổ sẽ tự đóng khi hoàn tất.", "busy")
+        self._finish_pending_close()
+
     def closeEvent(self, event) -> None:
-        if (self.busy or self._threads or self.memory_tab.has_active_operation or
-                self.debug_tab.has_active_operation or self.gateway_tab.has_active_operation):
-            event.ignore()
-            self._set_status(
-                "Thao tác đang chạy; hãy chờ hoàn tất hoặc hủy khi nút Hủy được bật.",
-                "error",
+        if self._has_active_operation():
+            if self._close_after_active_operation:
+                event.ignore()
+                return
+            if self.busy and self._cancellable_worker is None:
+                event.ignore()
+                self._set_status(
+                    "Đang nạp hoặc factory provisioning; không thể đóng cưỡng bức để bảo vệ Bootloader/metadata.",
+                    "error",
+                )
+                self.append_log("Close blocked: non-cancellable flash/factory operation is active.")
+                return
+            answer = QMessageBox.question(
+                self, "Thoát B300",
+                "Có thao tác Debug/Gateway/đọc đang chạy. Hủy an toàn rồi thoát?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
             )
-            self.append_log("Close blocked: an ST-Link operation is still active.")
+            if answer == QMessageBox.StandardButton.Yes:
+                self._request_cancel_and_close()
+            event.ignore()
             return
         self._update_poll_timer.stop()
         if not self.debug_tab.prepare_shutdown():
