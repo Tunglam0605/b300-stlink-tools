@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QApplication
 
 from b300_core.debug_service import DebugState
@@ -303,6 +304,25 @@ class DebugTabTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
+
+    def tearDown(self) -> None:
+        # DebugTab owns QTimer/QThread-backed workers. Destroy each top-level tab
+        # deterministically while the Qt event loop is still alive instead of
+        # leaving wrapper/native teardown order to CPython at module exit.
+        for widget in list(QApplication.topLevelWidgets()):
+            if isinstance(widget, DebugTab):
+                try:
+                    widget.prepare_shutdown()
+                except RuntimeError:
+                    pass
+            try:
+                widget.close()
+                widget.deleteLater()
+            except RuntimeError:
+                pass
+        self.app.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        self.app.processEvents()
 
     def wait_until(self, predicate, timeout: float = 2.0) -> None:
         deadline = time.monotonic() + timeout
