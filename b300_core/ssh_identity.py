@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import struct
@@ -32,6 +34,7 @@ class AuthorizedKeyResult:
     fingerprint: str
     changed: bool
     administrator_target: bool
+    target_verified: bool = False
 
 @dataclass(frozen=True)
 class SshClientPrerequisiteReport:
@@ -71,6 +74,24 @@ def resolve_ssh_client_executable(name: str = "ssh") -> Optional[Path]:
     return Path(resolved) if resolved else None
 
 
+def _trusted_windows_powershell_executable() -> Path:
+    """Return the OS-provided PowerShell path; never use PATH for UAC execution."""
+    if os.name != "nt":
+        return Path(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
+    try:
+        import ctypes
+        buffer = ctypes.create_unicode_buffer(32768)
+        length = ctypes.windll.kernel32.GetSystemDirectoryW(buffer, len(buffer))
+    except (AttributeError, OSError) as error:
+        raise RuntimeError("B300 cannot locate trusted Windows PowerShell for elevation.") from error
+    if not length or length >= len(buffer):
+        raise RuntimeError("B300 cannot locate trusted Windows PowerShell for elevation.")
+    candidate = Path(buffer.value) / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    if not candidate.is_file():
+        raise RuntimeError("Trusted Windows PowerShell executable was not found.")
+    return candidate
+
+
 def inspect_ssh_client_prerequisites(
         *, runner: CommandRunner = _run, system_name: Optional[str] = None,
 ) -> SshClientPrerequisiteReport:
@@ -103,34 +124,23 @@ def inspect_ssh_client_prerequisites(
 
 
 def _prepare_windows_ssh_client(runner: CommandRunner) -> None:
-    ps = shutil.which("powershell.exe") or shutil.which("powershell") or "powershell.exe"
-    script_file = tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8-sig", suffix=".ps1", delete=False, newline="\n"
+    ps = str(_trusted_windows_powershell_executable())
+    script = (
+        "$ErrorActionPreference='Stop'\n"
+        "$c=Get-WindowsCapability -Online -Name 'OpenSSH.Client~~~~0.0.1.0'\n"
+        "if($c.State -ne 'Installed'){Add-WindowsCapability -Online -Name 'OpenSSH.Client~~~~0.0.1.0' | Out-Null}\n"
+        "exit 0\n"
     )
-    try:
-        with script_file:
-            script_file.write(
-                "$ErrorActionPreference='Stop'\n"
-                "$c=Get-WindowsCapability -Online -Name 'OpenSSH.Client~~~~0.0.1.0'\n"
-                "if($c.State -ne 'Installed'){Add-WindowsCapability -Online -Name 'OpenSSH.Client~~~~0.0.1.0' | Out-Null}\n"
-                "exit 0\n"
-            )
-        path = str(Path(script_file.name).resolve()).replace("'", "''")
-        escaped_ps = ps.replace("'", "''")
-        command = (
-            ps, "-NoProfile", "-Command",
-            "$p=Start-Process -FilePath '%s' -Verb RunAs -WindowStyle Hidden -Wait -PassThru "
-            "-ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File','%s'); exit $p.ExitCode" %
-            (escaped_ps, path),
-        )
-        result = runner(command, 900.0)
-        if result.returncode != 0:
-            raise RuntimeError("Elevated Windows OpenSSH Client setup failed with exit code %d." % result.returncode)
-    finally:
-        try:
-            Path(script_file.name).unlink()
-        except OSError:
-            pass
+    encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+    command = (
+        ps, "-NoProfile", "-NonInteractive", "-Command",
+        "$ErrorActionPreference='Stop';try{$p=Start-Process -FilePath '%s' -Verb RunAs -WindowStyle Hidden -Wait -PassThru "
+        "-ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand','%s');exit $p.ExitCode}catch{exit 1}" %
+        (ps.replace("'", "''"), encoded),
+    )
+    result = runner(command, 900.0)
+    if result.returncode != 0:
+        raise RuntimeError("Elevated Windows OpenSSH Client setup failed with exit code %d." % result.returncode)
 
 
 def _linux_privileged_prefix() -> tuple[str, ...]:
@@ -277,18 +287,58 @@ def _contains_key(path: Path, public_key: str) -> bool:
             continue
     return False
 
-def _windows_admin_member(runner: CommandRunner) -> bool:
-    ps = shutil.which("powershell.exe") or "powershell.exe"
-    script = "$ids=[Security.Principal.WindowsIdentity]::GetCurrent().Groups | ForEach-Object {$_.Value}; if($ids -contains 'S-1-5-32-544'){'YES'}else{'NO'}"
-    result = runner((ps, "-NoProfile", "-NonInteractive", "-Command", script), 20.0)
-    return result.returncode == 0 and (result.stdout or "").strip() == "YES"
+def _windows_effective_authorized_keys_target(
+        *, runner: CommandRunner, home: Path, program_data: Path,
+) -> tuple[Path, bool]:
+    """Ask sshd which key file it will use for the current Windows account.
+
+    `Match Group administrators` is evaluated by sshd, not by a potentially
+    UAC-filtered GUI token.  Never guess a writable target when that query is
+    unavailable or points outside B300's two explicitly supported locations.
+    """
+    sshd = resolve_ssh_client_executable("sshd")
+    if sshd is None:
+        raise RuntimeError("B300 cannot safely determine the Windows SSH authorized-keys target because sshd.exe was not found.")
+    ps = str(_trusted_windows_powershell_executable())
+    identity = runner(
+        (ps, "-NoProfile", "-NonInteractive", "-Command", "[Security.Principal.WindowsIdentity]::GetCurrent().Name"),
+        20.0,
+    )
+    user = (identity.stdout or "").strip()
+    if identity.returncode != 0 or not re.fullmatch(r"[^\\,=\r\n]{1,128}\\[^\\,=\r\n]{1,128}", user):
+        raise RuntimeError("B300 cannot safely determine the Windows SSH authorized-keys target for this account identity.")
+    completed = runner(
+        (str(sshd), "-T", "-C", "user=%s,host=localhost,addr=127.0.0.1" % user), 20.0,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("B300 cannot safely determine the Windows SSH authorized-keys target from sshd configuration.")
+    values = []
+    for line in (completed.stdout or "").splitlines():
+        name, _, value = line.strip().partition(" ")
+        if name.lower() == "authorizedkeysfile" and value.strip():
+            values.append(value.strip().strip('"'))
+    if len(values) != 1:
+        raise RuntimeError("B300 cannot safely determine the Windows SSH authorized-keys target from sshd configuration.")
+    normalized = tuple(part.replace("\\", "/").lower() for part in values[0].split())
+    if normalized in {
+        (".ssh/authorized_keys",),
+        (".ssh/authorized_keys", ".ssh/authorized_keys2"),
+    }:
+        return home / ".ssh" / "authorized_keys", False
+    if normalized == ("__programdata__/ssh/administrators_authorized_keys",):
+        return program_data / "ssh" / "administrators_authorized_keys", True
+    raise RuntimeError("B300 cannot safely determine the Windows SSH authorized-keys target: sshd is configured with an unsupported AuthorizedKeysFile.")
+
 
 def authorized_keys_target(*, system_name: Optional[str] = None, runner: CommandRunner = _run, home: Optional[Path] = None, program_data: Optional[Path] = None) -> tuple[Path, bool]:
     system = (system_name or platform.system()).lower()
-    if system == "windows" and _windows_admin_member(runner):
+    user_home = Path(home or Path.home())
+    if system == "windows":
         root = Path(program_data or os.environ.get("PROGRAMDATA", r"C:\ProgramData"))
-        return root / "ssh" / "administrators_authorized_keys", True
-    return Path(home or Path.home()) / ".ssh" / "authorized_keys", False
+        return _windows_effective_authorized_keys_target(
+            runner=runner, home=user_home, program_data=root,
+        )
+    return user_home / ".ssh" / "authorized_keys", False
 
 def _install_user_authorized_key(target: Path, public_key: str) -> bool:
     if _contains_key(target, public_key):
@@ -304,18 +354,14 @@ def _install_user_authorized_key(target: Path, public_key: str) -> bool:
         os.chmod(str(target), 0o600)
     return True
 
-def _install_windows_admin_key(target: Path, public_key: str, runner: CommandRunner) -> bool:
-    if _contains_key(target, public_key):
-        return False
-    key_file = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".pub", delete=False, newline="\n")
-    try:
-        with key_file:
-            key_file.write(validate_public_key(public_key) + "\n")
-        ps = shutil.which("powershell.exe") or "powershell.exe"
-        script_file = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8-sig", suffix=".ps1", delete=False, newline="\n")
-        try:
-            script = """$ErrorActionPreference='Stop'
-$line=(Get-Content -LiteralPath '%s' -Raw).Trim()
+def _install_windows_key(
+        target: Path, public_key: str, runner: CommandRunner, *, administrator_target: bool,
+) -> bool:
+    """Install/reconcile one key and its sshd-required Windows ACL without a console."""
+    ps = str(_trusted_windows_powershell_executable())
+    owner_sid = "S-1-5-32-544" if administrator_target else ""
+    script = """$ErrorActionPreference='Stop'
+$line='%s'
 $target='%s'
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
 if(-not (Test-Path -LiteralPath $target)){New-Item -ItemType File -Path $target | Out-Null}
@@ -327,32 +373,121 @@ foreach($existing in (Get-Content -LiteralPath $target -ErrorAction SilentlyCont
   if($ep.Length -ge 2 -and ($ep[0]+' '+$ep[1]) -eq $needle){$found=$true; break}
 }
 if(-not $found){Add-Content -LiteralPath $target -Value $line}
-icacls $target /inheritance:r | Out-Null
-icacls $target /grant '*S-1-5-32-544:F' /grant 'SYSTEM:F' | Out-Null
+$ownerSid='%s'
+if(-not $ownerSid){$ownerSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value}
+$owner=[Security.Principal.SecurityIdentifier]::new($ownerSid)
+$system=[Security.Principal.SecurityIdentifier]::new('S-1-5-18')
+$acl=New-Object Security.AccessControl.FileSecurity
+$acl.SetOwner($owner)
+$acl.SetAccessRuleProtection($true,$false)
+$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($owner,[Security.AccessControl.FileSystemRights]::FullControl,[Security.AccessControl.AccessControlType]::Allow))
+$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($system,[Security.AccessControl.FileSystemRights]::FullControl,[Security.AccessControl.AccessControlType]::Allow))
+Set-Acl -LiteralPath $target -AclObject $acl
+""" % (
+        validate_public_key(public_key).replace("'", "''"), str(target).replace("'", "''"), owner_sid,
+    )
+    script += _windows_authorized_key_verification_script(
+        target, public_key, administrator_target=administrator_target,
+    )
+    if administrator_target:
+        script += """if(-not $verification.key_present){exit 11}
+if(-not $verification.acl_safe){exit 12}
 exit 0
-""" % (str(Path(key_file.name).resolve()).replace("'", "''"), str(target).replace("'", "''"))
-            with script_file:
-                script_file.write(script)
-            command = (ps, "-NoProfile", "-Command", "$p=Start-Process -FilePath '%s' -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File','%s'); exit $p.ExitCode" % (ps.replace("'", "''"), str(Path(script_file.name).resolve()).replace("'", "''")))
-            result = runner(command, 300.0)
-            if result.returncode != 0:
-                raise RuntimeError("Elevated authorized_keys update failed with exit code %d." % result.returncode)
-        finally:
-            try: Path(script_file.name).unlink()
-            except OSError: pass
-    finally:
-        try: Path(key_file.name).unlink()
-        except OSError: pass
+"""
+        encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+        launch = """$ErrorActionPreference='Stop'
+try{$p=Start-Process -FilePath '%s' -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand','%s');exit $p.ExitCode}catch{exit 1}
+""" % (ps.replace("'", "''"), encoded)
+        result = runner((ps, "-NoProfile", "-NonInteractive", "-Command", launch), 300.0)
+        if result.returncode == 11:
+            raise RuntimeError("Windows authorized_keys verification did not find the expected public key.")
+        if result.returncode == 12:
+            raise RuntimeError("Windows authorized_keys ACL verification failed.")
+        if result.returncode != 0:
+            raise RuntimeError("Windows authorized_keys update failed with exit code %d." % result.returncode)
+    else:
+        result = runner((ps, "-NoProfile", "-NonInteractive", "-Command", script), 300.0)
+        if result.returncode != 0:
+            raise RuntimeError("Windows authorized_keys update failed with exit code %d." % result.returncode)
+        key_present, acl_safe = _windows_authorized_key_verified(
+            target, public_key, runner, administrator_target=False,
+        )
+        if not key_present:
+            raise RuntimeError("Windows authorized_keys verification did not find the expected public key.")
+        if not acl_safe:
+            raise RuntimeError("Windows authorized_keys ACL verification failed.")
     return True
+
+
+def _windows_authorized_key_verification_script(
+        target: Path, public_key: str, *, administrator_target: bool,
+) -> str:
+    """Return PowerShell that leaves a validated key/ACL result in `$verification`."""
+    key_identity = public_key_identity(public_key).replace("'", "''")
+    target_text = str(target).replace("'", "''")
+    owner_sid = "S-1-5-32-544" if administrator_target else ""
+    script = """$ErrorActionPreference='Stop'
+$target='%s'
+$needle='%s'
+$ownerSid='%s'
+if(-not $ownerSid){$ownerSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value}
+$required=@($ownerSid,'S-1-5-18')
+$keyPresent=$false
+if(Test-Path -LiteralPath $target){
+  foreach($existing in (Get-Content -LiteralPath $target -ErrorAction Stop)){
+    $parts=$existing.Trim() -split '\\s+'
+    if($parts.Length -ge 2 -and ($parts[0]+' '+$parts[1]) -eq $needle){$keyPresent=$true; break}
+  }
+}
+$aclSafe=$false
+if(Test-Path -LiteralPath $target){
+  $acl=Get-Acl -LiteralPath $target
+  $owner=$acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+  $seen=@{}
+  $bad=($owner -ne $ownerSid -or -not $acl.AreAccessRulesProtected)
+  foreach($rule in $acl.Access){
+    if($rule.IsInherited){$bad=$true; continue}
+    try{$sid=$rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value}catch{$bad=$true; continue}
+    if($rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or $sid -notin $required -or (($rule.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -ne [Security.AccessControl.FileSystemRights]::FullControl)){$bad=$true; continue}
+    $seen[$sid]=$true
+  }
+  $aclSafe=(-not $bad -and $seen.ContainsKey($required[0]) -and $seen.ContainsKey($required[1]))
+}
+$verification=[PSCustomObject]@{key_present=$keyPresent;acl_safe=$aclSafe}
+""" % (target_text, key_identity, owner_sid)
+    return script
+
+
+def _windows_authorized_key_verified(
+        target: Path, public_key: str, runner: CommandRunner, *, administrator_target: bool,
+) -> tuple[bool, bool]:
+    """Verify a user-owned target after a non-elevated write."""
+    ps = str(_trusted_windows_powershell_executable())
+    script = _windows_authorized_key_verification_script(
+        target, public_key, administrator_target=administrator_target,
+    ) + "$verification|ConvertTo-Json -Compress\n"
+    completed = runner((ps, "-NoProfile", "-NonInteractive", "-Command", script), 30.0)
+    if completed.returncode != 0:
+        raise RuntimeError("Windows authorized_keys verification failed.")
+    try:
+        result = json.loads(completed.stdout or "")
+    except ValueError as error:
+        raise RuntimeError("Windows authorized_keys verification returned invalid data.") from error
+    if not isinstance(result, dict):
+        raise RuntimeError("Windows authorized_keys verification returned invalid data.")
+    return result.get("key_present") is True, result.get("acl_safe") is True
+
 
 def install_gateway_public_key(public_key: str, *, system_name: Optional[str] = None, runner: CommandRunner = _run, home: Optional[Path] = None, program_data: Optional[Path] = None) -> AuthorizedKeyResult:
     normalized = validate_public_key(public_key)
     target, admin_target = authorized_keys_target(system_name=system_name, runner=runner, home=home, program_data=program_data)
     if admin_target:
-        changed = _install_windows_admin_key(target, normalized, runner)
+        changed = _install_windows_key(target, normalized, runner, administrator_target=True)
+    elif (system_name or platform.system()).lower() == "windows":
+        changed = _install_windows_key(target, normalized, runner, administrator_target=False)
     else:
         changed = _install_user_authorized_key(target, normalized)
-    return AuthorizedKeyResult(target, public_key_fingerprint(normalized), changed, admin_target)
+    return AuthorizedKeyResult(target, public_key_fingerprint(normalized), changed, admin_target, True)
 
 def managed_identity_file(path: Optional[Path] = None) -> Optional[Path]:
     """Return the verified B300 private-key path without reading or exposing its contents."""

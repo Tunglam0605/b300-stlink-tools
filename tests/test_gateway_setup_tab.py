@@ -584,6 +584,23 @@ class GatewaySetupTabTests(unittest.TestCase):
         authorizer.assert_called_once_with(public)
         tab.close()
 
+    def test_authorize_result_does_not_claim_client_login_has_succeeded(self):
+        tab = GatewaySetupTab(
+            identity_inspector=lambda: identity_report(False), profile_loader=lambda: None,
+            auto_refresh=False,
+        )
+        result = AuthorizedKeyResult(
+            Path("C:/Users/Admin/.ssh/authorized_keys"), "SHA256:GATEWAY", True, False, True,
+        )
+        with mock.patch("b300_gui.gateway_setup_tab.QMessageBox.information") as dialog:
+            tab._key_authorized(result)
+
+        message = dialog.call_args.args[2]
+        self.assertIn("installed for sshd", message)
+        self.assertIn("Run the Client SSH connection check", message)
+        self.assertNotIn("connection succeeded", message.lower())
+        tab.close()
+
     def test_invalid_public_key_never_reaches_authorizer(self):
         authorizer = mock.Mock()
         tab = GatewaySetupTab(

@@ -1187,12 +1187,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "target": str(result.target),
                 "fingerprint": result.fingerprint,
                 "administrator_target": result.administrator_target,
+                "target_verified": result.target_verified,
                 "private_key_received": False,
             }
             emit_snapshot(
                 record, args.json,
-                "Gateway public key authorized%s. Fingerprint=%s" %
-                ("" if result.changed else " (already present)", result.fingerprint),
+                "Gateway public key installed for the effective sshd target%s. Fingerprint=%s" %
+                (" and Windows permissions repaired" if result.changed else "", result.fingerprint),
             )
             return 0
 

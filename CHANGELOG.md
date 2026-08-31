@@ -5,6 +5,10 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.12.7] - 2026-08-31
+
+- Fixed Windows Gateway Client-key authorization: B300 now asks the running `sshd` for the effective `AuthorizedKeysFile` of the current account, supports only the standard user or Windows Administrators targets, and fails closed for a custom/unmanaged target. Re-authorizing an existing key repairs the Windows ACL instead of reporting a misleading no-op. The UI now distinguishes installing a key for `sshd` from a successful Client SSH login, which remains verified by the Client connection check.
+
 ## [0.12.6] - 2026-08-31
 
 - Gateway Setup separates the active Windows network profile from the SSH firewall check. When exactly one active profile is Public, the confirmed/UAC-protected Gateway Prepare flow changes only that profile to Private and then repairs the B300 TCP/22 `LocalSubnet` rule. Private/Domain profiles are never changed; ambiguous multi-network/VPN cases remain fail-closed with an operator instruction.

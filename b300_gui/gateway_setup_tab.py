@@ -802,13 +802,14 @@ class GatewaySetupTab(QWidget):
 
     def _key_authorized(self, result: AuthorizedKeyResult) -> None:
         self.log.emit(
-            "Gateway Client public key authorized; fingerprint=%s changed=%s target=%s" %
+            "Gateway Client public key installed for sshd; fingerprint=%s changed=%s target=%s" %
             (result.fingerprint, result.changed, result.target)
         )
         QMessageBox.information(
             self, "Client Key Authorized",
-            "Public key authorized%s.\nFingerprint: %s\nTarget: %s" %
-            ("" if result.changed else " (already present)", result.fingerprint, result.target),
+            "Public key installed for sshd%s.\nFingerprint: %s\nTarget: %s\n\n"
+            "Run the Client SSH connection check to confirm login." %
+            (" and Windows permissions repaired" if result.changed else "", result.fingerprint, result.target),
         )
 
     def show_local_host_key(self) -> None:
