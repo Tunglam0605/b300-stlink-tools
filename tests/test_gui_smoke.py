@@ -161,8 +161,9 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertTrue(window.factory_provision_button.text().startswith("Nạp Bootloader"))
         self.assertTrue(window.factory_window_button.isVisible())
         self.assertIsNotNone(window.factory_dialog.findChild(QLabel, "factoryWarningNote"))
-        window.tabs.setCurrentIndex(3)
-        self.app.processEvents()
+        with mock.patch.object(window.gateway_tab, "refresh_host"):
+            window.tabs.setCurrentIndex(3)
+            self.app.processEvents()
         self.assertEqual(window.page_title.text(), "Kết nối từ xa")
         self.assertIn("vai trò của máy này", window.status_banner.text())
         window.tabs.setCurrentIndex(0)
@@ -340,9 +341,38 @@ class GuiSmokeTests(unittest.TestCase):
         event = QCloseEvent()
         window.closeEvent(event)
         self.assertFalse(event.isAccepted())
-        self.assertIn("đang chạy", window.status_banner.text().lower())
+        self.assertIn("không thể đóng cưỡng bức", window.status_banner.text().lower())
         window.busy = False
         window.close()
+
+    def test_close_cancels_active_debug_and_retries_after_worker_finishes(self) -> None:
+        window = MainWindow(service=FakeService(), probe_loader=lambda: ())
+        active = [True]
+        with mock.patch.object(
+                type(window.debug_tab), "has_active_operation",
+                new_callable=mock.PropertyMock, side_effect=lambda: active[0],
+        ), mock.patch.object(
+                window.debug_tab, "request_shutdown", create=True,
+        ) as request_shutdown, mock.patch(
+                "b300_gui.main_window.QMessageBox.question",
+                return_value=QMessageBox.StandardButton.Yes,
+        ) as question, mock.patch.object(window, "close") as close:
+            event = QCloseEvent()
+            window.closeEvent(event)
+            self.assertFalse(event.isAccepted())
+            question.assert_called_once()
+            request_shutdown.assert_called_once()
+            self.assertTrue(window._close_after_active_operation)
+
+            active[0] = False
+            window._finish_pending_close()
+            self.app.processEvents()
+            close.assert_called_once()
+
+        window.close()
+        window.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        self.app.processEvents()
 
     def test_function_worker_cancel_sets_cooperative_event(self) -> None:
         started = threading.Event()

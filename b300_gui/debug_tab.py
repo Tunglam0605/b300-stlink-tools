@@ -86,6 +86,7 @@ class DebugTab(QWidget):
         self._managed_profile_loaded = False
         self._sampling_active = False
         self._live_session: Optional[LiveMonitorSession] = None
+        self._shutdown_requested = False
 
         self._watchdog = QTimer(self)
         self._watchdog.setInterval(750)
@@ -702,6 +703,8 @@ class DebugTab(QWidget):
             self._retired_workers.append(worker)
         self._refresh_controls()
         self.operation_state_changed.emit(self.has_active_operation)
+        if self._shutdown_requested:
+            QTimer.singleShot(0, self._continue_requested_shutdown)
 
     def start_selected_mode(self) -> None:
         role = self._resolved_role()
@@ -1478,6 +1481,27 @@ class DebugTab(QWidget):
         self._worker = None
         self._retired_workers.clear()
         return True
+
+    def request_shutdown(self) -> None:
+        """Request cooperative Debug cleanup without blocking the GUI close event."""
+        self._shutdown_requested = True
+        self._watchdog.stop()
+        if self._live_session is not None:
+            self._live_session.cancel()
+        if self._worker is not None:
+            self._worker.cancel()
+            return
+        if self.has_active_operation:
+            self.stop_debug()
+
+    def _continue_requested_shutdown(self) -> None:
+        if not self._shutdown_requested or self._worker is not None:
+            return
+        if self.has_active_operation:
+            self.stop_debug()
+            return
+        self._shutdown_requested = False
+        self.operation_state_changed.emit(False)
 
     def closeEvent(self, event) -> None:
         if not self.prepare_shutdown():
