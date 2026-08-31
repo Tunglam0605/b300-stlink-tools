@@ -57,14 +57,6 @@ class SshClientPrepareResult:
 CommandRunner = Callable[[Sequence[str], float], subprocess.CompletedProcess]
 
 
-class _WindowsSshdHostKeysUnavailable(RuntimeError):
-    """The unprivileged account cannot inspect sshd's protected host keys."""
-
-    def __init__(self, sshd: Path, user: str) -> None:
-        super().__init__("B300 must query this Windows sshd configuration with elevation.")
-        self.sshd = sshd
-        self.user = user
-
 def _run(argv: Sequence[str], timeout: float = 30.0) -> subprocess.CompletedProcess:
     return subprocess.run(tuple(str(x) for x in argv), capture_output=True, text=True, timeout=timeout, check=False, creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW") else 0))
 
@@ -117,6 +109,61 @@ def _trusted_windows_sshd_executable() -> Path:
     if not candidate.is_file():
         raise RuntimeError("Trusted Windows OpenSSH Server executable was not found.")
     return candidate
+
+
+def _windows_authorized_keys_target_from_sshd_output(
+        output: str, *, home: Path, program_data: Path,
+) -> tuple[Path, bool]:
+    """Accept only the two authorized-keys locations B300 can safely manage."""
+    values = []
+    for line in output.splitlines():
+        name, _, value = line.strip().partition(" ")
+        if name.lower() == "authorizedkeysfile" and value.strip():
+            values.append(value.strip().strip('"'))
+    if len(values) != 1:
+        raise RuntimeError("B300 cannot safely determine the Windows SSH authorized-keys target from sshd configuration.")
+    normalized = tuple(part.replace("\\", "/").lower() for part in values[0].split())
+    if normalized in {
+        (".ssh/authorized_keys",),
+        (".ssh/authorized_keys", ".ssh/authorized_keys2"),
+    }:
+        return home / ".ssh" / "authorized_keys", False
+    if normalized == ("__programdata__/ssh/administrators_authorized_keys",):
+        return program_data / "ssh" / "administrators_authorized_keys", True
+    raise RuntimeError("B300 cannot safely determine the Windows SSH authorized-keys target: sshd is configured with an unsupported AuthorizedKeysFile.")
+
+
+def _windows_effective_authorized_keys_target_with_disposable_host_key(
+        user: str, *, runner: CommandRunner, home: Path, program_data: Path,
+) -> tuple[Path, bool]:
+    """Query the real sshd config without reading its protected production host keys.
+
+    Windows may deny even an elevated desktop process access to the service's
+    host private keys.  ``sshd -T -h`` needs any valid host key only to parse
+    the configuration, so a private temporary key avoids that unrelated
+    access check.  It is never installed or exposed and is removed on return.
+    """
+    sshd = _trusted_windows_sshd_executable()
+    keygen = sshd.with_name("ssh-keygen.exe")
+    if not keygen.is_file():
+        raise RuntimeError("B300 cannot safely query Windows sshd because the trusted ssh-keygen.exe was not found.")
+    with tempfile.TemporaryDirectory(prefix="b300-sshd-config-") as directory:
+        host_key = Path(directory) / "ssh_host_ed25519_key"
+        generated = runner(
+            (str(keygen), "-q", "-t", "ed25519", "-N", "", "-f", str(host_key)),
+            60.0,
+        )
+        if generated.returncode != 0:
+            raise RuntimeError("B300 could not create a disposable host key for the Windows sshd configuration check.")
+        completed = runner(
+            (str(sshd), "-T", "-h", str(host_key), "-C", "user=%s,host=localhost,addr=127.0.0.1" % user),
+            20.0,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError("B300 could not read the effective Windows sshd configuration with a disposable host key.")
+        return _windows_authorized_keys_target_from_sshd_output(
+            completed.stdout or "", home=home, program_data=program_data,
+        )
 
 
 def _trusted_windows_known_folder(csidl: int, fallback: Path, label: str) -> Path:
@@ -346,9 +393,7 @@ def _windows_effective_authorized_keys_target(
     UAC-filtered GUI token.  Never guess a writable target when that query is
     unavailable or points outside B300's two explicitly supported locations.
     """
-    sshd = resolve_ssh_client_executable("sshd")
-    if sshd is None:
-        raise RuntimeError("B300 cannot safely determine the Windows SSH authorized-keys target because sshd.exe was not found.")
+    sshd = _trusted_windows_sshd_executable()
     ps = str(_trusted_windows_powershell_executable())
     identity = runner(
         (ps, "-NoProfile", "-NonInteractive", "-Command", "[Security.Principal.WindowsIdentity]::GetCurrent().Name"),
@@ -362,24 +407,13 @@ def _windows_effective_authorized_keys_target(
     )
     if completed.returncode != 0:
         if "no hostkeys available" in (completed.stderr or "").lower():
-            raise _WindowsSshdHostKeysUnavailable(_trusted_windows_sshd_executable(), user)
+            return _windows_effective_authorized_keys_target_with_disposable_host_key(
+                user, runner=runner, home=home, program_data=program_data,
+            )
         raise RuntimeError("B300 cannot safely determine the Windows SSH authorized-keys target from sshd configuration.")
-    values = []
-    for line in (completed.stdout or "").splitlines():
-        name, _, value = line.strip().partition(" ")
-        if name.lower() == "authorizedkeysfile" and value.strip():
-            values.append(value.strip().strip('"'))
-    if len(values) != 1:
-        raise RuntimeError("B300 cannot safely determine the Windows SSH authorized-keys target from sshd configuration.")
-    normalized = tuple(part.replace("\\", "/").lower() for part in values[0].split())
-    if normalized in {
-        (".ssh/authorized_keys",),
-        (".ssh/authorized_keys", ".ssh/authorized_keys2"),
-    }:
-        return home / ".ssh" / "authorized_keys", False
-    if normalized == ("__programdata__/ssh/administrators_authorized_keys",):
-        return program_data / "ssh" / "administrators_authorized_keys", True
-    raise RuntimeError("B300 cannot safely determine the Windows SSH authorized-keys target: sshd is configured with an unsupported AuthorizedKeysFile.")
+    return _windows_authorized_keys_target_from_sshd_output(
+        completed.stdout or "", home=home, program_data=program_data,
+    )
 
 
 def authorized_keys_target(*, system_name: Optional[str] = None, runner: CommandRunner = _run, home: Optional[Path] = None, program_data: Optional[Path] = None) -> tuple[Path, bool]:
@@ -532,102 +566,6 @@ def _windows_authorized_key_verified(
     return result.get("key_present") is True, result.get("acl_safe") is True
 
 
-def _install_windows_key_after_elevated_target_discovery(
-        sshd: Path, user: str, public_key: str, runner: CommandRunner, *, home: Path, program_data: Path,
-) -> tuple[Path, bool]:
-    """Discover sshd's effective target and install one key in one UAC child.
-
-    Windows protects host private keys from a medium-integrity administrator.
-    `sshd -T` therefore has to run in the same trusted elevated process that
-    writes and verifies the selected authorized_keys file.
-    """
-    ps = str(_trusted_windows_powershell_executable())
-    script = """$ErrorActionPreference='Stop'
-$sshd='%s'
-$user='%s'
-$userTarget='%s'
-$adminTargetPath='%s'
-$line='%s'
-if([string]::IsNullOrWhiteSpace($user) -or $user.Length -gt 257 -or $user.Contains(',') -or $user.Contains('=') -or $user.IndexOf('\') -lt 1){exit 31}
-try{$callerSid=([Security.Principal.NTAccount]::new($user)).Translate([Security.Principal.SecurityIdentifier]).Value}catch{exit 31}
-$config=& $sshd -T -C ("user="+$user+",host=localhost,addr=127.0.0.1")
-if($LASTEXITCODE -ne 0){exit 31}
-$values=@()
-foreach($raw in $config){
-  $text=[string]$raw
-  if($text -match '^\\s*authorizedkeysfile\\s+(.+?)\\s*$'){$values += $Matches[1].Trim('"')}
-}
-if($values.Count -ne 1){exit 32}
-$normalized=@(($values[0] -replace '\\','/').ToLowerInvariant() -split '\\s+')
-$administratorTarget=$false
-if(($normalized.Count -eq 1 -and $normalized[0] -eq '.ssh/authorized_keys') -or ($normalized.Count -eq 2 -and $normalized[0] -eq '.ssh/authorized_keys' -and $normalized[1] -eq '.ssh/authorized_keys2')){
-  $target=$userTarget
-}elseif($normalized.Count -eq 1 -and $normalized[0] -eq '__programdata__/ssh/administrators_authorized_keys'){
-  $target=$adminTargetPath
-  $administratorTarget=$true
-}else{exit 32}
-New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
-if(-not (Test-Path -LiteralPath $target)){New-Item -ItemType File -Path $target | Out-Null}
-$parts=$line -split '\\s+'
-$needle=$parts[0]+' '+$parts[1]
-$found=$false
-foreach($existing in (Get-Content -LiteralPath $target -ErrorAction SilentlyContinue)){
-  $ep=$existing.Trim() -split '\\s+'
-  if($ep.Length -ge 2 -and ($ep[0]+' '+$ep[1]) -eq $needle){$found=$true; break}
-}
-if(-not $found){Add-Content -LiteralPath $target -Value $line}
-$ownerSid=if($administratorTarget){'S-1-5-32-544'}else{$callerSid}
-$owner=[Security.Principal.SecurityIdentifier]::new($ownerSid)
-$system=[Security.Principal.SecurityIdentifier]::new('S-1-5-18')
-$acl=New-Object Security.AccessControl.FileSecurity
-$acl.SetOwner($owner)
-$acl.SetAccessRuleProtection($true,$false)
-$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($owner,[Security.AccessControl.FileSystemRights]::FullControl,[Security.AccessControl.AccessControlType]::Allow))
-$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($system,[Security.AccessControl.FileSystemRights]::FullControl,[Security.AccessControl.AccessControlType]::Allow))
-Set-Acl -LiteralPath $target -AclObject $acl
-$keyPresent=$false
-foreach($existing in (Get-Content -LiteralPath $target -ErrorAction Stop)){
-  $ep=$existing.Trim() -split '\\s+'
-  if($ep.Length -ge 2 -and ($ep[0]+' '+$ep[1]) -eq $needle){$keyPresent=$true; break}
-}
-$check=Get-Acl -LiteralPath $target
-$seen=@{}
-$bad=($check.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $ownerSid -or -not $check.AreAccessRulesProtected)
-foreach($rule in $check.Access){
-  if($rule.IsInherited){$bad=$true; continue}
-  try{$sid=$rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value}catch{$bad=$true; continue}
-  if($rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or $sid -notin @($ownerSid,'S-1-5-18') -or (($rule.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -ne [Security.AccessControl.FileSystemRights]::FullControl)){$bad=$true; continue}
-  $seen[$sid]=$true
-}
-$aclSafe=(-not $bad -and $seen.ContainsKey($ownerSid) -and $seen.ContainsKey('S-1-5-18'))
-if(-not $keyPresent){exit 11}
-if(-not $aclSafe){exit 12}
-if($administratorTarget){exit 21}else{exit 22}
-""" % (
-        str(sshd).replace("'", "''"), user.replace("'", "''"), str(home / ".ssh" / "authorized_keys").replace("'", "''"),
-        str(program_data / "ssh" / "administrators_authorized_keys").replace("'", "''"),
-        validate_public_key(public_key).replace("'", "''"),
-    )
-    encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
-    launch = """$ErrorActionPreference='Stop'
-try{$p=Start-Process -FilePath '%s' -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand','%s');exit $p.ExitCode}catch{exit 1}
-""" % (ps.replace("'", "''"), encoded)
-    result = runner((ps, "-NoProfile", "-NonInteractive", "-Command", launch), 300.0)
-    if result.returncode == 21:
-        return program_data / "ssh" / "administrators_authorized_keys", True
-    if result.returncode == 22:
-        return home / ".ssh" / "authorized_keys", False
-    if result.returncode == 11:
-        raise RuntimeError("Windows authorized_keys verification did not find the expected public key.")
-    if result.returncode == 12:
-        raise RuntimeError("Windows authorized_keys ACL verification failed.")
-    if result.returncode == 31:
-        raise RuntimeError("B300 could not read the effective Windows sshd configuration after elevation.")
-    if result.returncode == 32:
-        raise RuntimeError("B300 rejected the elevated Windows sshd AuthorizedKeysFile configuration.")
-    raise RuntimeError("Windows elevated SSH authorization failed with exit code %d." % result.returncode)
-
-
 def install_gateway_public_key(public_key: str, *, system_name: Optional[str] = None, runner: CommandRunner = _run, home: Optional[Path] = None, program_data: Optional[Path] = None) -> AuthorizedKeyResult:
     normalized = validate_public_key(public_key)
     system = (system_name or platform.system()).lower()
@@ -637,17 +575,9 @@ def install_gateway_public_key(public_key: str, *, system_name: Optional[str] = 
     root = Path(program_data) if program_data is not None else (
         _trusted_windows_program_data_directory() if system == "windows" else Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData"))
     )
-    try:
-        target, admin_target = authorized_keys_target(
-            system_name=system, runner=runner, home=user_home, program_data=root,
-        )
-    except _WindowsSshdHostKeysUnavailable as error:
-        if system != "windows":
-            raise
-        target, admin_target = _install_windows_key_after_elevated_target_discovery(
-            error.sshd, error.user, normalized, runner, home=user_home, program_data=root,
-        )
-        return AuthorizedKeyResult(target, public_key_fingerprint(normalized), True, admin_target, True)
+    target, admin_target = authorized_keys_target(
+        system_name=system, runner=runner, home=user_home, program_data=root,
+    )
     if admin_target:
         changed = _install_windows_key(target, normalized, runner, administrator_target=True)
     elif system == "windows":

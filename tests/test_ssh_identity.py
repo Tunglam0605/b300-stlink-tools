@@ -139,13 +139,45 @@ class SshIdentityTests(unittest.TestCase):
                     )
                 return subprocess.CompletedProcess(argv, 0, "DESKTOP\\admin\n", "")
 
-            with mock.patch.object(ssh_identity, "resolve_ssh_client_executable", return_value=sshd):
+            with mock.patch.object(ssh_identity, "_trusted_windows_sshd_executable", return_value=sshd):
                 target, is_admin = ssh_identity.authorized_keys_target(
                     system_name="windows", runner=runner,
                     home=Path(directory) / "home", program_data=Path(directory) / "ProgramData",
                 )
             self.assertTrue(is_admin)
             self.assertEqual(target, Path(directory) / "ProgramData" / "ssh" / "administrators_authorized_keys")
+
+    def test_windows_target_ignores_path_resolved_sshd_before_reading_configuration(self):
+        """Prevent PATH or WINDIR spoofing from selecting an unauthorized key target."""
+        with tempfile.TemporaryDirectory() as directory:
+            attacker_sshd = Path(directory) / "attacker" / "sshd.exe"
+            trusted_sshd = Path(directory) / "System32" / "OpenSSH" / "sshd.exe"
+            attacker_sshd.parent.mkdir(parents=True)
+            trusted_sshd.parent.mkdir(parents=True)
+            attacker_sshd.write_bytes(b"")
+            trusted_sshd.write_bytes(b"")
+
+            def runner(argv, timeout):
+                if Path(argv[0]) == attacker_sshd:
+                    return subprocess.CompletedProcess(
+                        argv, 0, "authorizedkeysfile .ssh/authorized_keys\n", "",
+                    )
+                if Path(argv[0]) == trusted_sshd:
+                    return subprocess.CompletedProcess(
+                        argv, 0,
+                        "authorizedkeysfile __PROGRAMDATA__/ssh/administrators_authorized_keys\n", "",
+                    )
+                return subprocess.CompletedProcess(argv, 0, "DESKTOP\\admin\n", "")
+
+            with mock.patch.object(ssh_identity, "resolve_ssh_client_executable", return_value=attacker_sshd), \
+                    mock.patch.object(ssh_identity, "_trusted_windows_sshd_executable", return_value=trusted_sshd):
+                target, is_admin = ssh_identity.authorized_keys_target(
+                    system_name="windows", runner=runner,
+                    home=Path(directory) / "home", program_data=Path(directory) / "ProgramData",
+                )
+
+            self.assertEqual(target, Path(directory) / "ProgramData" / "ssh" / "administrators_authorized_keys")
+            self.assertTrue(is_admin)
 
     def test_windows_target_uses_name_sam_compatible_identity_for_sshd_match_rules(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -162,7 +194,7 @@ class SshIdentityTests(unittest.TestCase):
                     )
                 return subprocess.CompletedProcess(argv, 0, "DOMAIN\\jdoe\n", "")
 
-            with mock.patch.object(ssh_identity, "resolve_ssh_client_executable", return_value=sshd):
+            with mock.patch.object(ssh_identity, "_trusted_windows_sshd_executable", return_value=sshd):
                 target, is_admin = ssh_identity.authorized_keys_target(
                     system_name="windows", runner=runner,
                     home=Path(directory) / "home", program_data=Path(directory) / "ProgramData",
@@ -172,6 +204,63 @@ class SshIdentityTests(unittest.TestCase):
             self.assertEqual(sshd_argv[sshd_argv.index("-C") + 1], "user=DOMAIN\\jdoe,host=localhost,addr=127.0.0.1")
             self.assertTrue(is_admin)
             self.assertEqual(target, Path(directory) / "ProgramData" / "ssh" / "administrators_authorized_keys")
+
+    def test_windows_target_retries_sshd_config_with_disposable_host_key_when_host_keys_are_private(self):
+        """Prevent a Windows Gateway from rejecting authorization only because sshd host keys are protected."""
+        with tempfile.TemporaryDirectory() as directory:
+            unprivileged_sshd = Path(directory) / "unprivileged" / "sshd.exe"
+            trusted_sshd = Path(directory) / "System32" / "OpenSSH" / "sshd.exe"
+            trusted_keygen = trusted_sshd.with_name("ssh-keygen.exe")
+            unprivileged_sshd.parent.mkdir(parents=True)
+            trusted_sshd.parent.mkdir(parents=True)
+            unprivileged_sshd.write_bytes(b"")
+            trusted_sshd.write_bytes(b"")
+            trusted_keygen.write_bytes(b"")
+            invocations = []
+            probe_key = None
+
+            def runner(argv, timeout):
+                nonlocal probe_key
+                invocations.append(tuple(argv))
+                executable = Path(argv[0])
+                if executable == unprivileged_sshd:
+                    self.fail("PATH-resolved sshd.exe must not run for Windows target discovery")
+                if executable == trusted_sshd and "-h" not in argv:
+                    return subprocess.CompletedProcess(
+                        argv, 1, "", "sshd: no hostkeys available -- exiting.\n",
+                    )
+                if executable == trusted_keygen:
+                    self.assertEqual(argv[argv.index("-t") + 1], "ed25519")
+                    self.assertEqual(argv[argv.index("-N") + 1], "")
+                    probe_key = Path(argv[argv.index("-f") + 1])
+                    return subprocess.CompletedProcess(argv, 0, "", "")
+                if executable == trusted_sshd:
+                    self.assertIn("-h", argv)
+                    self.assertEqual(Path(argv[argv.index("-h") + 1]), probe_key)
+                    return subprocess.CompletedProcess(
+                        argv, 0,
+                        "authorizedkeysfile __PROGRAMDATA__/ssh/administrators_authorized_keys\n", "",
+                    )
+                return subprocess.CompletedProcess(argv, 0, "DESKTOP\\admin\n", "")
+
+            with mock.patch.object(ssh_identity, "resolve_ssh_client_executable", return_value=unprivileged_sshd), \
+                    mock.patch.object(ssh_identity, "_trusted_windows_sshd_executable", return_value=trusted_sshd):
+                try:
+                    target, is_admin = ssh_identity.authorized_keys_target(
+                        system_name="windows", runner=runner,
+                        home=Path(directory) / "home", program_data=Path(directory) / "ProgramData",
+                    )
+                except RuntimeError:
+                    target, is_admin = None, False
+
+            self.assertEqual(target, Path(directory) / "ProgramData" / "ssh" / "administrators_authorized_keys")
+            self.assertTrue(is_admin)
+            self.assertIsNotNone(probe_key)
+            self.assertFalse(probe_key.parent.exists())
+            trusted_calls = [argv for argv in invocations if Path(argv[0]) == trusted_sshd]
+            self.assertEqual(len(trusted_calls), 2)
+            self.assertNotIn("-h", trusted_calls[0])
+            self.assertIn("-h", trusted_calls[1])
 
     def test_windows_rejects_unknown_effective_sshd_authorized_key_target(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -185,7 +274,7 @@ class SshIdentityTests(unittest.TestCase):
                     )
                 return subprocess.CompletedProcess(argv, 0, "DESKTOP\\admin\n", "")
 
-            with mock.patch.object(ssh_identity, "resolve_ssh_client_executable", return_value=sshd):
+            with mock.patch.object(ssh_identity, "_trusted_windows_sshd_executable", return_value=sshd):
                 with self.assertRaisesRegex(RuntimeError, "cannot safely determine"):
                     ssh_identity.authorized_keys_target(
                         system_name="windows", runner=runner,
@@ -205,7 +294,7 @@ class SshIdentityTests(unittest.TestCase):
                     )
                 return subprocess.CompletedProcess(argv, 0, "DESKTOP\\admin\n", "")
 
-            with mock.patch.object(ssh_identity, "resolve_ssh_client_executable", return_value=sshd):
+            with mock.patch.object(ssh_identity, "_trusted_windows_sshd_executable", return_value=sshd):
                 target, is_admin = ssh_identity.authorized_keys_target(
                     system_name="windows", runner=runner, home=home,
                     program_data=Path(directory) / "ProgramData",
@@ -235,7 +324,7 @@ class SshIdentityTests(unittest.TestCase):
                     return subprocess.CompletedProcess(argv, 0, '{"key_present":true,"acl_safe":true}', "")
                 return subprocess.CompletedProcess(argv, 0, "", "")
 
-            with mock.patch.object(ssh_identity, "resolve_ssh_client_executable", return_value=sshd):
+            with mock.patch.object(ssh_identity, "_trusted_windows_sshd_executable", return_value=sshd):
                 result = ssh_identity.install_gateway_public_key(
                     key_line(27), system_name="windows", runner=runner,
                     home=home, program_data=Path(directory) / "ProgramData",
@@ -276,7 +365,7 @@ class SshIdentityTests(unittest.TestCase):
                     self.fail("administrator verification must remain elevated")
                 self.fail("unexpected command: %s" % rendered)
 
-            with mock.patch.object(ssh_identity, "resolve_ssh_client_executable", return_value=sshd), \
+            with mock.patch.object(ssh_identity, "_trusted_windows_sshd_executable", return_value=sshd), \
                     mock.patch.object(ssh_identity.shutil, "which", return_value=r"C:\\attacker\\powershell.exe"):
                 result = ssh_identity.install_gateway_public_key(
                     key_line(29), system_name="windows", runner=runner,
@@ -286,7 +375,7 @@ class SshIdentityTests(unittest.TestCase):
             self.assertTrue(result.changed)
             self.assertTrue(result.target_verified)
 
-    def test_windows_authorization_discovers_effective_target_elevated_when_hostkeys_are_private(self):
+    def test_windows_authorization_uses_trusted_disposable_host_key_when_hostkeys_are_private(self):
         with tempfile.TemporaryDirectory() as directory:
             attacker_sshd = Path(directory) / "attacker" / "sshd.exe"
             attacker_sshd.parent.mkdir()
@@ -294,6 +383,8 @@ class SshIdentityTests(unittest.TestCase):
             trusted_sshd = Path(directory) / "System32" / "OpenSSH" / "sshd.exe"
             trusted_sshd.parent.mkdir(parents=True)
             trusted_sshd.write_bytes(b"")
+            trusted_keygen = trusted_sshd.with_name("ssh-keygen.exe")
+            trusted_keygen.write_bytes(b"")
             home = Path(directory) / "home"
             program_data = Path(directory) / "ProgramData"
 
@@ -301,25 +392,27 @@ class SshIdentityTests(unittest.TestCase):
                 rendered = " ".join(argv)
                 if Path(argv[0]) == attacker_sshd:
                     return subprocess.CompletedProcess(argv, 1, "", "sshd: no hostkeys available -- exiting.\n")
+                if Path(argv[0]) == trusted_keygen:
+                    return subprocess.CompletedProcess(argv, 0, "", "")
+                if Path(argv[0]) == trusted_sshd and "-h" not in argv:
+                    return subprocess.CompletedProcess(argv, 1, "", "sshd: no hostkeys available -- exiting.\n")
+                if Path(argv[0]) == trusted_sshd:
+                    self.assertIn("-h", argv)
+                    self.assertNotIn(str(attacker_sshd), argv)
+                    return subprocess.CompletedProcess(
+                        argv, 0,
+                        "authorizedkeysfile __PROGRAMDATA__/ssh/administrators_authorized_keys\n", "",
+                    )
                 if "WindowsIdentity]::GetCurrent().Name" in rendered:
                     return subprocess.CompletedProcess(argv, 0, "DESKTOP\\caller\n", "")
                 if "Start-Process" in rendered:
                     self.assertNotIn("'-File'", rendered)
                     encoded = re.search(r"'-EncodedCommand','([^']+)'", rendered).group(1)
                     script = base64.b64decode(encoded).decode("utf-16le")
-                    self.assertIn("$config=& $sshd -T -C", script)
-                    self.assertIn("$sshd='%s'" % trusted_sshd, script)
                     self.assertNotIn(str(attacker_sshd), script)
-                    self.assertIn("$user='DESKTOP\\caller'", script)
-                    self.assertNotIn("WindowsIdentity]::GetCurrent().Name", script)
-                    self.assertIn("[Security.Principal.NTAccount]::new($user)", script)
-                    self.assertIn("else{$callerSid}", script)
-                    self.assertIn("$userTarget='%s'" % (home / ".ssh" / "authorized_keys"), script)
-                    self.assertIn("$adminTargetPath='%s'" % (program_data / "ssh" / "administrators_authorized_keys"), script)
                     self.assertNotIn(str(Path(directory) / "poisoned"), script)
-                    self.assertIn("__programdata__/ssh/administrators_authorized_keys", script.lower())
-                    self.assertIn("exit 21", script)
-                    return subprocess.CompletedProcess(argv, 21, "", "")
+                    self.assertIn("$line='ssh-ed25519 ", script)
+                    return subprocess.CompletedProcess(argv, 0, "", "")
                 self.fail("unexpected command: %s" % rendered)
 
             with mock.patch.object(ssh_identity, "resolve_ssh_client_executable", return_value=attacker_sshd), \
@@ -356,7 +449,7 @@ class SshIdentityTests(unittest.TestCase):
                     self.fail("administrator verification must remain elevated")
                 self.fail("unexpected command: %s" % rendered)
 
-            with mock.patch.object(ssh_identity, "resolve_ssh_client_executable", return_value=sshd):
+            with mock.patch.object(ssh_identity, "_trusted_windows_sshd_executable", return_value=sshd):
                 with self.assertRaisesRegex(RuntimeError, "ACL verification"):
                     ssh_identity.install_gateway_public_key(
                         key_line(30), system_name="windows", runner=runner,
