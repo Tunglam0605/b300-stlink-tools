@@ -6,7 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+from .debug_memory import DebugMemoryBackend, DebugMemoryBlock
 from .debug_session import DebugSession, DebugSessionConfig, DebugSessionInfo
+from .debug_snapshot import DebugHaltSnapshot, DebugSnapshotBackend
+from .debug_symbols import DebugSourceTarget, DebugSymbolBrowserBackend, DebugSymbolItem
 from .debug_workspace import DebugWorkspaceBackend
 from .internal_remote import create_internal_remote_session
 from .live_session import (
@@ -34,12 +37,10 @@ class DebugConnectionState:
 
 
 class DebugWorkstationController:
-    """Own the operator-facing Local/Client debug lifecycle outside Qt.
+    """Single non-Qt facade for the operator-facing v0.15 Debug Workstation.
 
-    SSH authentication has a longer lifetime than any individual GDB or Live Monitor
-    operation. A Client logs in once, then Interactive Debug and zero-halt Live Monitor
-    reuse the same ``RemoteSession`` and loopback forwards until the operator explicitly
-    disconnects Remote.
+    SSH authentication outlives individual Debug/Live operations. Qt consumers should
+    use this facade rather than importing raw GDB/MI, SSH tunnel, or ELF parser modules.
     """
 
     def __init__(self, *, debug_session: Optional[DebugSession] = None,
@@ -49,6 +50,9 @@ class DebugWorkstationController:
         self.remote_session = remote_session
         self.live_session = live_session or LiveMonitorSession()
         self.workspace: Optional[DebugWorkspaceBackend] = None
+        self.snapshot_backend: Optional[DebugSnapshotBackend] = None
+        self.memory_backend: Optional[DebugMemoryBackend] = None
+        self.symbol_browser: Optional[DebugSymbolBrowserBackend] = None
         self.mode = "disconnected"
         self._symbols: Optional[str] = None
         self._last_info: Optional[DebugSessionInfo] = None
@@ -106,6 +110,34 @@ class DebugWorkstationController:
         except Exception:
             return False
 
+    def _attach_workspace(self) -> None:
+        self.workspace = DebugWorkspaceBackend(
+            self.debug_session.gdb,
+            target_state_provider=self.debug_session.target_poll,
+        )
+        self.snapshot_backend = DebugSnapshotBackend(self.workspace)
+        self.memory_backend = DebugMemoryBackend(
+            self.debug_session.gdb,
+            target_state_provider=self.debug_session.target_poll,
+        )
+
+    def _require_workspace(self) -> DebugWorkspaceBackend:
+        if not self.interactive_active or self.workspace is None:
+            raise RuntimeError("Interactive Debug workspace is not CONNECTED.")
+        return self.workspace
+
+    def _require_snapshot_backend(self) -> DebugSnapshotBackend:
+        self._require_workspace()
+        if self.snapshot_backend is None:
+            raise RuntimeError("Debug snapshot backend is unavailable.")
+        return self.snapshot_backend
+
+    def _require_memory_backend(self) -> DebugMemoryBackend:
+        self._require_workspace()
+        if self.memory_backend is None:
+            raise RuntimeError("Debug Memory backend is unavailable.")
+        return self.memory_backend
+
     def start_local(self, config: DebugSessionConfig) -> DebugSessionInfo:
         if self.interactive_active:
             raise RuntimeError("Interactive Debug is already active.")
@@ -115,10 +147,7 @@ class DebugWorkstationController:
         self.mode = "local"
         self._symbols = info.symbols
         self._last_info = info
-        self.workspace = DebugWorkspaceBackend(
-            self.debug_session.gdb,
-            target_state_provider=self.debug_session.target_poll,
-        )
+        self._attach_workspace()
         return info
 
     def start_client(self, symbol_file: Optional[Path]) -> DebugSessionInfo:
@@ -141,11 +170,112 @@ class DebugWorkstationController:
         self.mode = "client"
         self._symbols = info.symbols
         self._last_info = info
-        self.workspace = DebugWorkspaceBackend(
-            self.debug_session.gdb,
-            target_state_provider=self.debug_session.target_poll,
-        )
+        self._attach_workspace()
         return info
+
+    # ------------------------------------------------------------------
+    # Interactive target control
+    # ------------------------------------------------------------------
+    def halt_target(self) -> str:
+        self._require_workspace()
+        return self.debug_session.halt()
+
+    def run_target(self) -> str:
+        self._require_workspace()
+        return self.debug_session.continue_execution()
+
+    def reset_halt_target(self) -> str:
+        self._require_workspace()
+        return self.debug_session.reset_halt()
+
+    def step_in(self, timeout_seconds: float = 5.0) -> str:
+        self._require_workspace()
+        return self.debug_session.step_once(timeout_seconds=timeout_seconds)
+
+    def step_over(self, timeout_seconds: float = 5.0) -> str:
+        self._require_workspace()
+        return self.debug_session.next_once(timeout_seconds=timeout_seconds)
+
+    def step_out(self, timeout_seconds: float = 5.0):
+        return self._require_workspace().step_out(timeout_seconds=timeout_seconds)
+
+    # ------------------------------------------------------------------
+    # Coherent debugger panes
+    # ------------------------------------------------------------------
+    def capture_halted(self, *, max_frames: int = 16) -> DebugHaltSnapshot:
+        return self._require_snapshot_backend().capture(max_frames=max_frames)
+
+    def select_frame_and_capture(self, level: int, *, max_frames: int = 16) -> DebugHaltSnapshot:
+        return self._require_snapshot_backend().select_frame_and_capture(
+            level, max_frames=max_frames,
+        )
+
+    def list_variable_children(self, variable_id: str):
+        return self._require_workspace().list_children(variable_id)
+
+    def create_watch(self, expression: str):
+        return self._require_workspace().create_watch(expression)
+
+    def refresh_variable_changes(self):
+        return self._require_workspace().refresh_changes()
+
+    def assign_variable(self, variable_id: str, value: str) -> str:
+        return self._require_workspace().assign_variable(variable_id, value)
+
+    def delete_watch(self, variable_id: str) -> None:
+        self._require_workspace().delete_watch(variable_id)
+
+    def list_breakpoints(self):
+        return self._require_workspace().list_breakpoints()
+
+    def breakpoint_usage(self):
+        return self._require_workspace().breakpoint_usage()
+
+    def create_hardware_breakpoint(self, location: str) -> int:
+        return self._require_workspace().create_hardware_breakpoint(location)
+
+    def create_watchpoint(self, expression: str) -> int:
+        return self._require_workspace().create_watchpoint(expression)
+
+    def delete_breakpoint(self, number: int) -> None:
+        self._require_workspace().delete_breakpoint(number)
+
+    def set_breakpoint_enabled(self, number: int, enabled: bool) -> None:
+        self._require_workspace().set_breakpoint_enabled(number, enabled)
+
+    def read_memory(self, address: int, length: int) -> DebugMemoryBlock:
+        return self._require_memory_backend().read(address, length)
+
+    # ------------------------------------------------------------------
+    # Offline symbols/source navigation
+    # ------------------------------------------------------------------
+    def open_symbol_browser(self, image: Optional[Path] = None,
+                            *, gdb_path: Optional[str] = None) -> DebugSymbolBrowserBackend:
+        selected = image
+        if selected is None:
+            if not self._symbols:
+                raise RuntimeError("No AXF/ELF is selected for symbol browsing.")
+            selected = Path(self._symbols)
+        if self.symbol_browser is not None:
+            self.symbol_browser.close()
+        self.symbol_browser = DebugSymbolBrowserBackend(Path(selected), gdb_path=gdb_path)
+        return self.symbol_browser
+
+    def search_functions(self, query: str = "", *, limit: int = 256):
+        if self.symbol_browser is None:
+            raise RuntimeError("Debug symbol browser is not open.")
+        return self.symbol_browser.functions(query, limit=limit)
+
+    def search_data_symbols(self, query: str = "", *, watchable: Optional[bool] = None,
+                            limit: int = 256):
+        if self.symbol_browser is None:
+            raise RuntimeError("Debug symbol browser is not open.")
+        return self.symbol_browser.data_symbols(query, watchable=watchable, limit=limit)
+
+    def resolve_symbol_source(self, item: DebugSymbolItem) -> DebugSourceTarget:
+        if self.symbol_browser is None:
+            raise RuntimeError("Debug symbol browser is not open.")
+        return self.symbol_browser.resolve_symbol(item)
 
     @staticmethod
     def _rate_hz(interval_seconds: float) -> Optional[float]:
@@ -157,6 +287,9 @@ class DebugWorkstationController:
             return None
         return round(1.0 / interval, 3)
 
+    # ------------------------------------------------------------------
+    # Zero-halt Live Monitor
+    # ------------------------------------------------------------------
     def start_live_local(self, config: LocalLiveMonitorConfig) -> LiveMonitorSessionInfo:
         if self.live_active:
             raise RuntimeError("Live Monitor is already active.")
@@ -207,6 +340,8 @@ class DebugWorkstationController:
     def stop_interactive(self) -> None:
         workspace = self.workspace
         self.workspace = None
+        self.snapshot_backend = None
+        self.memory_backend = None
         if workspace is not None and self.interactive_active:
             try:
                 workspace.close()
@@ -217,8 +352,6 @@ class DebugWorkstationController:
         self._last_info = None
 
     def disconnect_remote(self, *, forget_password: bool = False) -> None:
-        # Live and Interactive operations share this SSH transport in Client mode,
-        # therefore both must release their local consumers before Remote disconnects.
         if self.mode == "client" and self.live_active:
             self.stop_live()
         if self.mode == "client" and self.interactive_active:
@@ -286,5 +419,8 @@ class DebugWorkstationController:
     def close(self, *, disconnect_remote: bool = True) -> None:
         self.stop_live()
         self.stop_interactive()
+        if self.symbol_browser is not None:
+            self.symbol_browser.close()
+            self.symbol_browser = None
         if disconnect_remote and self.remote_session is not None:
             self.remote_session.disconnect()
