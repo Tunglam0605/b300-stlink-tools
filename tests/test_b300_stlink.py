@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import signal
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -198,6 +199,67 @@ class B300StlinkTests(unittest.TestCase):
         self.assertFalse(role["requires_local_gdb"])
         guard_events = [record.get("guard_event") for record in records if record["event"] == "remote_guard"]
         self.assertIn("armed", guard_events)
+        self.assertIn("shutdown_restore", guard_events)
+
+    def test_gateway_sigterm_runs_guarded_cleanup_before_openocd_stops(self) -> None:
+        """A service manager SIGTERM must exercise the same cleanup as Ctrl-C."""
+        module = tool()
+        created = []
+        installed_handlers = {}
+        sentinel_previous_handler = object()
+
+        def fake_signal(signum, handler):
+            previous = installed_handlers.get(signum, sentinel_previous_handler)
+            installed_handlers[signum] = handler
+            return previous
+
+        class FakeDebugService:
+            def __init__(self, executable=None):
+                self.executable = executable
+                self._state_reads = 0
+                self.stopped = False
+                created.append(self)
+
+            @property
+            def state(self):
+                self._state_reads += 1
+                handler = installed_handlers.get(signal.SIGTERM)
+                if self._state_reads == 1 and handler is not None:
+                    handler(signal.SIGTERM, None)
+                return module.DebugState.FAILED
+
+            def start(self, config, **kwargs):
+                self.config = config
+                return module.DebugState.READY
+
+            def stop(self):
+                self.stopped = True
+
+        class FakeTcl:
+            def __init__(self, _endpoint):
+                self.state = "running"
+
+            def wait_target_state(self, *args, **kwargs):
+                return self.state
+
+            def resume_target(self):
+                self.state = "running"
+                return self.state
+
+        output = io.StringIO()
+        probe = ProbeInfo("TERM123", "ST-Link", "test")
+        with mock.patch.object(module, "DebugService", FakeDebugService), \
+                mock.patch.object(module, "SafeTclClient", FakeTcl), \
+                mock.patch.object(signal, "signal", side_effect=fake_signal), \
+                mock.patch.object(module, "list_probes", return_value=(probe,)), \
+                mock.patch.object(module.time, "sleep"), redirect_stdout(output):
+            result = module.main(["debug", "gateway", "--json"])
+
+        self.assertEqual(result, 0)
+        self.assertTrue(created[0].stopped)
+        self.assertIs(installed_handlers[signal.SIGTERM], sentinel_previous_handler)
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        guard_events = [record.get("guard_event") for record in records if record["event"] == "remote_guard"]
         self.assertIn("shutdown_restore", guard_events)
 
     def test_real_debug_gateway_fails_closed_when_multiple_probes_are_connected(self) -> None:

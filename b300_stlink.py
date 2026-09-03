@@ -7,6 +7,7 @@ import hashlib
 import json
 import ipaddress
 import os
+import signal
 import sys
 import tempfile
 import time
@@ -717,6 +718,11 @@ def run_debug(args: argparse.Namespace, reporter: Reporter) -> int:
     reporter.emit("openocd", command=command, dry_run=False)
     service = DebugService(executable=args.openocd)
     guard = None
+    previous_sigterm_handler = None
+
+    def request_graceful_shutdown(_signum, _frame) -> None:
+        """Route service-manager termination through the normal debug cleanup path."""
+        raise KeyboardInterrupt
 
     def openocd_event(line: str) -> None:
         reporter.emit("openocd_output", line=line)
@@ -730,6 +736,10 @@ def run_debug(args: argparse.Namespace, reporter: Reporter) -> int:
                 )
 
     try:
+        # SIGTERM is the normal stop signal for a background Gateway.  The
+        # default action exits immediately and would bypass the guard/service
+        # cleanup below, leaving the OpenOCD child process behind.
+        previous_sigterm_handler = signal.signal(signal.SIGTERM, request_graceful_shutdown)
         service.start(config, event_sink=openocd_event)
         if args.tcl_port is not None and ipaddress.ip_address(args.bind_address).is_loopback:
             tcl = SafeTclClient(TclEndpoint(args.bind_address, args.tcl_port))
@@ -765,7 +775,11 @@ def run_debug(args: argparse.Namespace, reporter: Reporter) -> int:
                 reporter.emit(
                     "remote_guard", guard_event="shutdown_restore_failed", message=str(error),
                 )
-        service.stop()
+        try:
+            service.stop()
+        finally:
+            if previous_sigterm_handler is not None:
+                signal.signal(signal.SIGTERM, previous_sigterm_handler)
 
 
 def run_openocd(command, dry_run: bool, reporter: Reporter) -> int:

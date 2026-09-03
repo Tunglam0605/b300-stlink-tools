@@ -5,6 +5,11 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-09-03
+
+- Fixed the Linux CLI bootstrap to accept the signed one-file Linux CLI bundle. It continues to validate the signed manifest, immutable package URL, SHA-256, size, archive paths, executable, and managed installer; it no longer incorrectly requires the Windows-only `_internal` runtime directory.
+- Fixed headless Debug Gateway shutdown on `SIGTERM`. A background Gateway now runs its existing target-state restore and `DebugService` cleanup before exiting, so it does not leave the OpenOCD child process listening on loopback ports.
+
 ## [0.14.0] - 2026-09-01
 
 - Modernized the B300 desktop shell with a dedicated Production Operator workspace and an Engineering R&D workspace, theme switching, high-visibility provisioning steps, memory-map widgets, and compact technical panels.
