@@ -7,6 +7,7 @@ import hashlib
 import json
 import ipaddress
 import os
+import signal
 import sys
 import tempfile
 import time
@@ -55,13 +56,10 @@ from b300_core.debug_selftest import run_loopback_debug_selftest
 from b300_core.debug_sampling import sample_variables, validate_sampling_request, write_samples
 from b300_core.elf_matcher import discover_symbol_files, find_matching_symbol_file
 from b300_core.tcl_client import SafeTclClient, TclEndpoint
-from b300_core.ssh_host_trust import (
-    local_gateway_host_key, scan_gateway_host_key, trust_gateway_host_key,
-    trusted_known_hosts_file,
-)
+from b300_core.ssh_host_trust import local_gateway_host_key, scan_gateway_host_key, trust_gateway_host_key
 from b300_core.ssh_identity import (
     ensure_ssh_identity, inspect_ssh_client_prerequisites, install_gateway_public_key,
-    managed_identity_file, prepare_ssh_client_prerequisites, validate_public_key,
+    prepare_ssh_client_prerequisites, validate_public_key,
 )
 from b300_core.ssh_debug_tunnel import (
     SshDebugTunnel, SshDebugTunnelConfig, find_available_loopback_port,
@@ -146,10 +144,6 @@ def run_vscode_profile(args: argparse.Namespace) -> int:
         raise ValueError("debug vscode requires --ssh-host HOST and --ssh-user USER.")
     if not args.program_relative:
         raise ValueError("debug vscode requires --program-relative PATH_TO_AXF_OR_ELF.")
-    identity_file = managed_identity_file()
-    known_hosts_file = trusted_known_hosts_file(args.ssh_host, args.ssh_port)
-    if managed_profile is not None and (identity_file is None or known_hosts_file is None):
-        raise RuntimeError("Saved Gateway profile is not locally ready; run `b300-stlink gateway status` or repeat `gateway client-setup`.")
     profile = RemoteVsCodeProfile(
         ssh_host=args.ssh_host,
         ssh_user=args.ssh_user,
@@ -159,8 +153,6 @@ def run_vscode_profile(args: argparse.Namespace) -> int:
         executable=workspace_executable(args.program_relative),
         gdb_path=_resolve_vscode_gdb_path(args.vscode_gdb_path),
         probe_serial=args.probe_serial,
-        identity_file=identity_file,
-        known_hosts_file=known_hosts_file,
     )
     record = profile.record()
     if args.output_dir is not None:
@@ -595,11 +587,6 @@ def run_debug_client(args, reporter: Reporter) -> int:
     if symbols is not None and (symbols.suffix.lower() not in {".elf", ".axf"} or not symbols.is_file()):
         raise ValueError("debug client --symbols must reference an existing ELF/AXF file.")
 
-    identity_file = managed_identity_file()
-    known_hosts_file = trusted_known_hosts_file(args.ssh_host, args.ssh_port)
-    if managed_profile is not None and (identity_file is None or known_hosts_file is None):
-        raise RuntimeError("Saved Gateway profile is not locally ready; run `b300-stlink gateway status` or repeat `gateway client-setup`.")
-
     if action == "live":
         return run_live_client(args, reporter, symbols)
 
@@ -609,8 +596,6 @@ def run_debug_client(args, reporter: Reporter) -> int:
         host=args.ssh_host, user=args.ssh_user, ssh_port=args.ssh_port,
         local_gdb_port=local_gdb, local_tcl_port=local_tcl,
         gateway_gdb_port=3333, gateway_tcl_port=6666,
-        identity_file=identity_file,
-        known_hosts_file=known_hosts_file,
     )
     tunnel_config.validate()
 
@@ -717,6 +702,11 @@ def run_debug(args: argparse.Namespace, reporter: Reporter) -> int:
     reporter.emit("openocd", command=command, dry_run=False)
     service = DebugService(executable=args.openocd)
     guard = None
+    previous_sigterm_handler = None
+
+    def request_graceful_shutdown(_signum, _frame) -> None:
+        """Route service-manager termination through the normal debug cleanup path."""
+        raise KeyboardInterrupt
 
     def openocd_event(line: str) -> None:
         reporter.emit("openocd_output", line=line)
@@ -730,6 +720,10 @@ def run_debug(args: argparse.Namespace, reporter: Reporter) -> int:
                 )
 
     try:
+        # SIGTERM is the normal stop signal for a background Gateway.  The
+        # default action exits immediately and would bypass the guard/service
+        # cleanup below, leaving the OpenOCD child process behind.
+        previous_sigterm_handler = signal.signal(signal.SIGTERM, request_graceful_shutdown)
         service.start(config, event_sink=openocd_event)
         if args.tcl_port is not None and ipaddress.ip_address(args.bind_address).is_loopback:
             tcl = SafeTclClient(TclEndpoint(args.bind_address, args.tcl_port))
@@ -765,7 +759,11 @@ def run_debug(args: argparse.Namespace, reporter: Reporter) -> int:
                 reporter.emit(
                     "remote_guard", guard_event="shutdown_restore_failed", message=str(error),
                 )
-        service.stop()
+        try:
+            service.stop()
+        finally:
+            if previous_sigterm_handler is not None:
+                signal.signal(signal.SIGTERM, previous_sigterm_handler)
 
 
 def run_openocd(command, dry_run: bool, reporter: Reporter) -> int:

@@ -5,6 +5,40 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-09-03
+
+- Integrated the Cockpit-inspired frontend refinements across the existing Production and Engineering workspaces while preserving the Core-owned flash, Factory, memory, debug, and SSH safety paths.
+- Fixed stale target statistics after probe refresh/change or an unsupported MCU result. The dashboard and Operator workspace now return to an uninspected state instead of retaining target/WRP facts from the previous probe.
+- Made the Live Monitor variable/preset toolbar responsive at the supported 760×460 window size by using a compact two-column action grid without horizontal scrolling or clipped controls.
+- Isolated Qt unittest modules in CI so each module owns its QApplication/QThread teardown; Linux GUI smoke cases also run with bounded per-case timeouts and attributable failures.
+- Added the dark-theme wordmark to the Windows PyInstaller data set so packaged Windows builds match the source/Linux dark-mode branding.
+- Fixed the Linux CLI bootstrap to accept the signed one-file Linux CLI bundle. It continues to validate the signed manifest, immutable package URL, SHA-256, size, archive paths, executable, and managed installer; it no longer incorrectly requires the Windows-only `_internal` runtime directory.
+- Fixed headless Debug Gateway shutdown on `SIGTERM`. A background Gateway now runs its existing target-state restore and `DebugService` cleanup before exiting, so it does not leave the OpenOCD child process listening on loopback ports.
+- Switched default remote Client transport to ordinary password-interactive OpenSSH. Workflows persist only the Gateway endpoint (host, user, port) and prompt natively for account credentials at connect time, avoiding public-key prerequisites while keeping GDB and TCL bound strictly to loopback.
+
+## [0.14.0] - 2026-09-01
+
+- Modernized the B300 desktop shell with a dedicated Production Operator workspace and an Engineering R&D workspace, theme switching, high-visibility provisioning steps, memory-map widgets, and compact technical panels.
+- Refined Dark mode for dense engineering screens: readable neutral slate surfaces, brighter secondary text, restrained blue interaction accents, and consistent success/warning/error colours. Buttons now have matching hover, pressed, disabled, and keyboard-focus states without moving surrounding layout.
+- Kept production flash behind the existing validated B300 target, Bootloader WRP, and FlashPlan gate. Operator actions use the existing confirmation flow and Core `TargetInfo` contract; they never bypass Backend safety policy.
+- Added GUI regression coverage for theme interaction states, compact horizontal-scroll behavior, Core/GUI target-field compatibility, and the Operator confirmation gate.
+
+## [0.13.3] - 2026-08-31
+
+- Fixed Windows Gateway public-key authorization for local Administrator accounts running B300 without elevation. The GUI token may mark Administrators membership deny-only, which .NET hides from `WindowsIdentity.Groups`; B300 now reads the trusted System32 `whoami.exe /groups /fo csv` membership record, then rechecks the real `sshd` target inside UAC before writing or reporting success. The elevated script now preserves an empty `ssh-keygen` passphrase, avoids PowerShell's reserved `$HOME` variable, and sends valid regular expressions. It continues to write only the target selected by `sshd` and fails closed if membership output is unavailable or malformed.
+
+## [0.13.2] - 2026-08-31
+
+- Fixed Windows Gateway public-key authorization for Administrator accounts whose non-elevated GUI token resolves a user `authorized_keys` file while the SSH service applies the Administrators match rule. B300 now rechecks the effective target in the same UAC operation used to install and verify the key. It carries the initiating account identity through UAC, uses only trusted System32 OpenSSH tools, and returns a validated safe target without temporary result files.
+
+## [0.13.1] - 2026-08-31
+
+- Fixed Windows Gateway public-key authorization where the previous .NET ACL rebuild failed with an unhelpful exit code. B300 now uses the trusted System32 `icacls.exe` with locale-independent Administrator and SYSTEM SIDs, verifies the resulting restrictive ACL, and reports UAC cancellation separately from an ACL repair failure. The change does not modify `sshd_config`, the SSH service, or SSH host keys.
+
+## [0.13.0] - 2026-08-31
+
+- Fixed Windows Gateway public-key authorization on systems where `sshd -T` cannot read the production host keys, including after UAC. B300 now uses a one-time disposable ED25519 host key only for the effective-config query, removes it immediately, and continues to accept only the standard user or Windows Administrators authorized-keys targets. It does not modify `sshd_config`, the running SSH service, or any production host key.
+
 ## [0.12.9] - 2026-08-31
 
 - Fixed the Windows close button while a cancellable Gateway, Debug, or read-only operation is active. The close action now asks whether to cancel safely, requests cooperative cleanup without blocking the GUI, and closes automatically after the worker releases its resources. Flash and Bootloader Factory provisioning remain non-cancellable and cannot be force-closed.

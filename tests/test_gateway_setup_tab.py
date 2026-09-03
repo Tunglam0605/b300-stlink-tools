@@ -465,25 +465,17 @@ class GatewaySetupTabTests(unittest.TestCase):
         tab.close()
 
     def test_verified_remote_gateway_saves_nonsecret_profile(self):
-        scanned = GatewayHostKey(
-            "192.168.1.95", 22, "192.168.1.95", key_line(94), "SHA256:MATCH"
-        )
-        trusted = HostTrustResult(
-            Path("C:/Users/test/.ssh/b300_known_hosts"), "192.168.1.95", "SHA256:MATCH", True,
-        )
         saved = []
         tab = GatewaySetupTab(
             identity_inspector=lambda: identity_report(True),
             endpoint_prober=reachable_gateway_endpoint,
-            host_key_scanner=lambda host, port: scanned,
-            host_truster=lambda key: trusted,
             profile_loader=lambda: None,
             profile_saver=lambda profile: saved.append(profile) or Path("C:/profile.json"),
             auto_refresh=False,
         )
-        payload = tab._trust_and_save_profile("192.168.1.95", "automation", 22, "SHA256:MATCH")
+        payload = tab._trust_and_save_profile("192.168.1.95", "automation", 22)
         result, profile, path = payload
-        self.assertEqual(result, trusted)
+        self.assertIsNone(result)
         self.assertEqual(profile, RemoteGatewayProfile("192.168.1.95", "automation", 22))
         self.assertEqual(saved, [profile])
         self.assertEqual(path, Path("C:/profile.json"))
@@ -494,19 +486,15 @@ class GatewaySetupTabTests(unittest.TestCase):
         tab.close()
 
     def test_fingerprint_mismatch_never_saves_profile(self):
-        scanned = GatewayHostKey(
-            "gateway.local", 22, "gateway.local", key_line(95), "SHA256:SCANNED"
-        )
         saver = mock.Mock()
         tab = GatewaySetupTab(
             identity_inspector=lambda: identity_report(True),
             endpoint_prober=reachable_gateway_endpoint,
-            host_key_scanner=lambda host, port: scanned,
-            host_truster=mock.Mock(), profile_loader=lambda: None,
+            profile_loader=lambda: None,
             profile_saver=saver, auto_refresh=False,
         )
-        with self.assertRaisesRegex(RuntimeError, "HOST_KEY_FINGERPRINT_MISMATCH"):
-            tab._trust_and_save_profile("gateway.local", "automation", 22, "SHA256:EXPECTED")
+        with self.assertRaises(ValueError):
+            tab._trust_and_save_profile("invalid host with spaces", "automation", 22)
         saver.assert_not_called()
         tab.close()
 

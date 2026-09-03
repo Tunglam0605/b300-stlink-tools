@@ -130,16 +130,23 @@ class GuiPackagingTests(unittest.TestCase):
         self.assertTrue((ROOT / "branding" / "b300-stlink-icon.png").is_file())
         self.assertTrue((ROOT / "branding" / "b300-stlink-icon.ico").is_file())
         self.assertTrue((ROOT / "branding" / "b300-stlink-wordmark.png").is_file())
+        self.assertTrue((ROOT / "branding" / "b300-stlink-wordmark-dark.png").is_file())
         self.assertTrue(
             (ROOT / "packaging" / "linux" / "b300-stlink-gui.svg").is_file()
         )
         gui_spec = (ROOT / "b300_gui.spec").read_text(encoding="utf-8")
+        windows_gui_spec = (ROOT / "b300_gui_windows.spec").read_text(encoding="utf-8")
         native_builder = (ROOT / "build_native_bundle.py").read_text(encoding="utf-8")
         installer = (ROOT / "packaging" / "windows" /
                      "b300-stlink-gui.iss").read_text(encoding="utf-8")
         self.assertIn('icon=str(project_root / "branding" / "b300-stlink-icon.ico")',
                       gui_spec)
         self.assertIn('project_root / "CHANGELOG.md"', gui_spec)
+        self.assertIn('project_root / "branding" / "b300-stlink-wordmark-dark.png"', gui_spec)
+        self.assertIn(
+            'project_root / "branding" / "b300-stlink-wordmark-dark.png"',
+            windows_gui_spec,
+        )
         self.assertIn('"BUILD-COMMIT.txt"', gui_spec)
         self.assertIn("load_trusted_bootloader", gui_spec)
         self.assertNotIn("v00050001.hex", gui_spec)
@@ -168,6 +175,8 @@ class GuiPackagingTests(unittest.TestCase):
         self.assertIn("COLLECT(", windows_spec)
         self.assertIn("load_trusted_bootloader", windows_spec)
         self.assertNotIn("v00050001.hex", windows_spec)
+        self.assertIn("FOREIGN_ICU_BINARY_NAMES", windows_spec)
+        self.assertIn("_is_foreign_icu_binary", windows_spec)
         self.assertIn('ROOT / "b300_gui_windows.spec"', native_builder)
         self.assertIn('"--application-root"', native_builder)
         self.assertIn("Verify packaged Windows onedir runtime", workflow)

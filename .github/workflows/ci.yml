@@ -49,13 +49,20 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           python -m pip install -r requirements-test.txt
-          # Qt offscreen native state can terminate a long shared unittest
-          # interpreter on hosted runners. Isolate each test module so each
-          # QApplication/QThread lifecycle is process-bounded and attributable.
+          # Qt offscreen native state cannot safely accumulate across these
+          # long-lived GUI suites. Each module is isolated; those suites also
+          # isolate every test case with a finite per-case and module budget.
           for test in $(find tests -maxdepth 1 -name 'test_*.py' -printf '%f\n' | sort); do
             module="tests.${test%.py}"
             echo "=== $module ==="
-            timeout --signal=TERM 60 python scripts/run_unittest_module.py "$module"
+            case "$module" in
+              tests.test_gui_smoke|tests.test_gui_updater)
+                timeout --signal=TERM --kill-after=10s 300 python scripts/run_unittest_module.py --split-cases --case-timeout 60 "$module"
+                ;;
+              *)
+                timeout --signal=TERM 60 python scripts/run_unittest_module.py "$module"
+                ;;
+            esac
           done
 
       - name: Run unit tests (Windows)

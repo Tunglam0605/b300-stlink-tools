@@ -8,7 +8,7 @@
 | Verify fail | Dừng, kiểm tra nguồn/cáp/SWD/probe serial; không retry mù. |
 | Board vào recovery sau nạp | Lưu log, không mass erase/không retry; kiểm tra `failure_phase`, PC, BKP1R và Sector 3. Với Bootloader v0.6.5, `ERASED`/`CORRUPT` không boot; ca ST-Link thành công phải có `STLM + CONFIRMED` sau boot. |
 | `Address already in use` khi debug | Đóng OpenOCD/GDB server cũ hoặc chọn port khác. |
-| GDB không kết nối được IPC | Kiểm tra `--bind-address 0.0.0.0`, firewall, IP IPC và port 3333. |
+| GDB không kết nối được IPC | Chạy Gateway với GDB/TCL chỉ bind loopback, kiểm tra SSH TCP/22, xác nhận host key/password bằng OpenSSH bình thường và SSH local forwarding; không expose/NAT port 3333/6666. |
 | GDB hiện sai source/biến | Dùng đúng AXF/ELF build từ firmware đang chạy; không dùng lệnh `load` để chữa tạm. |
 | Board còn halt sau debug | Trong GDB chạy `monitor reset run`, `detach`, `quit`, rồi dừng OpenOCD. |
 | GUI không cho bấm Flash | Nhấn **Kiểm tra target**, chọn HEX hợp lệ và chờ thao tác hiện tại kết thúc. |

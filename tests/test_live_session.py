@@ -92,13 +92,9 @@ class LiveMonitorSessionTests(unittest.TestCase):
 
     def test_local_session_owns_service_and_releases_it_on_close(self):
         with tempfile.TemporaryDirectory() as directory, \
-                mock.patch("b300_core.live_session.find_matching_symbol_file") as matcher, \
-                mock.patch("b300_core.live_session.managed_identity_file") as identity, \
-                mock.patch("b300_core.live_session.trusted_known_hosts_file") as known_hosts:
+                mock.patch("b300_core.live_session.find_matching_symbol_file") as matcher:
             symbols = self.make_symbols(directory)
             matcher.return_value = (self.matched(symbols), ())
-            identity.return_value = symbols
-            known_hosts.return_value = symbols
             session = LiveMonitorSession(
                 openocd_executable="openocd", service_factory=FakeService,
                 tcl_factory=FakeTcl, symbol_table_factory=FakeSymbolTable,
@@ -159,13 +155,9 @@ class LiveMonitorSessionTests(unittest.TestCase):
 
     def test_client_session_uses_tcl_only_tunnel_and_no_local_service(self):
         with tempfile.TemporaryDirectory() as directory, \
-                mock.patch("b300_core.live_session.find_matching_symbol_file") as matcher, \
-                mock.patch("b300_core.live_session.managed_identity_file") as identity, \
-                mock.patch("b300_core.live_session.trusted_known_hosts_file") as known_hosts:
+                mock.patch("b300_core.live_session.find_matching_symbol_file") as matcher:
             symbols = self.make_symbols(directory)
             matcher.return_value = (self.matched(symbols), ())
-            identity.return_value = symbols
-            known_hosts.return_value = symbols
             session = LiveMonitorSession(
                 tunnel_factory=FakeTunnel, tcl_factory=FakeTcl,
                 symbol_table_factory=FakeSymbolTable, port_allocator=lambda preferred: 17666,
@@ -180,8 +172,8 @@ class LiveMonitorSessionTests(unittest.TestCase):
             tunnel = FakeTunnel.instances[-1]
             self.assertEqual(tunnel.config.local_tcl_port, 17666)
             self.assertEqual(tunnel.config.gateway_tcl_port, 6666)
-            self.assertEqual(tunnel.config.identity_file, symbols)
-            self.assertEqual(tunnel.config.known_hosts_file, symbols)
+            self.assertFalse(hasattr(tunnel.config, "identity_file"))
+            self.assertFalse(hasattr(tunnel.config, "known_hosts_file"))
             self.assertIsNone(session._service)
             self.assertEqual(session.run().samples, 1)
             session.close()

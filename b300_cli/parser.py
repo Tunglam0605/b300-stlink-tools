@@ -189,8 +189,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     gateway.add_argument(
         "gateway_action", nargs="?", choices=("doctor", "plan", "prepare", "quickstart", "client-key", "client-setup", "authorize-key", "host-key", "trust-host", "status", "connect-check", "profile-clear"), default="doctor",
-        help=("doctor/readiness; quickstart prepares a Gateway; client-setup automates Client key/trust/profile; "
-              "status/connect-check use the saved profile; low-level plan/prepare/key/trust actions remain available."),
+        help=("doctor/readiness; quickstart prepares a Gateway; client-setup saves an endpoint profile; "
+              "status/connect-check use the saved profile; legacy key/trust actions remain available."),
     )
     gateway.add_argument("--openocd")
     gateway.add_argument("--probe-serial", type=parse_probe_serial,
@@ -211,7 +211,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     gateway.add_argument(
         "--identity-file", type=Path,
-        help="Optional B300 Client private-key path; default is ~/.ssh/b300_gateway_ed25519.",
+        help="Private-key path for explicit legacy client-key maintenance only.",
     )
     gateway.add_argument(
         "--public-key-file", type=Path,

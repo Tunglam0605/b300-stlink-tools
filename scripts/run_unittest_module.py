@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -55,12 +56,81 @@ class HardExitTextResult(unittest.TextTestResult):
         os._exit(exit_code)
 
 
-def run_and_exit(argv=None) -> None:
+def iter_test_cases(suite: unittest.TestSuite):
+    """Yield leaf test cases without retaining an enclosing Qt test suite."""
+    for item in suite:
+        if isinstance(item, unittest.TestSuite):
+            yield from iter_test_cases(item)
+        else:
+            yield item
+
+
+def write_split_verdict(successful: bool) -> None:
+    """Record one aggregate result instead of leaking an earlier child verdict."""
+    result_file = os.environ.get("B300_UNITTEST_RESULT_FILE", "").strip()
+    if not result_file:
+        return
+    path = Path(result_file)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("PASS\n" if successful else "FAIL\n", encoding="ascii")
+
+
+def run_split_cases(module: str, *, case_timeout: int | None = None) -> int:
+    """Run every test case in a new interpreter to bound native Qt state."""
+    suite = unittest.defaultTestLoader.loadTestsFromName(module)
+    cases = tuple(iter_test_cases(suite))
+    if not cases:
+        print("No tests found in %s" % module, file=sys.stderr)
+        write_split_verdict(False)
+        return 1
+    child_env = dict(os.environ)
+    child_env.pop("B300_UNITTEST_RESULT_FILE", None)
+    for case in cases:
+        print("=== %s ===" % case.id(), flush=True)
+        try:
+            result = subprocess.run(
+                [sys.executable, str(Path(__file__).resolve()), case.id()],
+                cwd=ROOT,
+                env=child_env,
+                timeout=case_timeout,
+            )
+        except subprocess.TimeoutExpired:
+            print(
+                "Timed out after %ss: %s" % (case_timeout, case.id()),
+                file=sys.stderr,
+            )
+            write_split_verdict(False)
+            return 124
+        if result.returncode:
+            write_split_verdict(False)
+            return result.returncode
+    write_split_verdict(True)
+    return 0
+
+
+def run_and_exit(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="Run one unittest module in an isolated process."
     )
+    parser.add_argument(
+        "--split-cases",
+        action="store_true",
+        help="run each discovered test case in its own child interpreter",
+    )
+    parser.add_argument(
+        "--case-timeout",
+        type=int,
+        help="maximum seconds for each child test case (requires --split-cases)",
+    )
     parser.add_argument("module", help="Dotted unittest module name, e.g. tests.test_gui_smoke")
     args = parser.parse_args(argv)
+
+    if args.case_timeout is not None and args.case_timeout <= 0:
+        parser.error("--case-timeout must be positive")
+    if args.case_timeout is not None and not args.split_cases:
+        parser.error("--case-timeout requires --split-cases")
+    if args.split_cases:
+        return run_split_cases(args.module, case_timeout=args.case_timeout)
 
     suite = unittest.defaultTestLoader.loadTestsFromName(args.module)
     # Retain all nested test cases until HardExitTextResult.stopTestRun().
@@ -76,4 +146,4 @@ def run_and_exit(argv=None) -> None:
 
 
 if __name__ == "__main__":
-    run_and_exit()
+    sys.exit(run_and_exit())

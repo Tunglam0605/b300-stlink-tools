@@ -53,58 +53,53 @@ class RemoteGatewayProfileTests(unittest.TestCase):
 
 
 class RemoteConnectivityTests(unittest.TestCase):
-    def _files(self, root: Path):
-        ssh = root / "ssh.exe"
-        identity = root / "id_ed25519"
-        known = root / "known_hosts"
-        for item in (ssh, identity, known):
-            item.write_text("x", encoding="utf-8")
-        return ssh, identity, known
-
-    def test_connectivity_argv_is_batch_strict_and_public_ports_are_not_used(self):
-        with tempfile.TemporaryDirectory() as directory:
-            ssh, identity, known = self._files(Path(directory))
-            argv = build_connectivity_argv(
-                RemoteGatewayProfile("192.168.1.109", "automation", 22),
-                ssh_executable=ssh, identity_file=identity, known_hosts_file=known,
-            )
+    def test_connectivity_argv_is_password_interactive_and_public_ports_are_not_used(self):
+        argv = build_connectivity_argv(
+            RemoteGatewayProfile("192.168.1.109", "automation", 22),
+            ssh_executable="ssh-test",
+        )
+        expected_options = (
+            "-o", "PreferredAuthentications=password,keyboard-interactive",
+            "-o", "PasswordAuthentication=yes",
+            "-o", "KbdInteractiveAuthentication=yes",
+            "-o", "PubkeyAuthentication=no",
+        )
+        self.assertEqual(argv[2:2 + len(expected_options)], expected_options)
         joined = " ".join(argv)
-        self.assertIn("BatchMode=yes", joined)
-        self.assertIn("StrictHostKeyChecking=yes", joined)
-        self.assertIn("IdentitiesOnly=yes", joined)
-        self.assertIn("PasswordAuthentication=no", joined)
+        self.assertNotIn("BatchMode=yes", joined)
+        self.assertNotIn("-i", argv)
+        self.assertNotIn("IdentityFile", joined)
+        self.assertNotIn("KnownHostsFile", joined)
+        self.assertNotIn("ClearAllForwardings=yes", argv)
         self.assertNotIn("3333", joined)
         self.assertNotIn("6666", joined)
         self.assertEqual(argv[-1], "echo B300_SSH_READY")
 
     def test_connectivity_passes_only_on_expected_ready_token(self):
-        with tempfile.TemporaryDirectory() as directory:
-            ssh, identity, known = self._files(Path(directory))
-            calls = []
-            def runner(argv, timeout):
-                calls.append((tuple(argv), timeout))
-                return subprocess.CompletedProcess(argv, 0, "B300_SSH_READY\n", "")
-            result = check_remote_connectivity(
-                RemoteGatewayProfile("gateway.local", "automation", 2222), runner=runner,
-                ssh_executable=ssh, identity_file=identity, known_hosts_file=known,
-            )
+        calls = []
+        def runner(argv, timeout):
+            calls.append((tuple(argv), timeout))
+            return subprocess.CompletedProcess(argv, 0, "B300_SSH_READY\n", "")
+        result = check_remote_connectivity(
+            RemoteGatewayProfile("gateway.local", "automation", 2222), runner=runner,
+            ssh_executable="ssh-test",
+        )
         self.assertTrue(result.ready)
         self.assertEqual(result.reason_code, "SSH_READY")
         self.assertIn("automation@gateway.local:2222", result.gateway)
         self.assertEqual(len(calls), 1)
 
-    def test_connectivity_failure_is_bounded_and_noninteractive(self):
-        with tempfile.TemporaryDirectory() as directory:
-            ssh, identity, known = self._files(Path(directory))
-            def runner(argv, timeout):
-                return subprocess.CompletedProcess(argv, 255, "", "Permission denied (publickey).")
-            result = check_remote_connectivity(
-                RemoteGatewayProfile("gateway.local", "automation", 22), runner=runner,
-                ssh_executable=ssh, identity_file=identity, known_hosts_file=known,
-            )
+    def test_connectivity_failure_reports_no_password_value(self):
+        def runner(argv, timeout):
+            return subprocess.CompletedProcess(argv, 255, "", "Permission denied (password).")
+        result = check_remote_connectivity(
+            RemoteGatewayProfile("gateway.local", "automation", 22), runner=runner,
+            ssh_executable="ssh-test",
+        )
         self.assertFalse(result.ready)
         self.assertEqual(result.reason_code, "SSH_CONNECT_FAILED")
         self.assertIn("Permission denied", result.message)
+        self.assertNotIn("password=", result.message.lower())
 
 
 if __name__ == "__main__":

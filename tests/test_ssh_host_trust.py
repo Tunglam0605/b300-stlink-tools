@@ -1,18 +1,39 @@
 from __future__ import annotations
 
+import shlex
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from b300_core.ssh_host_trust import (
     expected_known_hosts_field, local_gateway_host_key, scan_gateway_host_key,
-    trust_gateway_host_key, trusted_known_hosts_file,
+    trust_gateway_host_key, trusted_known_hosts_file, validate_gateway_host,
 )
 from tests.test_ssh_identity import key_line
 
 
 class SshHostTrustTests(unittest.TestCase):
+    def _openssh_option_value(self, argv, name):
+        encoded = next(
+            argv[index + 1]
+            for index, item in enumerate(argv[:-1])
+            if item == "-o" and argv[index + 1].startswith(name + "=")
+        )
+        parsed = shlex.split(encoded, posix=True)
+        self.assertEqual(
+            len(parsed), 1,
+            "OpenSSH config parsing split the option value on whitespace",
+        )
+        key, separator, value = parsed[0].partition("=")
+        self.assertEqual((key, separator), (name, "="))
+        return value
+
+    def test_gateway_host_rejects_option_like_value(self):
+        with self.assertRaisesRegex(ValueError, "unsupported characters"):
+            validate_gateway_host("-Fattacker-config")
+
     def test_expected_host_field_uses_brackets_only_for_custom_port(self):
         self.assertEqual(expected_known_hosts_field("gateway.local", 22), "gateway.local")
         self.assertEqual(expected_known_hosts_field("gateway.local", 2222), "[gateway.local]:2222")
@@ -28,6 +49,116 @@ class SshHostTrustTests(unittest.TestCase):
         self.assertEqual(scanned.host_field, "gateway.local")
         self.assertTrue(scanned.fingerprint.startswith("SHA256:"))
         self.assertTrue(scanned.public_key.startswith("ssh-ed25519 "))
+
+    def test_scan_uses_passwordless_ssh_fallback_for_incompatible_keyscan_kex(self):
+        public = key_line(96, "gateway-modern-openssh").split()
+        calls = []
+
+        def runner(argv, timeout):
+            calls.append(tuple(argv))
+            if argv[0] == "ssh-keyscan":
+                return subprocess.CompletedProcess(
+                    argv, 1, "",
+                    "choose_kex: unsupported KEX method sntrup761x25519-sha512@openssh.com",
+                )
+            known_hosts = Path(self._openssh_option_value(argv, "UserKnownHostsFile"))
+            known_hosts.write_text(
+                "gateway.local %s %s\n" % (public[0], public[1]),
+                encoding="utf-8",
+            )
+            return subprocess.CompletedProcess(argv, 255, "", "Permission denied")
+
+        with mock.patch(
+            "b300_core.ssh_host_trust.resolve_ssh_client_executable",
+            side_effect=lambda name: Path(name),
+        ):
+            try:
+                scanned = scan_gateway_host_key(
+                    "gateway.local", 22, runner=runner, executable="ssh-keyscan",
+                )
+            except RuntimeError as error:
+                self.fail("safe SSH host-key fallback was not used: %s" % error)
+
+        self.assertEqual(scanned.public_key, "%s %s" % (public[0], public[1]))
+        self.assertTrue(scanned.fingerprint.startswith("SHA256:"))
+        self.assertEqual(len(calls), 2)
+        ssh_call = calls[1]
+        self.assertIn("-F", ssh_call)
+        self.assertEqual(ssh_call[ssh_call.index("-F") + 1], "none")
+        self.assertIn("-n", ssh_call)
+        self.assertIn("-l", ssh_call)
+        self.assertEqual(
+            ssh_call[ssh_call.index("-l") + 1],
+            "b300-host-key-scan-invalid",
+        )
+        for option in (
+            "BatchMode=yes",
+            "PreferredAuthentications=none",
+            "PasswordAuthentication=no",
+            "KbdInteractiveAuthentication=no",
+            "PubkeyAuthentication=no",
+            "HostbasedAuthentication=no",
+            "GSSAPIAuthentication=no",
+            "IdentityAgent=none",
+            "IdentityFile=none",
+            "ForwardAgent=no",
+            "ClearAllForwardings=yes",
+            "ControlMaster=no",
+            "ControlPath=none",
+            "StrictHostKeyChecking=accept-new",
+            "HashKnownHosts=no",
+            "HostKeyAlgorithms=ssh-ed25519",
+            "KexAlgorithms=curve25519-sha256",
+        ):
+            with self.subTest(option=option):
+                self.assertIn(option, ssh_call)
+
+    def test_ssh_fallback_quotes_known_hosts_path_with_spaces_for_openssh(self):
+        public = key_line(97, "gateway-spaced-temp").split()
+
+        def runner(argv, timeout):
+            if argv[0] == "ssh-keyscan":
+                return subprocess.CompletedProcess(
+                    argv, 1, "", "choose_kex: unsupported KEX method test-kex",
+                )
+            known_hosts = Path(self._openssh_option_value(argv, "UserKnownHostsFile"))
+            known_hosts.write_text(
+                "[gateway.local]:2222 %s %s\n" % (public[0], public[1]),
+                encoding="utf-8",
+            )
+            return subprocess.CompletedProcess(argv, 255, "", "Permission denied")
+
+        with tempfile.TemporaryDirectory() as directory:
+            temp_root = Path(directory) / "temporary root with spaces"
+            temp_root.mkdir()
+            with mock.patch.object(tempfile, "tempdir", str(temp_root)), mock.patch(
+                "b300_core.ssh_host_trust.resolve_ssh_client_executable",
+                side_effect=lambda name: Path(name),
+            ):
+                scanned = scan_gateway_host_key(
+                    "gateway.local", 2222, runner=runner, executable="ssh-keyscan",
+                )
+
+        self.assertEqual(scanned.host_field, "[gateway.local]:2222")
+        self.assertEqual(scanned.public_key, "%s %s" % (public[0], public[1]))
+
+    def test_scan_does_not_use_ssh_fallback_for_other_keyscan_failures(self):
+        calls = []
+
+        def runner(argv, timeout):
+            calls.append(tuple(argv))
+            return subprocess.CompletedProcess(argv, 1, "", "Connection refused")
+
+        with mock.patch(
+            "b300_core.ssh_host_trust.resolve_ssh_client_executable",
+            side_effect=AssertionError("SSH fallback must not be resolved"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "No ssh-ed25519 host key"):
+                scan_gateway_host_key(
+                    "gateway.local", 22, runner=runner, executable="ssh-keyscan",
+                )
+
+        self.assertEqual(len(calls), 1)
 
     def test_scan_rejects_multiple_different_keys(self):
         first = key_line(82).split()

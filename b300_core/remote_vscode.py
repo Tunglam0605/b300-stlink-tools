@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shlex
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Dict, Optional, Tuple
+
+from .ssh_client import password_ssh_options
 
 _SAFE_HOST = re.compile(r"^[A-Za-z0-9._:-]+$")
 _SAFE_USER = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -24,6 +28,14 @@ def workspace_executable(relative_path: str) -> str:
     return "${workspaceFolder}/%s" % path.as_posix()
 
 
+def _render_command(argv: Tuple[str, ...], *, system_name: Optional[str] = None) -> str:
+    """Render argv for the operator's platform without losing path boundaries."""
+    system = (system_name or ("windows" if os.name == "nt" else "posix")).lower()
+    if system == "windows":
+        return "& " + " ".join("'%s'" % item.replace("'", "''") for item in argv)
+    return shlex.join(argv)
+
+
 @dataclass(frozen=True)
 class RemoteVsCodeProfile:
     ssh_host: str
@@ -35,8 +47,6 @@ class RemoteVsCodeProfile:
     gdb_path: str = "arm-none-eabi-gdb"
     rtos: Optional[str] = "FreeRTOS"
     probe_serial: Optional[str] = None
-    identity_file: Optional[Path] = None
-    known_hosts_file: Optional[Path] = None
 
     def validate(self) -> None:
         if not self.ssh_host or not _SAFE_HOST.fullmatch(self.ssh_host):
@@ -56,10 +66,6 @@ class RemoteVsCodeProfile:
             raise ValueError("VSCode GDB path must not be empty.")
         if self.probe_serial is not None and not _SAFE_PROBE.fullmatch(self.probe_serial):
             raise ValueError("ST-Link probe serial contains unsupported characters.")
-        if self.identity_file is not None and not Path(self.identity_file).is_file():
-            raise ValueError("SSH identity file does not exist: %s" % self.identity_file)
-        if self.known_hosts_file is not None and not Path(self.known_hosts_file).is_file():
-            raise ValueError("SSH known_hosts file does not exist: %s" % self.known_hosts_file)
 
     @property
     def ssh_target(self) -> str:
@@ -70,8 +76,7 @@ class RemoteVsCodeProfile:
         self.validate()
         result = [
             "ssh", "-N",
-            "-o", "BatchMode=yes",
-            "-o", "StrictHostKeyChecking=yes",
+            *password_ssh_options(),
             "-o", "ExitOnForwardFailure=yes",
             "-o", "ConnectTimeout=8",
             "-o", "ServerAliveInterval=30",
@@ -79,17 +84,13 @@ class RemoteVsCodeProfile:
             "-L", "127.0.0.1:%d:127.0.0.1:%d" %
                   (self.local_gdb_port, self.remote_gdb_port),
         ]
-        if self.identity_file is not None:
-            result.extend(("-o", "IdentitiesOnly=yes", "-i", str(Path(self.identity_file))))
-        if self.known_hosts_file is not None:
-            result.extend(("-o", "UserKnownHostsFile=%s" % Path(self.known_hosts_file)))
         if self.ssh_port != 22:
             result.extend(("-p", str(self.ssh_port)))
         result.append(self.ssh_target)
         return tuple(result)
 
-    def tunnel_command(self) -> str:
-        return " ".join(self.tunnel_argv())
+    def tunnel_command(self, *, system_name: Optional[str] = None) -> str:
+        return _render_command(self.tunnel_argv(), system_name=system_name)
 
     def gateway_argv(self) -> Tuple[str, ...]:
         self.validate()
@@ -171,7 +172,7 @@ class RemoteVsCodeProfile:
             "4. Open the matching source workspace/AXF and select "
             "'B300 STM32F407 · Remote via SSH' in Run and Debug.\n\n"
             "Safety: OpenOCD GDB/TCL stay on gateway loopback. Only GDB is forwarded through SSH.\n"
-            "SSH uses BatchMode + strict host-key checking; enroll the trusted Gateway host key and SSH key first.\n"
+            "SSH shows its normal first-contact host-key and account-password prompts; B300 never stores either value.\n"
             "The generated VSCode profile uses request=attach and forces hardware breakpoints/watchpoints.\n"
             "Do not expose ports 3333 or 6666 directly to LAN/Internet.\n"
         ) % (self.gateway_command(), self.tunnel_command())
@@ -192,11 +193,16 @@ class RemoteVsCodeProfile:
         outputs = (launch, extensions, tunnel, gateway, guide)
         for output in outputs:
             self._check_output(output, force)
+        launch_text = json.dumps(self.launch_json(), indent=2, ensure_ascii=False) + "\n"
+        extensions_text = json.dumps(self.extensions_json(), indent=2, ensure_ascii=False) + "\n"
+        tunnel_text = self.tunnel_command() + "\n"
+        gateway_text = self.gateway_command() + "\n"
+        guide_text = self.instructions_text()
         launch.parent.mkdir(parents=True, exist_ok=True)
         root.mkdir(parents=True, exist_ok=True)
-        launch.write_text(json.dumps(self.launch_json(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        extensions.write_text(json.dumps(self.extensions_json(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        tunnel.write_text(self.tunnel_command() + "\n", encoding="utf-8")
-        gateway.write_text(self.gateway_command() + "\n", encoding="utf-8")
-        guide.write_text(self.instructions_text(), encoding="utf-8")
+        launch.write_text(launch_text, encoding="utf-8")
+        extensions.write_text(extensions_text, encoding="utf-8")
+        tunnel.write_text(tunnel_text, encoding="utf-8")
+        gateway.write_text(gateway_text, encoding="utf-8")
+        guide.write_text(guide_text, encoding="utf-8")
         return outputs

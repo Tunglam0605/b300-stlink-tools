@@ -43,11 +43,8 @@ class CollapsibleCard(QFrame):
         header_layout.setSpacing(8)
 
         self.toggle_btn = QPushButton("▼" if expanded else "▶")
-        self.toggle_btn.setFixedSize(22, 22)
-        self.toggle_btn.setStyleSheet(
-            "QPushButton { border: none; background: transparent; color: #0284C7; font-size: 11px; font-weight: 700; padding: 0; }"
-            "QPushButton:hover { background: #E0F2FE; border-radius: 4px; }"
-        )
+        self.toggle_btn.setObjectName("collapseToggleBtn")
+        self.toggle_btn.setFixedSize(20, 20)
         self.toggle_btn.clicked.connect(self.toggle)
         header_layout.addWidget(self.toggle_btn)
 

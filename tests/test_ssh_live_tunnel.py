@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import tempfile
 import unittest
-from pathlib import Path
 
 from b300_core.ssh_live_tunnel import SshLiveTunnel, SshLiveTunnelConfig
 
@@ -37,38 +35,27 @@ class FakeTcl:
 
 
 class SshLiveTunnelTests(unittest.TestCase):
-    def test_argv_forwards_tcl_only_and_keeps_strict_ssh_policy(self):
-        config = SshLiveTunnelConfig(
-            "gateway.local", "automation", local_tcl_port=16666, gateway_tcl_port=6666
-        )
+    def test_argv_forwards_tcl_only_with_password_interactive_ssh(self):
+        config = SshLiveTunnelConfig("gateway.local", "automation", local_tcl_port=16666, gateway_tcl_port=6666)
         argv = config.argv("ssh")
         rendered = " ".join(argv)
-        self.assertIn("BatchMode=yes", rendered)
-        self.assertIn("StrictHostKeyChecking=yes", rendered)
+        self.assertIn("PreferredAuthentications=password,keyboard-interactive", rendered)
+        self.assertIn("PasswordAuthentication=yes", rendered)
+        self.assertIn("KbdInteractiveAuthentication=yes", rendered)
+        self.assertIn("PubkeyAuthentication=no", rendered)
         self.assertIn("ExitOnForwardFailure=yes", rendered)
         self.assertIn("127.0.0.1:16666:127.0.0.1:6666", rendered)
         self.assertNotIn(":3333", rendered)
         self.assertEqual(argv.count("-L"), 1)
         self.assertNotIn("0.0.0.0", rendered)
 
-    def test_verified_identity_is_added_to_live_tunnel(self):
-        with tempfile.TemporaryDirectory() as directory:
-            identity = Path(directory) / "id_ed25519"
-            identity.write_text("private-placeholder", encoding="utf-8")
-            known_hosts = Path(directory) / "b300_known_hosts"
-            known_hosts.write_text("gateway.local ssh-ed25519 AAAAplaceholder\n", encoding="utf-8")
-            config = SshLiveTunnelConfig(
-                "gateway.local", "automation", local_tcl_port=16666,
-                identity_file=identity, known_hosts_file=known_hosts,
-            )
-            argv = config.argv("ssh")
-            rendered = " ".join(argv)
-            self.assertIn("IdentitiesOnly=yes", rendered)
-            self.assertIn(str(identity), argv)
-            self.assertIn("UserKnownHostsFile=%s" % known_hosts, argv)
-            self.assertIn("StrictHostKeyChecking=yes", rendered)
-            self.assertEqual(argv.count("-L"), 1)
-            self.assertNotIn(":3333", rendered)
+    def test_argv_has_no_managed_identity_or_known_hosts_override(self):
+        argv = SshLiveTunnelConfig("gateway.local", "automation").argv("ssh")
+        rendered = " ".join(argv)
+        self.assertNotIn("-i", argv)
+        self.assertNotIn("IdentityFile", rendered)
+        self.assertNotIn("KnownHostsFile", rendered)
+        self.assertNotIn("BatchMode=yes", rendered)
 
     def test_start_checks_forwarded_tcl_and_stop_owns_process(self):
         captured = {}

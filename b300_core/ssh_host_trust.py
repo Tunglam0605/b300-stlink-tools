@@ -7,6 +7,7 @@ import platform
 import re
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Sequence
@@ -16,6 +17,7 @@ from .ssh_identity import (
 )
 
 _SAFE_HOST = re.compile(r"^[A-Za-z0-9._:-]+$")
+_HOST_KEY_SCAN_USER = "b300-host-key-scan-invalid"
 
 
 @dataclass(frozen=True)
@@ -56,7 +58,7 @@ def _run(argv: Sequence[str], timeout: float = 15.0) -> subprocess.CompletedProc
 
 def validate_gateway_host(host: str) -> str:
     value = str(host).strip()
-    if not value or not _SAFE_HOST.fullmatch(value):
+    if not value or value.startswith("-") or not _SAFE_HOST.fullmatch(value):
         raise ValueError("SSH Gateway host contains unsupported characters.")
     return value
 
@@ -88,6 +90,96 @@ def _host_field_matches(field: str, host: str, port: int) -> bool:
     return False
 
 
+def _parse_gateway_host_key_output(
+        output: str, host: str, port: int, *, source: str,
+) -> GatewayHostKey:
+    candidates = []
+    for raw_line in str(output or "").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) < 3 or not _host_field_matches(parts[0], host, port):
+            raise _HostKeyScanSecurityError(
+                "%s returned malformed or untrusted host-key data; refusing enrollment." % source
+            )
+        try:
+            public_key = validate_public_key("%s %s" % (parts[1], parts[2]))
+        except ValueError as error:
+            raise _HostKeyScanSecurityError(
+                "%s returned malformed or untrusted host-key data; refusing enrollment." % source
+            ) from error
+        candidates.append((parts[0], public_key, public_key_fingerprint(public_key)))
+    unique = {(public, fingerprint) for _field, public, fingerprint in candidates}
+    if not candidates:
+        raise _HostKeyScanUnavailable("No ssh-ed25519 host key was returned by the Gateway.")
+    if len(unique) != 1:
+        raise _HostKeyScanSecurityError(
+            "Gateway returned multiple different ssh-ed25519 host keys; refusing enrollment."
+        )
+    field, public_key, fingerprint = candidates[0]
+    return GatewayHostKey(host, port, field, public_key, fingerprint)
+
+
+def _quote_ssh_config_value(value: object) -> str:
+    text = str(value)
+    if os.name == "nt":
+        text = text.replace("\\", "/")
+    return '"%s"' % text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _scan_gateway_host_key_via_ssh(
+        host: str, port: int, *, runner: CommandRunner,
+) -> GatewayHostKey:
+    resolved = resolve_ssh_client_executable("ssh")
+    if resolved is None:
+        raise _HostKeyScanUnavailable(
+            "ssh-keyscan KEX is incompatible and the OpenSSH client fallback was not found."
+        )
+    null_known_hosts = "NUL" if os.name == "nt" else "/dev/null"
+    with tempfile.TemporaryDirectory(prefix="b300-host-key-scan-") as directory:
+        known_hosts = Path(directory) / "known_hosts"
+        command = (
+            str(resolved), "-F", "none", "-T", "-n",
+            "-l", _HOST_KEY_SCAN_USER, "-p", str(port),
+            "-o", "BatchMode=yes",
+            "-o", "PreferredAuthentications=none",
+            "-o", "PasswordAuthentication=no",
+            "-o", "KbdInteractiveAuthentication=no",
+            "-o", "PubkeyAuthentication=no",
+            "-o", "HostbasedAuthentication=no",
+            "-o", "GSSAPIAuthentication=no",
+            "-o", "IdentityAgent=none",
+            "-o", "IdentityFile=none",
+            "-o", "ForwardAgent=no",
+            "-o", "ClearAllForwardings=yes",
+            "-o", "ControlMaster=no",
+            "-o", "ControlPath=none",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "HashKnownHosts=no",
+            "-o", "UserKnownHostsFile=%s" % _quote_ssh_config_value(known_hosts),
+            "-o", "GlobalKnownHostsFile=%s" % null_known_hosts,
+            "-o", "HostKeyAlgorithms=ssh-ed25519",
+            "-o", "KexAlgorithms=curve25519-sha256",
+            "-o", "ConnectTimeout=5",
+            host, "exit",
+        )
+        try:
+            runner(command, 15.0)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise _HostKeyScanUnavailable(
+                "OpenSSH client fallback could not connect to %s:%d: %s" %
+                (host, port, error)
+            ) from error
+        try:
+            output = known_hosts.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            raise _HostKeyScanUnavailable(
+                "OpenSSH client fallback did not capture an ssh-ed25519 host key."
+            ) from error
+    return _parse_gateway_host_key_output(output, host, port, source="OpenSSH client fallback")
+
+
 def scan_gateway_host_key(
         host: str, port: int = 22, *, runner: CommandRunner = _run,
         executable: Optional[str] = None,
@@ -112,32 +204,13 @@ def scan_gateway_host_key(
         raise _HostKeyScanUnavailable("ssh-keyscan failed with exit code %d: %s" % (
             result.returncode, (result.stderr or "").strip()
         ))
-    candidates = []
-    for raw_line in (result.stdout or "").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        parts = line.split()
-        if len(parts) < 3 or not _host_field_matches(parts[0], selected_host, selected_port):
-            raise _HostKeyScanSecurityError(
-                "ssh-keyscan returned malformed or untrusted host-key data; refusing enrollment."
-            )
-        try:
-            public_key = validate_public_key("%s %s" % (parts[1], parts[2]))
-        except ValueError as error:
-            raise _HostKeyScanSecurityError(
-                "ssh-keyscan returned malformed or untrusted host-key data; refusing enrollment."
-            ) from error
-        candidates.append((parts[0], public_key, public_key_fingerprint(public_key)))
-    unique = {(public, fingerprint) for _field, public, fingerprint in candidates}
-    if not candidates:
-        raise _HostKeyScanUnavailable("No ssh-ed25519 host key was returned by the Gateway.")
-    if len(unique) != 1:
-        raise _HostKeyScanSecurityError(
-            "Gateway returned multiple different ssh-ed25519 host keys; refusing enrollment."
+    if not (result.stdout or "").strip() and "unsupported KEX method" in (result.stderr or ""):
+        return _scan_gateway_host_key_via_ssh(
+            selected_host, selected_port, runner=runner,
         )
-    field, public_key, fingerprint = candidates[0]
-    return GatewayHostKey(selected_host, selected_port, field, public_key, fingerprint)
+    return _parse_gateway_host_key_output(
+        result.stdout or "", selected_host, selected_port, source="ssh-keyscan",
+    )
 
 
 def _line_host_fields(line: str) -> tuple[str, ...]:

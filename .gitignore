@@ -11,3 +11,4 @@ vendor/
 # Local QA/release scratch workspaces; never publish or commit these.
 /.tmp-*/
 /release-*/
+/artifacts_oneclick/

@@ -85,7 +85,6 @@ stage="$tmp/bundle"
 mkdir -p "$stage"
 tar -xzf "$package" -C "$stage"
 [ -x "$stage/b300-stlink" ] || fail 'Verified package is missing b300-stlink.'
-[ -d "$stage/_internal" ] || fail 'Verified package is missing _internal runtime.'
 [ -f "$stage/install.sh" ] || fail 'Verified package is missing install.sh.'
 chmod +x "$stage/install.sh"
 "$stage/install.sh"

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import tempfile
 import unittest
-from pathlib import Path
 
 from b300_core.ssh_debug_tunnel import SshDebugTunnel, SshDebugTunnelConfig
 
@@ -41,32 +39,22 @@ class SshDebugTunnelTests(unittest.TestCase):
         config = SshDebugTunnelConfig("gateway.local", "automation", local_gdb_port=13333, local_tcl_port=16666)
         argv = config.argv("ssh")
         rendered = " ".join(argv)
-        self.assertIn("BatchMode=yes", rendered)
-        self.assertIn("StrictHostKeyChecking=yes", rendered)
+        self.assertIn("PreferredAuthentications=password,keyboard-interactive", rendered)
+        self.assertIn("PasswordAuthentication=yes", rendered)
+        self.assertIn("KbdInteractiveAuthentication=yes", rendered)
+        self.assertIn("PubkeyAuthentication=no", rendered)
         self.assertIn("127.0.0.1:13333:127.0.0.1:3333", rendered)
         self.assertIn("127.0.0.1:16666:127.0.0.1:6666", rendered)
         self.assertTrue(rendered.endswith("automation@gateway.local"))
         self.assertNotIn("0.0.0.0", rendered)
 
-    def test_verified_identity_is_added_without_changing_loopback_forwarding(self):
-        with tempfile.TemporaryDirectory() as directory:
-            identity = Path(directory) / "id_ed25519"
-            identity.write_text("private-placeholder", encoding="utf-8")
-            known_hosts = Path(directory) / "b300_known_hosts"
-            known_hosts.write_text("gateway.local ssh-ed25519 AAAAplaceholder\n", encoding="utf-8")
-            config = SshDebugTunnelConfig(
-                "gateway.local", "automation", local_gdb_port=13333, local_tcl_port=16666,
-                identity_file=identity, known_hosts_file=known_hosts,
-            )
-            argv = config.argv("ssh")
-            rendered = " ".join(argv)
-            self.assertIn("IdentitiesOnly=yes", rendered)
-            self.assertIn("-i", argv)
-            self.assertIn(str(identity), argv)
-            self.assertIn("UserKnownHostsFile=%s" % known_hosts, argv)
-            self.assertIn("StrictHostKeyChecking=yes", rendered)
-            self.assertIn("127.0.0.1:13333:127.0.0.1:3333", rendered)
-            self.assertNotIn("0.0.0.0", rendered)
+    def test_argv_has_no_managed_identity_or_known_hosts_override(self):
+        argv = SshDebugTunnelConfig("gateway.local", "automation").argv("ssh")
+        rendered = " ".join(argv)
+        self.assertNotIn("-i", argv)
+        self.assertNotIn("IdentityFile", rendered)
+        self.assertNotIn("KnownHostsFile", rendered)
+        self.assertNotIn("BatchMode=yes", rendered)
 
     def test_start_waits_for_forwarded_tcl_and_stop_owns_ssh_process(self):
         captured = {}

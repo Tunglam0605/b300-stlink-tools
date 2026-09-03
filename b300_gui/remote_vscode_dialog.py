@@ -13,8 +13,6 @@ from PySide6.QtWidgets import (
 from b300_core.models import ProbeRef
 from b300_core.gdb_runtime import resolve_gdb
 from b300_core.remote_vscode import RemoteVsCodeProfile, workspace_executable
-from b300_core.ssh_host_trust import trusted_known_hosts_file
-from b300_core.ssh_identity import managed_identity_file
 
 
 class RemoteVsCodeDialog(QDialog):
@@ -97,10 +95,6 @@ class RemoteVsCodeDialog(QDialog):
             executable=workspace_executable(self.program_edit.text().strip()),
             gdb_path=self.gdb_edit.text().strip(),
             probe_serial=probe_serial,
-            identity_file=managed_identity_file(),
-            known_hosts_file=trusted_known_hosts_file(
-                self.host_edit.text().strip(), self.ssh_port.value()
-            ),
         )
 
     def refresh_preview(self) -> None:
@@ -111,7 +105,7 @@ class RemoteVsCodeDialog(QDialog):
             self.preview.setText("Chưa đủ cấu hình: %s" % error)
             return
         self.preview.setText(
-            "Gateway: %s\nSSH tunnel: %s" %
+            "Gateway: %s\nSSH tunnel: %s\nOpenSSH sẽ hỏi password tài khoản khi tunnel bắt đầu." %
             (profile.gateway_command(), profile.tunnel_command())
         )
 

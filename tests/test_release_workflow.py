@@ -1,3 +1,4 @@
+import re
 import unittest
 from pathlib import Path
 
@@ -20,6 +21,20 @@ def load_workflow(name: str):
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
+    def test_linux_ci_splits_qt_gui_smoke_cases_without_extending_other_timeouts(self) -> None:
+        """Qt state is bounded per GUI test, while every child keeps the normal cap."""
+        text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "tests.test_gui_smoke|tests.test_gui_updater)",
+            text,
+        )
+        self.assertIn(
+            "timeout --signal=TERM --kill-after=10s 300 python scripts/run_unittest_module.py --split-cases --case-timeout 60 \"$module\"",
+            text,
+        )
+
     def test_windows_dry_run_smokes_the_gui_onedir_executable(self) -> None:
         text = (
             ROOT / ".github" / "workflows" / "release-dry-run.yml"
@@ -205,6 +220,24 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertIn("--client-action inspect --dry-run --json", workflow)
             self.assertIn("Objects/F407/Main_V2_F407.axf", workflow)
             self.assertIn(".vscode", workflow)
+
+    def test_packaged_remote_smokes_require_only_openssh_client(self) -> None:
+        for name in ("release.yml", "release-dry-run.yml"):
+            workflow = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+            smoke_blocks = re.findall(
+                r"(?ms)^      - name: Smoke-test packaged .*? CLI without probes\n.*?^        run: \|\n(.*?)(?=^      - name:|\Z)",
+                workflow,
+            )
+            self.assertTrue(smoke_blocks, name)
+            for block in smoke_blocks:
+                with self.subTest(workflow=name, block=block.splitlines()[0]):
+                    self.assertNotIn("managed SSH fixture", block)
+                    self.assertNotIn("ssh-keygen", block)
+                    self.assertNotIn("b300_gateway_ed25519", block)
+                    self.assertNotIn("b300_known_hosts", block)
+                    self.assertIn("debug client --ssh-host gateway.example", block)
+                    self.assertIn("debug vscode --ssh-host gateway.example", block)
+            self.assertIn("openssh-client", workflow)
 
     def test_linux_release_smoke_tests_detached_update_helper(self) -> None:
         for name in ("release.yml", "release-dry-run.yml"):

@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 class IsolatedUnittestRunnerTests(unittest.TestCase):
-    def run_case(self, source: str):
+    def run_case(self, source: str, *runner_args: str):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "sentinel_case.py").write_text(source, encoding="utf-8")
@@ -18,7 +18,12 @@ class IsolatedUnittestRunnerTests(unittest.TestCase):
             env["PYTHONPATH"] = str(root) + os.pathsep + env.get("PYTHONPATH", "")
             env["B300_UNITTEST_RESULT_FILE"] = str(result_file)
             result = subprocess.run(
-                [sys.executable, "scripts/run_unittest_module.py", "sentinel_case"],
+                [
+                    sys.executable,
+                    "scripts/run_unittest_module.py",
+                    *runner_args,
+                    "sentinel_case",
+                ],
                 cwd=Path(__file__).resolve().parents[1], env=env,
                 capture_output=True, text=True,
             )
@@ -37,6 +42,30 @@ class IsolatedUnittestRunnerTests(unittest.TestCase):
             "import unittest\nclass T(unittest.TestCase):\n    def test_bad(self): self.assertEqual(1, 2)\n"
         )
         self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(verdict, "FAIL")
+
+    def test_split_cases_runs_every_test_in_fresh_child_process(self):
+        result, verdict = self.run_case(
+            "import os\nimport unittest\n"
+            "class T(unittest.TestCase):\n"
+            "    def test_one(self): os.environ['B300_SPLIT_CASE'] = 'set'\n"
+            "    def test_two(self): self.assertNotIn('B300_SPLIT_CASE', os.environ)\n",
+            "--split-cases",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(verdict, "PASS")
+
+    def test_split_cases_returns_timeout_when_one_child_exceeds_its_budget(self):
+        result, verdict = self.run_case(
+            "import time\nimport unittest\n"
+            "class T(unittest.TestCase):\n"
+            "    def test_fast(self): self.assertTrue(True)\n"
+            "    def test_slow(self): time.sleep(2)\n",
+            "--split-cases",
+            "--case-timeout",
+            "1",
+        )
+        self.assertEqual(result.returncode, 124, result.stdout + result.stderr)
         self.assertEqual(verdict, "FAIL")
 
 

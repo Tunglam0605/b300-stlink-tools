@@ -22,8 +22,6 @@ from b300_core.live_session import (
     ClientLiveMonitorConfig, LiveMonitorSession, LocalLiveMonitorConfig,
 )
 from b300_core.remote_debug_guard import RemoteDebugGuard
-from b300_core.ssh_host_trust import trusted_known_hosts_file
-from b300_core.ssh_identity import managed_identity_file
 from b300_core.remote_profile import load_remote_profile
 from b300_core.ssh_debug_tunnel import (
     SshDebugTunnel, SshDebugTunnelConfig, find_available_loopback_port,
@@ -110,7 +108,7 @@ class DebugTab(QWidget):
         self.scroll_area.setWidget(self.scroll_content)
         root_layout.addWidget(self.scroll_area)
 
-        # Safety-first mode guide. Keep the non-halting path visually primary.
+        # Safety-first mode guide. Redundant banner hidden to prioritize workspace view.
         self.safety_guide = QFrame(self.scroll_content)
         self.safety_guide.setObjectName("debugSafetyGuide")
         safety_layout = QHBoxLayout(self.safety_guide)
@@ -120,6 +118,7 @@ class DebugTab(QWidget):
         safe.setObjectName("debugSafeModeBadge")
         safe.setWordWrap(True)
         safety_layout.addWidget(safe, 1)
+        self.safety_guide.setVisible(False)
         layout.addWidget(self.safety_guide)
 
         # 1. Top Section: Connection & Environment Panel
@@ -152,6 +151,7 @@ class DebugTab(QWidget):
         self.remote_server_button.clicked.connect(self.start_remote_server)
         self.remote_stop_button.clicked.connect(self.stop_debug)
         self.remote_kit_button.clicked.connect(self.show_remote_vscode_dialog)
+        self.conn_panel.open_gateway_requested.connect(self._on_open_gateway_clicked)
 
         # 2. Realtime Live Monitor Section (Zero-Halt SWD)
         self.live_panel = DebugLivePanel(self.scroll_content)
@@ -249,6 +249,11 @@ class DebugTab(QWidget):
         self.sample_interval.valueChanged.connect(self._save_debug_preferences)
         self._restore_debug_preferences()
         self._refresh_controls()
+
+    def _on_open_gateway_clicked(self) -> None:
+        window = self.window()
+        if hasattr(window, "tabs"):
+            window.tabs.setCurrentIndex(3)
 
     def _setting_value(self, key: str, default=None):
         if self._settings is None:
@@ -740,8 +745,7 @@ class DebugTab(QWidget):
                 host=host, user=user, ssh_port=self.client_ssh_port.value(),
                 local_gdb_port=local_gdb, local_tcl_port=local_tcl,
                 gateway_gdb_port=3333, gateway_tcl_port=6666,
-                identity_file=managed_identity_file(),
-                known_hosts_file=trusted_known_hosts_file(host, self.client_ssh_port.value()),
+                show_console=True,
             )
             tunnel_config.validate()
         except (ValueError, RuntimeError) as error:
@@ -752,7 +756,7 @@ class DebugTab(QWidget):
             tunnel = self._tunnel_factory(tunnel_config)
             try:
                 log(
-                    "Opening managed SSH tunnel to %s@%s; local GDB=%d TCL=%d." %
+                    "Opening password-interactive SSH tunnel to %s@%s; local GDB=%d TCL=%d." %
                     (user, host, local_gdb, local_tcl)
                 )
                 version = tunnel.start()
@@ -1213,6 +1217,7 @@ class DebugTab(QWidget):
             host=host, user=user, symbols=symbols, interval_seconds=interval,
             sample_limit=samples, watch_specs=tuple(watch_specs),
             ssh_port=self.client_ssh_port.value(), symbol_roots=roots,
+            show_console=True,
         )
 
     def start_live_sampling(self) -> None:

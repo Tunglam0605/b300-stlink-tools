@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shlex
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -9,7 +11,7 @@ from io import StringIO
 from pathlib import Path
 
 from b300_cli.parser import parse_args
-from b300_core.remote_vscode import RemoteVsCodeProfile, workspace_executable
+from b300_core.remote_vscode import RemoteVsCodeProfile, _render_command, workspace_executable
 from b300_stlink import main
 
 
@@ -41,30 +43,36 @@ class RemoteVsCodeTests(unittest.TestCase):
         self.assertIn("--probe-serial", gateway)
         self.assertIn("127.0.0.1:3333:127.0.0.1:3333", tunnel)
         self.assertNotIn("6666", tunnel)
-        self.assertIn("BatchMode=yes", tunnel)
-        self.assertIn("StrictHostKeyChecking=yes", tunnel)
+        self.assertIn("PreferredAuthentications=password,keyboard-interactive", tunnel)
+        self.assertIn("PasswordAuthentication=yes", tunnel)
         self.assertIn("ExitOnForwardFailure=yes", tunnel)
         self.assertIn("ConnectTimeout=8", tunnel)
         self.assertIn("ServerAliveInterval=30", tunnel)
 
-    def test_vscode_tunnel_uses_managed_identity_when_available(self) -> None:
+    def test_vscode_tunnel_has_no_managed_identity_or_known_hosts_override(self) -> None:
+        tunnel = self.make_profile().tunnel_argv()
+        rendered = " ".join(tunnel)
+        self.assertNotIn("-i", tunnel)
+        self.assertNotIn("IdentityFile", rendered)
+        self.assertNotIn("KnownHostsFile", rendered)
+        self.assertNotIn("BatchMode=yes", rendered)
+
+    def test_vscode_kit_writes_without_managed_ssh_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            identity = Path(directory) / "b300_gateway_ed25519"
-            identity.write_text("private-placeholder", encoding="utf-8")
-            known_hosts = Path(directory) / "b300_known_hosts"
-            known_hosts.write_text("gateway.example ssh-ed25519 AAAAplaceholder\n", encoding="utf-8")
-            profile = RemoteVsCodeProfile(
-                ssh_host="gateway.example", ssh_user="automation",
-                executable=workspace_executable("Objects/F407/Main_V2_F407.axf"),
-                identity_file=identity, known_hosts_file=known_hosts,
-            )
-            tunnel = profile.tunnel_argv()
-            rendered = " ".join(tunnel)
-            self.assertIn("IdentitiesOnly=yes", rendered)
-            self.assertIn(str(identity), tunnel)
-            self.assertIn("UserKnownHostsFile=%s" % known_hosts, tunnel)
-            self.assertIn("StrictHostKeyChecking=yes", rendered)
-            self.assertNotIn("6666", tunnel)
+            destination = Path(directory) / "remote-kit"
+            self.make_profile().write_kit(destination)
+            self.assertTrue(destination.exists())
+
+    def test_vscode_tunnel_command_quotes_paths_for_posix_shell(self) -> None:
+        profile = self.make_profile()
+        self.assertEqual(shlex.split(profile.tunnel_command(system_name="linux")), list(profile.tunnel_argv()))
+
+    def test_vscode_tunnel_command_is_interactive_on_windows(self) -> None:
+        command = self.make_profile().tunnel_command(system_name="windows")
+        self.assertIn("PasswordAuthentication=yes", command)
+        self.assertNotIn("'-i'", command)
+        self.assertNotIn(" -i ", command)
+        self.assertNotIn("KnownHostsFile", command)
 
     def test_launch_json_is_external_attach_and_hardware_only(self) -> None:
         config = self.make_profile().cortex_debug_configuration()
@@ -135,15 +143,12 @@ class RemoteVsCodeTests(unittest.TestCase):
             launch = json.loads((output / ".vscode" / "launch.json").read_text(encoding="utf-8"))
             self.assertEqual(launch["configurations"][0]["gdbPath"], "arm-none-eabi-gdb")
 
-    def test_cli_vscode_kit_auto_uses_verified_b300_identity(self) -> None:
+    def test_cli_vscode_kit_uses_password_interactive_ssh_without_secret(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            identity = root / "b300_gateway_ed25519"
-            identity.write_text("private-placeholder", encoding="utf-8")
             output = root / "kit"
             stream = StringIO()
-            with patch("b300_stlink.managed_identity_file", return_value=identity), \
-                 redirect_stdout(stream):
+            with redirect_stdout(stream):
                 code = main([
                     "debug", "vscode", "--ssh-host", "192.168.1.50",
                     "--ssh-user", "automation", "--program-relative",
@@ -151,10 +156,12 @@ class RemoteVsCodeTests(unittest.TestCase):
                 ])
             self.assertEqual(code, 0)
             tunnel = (output / "b300-ssh-tunnel.txt").read_text(encoding="utf-8")
-            self.assertIn("IdentitiesOnly=yes", tunnel)
-            self.assertIn(str(identity), tunnel)
+            self.assertIn("PasswordAuthentication=yes", tunnel)
+            self.assertNotIn("'-i'", tunnel)
+            self.assertNotIn(" -i ", tunnel)
+            self.assertNotIn("KnownHostsFile", tunnel)
 
-    def test_cli_generates_portable_kit_without_hardware_access(self) -> None:
+    def test_cli_vscode_writes_kit_without_managed_identity_or_trust(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "kit"
             stream = StringIO()
@@ -169,16 +176,10 @@ class RemoteVsCodeTests(unittest.TestCase):
                 ])
             self.assertEqual(code, 0)
             record = json.loads(stream.getvalue().strip())
-            self.assertEqual(record["command"], "debug vscode")
-            self.assertFalse(record["security"]["gdb_exposed_publicly"])
-            self.assertFalse(record["security"]["tcl_forwarded"])
-            self.assertTrue((output / ".vscode" / "launch.json").is_file())
-            self.assertTrue((output / ".vscode" / "extensions.json").is_file())
-            self.assertTrue((output / "b300-ssh-tunnel.txt").is_file())
-            self.assertTrue((output / "b300-gateway-command.txt").is_file())
-            self.assertTrue((output / "B300-REMOTE-DEBUG.md").is_file())
-            launch = json.loads((output / ".vscode" / "launch.json").read_text(encoding="utf-8"))
-            self.assertEqual(launch["configurations"][0]["gdbTarget"], "127.0.0.1:3333")
+            self.assertFalse({"password", "secret", "identity_file", "known_hosts_file"} & set(record))
+            self.assertFalse({"password", "secret"} & set(record.get("profile", {})))
+            self.assertNotIn("s3cr3t", " ".join(record["ssh_tunnel_command"]))
+            self.assertTrue(output.exists())
 
 
 if __name__ == "__main__":

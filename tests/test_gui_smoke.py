@@ -97,7 +97,7 @@ class GuiSmokeTests(unittest.TestCase):
         # Qt teardown crash after unittest has already reported OK on Windows.
         # Entry-point finalization is covered in an isolated subprocess below.
 
-    def test_smoke_entry_point_finalizes_qapplication(self) -> None:
+    def test_smoke_entry_point_returns_without_qt_global_teardown(self) -> None:
         result = subprocess.run(
             [
                 sys.executable,
@@ -105,13 +105,50 @@ class GuiSmokeTests(unittest.TestCase):
                 "from b300_gui.__main__ import main; "
                 "from PySide6.QtWidgets import QApplication; "
                 "assert main(['--smoke-test']) == 0; "
-                "assert QApplication.instance() is None",
+                "assert QApplication.instance() is not None",
             ],
             capture_output=True,
             text=True,
             env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_smoke_entry_point_does_not_require_console_stdout(self) -> None:
+        """A PyInstaller windowed GUI runs without a console-backed stdout."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.stdout = None; "
+                "from b300_gui.__main__ import main; "
+                "from PySide6.QtWidgets import QApplication; "
+                "assert main(['--smoke-test']) == 0; "
+                "assert QApplication.instance() is not None",
+            ],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_smoke_entry_point_does_not_destroy_process_global_qapplication(self) -> None:
+        """Windowed executables must return from smoke mode without Qt global teardown."""
+        app = QApplication.instance()
+        self.assertIsNotNone(app)
+        with mock.patch.object(QApplication, "shutdown") as shutdown:
+            from b300_gui.__main__ import main
+
+            self.assertEqual(main(["--smoke-test"]), 0)
+        shutdown.assert_not_called()
+        self.assertIs(QApplication.instance(), app)
+
+    def test_smoke_entry_point_does_not_write_to_console(self) -> None:
+        """The windowed PyInstaller launcher has no safe console output stream."""
+        with mock.patch("builtins.print") as print_output:
+            from b300_gui.__main__ import main
+
+            self.assertEqual(main(["--smoke-test"]), 0)
+        print_output.assert_not_called()
 
     def test_main_window_starts_safe_and_has_no_com_selector(self) -> None:
         window = MainWindow(service=FakeService(), probe_loader=lambda: ())
@@ -170,6 +207,118 @@ class GuiSmokeTests(unittest.TestCase):
         self.app.processEvents()
         self.assertEqual(window.about_action.text(), "Giới thiệu")
         self.assertIn("Core v%s" % __version__, window.log_view.toPlainText())
+        window.close()
+
+    def test_dashboard_stats_are_neutral_until_target_inspection_then_use_target_info(self) -> None:
+        window = MainWindow(service=FakeService(), probe_loader=lambda: ())
+        self.assertEqual(window.stats_row.target_card.value_label.text(), "Chưa đọc target")
+        self.assertEqual(window.stats_row.flash_card.value_label.text(), "Chưa đọc flash")
+        info = TargetInfo(
+            0x101F6413, 512, 3.09, "S0-S2 protected", (0, 1, 2), True,
+        )
+        window.apply_target_info(info)
+        self.assertEqual(window.stats_row.target_card.value_label.text(), "STM32F407")
+        self.assertIn("512 KiB", window.stats_row.target_card.subtitle_label.text())
+        self.assertEqual(window.stats_row.flash_card.value_label.text(), "512 KiB")
+        window.close()
+
+    def test_target_facts_clear_when_probe_context_changes(self) -> None:
+        window = MainWindow(service=FakeService(), probe_loader=lambda: ())
+        info = TargetInfo(
+            0x101F6413, 512, 3.09, "S0-S2 protected", (0, 1, 2), True,
+        )
+        window.apply_target_info(info)
+        self.assertIs(window.operator_view._target_info, info)
+
+        window._probe_changed()
+
+        self.assertEqual(window.stats_row.target_card.value_label.text(), "Chưa đọc target")
+        self.assertEqual(window.stats_row.flash_card.value_label.text(), "Chưa đọc flash")
+        self.assertIsNone(window.operator_view._target_info)
+        self.assertFalse(window.operator_view._flash_ready)
+        window.close()
+
+    def test_compact_debug_workspace_keeps_controls_and_stats_unclipped(self) -> None:
+        window = MainWindow(service=FakeService(), probe_loader=lambda: ())
+        window.resize(760, 460)
+        window.show()
+        window.tabs.setCurrentIndex(2)
+        self.app.processEvents()
+        tab = window.debug_tab
+        controls = (
+            tab.conn_panel.mode_combo,
+            tab.conn_panel.btn_open_gateway,
+            tab.conn_panel.status_label,
+            tab.live_panel.start_button,
+            tab.live_panel.interval_preset_combo,
+            tab.live_panel.status,
+            tab.live_panel.expressions,
+            tab.live_panel.type_combo,
+            tab.live_panel.add_watch_btn,
+            tab.live_panel.remove_watch_btn,
+            tab.live_panel.browse_symbols_btn,
+            tab.live_panel.load_preset_btn,
+            tab.live_panel.save_preset_btn,
+        )
+        for control in controls:
+            label = control.text() if hasattr(control, "text") else control.objectName()
+            with self.subTest(control=type(control).__name__, label=label):
+                self.assertGreaterEqual(
+                    control.width(), control.minimumSizeHint().width(),
+                    "%s %r is clipped in the compact Debug workspace" % (
+                        type(control).__name__, label,
+                    ),
+                )
+        for card in (
+            window.stats_row.probe_card,
+            window.stats_row.target_card,
+            window.stats_row.flash_card,
+            window.stats_row.status_card,
+        ):
+            self.assertGreaterEqual(card.width(), card.minimumSizeHint().width())
+        window.close()
+
+    def test_stats_row_uses_two_columns_until_four_cards_can_fit(self) -> None:
+        window = MainWindow(service=FakeService(), probe_loader=lambda: ())
+        window.resize(1450, 700)
+        window.show()
+        self.app.processEvents()
+        self.assertEqual(window.stats_row._columns, 2)
+        for card in (
+            window.stats_row.probe_card,
+            window.stats_row.target_card,
+            window.stats_row.flash_card,
+            window.stats_row.status_card,
+        ):
+            self.assertGreaterEqual(card.width(), card.minimumSizeHint().width())
+        window.close()
+
+    def test_unsupported_target_does_not_claim_b300_flash_map(self) -> None:
+        window = MainWindow(service=FakeService(), probe_loader=lambda: ())
+        info = TargetInfo(
+            0x12345678, 256, 3.21, "unrecognised target", (), False,
+        )
+        window.apply_target_info(info)
+        self.assertEqual(window.stats_row.flash_card.value_label.text(), "256 KiB")
+        self.assertIn("Không hỗ trợ", window.stats_row.flash_card.subtitle_label.text())
+        self.assertNotIn("S0–S2", window.stats_row.flash_card.subtitle_label.text())
+        window.close()
+
+    def test_unsupported_target_clears_previous_operator_target(self) -> None:
+        window = MainWindow(service=FakeService(), probe_loader=lambda: ())
+        valid = TargetInfo(
+            0x101F6413, 512, 3.09, "S0-S2 protected", (0, 1, 2), True,
+        )
+        unsupported = TargetInfo(
+            0x12345678, 256, 3.21, "unrecognised target", (), False,
+        )
+        window.apply_target_info(valid)
+        self.assertIs(window.operator_view._target_info, valid)
+
+        window.apply_target_info(unsupported)
+
+        self.assertIsNone(window.operator_view._target_info)
+        self.assertFalse(window.operator_view._flash_ready)
         window.close()
 
     def test_debug_workspace_remains_simple_and_scroll_free_at_minimum_window(self) -> None:
