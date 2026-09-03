@@ -20,6 +20,20 @@ def load_workflow(name: str):
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
+    def test_linux_ci_splits_qt_gui_smoke_cases_without_extending_other_timeouts(self) -> None:
+        """Qt state is bounded per GUI test, while every child keeps the normal cap."""
+        text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "tests.test_gui_smoke|tests.test_gui_updater)",
+            text,
+        )
+        self.assertIn(
+            "timeout --signal=TERM --kill-after=10s 300 python scripts/run_unittest_module.py --split-cases --case-timeout 60 \"$module\"",
+            text,
+        )
+
     def test_windows_dry_run_smokes_the_gui_onedir_executable(self) -> None:
         text = (
             ROOT / ".github" / "workflows" / "release-dry-run.yml"
