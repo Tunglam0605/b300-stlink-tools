@@ -4,10 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from .debug_session import DebugSession, DebugSessionConfig, DebugSessionInfo
 from .debug_workspace import DebugWorkspaceBackend
+from .live_session import (
+    ClientLiveMonitorConfig,
+    LiveMonitorSession,
+    LiveMonitorSessionInfo,
+    LocalLiveMonitorConfig,
+)
 from .remote_session import RemoteSession, RemoteSessionState
 
 
@@ -21,32 +27,47 @@ class DebugConnectionState:
     pc: Optional[int]
     symbols: Optional[str]
     remote_endpoint: Optional[str]
+    live: str = "inactive"
+    sample_rate_hz: Optional[float] = None
 
 
 class DebugWorkstationController:
-    """Keep mode/session ownership out of Qt widgets.
+    """Own the operator-facing Local/Client debug lifecycle outside Qt.
 
-    The controller deliberately separates SSH login lifetime from interactive GDB
-    lifetime. A Client can authenticate once, stop/restart GDB, run Live Monitor, and
-    reuse the same SSH transport until the operator explicitly disconnects Remote.
+    SSH authentication has a longer lifetime than any individual GDB or Live Monitor
+    operation. A Client logs in once, then Interactive Debug and zero-halt Live Monitor
+    reuse the same ``RemoteSession`` and loopback forwards until the operator explicitly
+    disconnects Remote.
     """
 
     def __init__(self, *, debug_session: Optional[DebugSession] = None,
-                 remote_session: Optional[RemoteSession] = None) -> None:
+                 remote_session: Optional[RemoteSession] = None,
+                 live_session: Optional[LiveMonitorSession] = None) -> None:
         self.debug_session = debug_session or DebugSession()
         self.remote_session = remote_session
+        self.live_session = live_session or LiveMonitorSession()
         self.workspace: Optional[DebugWorkspaceBackend] = None
         self.mode = "disconnected"
         self._symbols: Optional[str] = None
         self._last_info: Optional[DebugSessionInfo] = None
+        self._live_info: Optional[LiveMonitorSessionInfo] = None
+        self._live_rate_hz: Optional[float] = None
 
     @property
     def interactive_active(self) -> bool:
         return bool(self.debug_session.active)
 
+    @property
+    def live_active(self) -> bool:
+        return bool(self.live_session.active)
+
+    @property
+    def live_running(self) -> bool:
+        return bool(self.live_session.running)
+
     def set_remote_session(self, session: RemoteSession) -> None:
-        if self.interactive_active:
-            raise RuntimeError("Cannot replace the RemoteSession while Interactive Debug is active.")
+        if self.interactive_active or self.live_active:
+            raise RuntimeError("Cannot replace the RemoteSession while Debug Studio operations are active.")
         self.remote_session = session
         self.mode = "client"
 
@@ -70,6 +91,8 @@ class DebugWorkstationController:
     def start_local(self, config: DebugSessionConfig) -> DebugSessionInfo:
         if self.interactive_active:
             raise RuntimeError("Interactive Debug is already active.")
+        if self.live_active:
+            raise RuntimeError("Stop Local Live Monitor before starting Local Interactive Debug.")
         info = self.debug_session.start(config)
         self.mode = "local"
         self._symbols = info.symbols
@@ -90,18 +113,13 @@ class DebugWorkstationController:
         if not health.authenticated:
             raise RuntimeError("Client SSH session is not connected.")
         gdb_forward, tcl_forward = remote.open_debug_forwards()
-        try:
-            info = self.debug_session.start_external(
-                symbol_file=symbol_file,
-                gdb_host=gdb_forward.local_host,
-                gdb_port=gdb_forward.local_port,
-                tcl_host=tcl_forward.local_host,
-                tcl_port=tcl_forward.local_port,
-            )
-        except Exception:
-            # Keep the authenticated SSH transport and loopback forwards alive so the
-            # operator can correct AXF/GDB state and retry without logging in again.
-            raise
+        info = self.debug_session.start_external(
+            symbol_file=symbol_file,
+            gdb_host=gdb_forward.local_host,
+            gdb_port=gdb_forward.local_port,
+            tcl_host=tcl_forward.local_host,
+            tcl_port=tcl_forward.local_port,
+        )
         self.mode = "client"
         self._symbols = info.symbols
         self._last_info = info
@@ -110,6 +128,63 @@ class DebugWorkstationController:
             target_state_provider=self.debug_session.target_poll,
         )
         return info
+
+    @staticmethod
+    def _rate_hz(interval_seconds: float) -> Optional[float]:
+        try:
+            interval = float(interval_seconds)
+        except (TypeError, ValueError):
+            return None
+        if interval <= 0:
+            return None
+        return round(1.0 / interval, 3)
+
+    def start_live_local(self, config: LocalLiveMonitorConfig) -> LiveMonitorSessionInfo:
+        if self.live_active:
+            raise RuntimeError("Live Monitor is already active.")
+        if self.interactive_active:
+            raise RuntimeError(
+                "Local Live Monitor cannot start a second OpenOCD service while Interactive Debug is active."
+            )
+        info = self.live_session.start_local(config)
+        self.mode = "local"
+        self._live_info = info
+        self._live_rate_hz = self._rate_hz(config.interval_seconds)
+        if self._symbols is None:
+            self._symbols = info.symbols
+        return info
+
+    def start_live_client(self, config: ClientLiveMonitorConfig) -> LiveMonitorSessionInfo:
+        if self.live_active:
+            raise RuntimeError("Live Monitor is already active.")
+        remote = self.remote_session
+        if remote is None:
+            raise RuntimeError("Client mode has no RemoteSession configured.")
+        health = remote.check_health()
+        if not health.authenticated:
+            raise RuntimeError("Client SSH session is not connected.")
+        info = self.live_session.start_client(config, remote_session=remote)
+        self.mode = "client"
+        self._live_info = info
+        self._live_rate_hz = self._rate_hz(config.interval_seconds)
+        if self._symbols is None:
+            self._symbols = info.symbols
+        return info
+
+    def run_live(self, on_sample: Optional[Callable] = None):
+        if not self.live_active:
+            raise RuntimeError("Live Monitor is not active.")
+        return self.live_session.run(on_sample)
+
+    def cancel_live(self) -> None:
+        if self.live_active:
+            self.live_session.cancel()
+
+    def stop_live(self) -> None:
+        if self.live_active:
+            self.live_session.close()
+        self._live_info = None
+        self._live_rate_hz = None
 
     def stop_interactive(self) -> None:
         workspace = self.workspace
@@ -124,6 +199,10 @@ class DebugWorkstationController:
         self._last_info = None
 
     def disconnect_remote(self, *, forget_password: bool = False) -> None:
+        # Live and Interactive operations share this SSH transport in Client mode,
+        # therefore both must release their local consumers before Remote disconnects.
+        if self.mode == "client" and self.live_active:
+            self.stop_live()
         if self.mode == "client" and self.interactive_active:
             self.stop_interactive()
         if self.remote_session is not None:
@@ -139,16 +218,26 @@ class DebugWorkstationController:
         else:
             ssh_state = "n/a"
 
+        live_state = "running" if self.live_running else ("active" if self.live_active else "inactive")
+
         if not self.interactive_active:
+            target = "disconnected"
+            if self.live_active:
+                try:
+                    target = str(self.live_session.target_state()).strip().lower()
+                except Exception:
+                    target = "unknown"
             return DebugConnectionState(
                 mode=self.mode,
                 ssh=ssh_state,
                 gdb="disconnected",
-                tcl="disconnected",
-                target="disconnected",
+                tcl="connected" if self.live_active else "disconnected",
+                target=target,
                 pc=None,
                 symbols=self._symbols,
                 remote_endpoint=remote_endpoint,
+                live=live_state,
+                sample_rate_hz=self._live_rate_hz,
             )
 
         gdb_state = "connected"
@@ -172,9 +261,12 @@ class DebugWorkstationController:
             pc=pc,
             symbols=self._symbols,
             remote_endpoint=remote_endpoint,
+            live=live_state,
+            sample_rate_hz=self._live_rate_hz,
         )
 
     def close(self, *, disconnect_remote: bool = True) -> None:
+        self.stop_live()
         self.stop_interactive()
         if disconnect_remote and self.remote_session is not None:
             self.remote_session.disconnect()
