@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QModelIndex, Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -42,7 +42,6 @@ class DebugVariablesPane(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
-        # Header with Add Watch input
         header = QFrame(self)
         header.setObjectName("debugVariablesHeader")
         header_layout = QHBoxLayout(header)
@@ -69,13 +68,15 @@ class DebugVariablesPane(QWidget):
 
         layout.addWidget(header)
 
-        # Tree View
         self.tree = QTreeView()
         self.tree.setObjectName("debugVariablesTree")
         self.tree.setModel(self.model)
         self.tree.setAlternatingRowColors(True)
         self.tree.setUniformRowHeights(True)
-        self.tree.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked | QAbstractItemView.EditTrigger.EditKeyPressed)
+        self.tree.setEditTriggers(
+            QAbstractItemView.EditTrigger.DoubleClicked
+            | QAbstractItemView.EditTrigger.EditKeyPressed
+        )
 
         mono_font = QFont("Consolas", 9)
         mono_font.setStyleHint(QFont.StyleHint.Monospace)
