@@ -64,7 +64,8 @@ class MemoryTab(QWidget):
         super().__init__()
         self.service = service
         self.probe_provider = probe_provider
-        self.log_sink = log_sink
+        self._external_log_sink = log_sink
+        self.log_sink = self._append_tab_log
         self.current_data = b""
         self.current_sector = None
         self._threads = []
@@ -72,6 +73,12 @@ class MemoryTab(QWidget):
         self._busy = False
         self._external_blocked = False
         self._build_ui()
+
+    def _append_tab_log(self, text: str) -> None:
+        if hasattr(self, "tab_log"):
+            self.tab_log.appendPlainText(text)
+        if hasattr(self, "_external_log_sink") and self._external_log_sink:
+            self._external_log_sink(text)
 
     def _build_ui(self) -> None:
         root_layout = QVBoxLayout(self)
@@ -104,7 +111,7 @@ class MemoryTab(QWidget):
         tb_layout.addWidget(sep)
 
         lbl_sec = QLabel("Sector:")
-        lbl_sec.setObjectName("eyebrowLabel")
+        lbl_sec.setObjectName("fieldLabel")
         tb_layout.addWidget(lbl_sec)
 
         self.sector_combo = QComboBox()
@@ -155,7 +162,7 @@ class MemoryTab(QWidget):
         left_header = QHBoxLayout()
         left_header.setSpacing(8)
         title_hex = QLabel("BẢNG NHỚ FLASH (HEX DUMP)")
-        title_hex.setObjectName("eyebrowLabel")
+        title_hex.setObjectName("CardTitle")
         left_header.addWidget(title_hex)
         left_header.addStretch(1)
 
@@ -217,7 +224,7 @@ class MemoryTab(QWidget):
         health_layout.setSpacing(6)
 
         title_health = QLabel("TRẠNG THÁI APPLICATION & BOOTLOADER")
-        title_health.setObjectName("eyebrowLabel")
+        title_health.setObjectName("CardTitle")
         health_layout.addWidget(title_health)
 
         self.health_notice = QLabel("Nhấn 'Kiểm tra Application' để đối chiếu metadata, vector và CRC32.")
@@ -244,7 +251,7 @@ class MemoryTab(QWidget):
 
         for field, display_label, r, c in health_fields:
             lbl = QLabel(display_label + ":")
-            lbl.setObjectName("eyebrowLabel")
+            lbl.setObjectName("fieldLabel")
             health_grid.addWidget(lbl, r, c)
 
             val = QLabel("—")
@@ -265,7 +272,7 @@ class MemoryTab(QWidget):
         meta_layout.setSpacing(6)
 
         title_meta = QLabel("BẢN GHI STLM METADATA · SECTOR 3 (0x0800C000)")
-        title_meta.setObjectName("eyebrowLabel")
+        title_meta.setObjectName("CardTitle")
         meta_layout.addWidget(title_meta)
 
         self.metadata_notice = QLabel("Nhấn 'Đọc Metadata' để kiểm tra bản ghi 44-byte Sector 3.")
@@ -298,12 +305,84 @@ class MemoryTab(QWidget):
                                           value.textInteractionFlags().TextSelectableByMouse)
             self.metadata_values[field] = value
             lbl = QLabel(display_label + ":")
-            lbl.setObjectName("eyebrowLabel")
+            lbl.setObjectName("fieldLabel")
             meta_form.addRow(lbl, value)
 
         meta_layout.addLayout(meta_form)
         right_layout.addWidget(meta_card)
-        right_layout.addStretch(1)
+
+        # 3. Flash Memory Map Card (Reference Spans)
+        map_card = QFrame()
+        map_card.setObjectName("cardSurface")
+        map_layout = QVBoxLayout(map_card)
+        map_layout.setContentsMargins(10, 8, 10, 8)
+        map_layout.setSpacing(6)
+
+        title_map = QLabel("🗺  PHÂN BỔ BỘ NHỚ FLASH STM32F407")
+        title_map.setObjectName("CardTitle")
+        map_layout.addWidget(title_map)
+
+        map_grid = QGridLayout()
+        map_grid.setHorizontalSpacing(8)
+        map_grid.setVerticalSpacing(4)
+        map_grid.setContentsMargins(0, 2, 0, 2)
+
+        flash_spans = [
+            ("Sector 0..2", "0x08000000 - 0x0800BFFF", "48 KB", "Bootloader (WRP Bảo vệ)", "#F59E0B"),
+            ("Sector 3", "0x0800C000 - 0x0800FFFF", "16 KB", "STLM OTA Metadata (44B)", "#06B6D4"),
+            ("Sector 4..7", "0x08010000 - 0x0807FFFF", "448 KB", "Application (Vùng nạp chính)", "#10B981"),
+        ]
+        for row, (sec, addr, size, role, color) in enumerate(flash_spans):
+            sec_lbl = QLabel(sec)
+            sec_lbl.setStyleSheet("font-weight: 700; color: %s; font-size: 11px;" % color)
+            addr_lbl = QLabel(addr)
+            addr_lbl.setObjectName("monoText")
+            addr_lbl.setStyleSheet("font-size: 10.5px;")
+            size_lbl = QLabel(size)
+            size_lbl.setStyleSheet("font-size: 10.5px; color: #94A3B8;")
+            role_lbl = QLabel(role)
+            role_lbl.setStyleSheet("font-size: 10.5px; font-weight: 600;")
+            map_grid.addWidget(sec_lbl, row, 0)
+            map_grid.addWidget(addr_lbl, row, 1)
+            map_grid.addWidget(size_lbl, row, 2)
+            map_grid.addWidget(role_lbl, row, 3)
+
+        map_layout.addLayout(map_grid)
+        right_layout.addWidget(map_card)
+
+        # 4. Activity & Inspection Log Card (Fills remaining height)
+        log_card = QFrame()
+        log_card.setObjectName("cardSurface")
+        log_layout = QVBoxLayout(log_card)
+        log_layout.setContentsMargins(10, 8, 10, 8)
+        log_layout.setSpacing(6)
+
+        log_header = QHBoxLayout()
+        log_header.setSpacing(6)
+        title_log = QLabel("📜  NHẬT KÝ KIỂM TRA MEMORY & METADATA")
+        title_log.setObjectName("CardTitle")
+        log_header.addWidget(title_log)
+        log_header.addStretch(1)
+
+        clear_log_btn = QPushButton("Xóa log")
+        clear_log_btn.setObjectName("ghostButton")
+        clear_log_btn.setFixedHeight(20)
+        clear_log_btn.setStyleSheet("font-size: 10px; padding: 1px 6px;")
+        clear_log_btn.clicked.connect(lambda: self.tab_log.clear())
+        log_header.addWidget(clear_log_btn)
+        log_layout.addLayout(log_header)
+
+        self.tab_log = QPlainTextEdit()
+        self.tab_log.setObjectName("terminalLog")
+        self.tab_log.setReadOnly(True)
+        self.tab_log.setPlaceholderText("Nhật ký chi tiết các bước đọc Flash, kiểm tra vector và đối chiếu STLM...")
+        font_log = QFont("Cascadia Code", 9)
+        font_log.setStyleHint(QFont.StyleHint.Monospace)
+        self.tab_log.setFont(font_log)
+        self.tab_log.setMinimumHeight(120)
+        log_layout.addWidget(self.tab_log, 1)
+
+        right_layout.addWidget(log_card, 1)
 
         right_scroll.setWidget(right_container)
         splitter.addWidget(right_scroll)

@@ -70,11 +70,12 @@ class MemoryMapCanvas(QWidget):
         bar_y = 6
 
         # Draw outer boundary
-        bg_color = QColor("#0E1522" if is_dark else "#F1F5F9")
-        border_color = QColor("#1E2B3E" if is_dark else "#CBD5E1")
+        palette = ThemeManager.instance().palette
+        bg_color = QColor(palette.surface_sunken)
+        border_color = QColor(palette.border)
         painter.setBrush(bg_color)
         painter.setPen(QPen(border_color, 1))
-        painter.drawRoundedRect(QRectF(0, bar_y, w, bar_h), 6, 6)
+        painter.drawRoundedRect(QRectF(0, bar_y, w, bar_h), 8, 8)
 
         # Draw sectors
         curr_x = 0.0
@@ -91,8 +92,8 @@ class MemoryMapCanvas(QWidget):
                 color = color.lighter(120)
 
             painter.setBrush(color)
-            painter.setPen(QPen(QColor(0, 0, 0, 40), 1))
-            painter.drawRoundedRect(rect, 4, 4)
+            painter.setPen(QPen(QColor(0, 0, 0, 30), 1))
+            painter.drawRoundedRect(rect, 5, 5)
 
             # Draw sector label
             if sec_w > 45:

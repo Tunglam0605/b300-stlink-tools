@@ -23,7 +23,7 @@ from b300_core.live_monitor import LiveSample, validate_live_watch_specs, save_w
 from .collapsible_card import CollapsibleCard
 
 
-class DebugLivePanel(QGroupBox):
+class DebugLivePanel(QFrame):
     """Zero-halt realtime SWD monitor displaying Execution Timeline and Live Variables."""
 
     symbol_browser_requested = Signal()
@@ -32,7 +32,8 @@ class DebugLivePanel(QGroupBox):
     VARIABLES_CAPACITY = 2000
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__("Theo dõi realtime", parent)
+        super().__init__(parent)
+        self.setObjectName("cardSurface")
         self.buffer = VariableSampleBuffer(max_samples=self.VARIABLES_CAPACITY)
         self.rows: Dict[str, int] = {}
         self._timeline_samples: List[dict] = []
@@ -41,38 +42,47 @@ class DebugLivePanel(QGroupBox):
 
     def _build_ui(self) -> None:
         panel_layout = QVBoxLayout(self)
-        panel_layout.setContentsMargins(10, 8, 10, 10)
+        panel_layout.setContentsMargins(8, 8, 8, 8)
         panel_layout.setSpacing(8)
 
-        # Header Bar: Subtitle & Statistical Sampling Warning Banner
+        # Zone Header: Clean Title
         header_row = QHBoxLayout()
-        header_row.setSpacing(8)
+        header_row.setSpacing(6)
 
-        sub_info = QVBoxLayout()
-        sub_info.setSpacing(2)
-        subtitle = QLabel("MCU tiếp tục chạy trong khi theo dõi")
-        subtitle.setStyleSheet("color: #059669; font-weight: 700; font-size: 12px;")
-        sub_info.addWidget(subtitle)
+        card_title = QLabel("📊  THEO DÕI BIẾN REALTIME")
+        card_title.setObjectName("CardTitle")
+        header_row.addWidget(card_title)
+        header_row.addStretch(1)
 
-        self.workflow_hint = QLabel("Chọn file → thêm biến nếu cần → Bắt đầu")
-        self.workflow_hint.setWordWrap(True)
-        self.workflow_hint.setStyleSheet("color: #64748B; font-size: 11px;")
-        sub_info.addWidget(self.workflow_hint)
-        self.statistical_notice = QLabel(
-            "DWT PC sampling là lấy mẫu thống kê; hàm chạy rất ngắn có thể không xuất hiện ở mọi mẫu."
-        )
-        self.statistical_notice.setStyleSheet("color: #64748B; font-size: 11px;")
-        self.statistical_notice.setWordWrap(True)
-        header_row.addLayout(sub_info, 1)
+        self.workflow_hint = QLabel("")
+        self.workflow_hint.setVisible(False)
+        self.statistical_notice = QLabel("")
+        self.statistical_notice.setVisible(False)
 
         panel_layout.addLayout(header_row)
 
-        # Responsive controls: settings and actions use separate rows so the
-        # workstation remains usable in a narrow laptop window.
-        controls = QGridLayout()
-        controls.setHorizontalSpacing(8)
-        controls.setVerticalSpacing(6)
-        controls.addWidget(QLabel("Tốc độ:"), 0, 0)
+        # Single-row Unified Sampling Toolbar
+        controls = QHBoxLayout()
+        controls.setSpacing(6)
+
+        self.start_button = QPushButton("▶ Bắt đầu")
+        self.start_button.setObjectName("primaryButton")
+        controls.addWidget(self.start_button)
+
+        self.stop_button = QPushButton("⏹ Dừng")
+        self.stop_button.setObjectName("ghostButton")
+        self.stop_button.setEnabled(False)
+        controls.addWidget(self.stop_button)
+
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.Shape.VLine)
+        sep1.setObjectName("borderMuted")
+        controls.addWidget(sep1)
+
+        lbl_spd = QLabel("Tốc độ:")
+        lbl_spd.setObjectName("fieldLabel")
+        controls.addWidget(lbl_spd)
+
         self.interval_preset_combo = QComboBox()
         self.interval_preset_combo.addItem("0.1 s", 0.1)
         self.interval_preset_combo.addItem("0.2 s", 0.2)
@@ -83,7 +93,7 @@ class DebugLivePanel(QGroupBox):
         self.interval_preset_combo.addItem("Tùy chỉnh", -1.0)
         self.interval_preset_combo.setCurrentIndex(2)  # default 0.5s
         self.interval_preset_combo.currentIndexChanged.connect(self._on_interval_preset_changed)
-        controls.addWidget(self.interval_preset_combo, 0, 1)
+        controls.addWidget(self.interval_preset_combo)
 
         self.interval = QDoubleSpinBox()
         self.interval.setObjectName("debugSampleInterval")
@@ -94,15 +104,16 @@ class DebugLivePanel(QGroupBox):
         self.interval.setSuffix(" s")
         self.interval.setVisible(False)
         self.interval.valueChanged.connect(self._on_custom_interval_changed)
-        controls.addWidget(self.interval, 0, 2)
+        controls.addWidget(self.interval)
 
-        self.limit_samples = QCheckBox("Giới hạn số mẫu")
+        self.limit_samples = QCheckBox("Giới hạn")
         self.limit_samples.setObjectName("debugLimitSamples")
         self.limit_samples.setChecked(False)
         self.limit_samples.setToolTip("Mặc định chạy liên tục đến khi bấm Dừng.")
-        controls.addWidget(self.limit_samples, 0, 3)
+        controls.addWidget(self.limit_samples)
 
         self.cycles_label = QLabel("Số mẫu:")
+        self.cycles_label.setObjectName("fieldLabel")
         self.cycles = QSpinBox()
         self.cycles.setObjectName("debugSampleCycles")
         self.cycles.setRange(1, 100000)
@@ -110,38 +121,30 @@ class DebugLivePanel(QGroupBox):
         self.cycles_label.setVisible(False)
         self.cycles.setVisible(False)
         self.limit_samples.toggled.connect(self._on_limit_samples_toggled)
-        controls.addWidget(self.cycles_label, 0, 4)
-        controls.addWidget(self.cycles, 0, 5)
-        controls.setColumnStretch(6, 1)
+        controls.addWidget(self.cycles_label)
+        controls.addWidget(self.cycles)
 
-        self.start_button = QPushButton("▶ Bắt đầu")
-        self.start_button.setObjectName("debugSampleStartButton")
-        self.start_button.setStyleSheet(
-            "QPushButton { min-height: 30px; font-weight: 700; color: #FFFFFF; background-color: #059669; border: 1px solid #047857; border-radius: 6px; padding: 2px 14px; }"
-            "QPushButton:hover { background-color: #047857; }"
-            "QPushButton:disabled { background-color: #E2E8F0; color: #94A3B8; border-color: #CBD5E1; }"
-        )
-        controls.addWidget(self.start_button, 1, 0, 1, 2)
-
-        self.stop_button = QPushButton("⏹ Dừng")
-        self.stop_button.setObjectName("debugSampleStopButton")
-        self.stop_button.setEnabled(False)
-        controls.addWidget(self.stop_button, 1, 2)
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.VLine)
+        sep2.setObjectName("borderMuted")
+        controls.addWidget(sep2)
 
         self.clear_button = QPushButton("Xóa")
-        self.clear_button.setObjectName("debugSampleClearButton")
-        controls.addWidget(self.clear_button, 1, 3)
+        self.clear_button.setObjectName("ghostButton")
+        controls.addWidget(self.clear_button)
 
         self.export_button = QPushButton("Xuất…")
-        self.export_button.setObjectName("debugSampleExportButton")
-        controls.addWidget(self.export_button, 1, 4)
+        self.export_button.setObjectName("ghostButton")
+        controls.addWidget(self.export_button)
+
+        controls.addStretch(1)
 
         self.status = QLabel("Sẵn sàng · 0 mẫu")
         self.status.setObjectName("debugSampleStatus")
-        self.status.setStyleSheet("color: #64748B; font-size: 11px; font-weight: 600;")
-        self.status.setWordWrap(True)
-        self.status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        controls.addWidget(self.status, 1, 5, 1, 2)
+        self.status.setStyleSheet("font-size: 11px; font-weight: 600;")
+        self.status.setWordWrap(False)
+        controls.addWidget(self.status)
+
         panel_layout.addLayout(controls)
 
         self.stats_frame = QFrame()
@@ -187,13 +190,8 @@ class DebugLivePanel(QGroupBox):
         timeline_layout.setSpacing(4)
 
         timeline_header = QHBoxLayout()
-        timeline_title = QLabel("Luồng thực thi")
-        timeline_title.setStyleSheet("font-weight: 700; color: #0F172A; font-size: 12px;")
-        timeline_header.addWidget(timeline_title)
-
         self.follow_latest_check = QCheckBox("Theo mẫu mới nhất")
         self.follow_latest_check.setChecked(True)
-        self.follow_latest_check.setStyleSheet("font-size: 11px; color: #334155;")
         timeline_header.addWidget(self.follow_latest_check)
         timeline_header.addStretch(1)
         timeline_layout.addLayout(timeline_header)
@@ -215,68 +213,73 @@ class DebugLivePanel(QGroupBox):
         self.timeline_table.setColumnWidth(1, 104)
         self.timeline_table.setColumnWidth(3, 180)
         self.timeline_table.setColumnWidth(4, 58)
-        self.timeline_table.setMinimumHeight(140)
+        self.timeline_table.setMinimumHeight(240)
         timeline_layout.addWidget(self.timeline_table)
 
 
         # Live Variables
         variables_container = QWidget()
         variables_layout = QVBoxLayout(variables_container)
-        variables_layout.setContentsMargins(0, 0, 0, 0)
-        variables_layout.setSpacing(4)
+        variables_layout.setContentsMargins(0, 4, 0, 0)
+        variables_layout.setSpacing(6)
 
-        var_header = QHBoxLayout()
-        var_title = QLabel("Biến đang theo dõi")
-        var_title.setStyleSheet("font-weight: 700; color: #0F172A; font-size: 12px;")
-        var_header.addWidget(var_title)
-        var_header.addStretch(1)
-        variables_layout.addLayout(var_header)
+        # Single-row unified Variable Search & Preset Toolbar
+        add_var_bar = QHBoxLayout()
+        add_var_bar.setSpacing(6)
 
-        # Add-variable controls are split into two compact rows for laptop widths.
-        add_var_grid = QGridLayout()
-        add_var_grid.setHorizontalSpacing(6)
-        add_var_grid.setVerticalSpacing(5)
+        lbl_v = QLabel("Biến:")
+        lbl_v.setObjectName("fieldLabel")
+        add_var_bar.addWidget(lbl_v)
+
         self.expressions = QLineEdit()
         self.expressions.setObjectName("debugSampleExpressions")
-        self.expressions.setPlaceholderText("Tên biến, ví dụ xTickCount")
+        self.expressions.setPlaceholderText("Tên biến global (vd: xTickCount hoặc Com3RxDmaBuffer)")
         self.expressions.setToolTip("Nhập tên biến global có trong file AXF/ELF.")
-        self.expressions.setMinimumWidth(0)
-        add_var_grid.addWidget(self.expressions, 0, 0, 1, 3)
+        self.expressions.setMinimumWidth(180)
+        self.expressions.setMaximumWidth(320)
+        add_var_bar.addWidget(self.expressions)
 
         self.type_combo = QComboBox()
         for t in ("u32", "i32", "u16", "i16", "u8", "i8", "f32", "f64"):
             self.type_combo.addItem(t)
-        add_var_grid.addWidget(self.type_combo, 0, 3)
+        add_var_bar.addWidget(self.type_combo)
 
         self.add_watch_btn = QPushButton("+ Thêm")
+        self.add_watch_btn.setObjectName("primaryButton")
         self.add_watch_btn.clicked.connect(self._on_add_watch_clicked)
-        add_var_grid.addWidget(self.add_watch_btn, 0, 4)
+        add_var_bar.addWidget(self.add_watch_btn)
+
+        self.remove_watch_btn = QPushButton("Xóa biến")
+        self.remove_watch_btn.setObjectName("ghostButton")
+        self.remove_watch_btn.clicked.connect(self._on_remove_watch_clicked)
+        add_var_bar.addWidget(self.remove_watch_btn)
+
+        sep_var = QFrame()
+        sep_var.setFrameShape(QFrame.Shape.VLine)
+        sep_var.setObjectName("borderMuted")
+        add_var_bar.addWidget(sep_var)
 
         self.browse_symbols_btn = QPushButton("Chọn từ AXF…")
-        self.browse_symbols_btn.setObjectName("debugBrowseLiveSymbolsButton")
+        self.browse_symbols_btn.setObjectName("ghostButton")
         self.browse_symbols_btn.setToolTip(
             "Duyệt symbol offline từ AXF/ELF; thao tác này không truy cập hoặc halt STM32."
         )
         self.browse_symbols_btn.clicked.connect(self.symbol_browser_requested.emit)
-        add_var_grid.addWidget(self.browse_symbols_btn, 1, 0)
+        add_var_bar.addWidget(self.browse_symbols_btn)
 
         self.load_preset_btn = QPushButton("Nạp preset…")
-        self.load_preset_btn.setObjectName("debugLoadLivePresetButton")
+        self.load_preset_btn.setObjectName("ghostButton")
         self.load_preset_btn.setToolTip("Nạp danh sách biến theo dõi từ file JSON.")
         self.load_preset_btn.clicked.connect(self._on_load_preset_clicked)
-        add_var_grid.addWidget(self.load_preset_btn, 1, 1)
+        add_var_bar.addWidget(self.load_preset_btn)
 
         self.save_preset_btn = QPushButton("Lưu preset…")
-        self.save_preset_btn.setObjectName("debugSaveLivePresetButton")
+        self.save_preset_btn.setObjectName("ghostButton")
         self.save_preset_btn.setToolTip("Lưu danh sách biến hiện tại ra file JSON.")
         self.save_preset_btn.clicked.connect(self._on_save_preset_clicked)
-        add_var_grid.addWidget(self.save_preset_btn, 1, 2)
+        add_var_bar.addWidget(self.save_preset_btn)
 
-        self.remove_watch_btn = QPushButton("Xóa biến")
-        self.remove_watch_btn.clicked.connect(self._on_remove_watch_clicked)
-        add_var_grid.addWidget(self.remove_watch_btn, 1, 4)
-        add_var_grid.setColumnStretch(3, 1)
-        variables_layout.addLayout(add_var_grid)
+        variables_layout.addLayout(add_var_bar)
 
         self.table = QTableWidget(0, 9)
         self.table.setObjectName("debugSampleTable")
@@ -297,7 +300,7 @@ class DebugLivePanel(QGroupBox):
         self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.setMinimumHeight(140)
+        self.table.setMinimumHeight(240)
         variables_layout.addWidget(self.table)
 
         self.view_tabs.addTab(variables_container, "Biến theo dõi")

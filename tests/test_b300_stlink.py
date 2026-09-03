@@ -503,7 +503,8 @@ class B300StlinkTests(unittest.TestCase):
 
     def test_debug_client_requires_explicit_ssh_identity(self) -> None:
         output = io.StringIO()
-        with redirect_stdout(output):
+        with mock.patch("b300_cli.gateway_workflows.load_remote_profile", return_value=None), \
+                redirect_stdout(output):
             result = tool().main(["debug", "client", "--dry-run", "--json"])
         self.assertEqual(result, 1)
         record = json.loads(output.getvalue())

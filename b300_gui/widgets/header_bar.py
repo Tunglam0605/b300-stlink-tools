@@ -53,6 +53,7 @@ class HeaderBar(QFrame):
         self.version_badge = QLabel(f"v{CORE_VERSION}")
         self.version_badge.setObjectName("eyebrowLabel")
         brand_layout.addWidget(self.version_badge)
+        self.brand_container.setVisible(False)
         layout.addWidget(self.brand_container)
 
         layout.addSpacing(8)

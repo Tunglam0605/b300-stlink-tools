@@ -179,17 +179,31 @@ class MainWindow(QMainWindow):
                 self._update_poll_timer.start()
                 QTimer.singleShot(2000, self._automatic_update_tick)
 
+    def _update_brand_logo(self) -> None:
+        if not hasattr(self, "brand_logo"):
+            return
+        is_dark = ThemeManager.instance().is_dark
+        filename = "b300-stlink-wordmark-dark.png" if is_dark else "b300-stlink-wordmark.png"
+        path = asset_path(filename)
+        if not path.is_file():
+            path = asset_path("b300-stlink-wordmark.png")
+        pix = QPixmap(str(path)).scaledToHeight(78, Qt.TransformationMode.SmoothTransformation)
+        self.brand_logo.setPixmap(pix)
+
     def _on_toggle_theme(self) -> None:
         new_mode = ThemeManager.instance().toggle_theme()
         if hasattr(self, "header_bar"):
             self.header_bar._update_theme_icon()
+        self._update_brand_logo()
         self.append_log(f"Đã đổi giao diện: {'Tối (Dark Mode)' if new_mode == 'dark' else 'Sáng (Light Mode)'}")
 
     def _on_theme_changed(self, mode: str) -> None:
+        self._update_brand_logo()
         self.append_log(f"Đã đổi giao diện: {'Tối (Dark Mode)' if mode == 'dark' else 'Sáng (Light Mode)'}")
 
     def _build_ui(self) -> None:
         central = QWidget()
+        central.setObjectName("centralContainer")
         root_v_layout = QVBoxLayout(central)
         root_v_layout.setContentsMargins(0, 0, 0, 0)
         root_v_layout.setSpacing(0)
@@ -205,6 +219,7 @@ class MainWindow(QMainWindow):
         root_v_layout.addWidget(self.header_bar)
 
         main_work_area = QWidget()
+        main_work_area.setObjectName("mainWorkArea")
         main_h_layout = QHBoxLayout(main_work_area)
         main_h_layout.setContentsMargins(0, 0, 0, 0)
         main_h_layout.setSpacing(0)
@@ -219,35 +234,20 @@ class MainWindow(QMainWindow):
         # Brand header at top of sidebar
         brand_card = QWidget()
         brand_card_layout = QVBoxLayout(brand_card)
-        brand_card_layout.setContentsMargins(4, 4, 4, 6)
-        brand_card_layout.setSpacing(4)
+        brand_card_layout.setContentsMargins(4, 2, 4, 4)
+        brand_card_layout.setSpacing(2)
 
         self.brand_logo = QLabel()
         self.brand_logo.setObjectName("brandLogo")
         self.brand_logo.setAccessibleName("B300 ST-Link Tools")
         self.brand_logo.setToolTip("Nhấn vào logo để mở menu Trợ giúp & Giới thiệu")
         self.brand_logo.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.brand_logo.setPixmap(
-            QPixmap(str(asset_path("b300-stlink-wordmark.png"))).scaledToHeight(
-                40, Qt.TransformationMode.SmoothTransformation
-            )
-        )
+        self._update_brand_logo()
         self.brand_logo.mousePressEvent = self._brand_logo_clicked
         brand_card_layout.addWidget(self.brand_logo)
-
-        eyebrow = QLabel("B300 ENGINEERING TOOLKIT")
-        eyebrow.setObjectName("eyebrowLabel")
-        brand_card_layout.addWidget(eyebrow)
-
-        self.update_channel_label = QLabel("Phiên bản v%s" % __version__)
-        self.update_channel_label.setObjectName("updateChannelLabel")
-        self.update_channel_label.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.update_channel_label.setToolTip("Nhấn để kiểm tra cập nhật phiên bản mới")
-        self.update_channel_label.mousePressEvent = lambda _event: self.check_for_updates(manual=True)
-        brand_card_layout.addWidget(self.update_channel_label)
         sidebar_layout.addWidget(brand_card)
 
-        sidebar_layout.addSpacing(6)
+        sidebar_layout.addSpacing(4)
 
         # Navigation Section Title
         nav_title = QLabel("CHỨC NĂNG")
@@ -257,7 +257,7 @@ class MainWindow(QMainWindow):
         # Navigation Buttons (Grouped closely with 4px gap)
         self.nav_buttons = []
 
-        self.nav_flash_btn = QPushButton("Nạp & Phân tích Flash")
+        self.nav_flash_btn = QPushButton("⚡  Nạp · Phân tích Flash")
         self.nav_flash_btn.setObjectName("navButton")
         self.nav_flash_btn.setCheckable(True)
         self.nav_flash_btn.setChecked(True)
@@ -265,35 +265,42 @@ class MainWindow(QMainWindow):
         sidebar_layout.addWidget(self.nav_flash_btn)
         self.nav_buttons.append(self.nav_flash_btn)
 
-        self.nav_memory_btn = QPushButton("Cấu trúc & Metadata")
+        self.nav_memory_btn = QPushButton("📑  Cấu trúc · Metadata")
         self.nav_memory_btn.setObjectName("navButton")
         self.nav_memory_btn.setCheckable(True)
         self.nav_memory_btn.clicked.connect(lambda: self.tabs.setCurrentIndex(1))
         sidebar_layout.addWidget(self.nav_memory_btn)
         self.nav_buttons.append(self.nav_memory_btn)
 
-        self.nav_debug_btn = QPushButton("Studio Theo dõi & Debug")
+        self.nav_debug_btn = QPushButton("📊  Studio Theo dõi · Debug")
         self.nav_debug_btn.setObjectName("navButton")
         self.nav_debug_btn.setCheckable(True)
         self.nav_debug_btn.clicked.connect(lambda: self.tabs.setCurrentIndex(2))
         sidebar_layout.addWidget(self.nav_debug_btn)
         self.nav_buttons.append(self.nav_debug_btn)
 
-        self.nav_gateway_btn = QPushButton("Cầu nối Từ xa (SSH)")
+        self.nav_gateway_btn = QPushButton("🌐  Cầu nối Từ xa (SSH)")
         self.nav_gateway_btn.setObjectName("navButton")
         self.nav_gateway_btn.setCheckable(True)
         self.nav_gateway_btn.clicked.connect(lambda: self.tabs.setCurrentIndex(3))
         sidebar_layout.addWidget(self.nav_gateway_btn)
         self.nav_buttons.append(self.nav_gateway_btn)
 
-        sidebar_layout.addSpacing(8)
+        sidebar_layout.addStretch(1)
+
         self.machine_setup_button = QPushButton("⚙  Thiết lập máy mới")
         self.machine_setup_button.setObjectName("navUtilityButton")
         self.machine_setup_button.setToolTip("Kiểm tra và cài các thành phần còn thiếu: ST-Link driver, OpenOCD, OpenSSH/udev")
         self.machine_setup_button.clicked.connect(self.show_machine_setup)
         sidebar_layout.addWidget(self.machine_setup_button)
 
-        sidebar_layout.addStretch(1)
+        self.update_channel_label = QLabel("Phiên bản v%s" % __version__)
+        self.update_channel_label.setObjectName("updateChannelLabel")
+        self.update_channel_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.update_channel_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.update_channel_label.setToolTip("Nhấn để kiểm tra cập nhật phiên bản mới")
+        self.update_channel_label.mousePressEvent = lambda _event: self.check_for_updates(manual=True)
+        sidebar_layout.addWidget(self.update_channel_label)
 
         # Legacy OpenOCD offline action; machine setup wizard is the user-facing entry point.
         self.setup_button = QPushButton("OpenOCD offline…")
@@ -316,27 +323,41 @@ class MainWindow(QMainWindow):
         content_v_layout.setContentsMargins(12, 10, 12, 10)
         content_v_layout.setSpacing(8)
 
-        # Persistent page context + task status. Users should not need to infer
-        # the active workflow from the sidebar or rely on transient toasts.
+        # Persistent page context + task status (Single-row breadcrumb)
         page_header = QFrame()
         page_header.setObjectName("pageContextHeader")
-        page_header_layout = QVBoxLayout(page_header)
-        page_header_layout.setContentsMargins(12, 8, 12, 8)
-        page_header_layout.setSpacing(3)
+        page_header_layout = QHBoxLayout(page_header)
+        page_header_layout.setContentsMargins(10, 4, 10, 4)
+        page_header_layout.setSpacing(10)
+
         self.page_title = QLabel("Nạp firmware")
         self.page_title.setObjectName("pageContextTitle")
+        page_header_layout.addWidget(self.page_title)
+
+        sep_header = QFrame()
+        sep_header.setFrameShape(QFrame.Shape.VLine)
+        sep_header.setObjectName("borderMuted")
+        page_header_layout.addWidget(sep_header)
+
         self.page_subtitle = QLabel("Provision Application an toàn, giữ Bootloader và metadata contract.")
         self.page_subtitle.setObjectName("pageContextSubtitle")
-        self.page_subtitle.setWordWrap(True)
-        page_header_layout.addWidget(self.page_title)
+        self.page_subtitle.setWordWrap(False)
         page_header_layout.addWidget(self.page_subtitle)
-        content_v_layout.addWidget(page_header)
+
+        page_header_layout.addStretch(1)
 
         self.status_banner = QLabel("Sẵn sàng kiểm tra ST-Link")
         self.status_banner.setObjectName("statusBanner")
         self.status_banner.setAccessibleName("Trạng thái nhiệm vụ hiện tại")
         self.status_banner.setVisible(True)
-        content_v_layout.addWidget(self.status_banner)
+        page_header_layout.addWidget(self.status_banner)
+
+        content_v_layout.addWidget(page_header)
+
+        # Cockpit-style 4-Card Quick Stats Row (Overview KPI bar)
+        from .widgets.stats_row import StatsRow
+        self.stats_row = StatsRow(content_area)
+        content_v_layout.addWidget(self.stats_row)
 
         # Workstation Tab Widget (Native top tab bar hidden in favor of vertical sidebar)
         self.tabs = QTabWidget()
@@ -845,7 +866,7 @@ class MainWindow(QMainWindow):
         elif index == 1:
             self._set_status("Chọn Kiểm tra Application để xem trạng thái nhanh; mở Nâng cao nếu cần đọc Memory thủ công", "normal", notify=False)
         elif index == 2:
-            self._set_status("Theo dõi realtime là chế độ khuyến nghị; Debug nâng cao có thể tạm dừng MCU", "normal", notify=False)
+            self._set_status("Sẵn sàng · Chọn Nguồn kết nối và nhấn Bắt đầu để theo dõi biến realtime", "normal", notify=False)
         elif index == 3:
             self._set_status("Chọn vai trò của máy này và làm theo Bước tiếp theo", "normal", notify=False)
 
@@ -892,6 +913,7 @@ class MainWindow(QMainWindow):
 
         # 1. ST-Link Probe Card
         device_group = QGroupBox("1. ST-Link probe")
+        device_group.setObjectName("cardSurface")
         device_row = QGridLayout(device_group)
         device_row.setHorizontalSpacing(8)
         device_row.setVerticalSpacing(6)
@@ -915,6 +937,7 @@ class MainWindow(QMainWindow):
 
         # 2. Application HEX Card
         firmware_group = QGroupBox("2. Application HEX")
+        firmware_group.setObjectName("cardSurface")
         firmware_layout = QGridLayout(firmware_group)
         self.file_path = QLineEdit()
         self.file_path.setReadOnly(True)
@@ -926,15 +949,15 @@ class MainWindow(QMainWindow):
         self.image_summary = QLabel("Chưa chọn firmware")
         self.image_summary.setObjectName("imageSummaryBox")
         self.image_summary.setWordWrap(True)
-        self.image_summary.setStyleSheet("color: #64748B;")
         firmware_layout.addWidget(self.image_summary, 1, 0, 1, 2)
         left_layout.addWidget(firmware_group)
 
         # 3. Flash Plan & Action Execution Card
         plan_group = QGroupBox("3. Preflight & Nạp Application")
+        plan_group.setObjectName("cardSurface")
         plan_layout = QVBoxLayout(plan_group)
-        plan_layout.setContentsMargins(8, 8, 8, 8)
-        plan_layout.setSpacing(6)
+        plan_layout.setContentsMargins(12, 10, 12, 10)
+        plan_layout.setSpacing(8)
 
         self.flash_details_card = CollapsibleCard(
             "Chi tiết kỹ thuật",
@@ -958,10 +981,6 @@ class MainWindow(QMainWindow):
             "Bootloader CONFIRMED → Post-verify"
         )
         self.flash_plan_label.setObjectName("flashPlanBadge")
-        self.flash_plan_label.setStyleSheet(
-            "background-color: #F8FAFC; color: #475569; border: 1px solid #E2E8F0; "
-            "border-radius: 6px; padding: 4px 8px; font-weight: 600; font-size: 11px;"
-        )
         self.flash_plan_label.setWordWrap(True)
         flash_details_layout.addWidget(self.flash_plan_label)
 
@@ -1051,10 +1070,7 @@ class MainWindow(QMainWindow):
         factory_profile_layout.addLayout(profile_row)
 
         self.factory_summary_chip = QLabel("Chưa chọn profile")
-        self.factory_summary_chip.setStyleSheet(
-            "background-color: #F0FDF4; color: #166534; border: 1px solid #BBF7D0; "
-            "border-radius: 6px; padding: 6px 10px; font-weight: 600; font-size: 11px;"
-        )
+        self.factory_summary_chip.setObjectName("statusPillSuccess")
         self.factory_summary_chip.setWordWrap(True)
         factory_profile_layout.addWidget(self.factory_summary_chip)
 
@@ -1492,6 +1508,17 @@ class MainWindow(QMainWindow):
             self.header_bar.set_probes(self._probes, current)
         if hasattr(self, "debug_tab"):
             self.debug_tab.refresh_environment()
+        if hasattr(self, "stats_row"):
+            if probes:
+                p = probes[0]
+                serial_info = ("SN: %s…" % p.serial[:12]) if p.serial else "ST-Link USB"
+                self.stats_row.update_probe(p.name or "ST-Link", serial_info)
+            else:
+                self.stats_row.update_probe("Chưa kết nối", "Quét lại để tìm probe")
+            if available:
+                self.stats_row.update_status("Sẵn sàng", "OpenOCD Loopback OK")
+            else:
+                self.stats_row.update_status("Chưa cài OpenOCD", "Cần chạy Cài đặt máy")
 
         self.probe_combo.blockSignals(True)
         self.probe_combo.clear()

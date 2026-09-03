@@ -38,6 +38,13 @@ class CliBootstrapTests(unittest.TestCase):
         self.assertNotIn("sudo ", text)
         self.assertNotIn("pkexec ", text)
 
+    def test_linux_onefile_cli_bootstrap_does_not_require_windows_onedir_runtime(self) -> None:
+        """Linux CLI artifacts intentionally contain a one-file executable, not _internal."""
+        text = (ROOT / "install-cli.sh").read_text(encoding="utf-8")
+        self.assertIn('[ -x "$stage/b300-stlink" ]', text)
+        self.assertIn('[ -f "$stage/install.sh" ]', text)
+        self.assertNotIn('[ -d "$stage/_internal" ]', text)
+
     def test_bootstrap_docs_expose_one_line_terminal_install(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         download = (ROOT / "DOWNLOAD.md").read_text(encoding="utf-8")
