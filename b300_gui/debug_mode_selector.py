@@ -1,4 +1,4 @@
-"""Mode-First Entry Screen for B300 Debug Workstation."""
+"""Mode-first entry for the B300 engineering Debug Workstation."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 
 
 class ModeTile(QFrame):
-    """Compact, technical mode tile without verbose paragraphs or noisy emoji."""
+    """Compact technical role tile."""
 
     clicked = Signal(str)
 
@@ -36,27 +36,28 @@ class ModeTile(QFrame):
         self.setObjectName("debugModeTile")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self.setMinimumWidth(200)
-        self.setMaximumWidth(340)
-        self.setMinimumHeight(130)
+        self.setMinimumWidth(190)
+        self.setMaximumWidth(320)
+        self.setMinimumHeight(112)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(8)
+        layout.setContentsMargins(16, 14, 16, 12)
+        layout.setSpacing(6)
 
-        # Header row: technical icon tag + mode title + badge
         top_row = QHBoxLayout()
         top_row.setSpacing(8)
 
         self.tag_lbl = QLabel(icon_tag)
         self.tag_lbl.setStyleSheet(
-            "font-size: 13px; font-weight: 800; font-family: 'Cascadia Code', monospace; color: #38BDF8;"
+            "font-size: 12px; font-weight: 800; font-family: 'Cascadia Code', monospace; color: #38BDF8;"
         )
         top_row.addWidget(self.tag_lbl)
 
         title_lbl = QLabel(title)
         title_lbl.setObjectName("debugModeTileTitle")
-        title_lbl.setStyleSheet("font-size: 15px; font-weight: 900; letter-spacing: 0.8px; color: #F8FAFC;")
+        title_lbl.setStyleSheet(
+            "font-size: 14px; font-weight: 900; letter-spacing: 0.8px; color: #F8FAFC;"
+        )
         top_row.addWidget(title_lbl)
         top_row.addStretch(1)
 
@@ -64,39 +65,38 @@ class ModeTile(QFrame):
             badge = QLabel(detail_badge)
             badge.setObjectName("debugModeTileBadge")
             badge.setStyleSheet(
-                "font-size: 10px; font-family: 'Cascadia Code', monospace; padding: 2px 6px; "
-                "border-radius: 4px; background: rgba(56, 189, 248, 0.12); color: #38BDF8;"
+                "font-size: 9px; font-family: 'Cascadia Code', monospace; padding: 2px 5px; "
+                "border-radius: 3px; background: rgba(56,189,248,0.10); color: #38BDF8;"
             )
             top_row.addWidget(badge)
-
         layout.addLayout(top_row)
 
-        # Subtitle
         sub_lbl = QLabel(subtitle)
         sub_lbl.setObjectName("debugModeTileSubtitle")
-        sub_lbl.setStyleSheet("font-size: 12px; color: #94A3B8;")
+        sub_lbl.setStyleSheet("font-size: 11px; color: #94A3B8;")
         sub_lbl.setWordWrap(True)
         layout.addWidget(sub_lbl)
-
         layout.addStretch(1)
 
-        # Action trigger button (clean, minimal styling, kept for compatibility & keyboard a11y)
-        self.button = QPushButton("Mở cấu hình")
+        # Kept as a real button for keyboard navigation and regression compatibility.
+        self.button = QPushButton("SELECT")
         self.button.setObjectName("debugModeTileButton")
+        self.button.setMaximumWidth(74)
         self.button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.button.setStyleSheet(
-            "font-size: 11px; font-weight: 700; padding: 5px 12px; border-radius: 4px; "
-            "background: rgba(30, 41, 59, 0.7); border: 1px solid #334155; color: #CBD5E1;"
+            "font-size: 10px; font-weight: 800; font-family: 'Cascadia Code', monospace; "
+            "padding: 4px 8px; border-radius: 3px; background: #111827; "
+            "border: 1px solid #334155; color: #CBD5E1;"
         )
         self.button.clicked.connect(lambda: self.clicked.emit(self.mode_id))
-        layout.addWidget(self.button)
+        layout.addWidget(self.button, 0, Qt.AlignmentFlag.AlignRight)
 
     def set_active(self, active: bool) -> None:
         self._is_active = active
         border_color = "#38BDF8" if active else "#334155"
-        bg_color = "rgba(56, 189, 248, 0.08)" if active else "#0F172A"
+        bg_color = "rgba(56,189,248,0.07)" if active else "#0F172A"
         self.setStyleSheet(
-            f"#debugModeTile {{ border: 1.5px solid {border_color}; border-radius: 8px; background: {bg_color}; }}"
+            f"#debugModeTile {{ border: 1.5px solid {border_color}; border-radius: 6px; background: {bg_color}; }}"
         )
 
     def mousePressEvent(self, event) -> None:
@@ -109,9 +109,9 @@ class ModeTile(QFrame):
 
 
 class DebugModeSelector(QWidget):
-    """Mode-first entry widget presenting Local, Gateway, and Client modes."""
+    """Explicit LOCAL/GATEWAY/CLIENT role selection before setup."""
 
-    mode_selected = Signal(str)  # "local" | "gateway" | "client"
+    mode_selected = Signal(str)
 
     def __init__(
         self,
@@ -126,63 +126,39 @@ class DebugModeSelector(QWidget):
 
     def _build_ui(self) -> None:
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(20, 24, 20, 24)
-        main_layout.setSpacing(18)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(14)
         main_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        # Title ribbon (technical and dense)
-        header_box = QVBoxLayout()
-        header_box.setSpacing(4)
-        header_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         title = QLabel("DEBUG MODE")
         title.setObjectName("debugModeHeaderTitle")
-        title.setStyleSheet("font-size: 18px; font-weight: 900; letter-spacing: 1.5px; color: #F8FAFC;")
-        header_box.addWidget(title)
+        title.setStyleSheet(
+            "font-size: 17px; font-weight: 900; letter-spacing: 1.4px; color: #F8FAFC;"
+        )
+        main_layout.addWidget(title, 0, Qt.AlignmentFlag.AlignCenter)
 
-        subtitle = QLabel("Chọn môi trường gỡ lỗi cho STM32F407")
-        subtitle.setStyleSheet("font-size: 12px; color: #64748B; font-weight: 500;")
-        header_box.addWidget(subtitle)
+        target = QLabel("STM32F407 · SELECT ROLE")
+        target.setStyleSheet(
+            "font-size: 10px; color: #64748B; font-family: 'Cascadia Code', monospace;"
+        )
+        main_layout.addWidget(target, 0, Qt.AlignmentFlag.AlignCenter)
 
-        main_layout.addLayout(header_box)
-
-        # 3 balanced technical tiles (no emojis, technical identifiers)
         tiles_layout = QHBoxLayout()
-        tiles_layout.setSpacing(16)
+        tiles_layout.setSpacing(14)
         tiles_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.tile_local = ModeTile(
-            mode_id="local",
-            icon_tag="⬡",
-            title="LOCAL",
-            subtitle="ST-Link kết nối trực tiếp trên máy này",
-            detail_badge="USB SWD",
-            parent=self,
+            "local", "[L]", "LOCAL", "ST-Link on this workstation", "USB SWD", self
         )
-        self.tile_local.clicked.connect(self.select_mode)
-        tiles_layout.addWidget(self.tile_local)
-
         self.tile_gateway = ModeTile(
-            mode_id="gateway",
-            icon_tag="⬢",
-            title="GATEWAY",
-            subtitle="Chạy OpenOCD server nhận kết nối từ xa",
-            detail_badge="TCP 3333/6666",
-            parent=self,
+            "gateway", "[G]", "GATEWAY", "ST-Link + OpenOCD + SSH endpoint", "ST-LINK + SSH", self
         )
-        self.tile_gateway.clicked.connect(self.select_mode)
-        tiles_layout.addWidget(self.tile_gateway)
-
         self.tile_client = ModeTile(
-            mode_id="client",
-            icon_tag="◈",
-            title="CLIENT",
-            subtitle="Gỡ lỗi qua mạng tới máy chủ Gateway",
-            detail_badge="SSH TUNNEL",
-            parent=self,
+            "client", "[C]", "CLIENT", "Remote debug through Gateway", "SSH", self
         )
-        self.tile_client.clicked.connect(self.select_mode)
-        tiles_layout.addWidget(self.tile_client)
+        for tile in (self.tile_local, self.tile_gateway, self.tile_client):
+            tile.clicked.connect(self.select_mode)
+            tiles_layout.addWidget(tile)
 
         main_layout.addLayout(tiles_layout)
         self._update_tile_highlights()
