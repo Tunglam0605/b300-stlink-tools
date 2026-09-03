@@ -17,6 +17,7 @@ def verify_client_symbols(
     symbol_roots: Sequence[Path] = (),
     gateway_tcl_port: int = 6666,
     max_files: int = 128,
+    tcl_factory=SafeTclClient,
 ) -> Optional[Path]:
     """Return the unique AXF/ELF matching remote Application Flash.
 
@@ -44,7 +45,7 @@ def verify_client_symbols(
     forward = remote_session.open_forward(
         "tcl", remote_port=int(gateway_tcl_port), local_port=0,
     )
-    tcl = SafeTclClient(TclEndpoint(forward.local_host, forward.local_port))
+    tcl = tcl_factory(TclEndpoint(forward.local_host, forward.local_port))
     state_before = tcl.wait_target_state()
 
     candidates = (exact,) if exact is not None else discover_symbol_files(
