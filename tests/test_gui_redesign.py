@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import QApplication, QScrollArea
 
 from b300_core.models import ImageInfo, ProbeInfo, TargetInfo
@@ -20,7 +20,7 @@ from b300_gui.widgets.compact_sidebar import CompactSidebar
 from b300_gui.widgets.pipeline_stepper import PipelineStepper
 from b300_gui.widgets.pass_fail_banner import PassFailBanner
 from b300_gui.widgets.memory_map_widget import MemoryMapWidget
-from b300_gui.widgets.stats_row import StatsRow
+from b300_gui.widgets.stats_row import StatCard, StatsRow
 from b300_gui.views.operator_view import OperatorView
 from b300_gui.views.rnd_flash_view import RndFlashView
 from b300_gui.main_window import MainWindow
@@ -83,18 +83,59 @@ class GuiRedesignTests(unittest.TestCase):
         self.assertEqual(stats.probe_card.value_label.text(), "ST-Link V3")
         self.assertEqual(stats.status_card.subtitle_label.text(), "OpenOCD Loopback OK")
 
-    def test_stats_row_waits_for_comfortable_card_width_before_four_columns(self) -> None:
+    def test_stats_row_uses_two_columns_at_280_pixels_per_card(self) -> None:
         ThemeManager.instance().set_theme("dark")
         ThemeManager.instance().apply()
         stats = StatsRow()
-        four_column_width = 4 * 280 + 3 * stats.layout().horizontalSpacing()
+        two_column_width = 2 * 280 + stats.layout().horizontalSpacing()
+
+        stats.resize(two_column_width - 1, 240)
+        stats.show()
+        self.app.processEvents()
+
+        self.assertEqual(stats._columns, 1)
+        stats.resize(two_column_width, 240)
+        self.app.processEvents()
+
+        self.assertEqual(stats._columns, 2)
+        stats.close()
+
+    def test_stats_row_uses_four_columns_at_320_pixels_per_card(self) -> None:
+        ThemeManager.instance().set_theme("dark")
+        ThemeManager.instance().apply()
+        stats = StatsRow()
+        four_column_width = 4 * 320 + 3 * stats.layout().horizontalSpacing()
 
         stats.resize(four_column_width - 1, 240)
         stats.show()
         self.app.processEvents()
 
         self.assertEqual(stats._columns, 2)
+        stats.resize(four_column_width, 240)
+        self.app.processEvents()
+
+        self.assertEqual(stats._columns, 4)
         stats.close()
+
+    def test_stats_row_breakpoints_ignore_platform_card_size_hints(self) -> None:
+        ThemeManager.instance().set_theme("dark")
+        ThemeManager.instance().apply()
+        stats = StatsRow()
+        self.addCleanup(stats.close)
+
+        with patch.object(
+            StatCard,
+            "minimumSizeHint",
+            return_value=QSize(400, 58),
+        ):
+            stats.resize(568, 240)
+            stats.show()
+            self.app.processEvents()
+            self.assertEqual(stats._columns, 2)
+
+            stats.resize(1304, 240)
+            self.app.processEvents()
+            self.assertEqual(stats._columns, 4)
 
     def test_header_bar_mode_switching(self) -> None:
         header = HeaderBar()
