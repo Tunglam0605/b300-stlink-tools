@@ -15,6 +15,7 @@ from .live_monitor import (
 from .live_service import LiveMonitorService
 from .models import ProbeRef
 from .offline_symbols import OfflineSymbolTable
+from .remote_session import RemoteSession
 from .ssh_debug_tunnel import find_available_loopback_port
 from .ssh_live_tunnel import SshLiveTunnel, SshLiveTunnelConfig
 from .tcl_client import SafeTclClient, TclEndpoint
@@ -93,11 +94,11 @@ def _validate_monitor_request(interval_seconds: float, sample_limit: Optional[in
 
 
 class LiveMonitorSession:
-    """Own Live Monitor transports/symbols and expose cooperative cancellation.
+    """Own Live Monitor symbols/transports and expose cooperative cancellation.
 
-    The normal GUI pattern is: create/start/run in a worker thread, call ``cancel``
-    from the UI thread, then ``close`` in the worker's ``finally`` block. ``cancel``
-    never halts or resumes the STM32 target.
+    v0.15 Client mode may receive an already-authenticated ``RemoteSession``. In that
+    mode Live Monitor reuses the same embedded SSH connection/loopback TCL forward as
+    the rest of Debug Studio and never prompts for another password or opens a console.
     """
 
     def __init__(self, *, openocd_executable: Optional[str] = None,
@@ -119,6 +120,7 @@ class LiveMonitorSession:
         self._config = None
         self._service = None
         self._tunnel = None
+        self._remote_session: Optional[RemoteSession] = None
         self._tcl = None
         self._symbols = None
 
@@ -189,20 +191,38 @@ class LiveMonitorSession:
             symbols=str(matched), initial_target_state=state,
         )
 
-    def start_client(self, config: ClientLiveMonitorConfig) -> LiveMonitorSessionInfo:
+    def start_client(self, config: ClientLiveMonitorConfig,
+                     remote_session: Optional[RemoteSession] = None) -> LiveMonitorSessionInfo:
         config.validate()
         self._require_inactive()
         selected_symbols = (_validate_symbol_file(config.symbols)
                             if config.symbols is not None else None)
-        local_tcl = self._port_allocator(config.preferred_local_tcl_port)
-        tunnel_config = SshLiveTunnelConfig(
-            host=config.host, user=config.user, ssh_port=config.ssh_port,
-            local_tcl_port=local_tcl, gateway_tcl_port=config.gateway_tcl_port,
-            show_console=config.show_console,
-        )
-        tunnel = self._tunnel_factory(tunnel_config)
-        try:
+        tunnel = None
+        shared_remote = None
+        if remote_session is not None:
+            profile = remote_session.profile
+            if (profile.host, profile.user, profile.port) != (config.host, config.user, config.ssh_port):
+                raise ValueError("Client Live Monitor endpoint does not match the authenticated RemoteSession.")
+            health = remote_session.check_health()
+            if not health.authenticated:
+                raise RuntimeError("Client Live Monitor requires an authenticated RemoteSession.")
+            forward = remote_session.open_forward(
+                "tcl", remote_port=config.gateway_tcl_port, local_port=0,
+            )
+            local_tcl = forward.local_port
+            shared_remote = remote_session
+            transport_name = "embedded-ssh-shared-tcl-forward"
+        else:
+            local_tcl = self._port_allocator(config.preferred_local_tcl_port)
+            tunnel_config = SshLiveTunnelConfig(
+                host=config.host, user=config.user, ssh_port=config.ssh_port,
+                local_tcl_port=local_tcl, gateway_tcl_port=config.gateway_tcl_port,
+                show_console=config.show_console,
+            )
+            tunnel = self._tunnel_factory(tunnel_config)
             tunnel.start()
+            transport_name = "ssh-tcl-local-forwarding"
+        try:
             tcl = self._tcl_factory(TclEndpoint("127.0.0.1", local_tcl))
             matched = _resolve_client_symbols(config, selected_symbols, tcl)
             state = tcl.wait_target_state()
@@ -212,7 +232,8 @@ class LiveMonitorSession:
                 )
             symbols = self._symbol_table_factory(matched)
         except BaseException:
-            tunnel.stop()
+            if tunnel is not None:
+                tunnel.stop()
             raise
         with self._lock:
             self._store.clear()
@@ -220,11 +241,12 @@ class LiveMonitorSession:
             self._role = "client"
             self._config = config
             self._tunnel = tunnel
+            self._remote_session = shared_remote
             self._tcl = tcl
             self._symbols = symbols
             self._active = True
         return LiveMonitorSessionInfo(
-            role="client", transport="ssh-tcl-local-forwarding",
+            role="client", transport=transport_name,
             tcl_endpoint="127.0.0.1:%d" % local_tcl,
             symbols=str(matched), initial_target_state=state,
         )
@@ -258,13 +280,14 @@ class LiveMonitorSession:
         self._cancel.set()
 
     def close(self) -> None:
-        """Release symbols/transports. Prefer calling after ``run`` has returned."""
+        """Release symbols/local transport without disconnecting a shared RemoteSession."""
         self.cancel()
         with self._lock:
             symbols, tunnel, service = self._symbols, self._tunnel, self._service
             self._symbols = None
             self._tcl = None
             self._tunnel = None
+            self._remote_session = None
             self._service = None
             self._config = None
             self._role = None

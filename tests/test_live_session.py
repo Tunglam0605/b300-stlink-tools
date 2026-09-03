@@ -13,6 +13,8 @@ from b300_core.live_session import (
 )
 from b300_core.models import ProbeRef
 from b300_core.offline_symbols import ElfSymbol, SourceLocation
+from b300_core.remote_profile import RemoteGatewayProfile
+from b300_core.remote_session import RemoteForward, RemoteSessionState
 
 
 class FakeService:
@@ -38,6 +40,25 @@ class FakeTunnel:
         return "OpenOCD forwarded"
     def stop(self):
         self.stopped += 1
+
+
+class FakeRemoteSession:
+    def __init__(self, *, connected=True):
+        self.profile = RemoteGatewayProfile("gateway.local", "automation", 22)
+        self.connected = connected
+        self.forward_calls = []
+        self.disconnect_calls = 0
+    def check_health(self):
+        return RemoteSessionState(
+            state="connected" if self.connected else "disconnected",
+            endpoint="automation@gateway.local:22", authenticated=self.connected,
+        )
+    def open_forward(self, name, *, remote_port, local_port=0, remote_host="127.0.0.1", local_host="127.0.0.1"):
+        self.forward_calls.append((name, remote_port, local_port, remote_host, local_host))
+        return RemoteForward(name, "127.0.0.1", 18666, "127.0.0.1", remote_port)
+    def disconnect(self):
+        self.disconnect_calls += 1
+        self.connected = False
 
 
 class FakeTcl:
@@ -178,6 +199,47 @@ class LiveMonitorSessionTests(unittest.TestCase):
             self.assertEqual(session.run().samples, 1)
             session.close()
             self.assertEqual(tunnel.stopped, 1)
+
+    def test_client_reuses_authenticated_remote_session_without_new_tunnel_or_disconnect(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch("b300_core.live_session.find_matching_symbol_file") as matcher:
+            symbols = self.make_symbols(directory)
+            matcher.return_value = (self.matched(symbols), ())
+            remote = FakeRemoteSession(connected=True)
+            called = []
+            session = LiveMonitorSession(
+                tunnel_factory=lambda config: called.append(config) or FakeTunnel(config),
+                tcl_factory=FakeTcl, symbol_table_factory=FakeSymbolTable,
+            )
+            info = session.start_client(ClientLiveMonitorConfig(
+                "gateway.local", "automation", symbols, interval_seconds=0.5,
+                sample_limit=1, watch_specs=("xTickCount:u32",),
+            ), remote_session=remote)
+            self.assertEqual(info.transport, "embedded-ssh-shared-tcl-forward")
+            self.assertEqual(info.tcl_endpoint, "127.0.0.1:18666")
+            self.assertEqual(called, [])
+            self.assertEqual(remote.forward_calls, [
+                ("tcl", 6666, 0, "127.0.0.1", "127.0.0.1")
+            ])
+            self.assertEqual(session.run().samples, 1)
+            session.close()
+            self.assertTrue(remote.connected)
+            self.assertEqual(remote.disconnect_calls, 0)
+
+    def test_shared_remote_session_must_match_config_and_be_authenticated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            symbols = self.make_symbols(directory)
+            session = LiveMonitorSession(tcl_factory=FakeTcl, symbol_table_factory=FakeSymbolTable)
+            remote = FakeRemoteSession(connected=False)
+            with self.assertRaisesRegex(RuntimeError, "authenticated"):
+                session.start_client(ClientLiveMonitorConfig(
+                    "gateway.local", "automation", symbols, sample_limit=1,
+                ), remote_session=remote)
+            remote.connected = True
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                session.start_client(ClientLiveMonitorConfig(
+                    "other-host", "automation", symbols, sample_limit=1,
+                ), remote_session=remote)
 
     def test_client_symbol_root_can_resolve_unique_matching_axf(self):
         with tempfile.TemporaryDirectory() as directory, \
