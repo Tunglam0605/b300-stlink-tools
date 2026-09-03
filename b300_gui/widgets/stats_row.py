@@ -110,7 +110,7 @@ class StatsRow(QWidget):
             icon="💾",
             title="Flash Memory",
             value="Chưa đọc flash",
-            subtitle="S0–S2 BL · S4–S7 App",
+            subtitle="Dùng Kiểm tra target",
             variant="flash",
             parent=self,
         )
@@ -167,6 +167,10 @@ class StatsRow(QWidget):
 
     def update_target(self, target: str, details: str = "") -> None:
         self.target_card.set_value(target, details)
+
+    def clear_target(self) -> None:
+        self.target_card.set_value("Chưa đọc target", "Dùng Kiểm tra target")
+        self.flash_card.set_value("Chưa đọc flash", "Dùng Kiểm tra target")
 
     def update_flash(self, flash: str, details: str = "") -> None:
         self.flash_card.set_value(flash, details)

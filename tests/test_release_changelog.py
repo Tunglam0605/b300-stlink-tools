@@ -6,6 +6,9 @@ from unittest import mock
 from scripts.release.changelog import extract_release_notes, main
 
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
 CHANGELOG = """# Changelog
 
 ## [Unreleased]
@@ -64,6 +67,18 @@ class ReleaseChangelogTests(unittest.TestCase):
                 ]), 0)
             self.assertEqual(output.read_text(encoding="utf-8"),
                              extract_release_notes(CHANGELOG, "0.3.0") + "\n")
+
+    def test_v0141_notes_cover_integrated_gui_and_ci_fixes(self) -> None:
+        changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        notes = extract_release_notes(changelog, "0.14.1")
+        for phrase in (
+            "Cockpit",
+            "target statistics",
+            "Qt unittest modules",
+            "dark-theme wordmark",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, notes)
 
 
 if __name__ == "__main__":

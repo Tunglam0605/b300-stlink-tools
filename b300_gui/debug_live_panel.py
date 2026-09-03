@@ -228,13 +228,13 @@ class DebugLivePanel(QFrame):
         variables_layout.setContentsMargins(0, 4, 0, 0)
         variables_layout.setSpacing(6)
 
-        # Single-row unified Variable Search & Preset Toolbar
-        add_var_bar = QHBoxLayout()
-        add_var_bar.setSpacing(6)
+        variable_toolbar = QGridLayout()
+        variable_toolbar.setHorizontalSpacing(2)
+        variable_toolbar.setVerticalSpacing(6)
 
         lbl_v = QLabel("Biến:")
         lbl_v.setObjectName("fieldLabel")
-        add_var_bar.addWidget(lbl_v)
+        variable_toolbar.addWidget(lbl_v, 0, 0)
 
         self.expressions = QLineEdit()
         self.expressions.setObjectName("debugSampleExpressions")
@@ -242,49 +242,45 @@ class DebugLivePanel(QFrame):
         self.expressions.setToolTip("Nhập tên biến global có trong file AXF/ELF.")
         self.expressions.setMinimumWidth(180)
         self.expressions.setMaximumWidth(320)
-        add_var_bar.addWidget(self.expressions)
+        variable_toolbar.addWidget(self.expressions, 0, 1)
 
         self.type_combo = QComboBox()
         for t in ("u32", "i32", "u16", "i16", "u8", "i8", "f32", "f64"):
             self.type_combo.addItem(t)
-        add_var_bar.addWidget(self.type_combo)
+        variable_toolbar.addWidget(self.type_combo, 1, 0)
 
         self.add_watch_btn = QPushButton("+ Thêm")
         self.add_watch_btn.setObjectName("primaryButton")
         self.add_watch_btn.clicked.connect(self._on_add_watch_clicked)
-        add_var_bar.addWidget(self.add_watch_btn)
+        variable_toolbar.addWidget(self.add_watch_btn, 1, 1)
 
         self.remove_watch_btn = QPushButton("Xóa biến")
         self.remove_watch_btn.setObjectName("ghostButton")
         self.remove_watch_btn.clicked.connect(self._on_remove_watch_clicked)
-        add_var_bar.addWidget(self.remove_watch_btn)
+        variable_toolbar.addWidget(self.remove_watch_btn, 2, 0)
 
-        sep_var = QFrame()
-        sep_var.setFrameShape(QFrame.Shape.VLine)
-        sep_var.setObjectName("borderMuted")
-        add_var_bar.addWidget(sep_var)
-
-        self.browse_symbols_btn = QPushButton("Chọn từ AXF…")
+        self.browse_symbols_btn = QPushButton("AXF/ELF…")
         self.browse_symbols_btn.setObjectName("ghostButton")
         self.browse_symbols_btn.setToolTip(
             "Duyệt symbol offline từ AXF/ELF; thao tác này không truy cập hoặc halt STM32."
         )
         self.browse_symbols_btn.clicked.connect(self.symbol_browser_requested.emit)
-        add_var_bar.addWidget(self.browse_symbols_btn)
+        variable_toolbar.addWidget(self.browse_symbols_btn, 2, 1)
 
-        self.load_preset_btn = QPushButton("Nạp preset…")
+        self.load_preset_btn = QPushButton("Nạp…")
         self.load_preset_btn.setObjectName("ghostButton")
         self.load_preset_btn.setToolTip("Nạp danh sách biến theo dõi từ file JSON.")
         self.load_preset_btn.clicked.connect(self._on_load_preset_clicked)
-        add_var_bar.addWidget(self.load_preset_btn)
+        variable_toolbar.addWidget(self.load_preset_btn, 3, 0)
 
-        self.save_preset_btn = QPushButton("Lưu preset…")
+        self.save_preset_btn = QPushButton("Lưu…")
         self.save_preset_btn.setObjectName("ghostButton")
         self.save_preset_btn.setToolTip("Lưu danh sách biến hiện tại ra file JSON.")
         self.save_preset_btn.clicked.connect(self._on_save_preset_clicked)
-        add_var_bar.addWidget(self.save_preset_btn)
+        variable_toolbar.addWidget(self.save_preset_btn, 3, 1)
+        variable_toolbar.setColumnStretch(1, 1)
 
-        variables_layout.addLayout(add_var_bar)
+        variables_layout.addLayout(variable_toolbar)
 
         self.table = QTableWidget(0, 9)
         self.table.setObjectName("debugSampleTable")

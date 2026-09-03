@@ -222,6 +222,22 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(window.stats_row.flash_card.value_label.text(), "512 KiB")
         window.close()
 
+    def test_target_facts_clear_when_probe_context_changes(self) -> None:
+        window = MainWindow(service=FakeService(), probe_loader=lambda: ())
+        info = TargetInfo(
+            0x101F6413, 512, 3.09, "S0-S2 protected", (0, 1, 2), True,
+        )
+        window.apply_target_info(info)
+        self.assertIs(window.operator_view._target_info, info)
+
+        window._probe_changed()
+
+        self.assertEqual(window.stats_row.target_card.value_label.text(), "Chưa đọc target")
+        self.assertEqual(window.stats_row.flash_card.value_label.text(), "Chưa đọc flash")
+        self.assertIsNone(window.operator_view._target_info)
+        self.assertFalse(window.operator_view._flash_ready)
+        window.close()
+
     def test_compact_debug_workspace_keeps_controls_and_stats_unclipped(self) -> None:
         window = MainWindow(service=FakeService(), probe_loader=lambda: ())
         window.resize(760, 460)
@@ -236,12 +252,23 @@ class GuiSmokeTests(unittest.TestCase):
             tab.live_panel.start_button,
             tab.live_panel.interval_preset_combo,
             tab.live_panel.status,
+            tab.live_panel.expressions,
+            tab.live_panel.type_combo,
+            tab.live_panel.add_watch_btn,
+            tab.live_panel.remove_watch_btn,
+            tab.live_panel.browse_symbols_btn,
+            tab.live_panel.load_preset_btn,
+            tab.live_panel.save_preset_btn,
         )
         for control in controls:
-            self.assertGreaterEqual(
-                control.width(), control.minimumSizeHint().width(),
-                "%s is clipped in the compact Debug workspace" % control.objectName(),
-            )
+            label = control.text() if hasattr(control, "text") else control.objectName()
+            with self.subTest(control=type(control).__name__, label=label):
+                self.assertGreaterEqual(
+                    control.width(), control.minimumSizeHint().width(),
+                    "%s %r is clipped in the compact Debug workspace" % (
+                        type(control).__name__, label,
+                    ),
+                )
         for card in (
             window.stats_row.probe_card,
             window.stats_row.target_card,
@@ -275,6 +302,23 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertEqual(window.stats_row.flash_card.value_label.text(), "256 KiB")
         self.assertIn("Không hỗ trợ", window.stats_row.flash_card.subtitle_label.text())
         self.assertNotIn("S0–S2", window.stats_row.flash_card.subtitle_label.text())
+        window.close()
+
+    def test_unsupported_target_clears_previous_operator_target(self) -> None:
+        window = MainWindow(service=FakeService(), probe_loader=lambda: ())
+        valid = TargetInfo(
+            0x101F6413, 512, 3.09, "S0-S2 protected", (0, 1, 2), True,
+        )
+        unsupported = TargetInfo(
+            0x12345678, 256, 3.21, "unrecognised target", (), False,
+        )
+        window.apply_target_info(valid)
+        self.assertIs(window.operator_view._target_info, valid)
+
+        window.apply_target_info(unsupported)
+
+        self.assertIsNone(window.operator_view._target_info)
+        self.assertFalse(window.operator_view._flash_ready)
         window.close()
 
     def test_debug_workspace_remains_simple_and_scroll_free_at_minimum_window(self) -> None:

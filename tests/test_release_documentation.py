@@ -98,6 +98,49 @@ class ReleaseDocumentationTests(unittest.TestCase):
                 self.assertIn("CONFIRMED", text)
                 self.assertIn("0x0800C000", text)
 
+    def test_remote_debug_docs_require_ssh_and_do_not_recommend_public_debug_ports(
+        self,
+    ) -> None:
+        paths = (
+            ROOT / "docs" / "04_DEBUG.md",
+            ROOT / "docs" / "05_TROUBLESHOOTING.md",
+            ROOT / ".agents" / "skills" / "b300-ota-stlink" / "SKILL.md",
+            ROOT
+            / ".agents"
+            / "skills"
+            / "b300-ota-stlink"
+            / "references"
+            / "commands.md",
+        )
+        for path in paths:
+            with self.subTest(path=path):
+                text = path.read_text(encoding="utf-8")
+                self.assertNotIn("--bind-address 0.0.0.0", text)
+                self.assertIn("SSH", text)
+
+    def test_v0141_acceptance_tracks_software_and_field_gates(self) -> None:
+        path = (
+            ROOT
+            / "docs"
+            / "21_V0.14.1_RELEASE_CANDIDATE_ACCEPTANCE_2026-09-03.md"
+        )
+        self.assertTrue(path.is_file(), "v0.14.1 acceptance ledger is missing")
+        if not path.is_file():
+            return
+        text = path.read_text(encoding="utf-8")
+        for phrase in (
+            "f0547fa",
+            "ALL_MODULES_PASS",
+            "Windows x64",
+            "Ubuntu x64",
+            "Ubuntu ARM64",
+            "NO_PROBE",
+            "SSH_CONNECT_FAILED",
+            "DO NOT PUBLISH",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
+
 
 
 if __name__ == "__main__":

@@ -1569,6 +1569,9 @@ class MainWindow(QMainWindow):
         self.openocd_ready = available
         self.target_ready = False
         self.target_info = None
+        self._clear_target_display()
+        if hasattr(self, "operator_view"):
+            self.operator_view.set_probes(self._probes)
         if hasattr(self, "factory_target_summary"):
             self.factory_target_summary.setText(
                 "Sẵn sàng one-click Factory; target/WRP sẽ được tự kiểm tra trước khi ghi"
@@ -1650,6 +1653,7 @@ class MainWindow(QMainWindow):
         self.openocd_ready = available
         self.target_ready = False
         self.target_info = None
+        self._clear_target_display()
         if available:
             self._set_status(
                 "OpenOCD sẵn sàng · chưa quét ST-Link · %s" % resolved,
@@ -1673,6 +1677,12 @@ class MainWindow(QMainWindow):
         )
         self._update_controls()
 
+    def _clear_target_display(self) -> None:
+        if hasattr(self, "stats_row"):
+            self.stats_row.clear_target()
+        if hasattr(self, "operator_view"):
+            self.operator_view.clear_target_info()
+
     def _probe_changed(self) -> None:
         selected = self.probe_combo.currentData()
         if hasattr(self, "factory_probe_combo"):
@@ -1682,6 +1692,7 @@ class MainWindow(QMainWindow):
             self.factory_probe_combo.blockSignals(False)
         self.target_ready = False
         self.target_info = None
+        self._clear_target_display()
         self.target_summary.setText("Probe changed; inspect target/WRP again")
         if hasattr(self, "factory_target_summary"):
             self.factory_target_summary.setText("Probe changed; inspect target/WRP again")
@@ -1697,6 +1708,7 @@ class MainWindow(QMainWindow):
             self.probe_combo.blockSignals(False)
         self.target_ready = False
         self.target_info = None
+        self._clear_target_display()
         self.target_summary.setText("Factory probe changed; target sẽ được tự kiểm tra khi nạp")
         self.factory_target_summary.setText("Probe đã thay đổi; one-click Factory sẽ tự kiểm tra target/WRP")
         self._rebuild_plan()
@@ -1776,7 +1788,10 @@ class MainWindow(QMainWindow):
                 "S0–S2 BL · S4–S7 App" if is_f407 else "Không hỗ trợ · không áp dụng bản đồ B300",
             )
         if hasattr(self, "operator_view"):
-            self.operator_view.set_target_info(info) if is_f407 else None
+            if is_f407:
+                self.operator_view.set_target_info(info)
+            else:
+                self.operator_view.clear_target_info()
         rdp_text = "ENABLED (blocked)" if info.readout_protected else "Level 0 / not reported as secured"
         summary = (
             "Device ID: 0x%08X | Flash: %d KiB | Voltage: %.3f V\n"

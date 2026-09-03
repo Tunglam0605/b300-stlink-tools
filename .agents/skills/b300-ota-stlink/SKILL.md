@@ -64,9 +64,10 @@ ordinary Application update. It must not use mass erase, RDP operations,
 
 Use `b300-stlink debug --gdb-port 3333` only when halting or
 resetting the CPU is acceptable. Debug does not flash, but a connected debugger
-can halt/reset the board. It binds to `127.0.0.1` by default. For a trusted IPC
-network, remote access must be explicit with `--bind-address 0.0.0.0`. Keep
-Telnet/TCL disabled for remote sessions.
+can halt/reset the board. It binds to `127.0.0.1` by default. For remote work,
+run `b300-stlink debug gateway` with GDB/TCL still on loopback, then use
+`b300-stlink debug client` or an SSH/VPN local-forwarding workflow. Do not expose
+or NAT GDB/TCL ports to the LAN or Internet. Keep Telnet disabled.
 
 Use the AXF/ELF matching the firmware already on the board for symbols. Do not
 run GDB `load`, `restore`, or flash commands. Before stopping OpenOCD, resume the

@@ -7,6 +7,11 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [0.14.1] - 2026-09-03
 
+- Integrated the Cockpit-inspired frontend refinements across the existing Production and Engineering workspaces while preserving the Core-owned flash, Factory, memory, debug, and SSH safety paths.
+- Fixed stale target statistics after probe refresh/change or an unsupported MCU result. The dashboard and Operator workspace now return to an uninspected state instead of retaining target/WRP facts from the previous probe.
+- Made the Live Monitor variable/preset toolbar responsive at the supported 760×460 window size by using a compact two-column action grid without horizontal scrolling or clipped controls.
+- Isolated Qt unittest modules in CI so each module owns its QApplication/QThread teardown; Linux GUI smoke cases also run with bounded per-case timeouts and attributable failures.
+- Added the dark-theme wordmark to the Windows PyInstaller data set so packaged Windows builds match the source/Linux dark-mode branding.
 - Fixed the Linux CLI bootstrap to accept the signed one-file Linux CLI bundle. It continues to validate the signed manifest, immutable package URL, SHA-256, size, archive paths, executable, and managed installer; it no longer incorrectly requires the Windows-only `_internal` runtime directory.
 - Fixed headless Debug Gateway shutdown on `SIGTERM`. A background Gateway now runs its existing target-state restore and `DebugService` cleanup before exiting, so it does not leave the OpenOCD child process listening on loopback ports.
 

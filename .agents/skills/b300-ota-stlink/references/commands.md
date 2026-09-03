@@ -23,17 +23,23 @@ gdb-multiarch /opt/firmware/Main_V2_F407.axf
 If Ubuntu does not expose the ST-Link to the non-root user, repair the udev rule
 and `plugdev` membership; do not prepend `sudo` to `b300-stlink`.
 
-Local debug binds to `127.0.0.1`. When the probe is connected to a trusted IPC
-and GDB runs on another machine, start:
+Local debug binds to `127.0.0.1`. When the probe is connected to an Ubuntu IPC
+and the client runs on another machine, keep OpenOCD on loopback:
 
 ```text
-b300-stlink debug --bind-address 0.0.0.0 --gdb-port 3333
+b300-stlink debug gateway
 ```
 
-Telnet/TCL must remain disabled for remote sessions. Then connect GDB to
-`<IPC-IP>:3333` with the matching AXF/ELF symbol file. Never use GDB `load`,
-`restore`, or flash commands in this debug workflow. End with `monitor reset
-run`, `detach`, and `quit`, then stop OpenOCD.
+From the client, use the managed SSH profile and local forwarding:
+
+```text
+b300-stlink debug client --ssh-host <IPC-IP> --ssh-user <SSH-USER> \
+  --symbols <application.axf> --client-action inspect --json
+```
+
+Only SSH TCP/22 is LAN-facing; do not expose or NAT GDB/TCL ports 3333/6666.
+Never use GDB `load`, `restore`, or flash commands in this debug workflow. End
+with `monitor reset run`, `detach`, and `quit`, then stop OpenOCD.
 
 ## Useful output
 

@@ -135,6 +135,7 @@ class GuiPackagingTests(unittest.TestCase):
             (ROOT / "packaging" / "linux" / "b300-stlink-gui.svg").is_file()
         )
         gui_spec = (ROOT / "b300_gui.spec").read_text(encoding="utf-8")
+        windows_gui_spec = (ROOT / "b300_gui_windows.spec").read_text(encoding="utf-8")
         native_builder = (ROOT / "build_native_bundle.py").read_text(encoding="utf-8")
         installer = (ROOT / "packaging" / "windows" /
                      "b300-stlink-gui.iss").read_text(encoding="utf-8")
@@ -142,6 +143,10 @@ class GuiPackagingTests(unittest.TestCase):
                       gui_spec)
         self.assertIn('project_root / "CHANGELOG.md"', gui_spec)
         self.assertIn('project_root / "branding" / "b300-stlink-wordmark-dark.png"', gui_spec)
+        self.assertIn(
+            'project_root / "branding" / "b300-stlink-wordmark-dark.png"',
+            windows_gui_spec,
+        )
         self.assertIn('"BUILD-COMMIT.txt"', gui_spec)
         self.assertIn("load_trusted_bootloader", gui_spec)
         self.assertNotIn("v00050001.hex", gui_spec)

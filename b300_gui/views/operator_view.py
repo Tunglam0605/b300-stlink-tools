@@ -262,6 +262,17 @@ class OperatorView(QWidget):
             self.stepper.set_step_state(0, state, detail)
         self._update_action_state()
 
+    def clear_target_info(self) -> None:
+        self._target_info = None
+        self._flash_ready = False
+        if self._probes:
+            probe = self._probes[0]
+            self.probe_status_sub.setText(
+                f"Đã kết nối qua {probe.source.upper()}. Sẵn sàng kiểm tra chip."
+            )
+            self.stepper.set_step_state(0, "pending", "Cần kiểm tra lại target/WRP")
+        self._update_action_state()
+
     def set_flash_ready(self, ready: bool) -> None:
         """Reflect MainWindow's validated B300 flash gate in the operator UI."""
         self._flash_ready = ready

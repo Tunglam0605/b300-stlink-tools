@@ -20,6 +20,7 @@ a = Analysis(
     datas=[
         (str(project_root / "branding" / "b300-stlink-icon.png"), "branding"),
         (str(project_root / "branding" / "b300-stlink-wordmark.png"), "branding"),
+        (str(project_root / "branding" / "b300-stlink-wordmark-dark.png"), "branding"),
         (str(project_root / "CHANGELOG.md"), "."),
         (str(build_commit_file), "."),
         (str(trusted_bootloader.image.path), "resources/firmware"),
