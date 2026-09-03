@@ -8,7 +8,7 @@ from typing import Callable, Optional
 from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLayout, QLineEdit,
-    QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
+    QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from b300_core.debug_service import DebugConfig, DebugService, DebugState
@@ -37,6 +37,16 @@ from .debug_interactive_panel import DebugInteractivePanel
 from .debug_log_panel import DebugLogPanel
 from .remote_vscode_dialog import RemoteVsCodeDialog
 from .symbol_browser_dialog import SymbolBrowserDialog
+from .debug_workspace import DebugWorkstationWidget
+from .debug_mode_selector import DebugModeSelector
+from .remote_login_dialog import RemoteLoginDialog
+from .debug_view_models import (
+    DebugBreakpoint,
+    DebugConnectionState,
+    DebugFrame,
+    DebugRegister,
+    DebugVariableNode,
+)
 
 
 class DebugTab(QWidget):
@@ -106,7 +116,15 @@ class DebugTab(QWidget):
         layout.setSizeConstraint(QLayout.SizeConstraint.SetDefaultConstraint)
         self.scroll_content.setMinimumSize(0, 0)
         self.scroll_area.setWidget(self.scroll_content)
-        root_layout.addWidget(self.scroll_area)
+
+        self.main_stack = QStackedWidget(self)
+        self.main_stack.setObjectName("debugMainStack")
+        root_layout.addWidget(self.main_stack)
+
+        self.main_stack.addWidget(self.scroll_area)
+
+        self.workstation = DebugWorkstationWidget(self)
+        self.main_stack.addWidget(self.workstation)
 
         # Safety-first mode guide. Redundant banner hidden to prioritize workspace view.
         self.safety_guide = QFrame(self.scroll_content)
@@ -247,8 +265,59 @@ class DebugTab(QWidget):
         self.sample_cycles.valueChanged.connect(self._save_debug_preferences)
         self.sample_limit_enabled.toggled.connect(self._save_debug_preferences)
         self.sample_interval.valueChanged.connect(self._save_debug_preferences)
+        self.mode_selector = self.conn_panel.mode_selector
+        self.conn_panel.client_login_requested.connect(self._on_client_login_requested)
+        self.workstation.toolbar.run_requested.connect(self.continue_target)
+        self.workstation.toolbar.halt_requested.connect(self.halt_target)
+        self.workstation.toolbar.reset_requested.connect(self.reset_halt_target)
+        self.workstation.toolbar.step_in_requested.connect(self.step_into_target)
+        self.workstation.toolbar.step_over_requested.connect(self.step_over_target)
+        self.workstation.toolbar.break_requested.connect(self.break_once)
+        self.workstation.toolbar.disconnect_requested.connect(self.stop_debug)
+
         self._restore_debug_preferences()
         self._refresh_controls()
+        self._sync_workstation_state()
+
+    def _sync_workstation_state(self) -> None:
+        target_norm = "DISCONNECTED"
+        if self._target_state == "running":
+            target_norm = "RUNNING"
+        elif self._target_state == "halted":
+            target_norm = "HALTED"
+        elif self.session.active:
+            target_norm = "CONNECTED"
+
+        conn_state = DebugConnectionState(
+            mode=self._resolved_role(),
+            ssh=self._client_mode_active or (self._client_tunnel is not None and self._client_tunnel.active),
+            gdb=self.session.active,
+            tcl=self.session.active or (self._remote_tcl is not None),
+            target=target_norm,
+            pc=getattr(self, "_last_pc", "—"),
+            sample_rate="10 Hz" if self._sampling_active else "—",
+        )
+        self.workstation.update_connection_state(conn_state)
+
+    def _on_client_login_requested(
+        self, host: str, user: str, password: str, port: int, remember: bool
+    ) -> None:
+        self.client_host.setText(host)
+        self.client_user.setText(user)
+        self.client_ssh_port.setValue(port)
+        if remember:
+            self._save_debug_preferences()
+        self.start_client_debug()
+
+    def show_mode_selector(self) -> None:
+        self.main_stack.setCurrentWidget(self.scroll_area)
+        self.conn_panel.mode_selector.setFocus()
+
+    def show_workstation(self) -> None:
+        self.main_stack.setCurrentWidget(self.workstation)
+
+    def show_setup(self) -> None:
+        self.main_stack.setCurrentWidget(self.scroll_area)
 
     def _on_open_gateway_clicked(self) -> None:
         window = self.window()
@@ -832,6 +901,8 @@ class DebugTab(QWidget):
             self.log.emit("Client connected without AXF/ELF; source-level names may be unavailable.")
         self._watchdog.start()
         self._save_debug_preferences()
+        self.main_stack.setCurrentWidget(self.workstation)
+        self._sync_workstation_state()
         self._refresh_controls()
 
     def show_remote_vscode_dialog(self) -> None:
@@ -986,6 +1057,8 @@ class DebugTab(QWidget):
         )
         self._watchdog.start()
         self._save_debug_preferences()
+        self.main_stack.setCurrentWidget(self.workstation)
+        self._sync_workstation_state()
         self._refresh_controls()
 
     def _start_failed(self, failure: WorkerFailure) -> None:
@@ -1146,6 +1219,44 @@ class DebugTab(QWidget):
         self._set_target_state(state)
         text = formatter(result)
         self.interactive_panel.set_diagnostic_result(label, text, state)
+        if label == "Where":
+            addr = getattr(result, "address", "") or ""
+            fn = getattr(result, "function", "") or ""
+            f = getattr(result, "file", "") or getattr(result, "fullname", "") or ""
+            ln = getattr(result, "line", 0) or 0
+            self._last_pc = addr
+            self.workstation.source_view.show_location(f, ln, addr, function=fn)
+            self._sync_workstation_state()
+        elif label == "Call Stack":
+            frames = []
+            if isinstance(result, (list, tuple)):
+                for i, item in enumerate(result):
+                    frames.append(DebugFrame(
+                        level=i,
+                        function=getattr(item, "function", "") or "",
+                        file=getattr(item, "file", "") or getattr(item, "fullname", "") or "",
+                        line=getattr(item, "line", 0) or 0,
+                        address=getattr(item, "address", "") or "",
+                    ))
+            self.workstation.callstack_pane.set_frames(frames)
+            if frames:
+                self.workstation.source_view.show_location(
+                    frames[0].file, frames[0].line, frames[0].address, function=frames[0].function
+                )
+        elif label == "Registers":
+            regs = []
+            if isinstance(result, (list, tuple)):
+                for item in result:
+                    regs.append(DebugRegister(
+                        name=getattr(item, "name", "") or "",
+                        value=getattr(item, "value", "") or "",
+                    ))
+            self.workstation.registers_pane.set_registers(regs)
+        elif label == "Variable":
+            expr = getattr(result, "expression", "") or ""
+            val = getattr(result, "value", "") or ""
+            node = DebugVariableNode(id=expr, name=expr, value=val, type="auto", address="RAM", editable=True)
+            self.workstation.variables_pane.set_variables([node])
         self.log.emit("Diagnostic completed: %s · target restored=%s" % (label, state.upper()))
         self._refresh_controls()
 
@@ -1464,6 +1575,8 @@ class DebugTab(QWidget):
         self.log.emit("Debug session stopped and endpoints released.")
         self.operation_state_changed.emit(False)
         self._set_target_state(None)
+        self.main_stack.setCurrentWidget(self.scroll_area)
+        self._sync_workstation_state()
         self._refresh_controls()
 
     def prepare_shutdown(self) -> bool:

@@ -6,16 +6,30 @@ from typing import Optional
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QComboBox, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
+    QComboBox,
+    QFrame,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QSizePolicy,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
 )
 
 from .collapsible_card import CollapsibleCard
+from .debug_mode_selector import DebugModeSelector
+from .remote_login_dialog import RemoteLoginDialog
 
 
 class DebugConnectionPanel(QFrame):
     """Clean engineering connection ribbon with mode selection, probe info, symbols, and collapsible settings."""
+
     open_gateway_requested = Signal()
+    client_login_requested = Signal(str, str, str, int, bool)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -27,17 +41,12 @@ class DebugConnectionPanel(QFrame):
         main_layout.setContentsMargins(12, 10, 12, 10)
         main_layout.setSpacing(10)
 
-        # Zone Header: Clean Title
-        card_header = QHBoxLayout()
-        card_header.setSpacing(6)
-        card_title = QLabel("⚡  THIẾT LẬP KẾT NỐI & NGUỒN")
-        card_title.setObjectName("CardTitle")
-        card_header.addWidget(card_title)
-        card_header.addStretch(1)
-        main_layout.addLayout(card_header)
+        # 0. Mode-First Selector: 3 balanced technical tiles
+        self.mode_selector = DebugModeSelector(parent=self)
+        self.mode_selector.mode_selected.connect(self._on_mode_tile_selected)
+        main_layout.addWidget(self.mode_selector)
 
-        # 1. Responsive connection controls.  Compact windows must wrap rather
-        # than clipping critical connection and status controls.
+        # 1. Responsive connection controls row
         conn_bar = QGridLayout()
         conn_bar.setHorizontalSpacing(8)
         conn_bar.setVerticalSpacing(6)
@@ -62,6 +71,7 @@ class DebugConnectionPanel(QFrame):
         self.mode_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.mode_combo.setMinimumContentsLength(10)
         self.mode_combo.setMinimumWidth(220)
+        self.mode_combo.currentIndexChanged.connect(self._on_combo_mode_changed)
         conn_bar.addWidget(self.mode_combo, 0, 1)
 
         self.btn_open_gateway = QPushButton("SSH…")
@@ -144,7 +154,7 @@ class DebugConnectionPanel(QFrame):
 
         main_layout.addWidget(self.symbols_box)
 
-        # Role explanation summary (hidden to keep layout clean and unbloated)
+        # Role explanation summary
         self.role_summary = QLabel("")
         self.role_summary.setStyleSheet("color: #64748B; font-size: 11px;")
         self.role_summary.setWordWrap(True)
@@ -162,7 +172,13 @@ class DebugConnectionPanel(QFrame):
         self.client_host.setObjectName("debugClientHost")
         self.client_host.setPlaceholderText("IP/hostname Gateway")
         self.client_host.setMinimumWidth(0)
-        client_layout.addWidget(self.client_host, 0, 1, 1, 3)
+        client_layout.addWidget(self.client_host, 0, 1, 1, 2)
+
+        self.btn_open_login_dialog = QPushButton("Đăng nhập SSH…")
+        self.btn_open_login_dialog.setObjectName("debugClientLoginBtn")
+        self.btn_open_login_dialog.setToolTip("Mở cửa sổ đăng nhập Client duy nhất (password masked)")
+        self.btn_open_login_dialog.clicked.connect(self._open_login_dialog)
+        client_layout.addWidget(self.btn_open_login_dialog, 0, 3)
 
         client_layout.addWidget(QLabel("SSH user:"), 1, 0)
         self.client_user = QLineEdit()
@@ -207,3 +223,23 @@ class DebugConnectionPanel(QFrame):
         self.advanced_card.content_layout.addLayout(advanced_layout)
         self.connection_box = self.advanced_card
         main_layout.addWidget(self.advanced_card)
+
+    def _on_mode_tile_selected(self, mode: str) -> None:
+        idx = self.mode_combo.findData(mode)
+        if idx >= 0 and self.mode_combo.currentIndex() != idx:
+            self.mode_combo.setCurrentIndex(idx)
+
+    def _on_combo_mode_changed(self, index: int) -> None:
+        data = self.mode_combo.itemData(index)
+        if data in ("local", "gateway", "client"):
+            self.mode_selector.set_mode(data)
+
+    def _open_login_dialog(self) -> None:
+        dlg = RemoteLoginDialog(
+            default_host=self.client_host.text().strip(),
+            default_user=self.client_user.text().strip(),
+            default_port=self.client_ssh_port.value(),
+            parent=self.window(),
+        )
+        dlg.connect_requested.connect(self.client_login_requested.emit)
+        dlg.exec()
