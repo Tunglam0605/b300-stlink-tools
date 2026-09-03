@@ -74,6 +74,8 @@ class StatCard(QFrame):
 class StatsRow(QWidget):
     """Cockpit-style 4-column KPI overview bar for ST-Link, Target, Flash, and System State."""
 
+    _COMFORTABLE_CARD_WIDTH = 280
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("statsRowContainer")
@@ -151,7 +153,11 @@ class StatsRow(QWidget):
         column_widths = [0] * columns
         for index, card in enumerate(self._cards):
             column = index % columns
-            column_widths[column] = max(column_widths[column], card.minimumSizeHint().width())
+            card_width = max(
+                self._COMFORTABLE_CARD_WIDTH,
+                card.minimumSizeHint().width(),
+            )
+            column_widths[column] = max(column_widths[column], card_width)
         return sum(column_widths) + self._layout.horizontalSpacing() * (columns - 1)
 
     def resizeEvent(self, event) -> None:

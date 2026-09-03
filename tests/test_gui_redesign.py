@@ -83,6 +83,19 @@ class GuiRedesignTests(unittest.TestCase):
         self.assertEqual(stats.probe_card.value_label.text(), "ST-Link V3")
         self.assertEqual(stats.status_card.subtitle_label.text(), "OpenOCD Loopback OK")
 
+    def test_stats_row_waits_for_comfortable_card_width_before_four_columns(self) -> None:
+        ThemeManager.instance().set_theme("dark")
+        ThemeManager.instance().apply()
+        stats = StatsRow()
+        four_column_width = 4 * 280 + 3 * stats.layout().horizontalSpacing()
+
+        stats.resize(four_column_width - 1, 240)
+        stats.show()
+        self.app.processEvents()
+
+        self.assertEqual(stats._columns, 2)
+        stats.close()
+
     def test_header_bar_mode_switching(self) -> None:
         header = HeaderBar()
         self.assertEqual(header.current_mode, "rnd")
