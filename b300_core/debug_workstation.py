@@ -8,13 +8,15 @@ from typing import Callable, Optional
 
 from .debug_session import DebugSession, DebugSessionConfig, DebugSessionInfo
 from .debug_workspace import DebugWorkspaceBackend
+from .internal_remote import create_internal_remote_session
 from .live_session import (
     ClientLiveMonitorConfig,
     LiveMonitorSession,
     LiveMonitorSessionInfo,
     LocalLiveMonitorConfig,
 )
-from .remote_session import RemoteSession, RemoteSessionState
+from .remote_profile import RemoteGatewayProfile
+from .remote_session import CredentialStore, RemoteSession, RemoteSessionState
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,22 @@ class DebugWorkstationController:
             raise RuntimeError("Cannot replace the RemoteSession while Debug Studio operations are active.")
         self.remote_session = session
         self.mode = "client"
+
+    def configure_internal_remote(
+        self,
+        profile: RemoteGatewayProfile,
+        *,
+        credential_store: Optional[CredentialStore] = None,
+        keepalive_seconds: int = 15,
+    ) -> RemoteSession:
+        """Configure normal v0.15 Client mode without known_hosts/fingerprint ceremony."""
+        session = create_internal_remote_session(
+            profile,
+            credential_store=credential_store,
+            keepalive_seconds=keepalive_seconds,
+        )
+        self.set_remote_session(session)
+        return session
 
     def remote_login(self, password: Optional[str] = None, *, remember: bool = False,
                      timeout_seconds: float = 30.0) -> RemoteSessionState:
