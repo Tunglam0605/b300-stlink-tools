@@ -109,16 +109,18 @@ class DebugConnectionPanel(QFrame):
         gateway_actions_layout.setContentsMargins(0, 0, 0, 0)
         gateway_actions_layout.setSpacing(6)
 
-        self.remote_server_button = QPushButton("START GATEWAY")
+        # Keep established labels because DebugTab remains an internal compatibility API.
+        # Production v0.15 still reaches this panel only after the explicit Mode-First screen.
+        self.remote_server_button = QPushButton("Bật Gateway")
         self.remote_server_button.setObjectName("debugRemoteServerButton")
         gateway_actions_layout.addWidget(self.remote_server_button)
 
-        self.gateway_stop_button = QPushButton("STOP")
+        self.gateway_stop_button = QPushButton("Dừng")
         self.gateway_stop_button.setObjectName("debugGatewayStopButton")
         self.gateway_stop_button.setEnabled(False)
         gateway_actions_layout.addWidget(self.gateway_stop_button)
 
-        self.remote_kit_button = QPushButton("VS CODE KIT")
+        self.remote_kit_button = QPushButton("VS Code Kit…")
         self.remote_kit_button.setObjectName("debugRemoteKitButton")
         self.remote_kit_button.setToolTip("Tạo cấu hình Cortex-Debug/VS Code cho Gateway")
         gateway_actions_layout.addWidget(self.remote_kit_button)
@@ -142,7 +144,7 @@ class DebugConnectionPanel(QFrame):
         self.symbol_path.setMinimumWidth(0)
         symbols_layout.addWidget(self.symbol_path, 1)
 
-        self.symbol_browse_button = QPushButton("BROWSE")
+        self.symbol_browse_button = QPushButton("Chọn file…")
         self.symbol_browse_button.setObjectName("ghostButton")
         symbols_layout.addWidget(self.symbol_browse_button)
 
@@ -209,7 +211,7 @@ class DebugConnectionPanel(QFrame):
         self.gdb_port.setReadOnly(True)
         advanced_layout.addWidget(self.gdb_port, 0, 3)
 
-        self.tcl_display = QLabel("TCL 6666 · LOOPBACK")
+        self.tcl_display = QLabel("TCL: 6666 · tự chọn loopback")
         self.tcl_display.setStyleSheet(
             "color: #64748B; font-family: 'Cascadia Code', monospace; font-size: 11px;"
         )
