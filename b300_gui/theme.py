@@ -1106,6 +1106,70 @@ def generate_stylesheet(p: ThemePalette) -> str:
         background-color: {p.primary_light};
         border: 2px solid {p.primary};
     }}
+
+    /* Debug Workstation Mode-First Entry */
+    QFrame#debugModeTile {{
+        background-color: {p.surface};
+        border: 1px solid {p.border};
+        border-radius: 8px;
+    }}
+    QFrame#debugModeTile:hover {{
+        background-color: {p.surface_raised};
+        border-color: {p.primary};
+    }}
+    QPushButton#debugModeTileButton {{
+        background-color: {p.surface_raised};
+        color: {p.text};
+        border: 1px solid {p.border_strong};
+        border-radius: 4px;
+        padding: 6px 12px;
+        font-weight: 600;
+        font-size: 12px;
+    }}
+    QPushButton#debugModeTileButton:hover {{
+        background-color: {p.primary};
+        color: #FFFFFF;
+        border-color: {p.primary};
+    }}
+
+    /* Engineering Debug Workstation Splitters & Panes */
+    QSplitter::handle {{
+        background-color: {p.border_muted};
+    }}
+    QSplitter::handle:horizontal {{
+        width: 3px;
+    }}
+    QSplitter::handle:vertical {{
+        height: 3px;
+    }}
+    QSplitter::handle:hover {{
+        background-color: {p.primary};
+    }}
+
+    QFrame#debugWorkstationToolbar QPushButton {{
+        min-height: 24px;
+        padding: 3px 8px;
+        font-size: 11px;
+        font-weight: 600;
+        border-radius: 4px;
+    }}
+
+    QTableWidget#debugCallStackTable,
+    QTableWidget#debugRegistersTable,
+    QTableWidget#debugBreakpointsTable,
+    QTreeWidget#debugSymbolsTree,
+    QTreeView#debugVariablesTree {{
+        background-color: {p.surface_sunken};
+        border: 1px solid {p.border};
+        gridline-color: {p.border_muted};
+        font-size: 11px;
+    }}
+
+    QPlainTextEdit#debugSourceEditor {{
+        background-color: {p.surface_sunken};
+        border: 1px solid {p.border};
+        color: {p.text};
+    }}
     """
 
 
