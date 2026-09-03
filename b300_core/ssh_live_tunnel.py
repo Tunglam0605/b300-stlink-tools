@@ -7,10 +7,9 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Callable, Optional, Protocol, Tuple
 
-from .process_startup import child_process_kwargs
+from .ssh_client import password_ssh_options
 from .ssh_identity import resolve_ssh_client_executable
 from .tcl_client import SafeTclClient, TclEndpoint
 
@@ -35,10 +34,9 @@ class SshLiveTunnelConfig:
     ssh_port: int = 22
     local_tcl_port: int = 16666
     gateway_tcl_port: int = 6666
-    identity_file: Optional[Path] = None
-    known_hosts_file: Optional[Path] = None
+    show_console: bool = False
 
-    def validate(self) -> None:
+    def validate_endpoint(self) -> None:
         if not self.host or not _SAFE_HOST.fullmatch(self.host):
             raise ValueError("SSH gateway host contains unsupported characters.")
         if not self.user or not _SAFE_USER.fullmatch(self.user):
@@ -47,10 +45,9 @@ class SshLiveTunnelConfig:
                             ("gateway TCL", self.gateway_tcl_port)):
             if not 1 <= int(port) <= 65535:
                 raise ValueError("%s port must be in range 1..65535." % label)
-        if self.identity_file is not None and not Path(self.identity_file).is_file():
-            raise ValueError("SSH identity file does not exist: %s" % self.identity_file)
-        if self.known_hosts_file is not None and not Path(self.known_hosts_file).is_file():
-            raise ValueError("SSH known_hosts file does not exist: %s" % self.known_hosts_file)
+
+    def validate(self) -> None:
+        self.validate_endpoint()
 
     @property
     def destination(self) -> str:
@@ -60,8 +57,7 @@ class SshLiveTunnelConfig:
         self.validate()
         command = [
             ssh_executable, "-N",
-            "-o", "BatchMode=yes",
-            "-o", "StrictHostKeyChecking=yes",
+            *password_ssh_options(),
             "-o", "ExitOnForwardFailure=yes",
             "-o", "ConnectTimeout=8",
             "-o", "ServerAliveInterval=30",
@@ -69,10 +65,6 @@ class SshLiveTunnelConfig:
             "-L", "127.0.0.1:%d:127.0.0.1:%d" %
                   (self.local_tcl_port, self.gateway_tcl_port),
         ]
-        if self.identity_file is not None:
-            command.extend(("-o", "IdentitiesOnly=yes", "-i", str(Path(self.identity_file))))
-        if self.known_hosts_file is not None:
-            command.extend(("-o", "UserKnownHostsFile=%s" % Path(self.known_hosts_file)))
         if self.ssh_port != 22:
             command.extend(("-p", str(self.ssh_port)))
         command.append(self.destination)
@@ -110,10 +102,14 @@ class SshLiveTunnel:
         executable = self.ssh_executable or (str(resolved) if resolved is not None else None)
         if not executable:
             raise RuntimeError("SSH client was not found. Prepare OpenSSH Client first.")
+        startup_kwargs = {}
+        platform = (self._platform_name or __import__("platform").system()).lower()
+        if self.config.show_console and platform in {"windows", "win32", "nt"}:
+            startup_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
         process = self._process_factory(
-            list(self.config.argv(executable)), stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=False,
-            **child_process_kwargs(self._platform_name),
+            list(self.config.argv(executable)), stdin=None,
+            stdout=None, stderr=None, shell=False,
+            **startup_kwargs,
         )
         self._process = process
         deadline = time.monotonic() + timeout_seconds
@@ -124,7 +120,7 @@ class SshLiveTunnel:
                 self._process = None
                 raise RuntimeError(
                     "SSH Live Monitor tunnel exited before readiness (exit code %s). "
-                    "Verify host key, SSH key/agent, gateway address and sshd service." % code
+                    "Verify host-key prompt, password, gateway address and sshd service." % code
                 )
             try:
                 client = self._tcl_factory(TclEndpoint("127.0.0.1", self.config.local_tcl_port))

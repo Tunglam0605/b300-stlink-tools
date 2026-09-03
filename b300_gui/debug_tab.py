@@ -22,8 +22,6 @@ from b300_core.live_session import (
     ClientLiveMonitorConfig, LiveMonitorSession, LocalLiveMonitorConfig,
 )
 from b300_core.remote_debug_guard import RemoteDebugGuard
-from b300_core.ssh_host_trust import trusted_known_hosts_file
-from b300_core.ssh_identity import managed_identity_file
 from b300_core.remote_profile import load_remote_profile
 from b300_core.ssh_debug_tunnel import (
     SshDebugTunnel, SshDebugTunnelConfig, find_available_loopback_port,
@@ -747,8 +745,7 @@ class DebugTab(QWidget):
                 host=host, user=user, ssh_port=self.client_ssh_port.value(),
                 local_gdb_port=local_gdb, local_tcl_port=local_tcl,
                 gateway_gdb_port=3333, gateway_tcl_port=6666,
-                identity_file=managed_identity_file(),
-                known_hosts_file=trusted_known_hosts_file(host, self.client_ssh_port.value()),
+                show_console=True,
             )
             tunnel_config.validate()
         except (ValueError, RuntimeError) as error:
@@ -759,7 +756,7 @@ class DebugTab(QWidget):
             tunnel = self._tunnel_factory(tunnel_config)
             try:
                 log(
-                    "Opening managed SSH tunnel to %s@%s; local GDB=%d TCL=%d." %
+                    "Opening password-interactive SSH tunnel to %s@%s; local GDB=%d TCL=%d." %
                     (user, host, local_gdb, local_tcl)
                 )
                 version = tunnel.start()
@@ -1220,6 +1217,7 @@ class DebugTab(QWidget):
             host=host, user=user, symbols=symbols, interval_seconds=interval,
             sample_limit=samples, watch_specs=tuple(watch_specs),
             ssh_port=self.client_ssh_port.value(), symbol_roots=roots,
+            show_console=True,
         )
 
     def start_live_sampling(self) -> None:

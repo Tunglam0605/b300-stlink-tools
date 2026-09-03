@@ -14,6 +14,7 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 - Added the dark-theme wordmark to the Windows PyInstaller data set so packaged Windows builds match the source/Linux dark-mode branding.
 - Fixed the Linux CLI bootstrap to accept the signed one-file Linux CLI bundle. It continues to validate the signed manifest, immutable package URL, SHA-256, size, archive paths, executable, and managed installer; it no longer incorrectly requires the Windows-only `_internal` runtime directory.
 - Fixed headless Debug Gateway shutdown on `SIGTERM`. A background Gateway now runs its existing target-state restore and `DebugService` cleanup before exiting, so it does not leave the OpenOCD child process listening on loopback ports.
+- Switched default remote Client transport to ordinary password-interactive OpenSSH. Workflows persist only the Gateway endpoint (host, user, port) and prompt natively for account credentials at connect time, avoiding public-key prerequisites while keeping GDB and TCL bound strictly to loopback.
 
 ## [0.14.0] - 2026-09-01
 

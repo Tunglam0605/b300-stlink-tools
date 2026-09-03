@@ -56,13 +56,10 @@ from b300_core.debug_selftest import run_loopback_debug_selftest
 from b300_core.debug_sampling import sample_variables, validate_sampling_request, write_samples
 from b300_core.elf_matcher import discover_symbol_files, find_matching_symbol_file
 from b300_core.tcl_client import SafeTclClient, TclEndpoint
-from b300_core.ssh_host_trust import (
-    local_gateway_host_key, scan_gateway_host_key, trust_gateway_host_key,
-    trusted_known_hosts_file,
-)
+from b300_core.ssh_host_trust import local_gateway_host_key, scan_gateway_host_key, trust_gateway_host_key
 from b300_core.ssh_identity import (
     ensure_ssh_identity, inspect_ssh_client_prerequisites, install_gateway_public_key,
-    managed_identity_file, prepare_ssh_client_prerequisites, validate_public_key,
+    prepare_ssh_client_prerequisites, validate_public_key,
 )
 from b300_core.ssh_debug_tunnel import (
     SshDebugTunnel, SshDebugTunnelConfig, find_available_loopback_port,
@@ -147,10 +144,6 @@ def run_vscode_profile(args: argparse.Namespace) -> int:
         raise ValueError("debug vscode requires --ssh-host HOST and --ssh-user USER.")
     if not args.program_relative:
         raise ValueError("debug vscode requires --program-relative PATH_TO_AXF_OR_ELF.")
-    identity_file = managed_identity_file()
-    known_hosts_file = trusted_known_hosts_file(args.ssh_host, args.ssh_port)
-    if managed_profile is not None and (identity_file is None or known_hosts_file is None):
-        raise RuntimeError("Saved Gateway profile is not locally ready; run `b300-stlink gateway status` or repeat `gateway client-setup`.")
     profile = RemoteVsCodeProfile(
         ssh_host=args.ssh_host,
         ssh_user=args.ssh_user,
@@ -160,8 +153,6 @@ def run_vscode_profile(args: argparse.Namespace) -> int:
         executable=workspace_executable(args.program_relative),
         gdb_path=_resolve_vscode_gdb_path(args.vscode_gdb_path),
         probe_serial=args.probe_serial,
-        identity_file=identity_file,
-        known_hosts_file=known_hosts_file,
     )
     record = profile.record()
     if args.output_dir is not None:
@@ -596,11 +587,6 @@ def run_debug_client(args, reporter: Reporter) -> int:
     if symbols is not None and (symbols.suffix.lower() not in {".elf", ".axf"} or not symbols.is_file()):
         raise ValueError("debug client --symbols must reference an existing ELF/AXF file.")
 
-    identity_file = managed_identity_file()
-    known_hosts_file = trusted_known_hosts_file(args.ssh_host, args.ssh_port)
-    if managed_profile is not None and (identity_file is None or known_hosts_file is None):
-        raise RuntimeError("Saved Gateway profile is not locally ready; run `b300-stlink gateway status` or repeat `gateway client-setup`.")
-
     if action == "live":
         return run_live_client(args, reporter, symbols)
 
@@ -610,8 +596,6 @@ def run_debug_client(args, reporter: Reporter) -> int:
         host=args.ssh_host, user=args.ssh_user, ssh_port=args.ssh_port,
         local_gdb_port=local_gdb, local_tcl_port=local_tcl,
         gateway_gdb_port=3333, gateway_tcl_port=6666,
-        identity_file=identity_file,
-        known_hosts_file=known_hosts_file,
     )
     tunnel_config.validate()
 

@@ -11,7 +11,7 @@ Debug Workstation hiển thị hai mức tác động ngay đầu màn hình:
 - **LIVE MONITOR · KHUYẾN NGHỊ · MCU tiếp tục RUNNING**: đường quan sát non-halting dùng TCL/SWD bounded reads; không GDB attach, không breakpoint/watchpoint, không reset.
 - **INTERACTIVE DEBUG · Có thể HALT/STEP/RESET MCU**: đường GDB source-level có thể tác động realtime; panel này mặc định **thu gọn** để tránh bấm nhầm khi mục tiêu chỉ là quan sát robot đang chạy.
 
-Khi máy đã được cấu hình ở **Remote Gateway / Client**, Debug Client tự điền managed Gateway profile `host/user/port` nếu các field cũ trống. Managed SSH key + strict host trust vẫn là bắt buộc; việc tự điền profile không làm yếu authentication policy.
+Khi máy đã được cấu hình ở **Remote Gateway / Client**, Debug Client tự điền Gateway profile `host/user/port` nếu các field cũ trống. Profile chỉ nhớ endpoint; OpenSSH sẽ hỏi password tài khoản khi mỗi tunnel mới kết nối.
 
 ## Cần chuẩn bị
 
@@ -26,7 +26,7 @@ Khi máy đã được cấu hình ở **Remote Gateway / Client**, Debug Client
 - **Gateway** không cần GDB, source hay AXF/ELF. Gateway chỉ cần ST-Link, OpenOCD
   và SSH server; `b300-stlink debug gateway` giữ GDB/TCL ở loopback.
 - **Client** giữ source + AXF/ELF. GUI Client và `b300-stlink debug client` đều tạo
-  managed SSH local forwarding, xác minh AXF/ELF với Application Flash rồi mới attach GDB.
+  SSH local forwarding qua endpoint đã lưu; OpenSSH hỏi password tài khoản khi tạo tunnel mới, còn B300 không lưu password. Tool vẫn xác minh AXF/ELF với Application Flash rồi mới attach GDB.
 
 Nếu Gateway không có GDB local thì Flash, Factory provisioning và Debug Gateway vẫn
 hoạt động bình thường.
@@ -284,8 +284,8 @@ profile. Khi mở **Debug tương tác · Nâng cao** và bấm **Kết nối De
 tool tự động:
 
 1. chọn hai local loopback port còn trống;
-2. chạy OpenSSH với `BatchMode=yes`, `StrictHostKeyChecking=yes`,
-   `ExitOnForwardFailure=yes`;
+2. chạy OpenSSH tương tác với password/keyboard-interactive và
+   `ExitOnForwardFailure=yes`; lần đầu OpenSSH hỏi xác nhận host key như bình thường;
 3. forward GDB và Safe TCL **bên trong SSH mà thôi**; cả hai endpoint vẫn là loopback
    ở Gateway và Client, không public ra mạng;
 4. xác nhận forwarded TCL hoạt động;
@@ -297,9 +297,10 @@ tool tự động:
 8. nếu attach làm target đang RUNNING bị HALT, tự Resume về RUNNING;
 9. bật Where, Call Stack, Registers, Variable, hardware breakpoint/watchpoint.
 
-Tool không lưu password SSH plaintext. Gateway host key phải đã có trong
-`known_hosts`; nên dùng SSH key/agent. Đây là điểm cố ý không tự động hóa để không
-đánh đổi xác thực Gateway.
+Tool chỉ lưu Gateway `host/user/port`, không lưu password, private key hay host-key
+material. Lần đầu có thể chạy `ssh <user>@<gateway> -p <port>` để OpenSSH hỏi xác nhận
+host key và password; các lần sau OpenSSH dùng `known_hosts` chuẩn của chính người dùng.
+Không đưa password vào CLI, environment, log hay VS Code kit.
 
 Khi Stop Client: tool khôi phục target trước, đóng GDB sau đó mới đóng SSH tunnel.
 Nếu tunnel chết bất ngờ, GUI fail-closed và báo mất kết nối thay vì giả vờ session
@@ -367,15 +368,12 @@ Máy Gateway chưa có SSH có thể dùng tab **Gateway Setup** hoặc CLI `gat
 # Gateway
 b300-stlink gateway quickstart --confirm-system-change
 
-# Client: dùng client_setup_command do Gateway in ra
-b300-stlink gateway client-setup --ssh-host <gateway> --ssh-user <user> \
-  --confirm-host-fingerprint <SHA256:...>
-
-# Gateway: chạy authorize_command do Client in ra
+# Client: lưu endpoint (password sẽ được OpenSSH hỏi khi kết nối)
+b300-stlink gateway client-setup --ssh-host <gateway> --ssh-user <user>
 
 # Client
 b300-stlink gateway connect-check
 b300-stlink gateway status
 ```
 
-Sau khi saved profile đã sẵn sàng, `debug client` và `debug vscode` có thể bỏ `--ssh-host/--ssh-user`. `gateway status` chỉ phản ánh local setup; `gateway connect-check` mới xác minh SSH thật. Chi tiết đầy đủ: [Gateway Setup & Remote Workflow](19_GATEWAY_SETUP_WIZARD_V0.12.0.md).
+Sau khi saved profile đã sẵn sàng, `debug client` và `debug vscode` có thể bỏ `--ssh-host/--ssh-user`. `gateway status` chỉ phản ánh local setup; `gateway connect-check` mở OpenSSH tương tác và mới xác minh SSH thật. GDB/TCL vẫn chỉ loopback ở Gateway và chỉ đi qua SSH forwarding; không NAT/expose `3333`/`6666`. Chi tiết đầy đủ: [Gateway Setup & Remote Workflow](19_GATEWAY_SETUP_WIZARD_V0.12.0.md).

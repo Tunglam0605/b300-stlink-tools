@@ -77,6 +77,25 @@ class CliLiveMonitorTests(unittest.TestCase):
         self.assertEqual(command.count("-L"), 1)
         self.assertIn("127.0.0.1:16666:127.0.0.1:6666", rendered)
         self.assertNotIn(":3333", rendered)
+        for option in ("PasswordAuthentication=yes", "KbdInteractiveAuthentication=yes", "PubkeyAuthentication=no", "PreferredAuthentications=password,keyboard-interactive"):
+            self.assertIn(option, command)
+        self.assertNotIn("-i", command)
+        self.assertNotIn("KnownHostsFile", rendered)
+
+    def test_client_live_dry_run_requires_no_managed_ssh_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            symbols = fake_axf(directory)
+            module = tool()
+            output = io.StringIO()
+            with redirect_stdout(output):
+                result = module.main([
+                    "debug", "client", "--ssh-host", "gateway.local",
+                    "--ssh-user", "automation", "--client-action", "live",
+                    "--symbols", str(symbols), "--dry-run", "--json",
+                ])
+            self.assertEqual(result, 0)
+            record = json.loads(output.getvalue().strip())
+            self.assertNotIn("-i", record["ssh_command"])
 
     def test_invalid_live_interval_fails_before_probe_discovery(self):
         module = tool()
