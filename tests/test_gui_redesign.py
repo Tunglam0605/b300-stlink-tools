@@ -20,6 +20,7 @@ from b300_gui.widgets.compact_sidebar import CompactSidebar
 from b300_gui.widgets.pipeline_stepper import PipelineStepper
 from b300_gui.widgets.pass_fail_banner import PassFailBanner
 from b300_gui.widgets.memory_map_widget import MemoryMapWidget
+from b300_gui.widgets.stats_row import StatsRow
 from b300_gui.views.operator_view import OperatorView
 from b300_gui.views.rnd_flash_view import RndFlashView
 from b300_gui.main_window import MainWindow
@@ -56,18 +57,31 @@ class GuiRedesignTests(unittest.TestCase):
         mgr.set_theme("dark")
         self.assertEqual(mgr.current_mode, "dark")
 
-    def test_dark_theme_uses_neutral_readable_data_colors_and_visible_focus(self) -> None:
-        self.assertEqual(DARK_PALETTE.canvas, "#101722")
-        self.assertEqual(DARK_PALETTE.text, "#F8FAFC")
-        self.assertEqual(DARK_PALETTE.text_secondary, "#CBD5E1")
+    def test_dark_theme_uses_readable_emerald_palette_and_visible_focus(self) -> None:
+        self.assertEqual(DARK_PALETTE.canvas, "#0A0E17")
+        self.assertEqual(DARK_PALETTE.text, "#F1F5F9")
+        self.assertEqual(DARK_PALETTE.text_secondary, "#94A3B8")
         self.assertNotEqual(DARK_PALETTE.primary, DARK_PALETTE.text)
         self.assertNotEqual(DARK_PALETTE.accent_cyan, DARK_PALETTE.text)
 
         qss = generate_stylesheet(DARK_PALETTE)
         self.assertIn("QPushButton:focus", qss)
-        self.assertIn("QPushButton#primaryButton:pressed", qss)
-        self.assertIn("QPushButton#operatorFlashBtn:pressed", qss)
-        self.assertIn("color: #CBD5E1;", qss)
+        self.assertIn("QPushButton#primaryButton,", qss)
+        self.assertIn("QPushButton#operatorFlashBtn:hover", qss)
+        self.assertIn("QPushButton#primaryButton:disabled", qss)
+        self.assertIn("color: #94A3B8;", qss)
+
+    def test_cockpit_stats_row_keeps_four_operational_cards(self) -> None:
+        stats = StatsRow()
+        self.assertEqual(stats.layout().count(), 4)
+        self.assertEqual(stats.probe_card.title_label.text(), "ST-LINK PROBE")
+        self.assertEqual(stats.target_card.title_label.text(), "TARGET MCU")
+        self.assertEqual(stats.flash_card.title_label.text(), "FLASH MEMORY")
+        self.assertEqual(stats.status_card.title_label.text(), "TRẠNG THÁI")
+        stats.update_probe("ST-Link V3", "SN: ABC123")
+        stats.update_status("Sẵn sàng", "OpenOCD Loopback OK")
+        self.assertEqual(stats.probe_card.value_label.text(), "ST-Link V3")
+        self.assertEqual(stats.status_card.subtitle_label.text(), "OpenOCD Loopback OK")
 
     def test_header_bar_mode_switching(self) -> None:
         header = HeaderBar()

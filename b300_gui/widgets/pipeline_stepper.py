@@ -37,19 +37,19 @@ class StepCard(QFrame):
         top_h.setSpacing(6)
 
         self.badge = QLabel(str(step_num))
-        self.badge.setFixedSize(20, 20)
+        self.badge.setFixedSize(22, 22)
         self.badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.badge.setObjectName("stepBadge")
         top_h.addWidget(self.badge)
 
         self.title_label = QLabel(title)
-        self.title_label.setObjectName("eyebrowLabel")
+        self.title_label.setObjectName("stepTitle")
         top_h.addWidget(self.title_label, 1)
 
         layout.addLayout(top_h)
 
         self.sub_label = QLabel(subtitle)
-        self.sub_label.setObjectName("pageContextSubtitle")
+        self.sub_label.setObjectName("stepSubtitle")
         self.sub_label.setWordWrap(True)
         layout.addWidget(self.sub_label)
 

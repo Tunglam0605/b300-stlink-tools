@@ -56,35 +56,35 @@ class ThemePalette:
 DARK_PALETTE = ThemePalette(
     name="dark",
     is_dark=True,
-    canvas="#101722",           # Neutral slate canvas; avoids a crushed-black work area
-    surface="#172231",          # Elevated dark card
-    surface_raised="#202F42",   # Active panel / header surface
-    surface_sunken="#0B111A",   # Depressed container
-    input_bg="#111C2A",         # Input fields
-    terminal_bg="#0B1220",      # Terminal console
+    canvas="#0A0E17",           # Deep dark canvas (harmonious with TungLam ESP32 root #0A0E17)
+    surface="#131A2A",          # Elevated dark card (TungLam ESP32 panel #131A2A)
+    surface_raised="#192237",   # Active panel / sub-card / hover (TungLam ESP32 panel_alt #192237)
+    surface_sunken="#0D1420",   # Depressed container / input bg (TungLam ESP32 input #0D1420)
+    input_bg="#0D1420",         # Input fields
+    terminal_bg="#080C14",      # Terminal console
 
-    border="#2C3A4D",           # Subdued structural border
-    border_strong="#465A73",    # Control border
-    border_active="#38BDF8",    # Active focus border (Electric Sky)
-    border_muted="#1E293B",     # Subtle separator
+    border="#2A3A52",           # Harmonious structural slate border (TungLam ESP32 border #2A3A52)
+    border_strong="#3B4F6E",    # Control border
+    border_active="#10B981",    # Active focus border (TungLam ESP32 Emerald #10B981)
+    border_muted="#1C2738",     # Subtle separator
 
-    text="#F8FAFC",             # Slate 50 high contrast
-    text_secondary="#CBD5E1",   # Slate 300 secondary; legible in dense workspaces
-    text_muted="#94A3B8",       # Slate 400 captions
+    text="#F1F5F9",             # Slate 100 crisp white high contrast
+    text_secondary="#94A3B8",   # Slate 400 calm secondary / labels
+    text_muted="#64748B",       # Slate 500 captions
     text_on_accent="#FFFFFF",   # High-contrast text on bright backgrounds
 
-    primary="#0284C7",          # Controlled Sky 600: interaction only
-    primary_hover="#0EA5E9",    # Clear but restrained hover
-    primary_light="#123551",    # Sky tint for badges
-    accent_cyan="#93C5FD",      # Technical values, not general body text
-    accent_purple="#C4B5FD",    # Memory sizes
-    accent_amber="#FCD34D",     # Registers
+    primary="#10B981",          # Emerald 500 - Tung Lam Signature Brand Accent
+    primary_hover="#34D399",    # Emerald 400
+    primary_light="#064E3B",    # Dark emerald tint for chips/badges
+    accent_cyan="#38BDF8",      # Electric Sky strictly for memory hex offsets
+    accent_purple="#C084FC",    # Electric Purple for memory sizes
+    accent_amber="#FBBF24",     # Electric Amber for registers
 
-    success="#059669",          # Emerald 600
-    success_hover="#10B981",    # Emerald 500
-    success_light="#064E3B",    # Dark emerald tint
-    danger="#DC2626",           # Red 600
-    danger_hover="#EF4444",     # Red 500
+    success="#10B981",          # Emerald 500 (TungLam ESP32 accent #10B981)
+    success_hover="#34D399",    # Emerald 400
+    success_light="#064E3B",    # Dark emerald tint (TungLam ESP32 accent_soft #064E3B)
+    danger="#EF4444",           # Red 500
+    danger_hover="#F87171",     # Red 400
     danger_light="#450A0A",     # Dark red tint
     warning="#F59E0B",          # Amber 500
     warning_light="#451A03",    # Dark amber tint
@@ -94,38 +94,38 @@ DARK_PALETTE = ThemePalette(
 LIGHT_PALETTE = ThemePalette(
     name="light",
     is_dark=False,
-    canvas="#F8FAFC",           # Clean Slate 50 canvas
+    canvas="#F3F7FB",           # Clean Slate canvas (TungLam ESP32 light root #F3F7FB)
     surface="#FFFFFF",          # Pure white card surface
-    surface_raised="#F1F5F9",   # Slate 100 header
+    surface_raised="#F8FAFC",   # Slate 100 header / hover
     surface_sunken="#E2E8F0",   # Depressed surface
     input_bg="#FFFFFF",         # Pure white input
     terminal_bg="#0F172A",      # Slate 900 IDE terminal
 
-    border="#E2E8F0",           # Slate 200 light border
+    border="#D7E2EE",           # Slate 200 light border (TungLam ESP32 light border #D7E2EE)
     border_strong="#CBD5E1",    # Slate 300 control border
-    border_active="#0284C7",    # Sky 600 active border
+    border_active="#059669",    # Emerald 600 active border
     border_muted="#F1F5F9",     # Slate 100 separator
 
-    text="#0F172A",             # Slate 900 typography
-    text_secondary="#334155",   # Slate 700 secondary
+    text="#1E293B",             # Slate 800 typography
+    text_secondary="#526477",   # Slate 600 secondary / labels
     text_muted="#64748B",       # Slate 500 captions
     text_on_accent="#FFFFFF",   # White text on colored pills
 
-    primary="#0284C7",          # Sky 600
-    primary_hover="#0369A1",    # Sky 700
-    primary_light="#E0F2FE",    # Sky 100 badge
-    accent_cyan="#0284C7",      # Deep Sky for hex addresses
-    accent_purple="#7C3AED",    # Deep Purple for memory sizes
-    accent_amber="#D97706",     # Amber for registers
+    primary="#059669",          # Emerald 600 - Tung Lam Signature Brand Accent
+    primary_hover="#047857",    # Emerald 700
+    primary_light="#D1FAE5",    # Soft emerald tint
+    accent_cyan="#0284C7",      # Sky 600 for hex addresses
+    accent_purple="#7C3AED",    # Purple 600 for sizes
+    accent_amber="#D97706",     # Amber 600 for registers
 
     success="#059669",          # Emerald 600
     success_hover="#047857",    # Emerald 700
-    success_light="#D1FAE5",    # Emerald 100
+    success_light="#D1FAE5",    # Soft emerald tint
     danger="#DC2626",           # Red 600
     danger_hover="#B91C1C",     # Red 700
-    danger_light="#FEE2E2",     # Red 100
+    danger_light="#FEE2E2",     # Soft red tint
     warning="#D97706",          # Amber 600
-    warning_light="#FEF3C7",    # Amber 100
+    warning_light="#FEF3C7",    # Soft amber tint
 )
 
 
@@ -133,8 +133,11 @@ def generate_stylesheet(p: ThemePalette) -> str:
     """Generate comprehensive modern industrial QSS stylesheet with rich typography and syntax highlighting."""
     return f"""
     /* Global Base */
-    QMainWindow, QDialog, QWidget {{
+    QMainWindow, QDialog, QWidget#centralContainer, QWidget#mainWorkArea, QStackedWidget, QWidget#operatorContainer {{
         background-color: {p.canvas};
+    }}
+
+    QWidget {{
         color: {p.text};
         font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, "Roboto", "Helvetica Neue", Arial, sans-serif;
         font-size: 13px;
@@ -142,6 +145,29 @@ def generate_stylesheet(p: ThemePalette) -> str:
 
     QDialog {{
         background-color: {p.surface};
+    }}
+
+    /* All Labels are transparent by default — prevents ugly black boxes on cards */
+    QLabel {{
+        background: transparent;
+        background-color: transparent;
+        color: {p.text};
+    }}
+
+    QCheckBox, QRadioButton {{
+        background: transparent;
+        color: {p.text};
+    }}
+
+    QScrollArea,
+    QScrollArea > QWidget > QWidget {{
+        background: transparent;
+        border: none;
+    }}
+
+    QTabWidget::pane {{
+        background: transparent;
+        border: none;
     }}
 
     /* Tooltips */
@@ -162,7 +188,7 @@ def generate_stylesheet(p: ThemePalette) -> str:
         margin: 0px;
     }}
     QScrollBar::handle:vertical {{
-        background: {p.border_strong};
+        background: {p.border};
         min-height: 24px;
         border-radius: 4px;
     }}
@@ -182,7 +208,7 @@ def generate_stylesheet(p: ThemePalette) -> str:
         margin: 0px;
     }}
     QScrollBar::handle:horizontal {{
-        background: {p.border_strong};
+        background: {p.border};
         min-width: 24px;
         border-radius: 4px;
     }}
@@ -200,36 +226,149 @@ def generate_stylesheet(p: ThemePalette) -> str:
     QGroupBox {{
         background-color: {p.surface};
         border: 1px solid {p.border};
-        border-radius: 8px;
-        margin-top: 22px;
-        padding: 12px 10px 10px 10px;
+        border-radius: 10px;
+        margin-top: 14px;
+        padding-top: 16px;
+        padding-bottom: 12px;
+        padding-left: 14px;
+        padding-right: 14px;
         font-weight: 700;
-        font-size: 12px;
+        font-size: 13px;
         color: {p.text};
+    }}
+
+    QGroupBox:hover {{
+        border: 1px solid {p.border_strong};
     }}
 
     QGroupBox::title {{
         subcontrol-origin: margin;
         subcontrol-position: top left;
-        left: 10px;
-        top: 2px;
-        padding: 2px 8px;
-        background-color: {p.surface};
-        color: {p.accent_cyan};
-        font-weight: 700;
+        left: 12px;
+        top: 0px;
+        padding: 3px 10px;
+        background-color: {p.surface_raised};
+        color: {p.text};
+        font-weight: 800;
+        font-size: 11px;
         letter-spacing: 0.5px;
         border: 1px solid {p.border};
-        border-radius: 4px;
+        border-radius: 6px;
     }}
 
-    QFrame#cardSurface, QFrame#operatorCard, QFrame#rndCard {{
+    QFrame#Card, QFrame#cardSurface, QFrame#headerRibbon, QFrame#operatorCard, QFrame#rndCard, QFrame#collapsibleCard {{
         background-color: {p.surface};
         border: 1px solid {p.border};
         border-radius: 8px;
     }}
 
-    QFrame#cardSurface:hover, QFrame#operatorCard:hover {{
+    QFrame#Card:hover, QFrame#cardSurface:hover, QFrame#headerRibbon:hover, QFrame#operatorCard:hover {{
         border: 1px solid {p.border_strong};
+    }}
+
+    QFrame#collapsibleHeader {{
+        background-color: {p.surface_raised};
+        border-bottom: 1px solid {p.border};
+        border-top-left-radius: 7px;
+        border-top-right-radius: 7px;
+        padding: 5px 8px;
+    }}
+
+    QPushButton#collapseToggleBtn {{
+        border: none;
+        background: transparent;
+        color: {p.primary};
+        font-size: 11px;
+        font-weight: 700;
+        padding: 0;
+    }}
+
+    QPushButton#collapseToggleBtn:hover {{
+        background: {p.primary_light};
+        border-radius: 4px;
+    }}
+
+    QLabel#collapsibleTitle {{
+        font-size: 11px;
+        font-weight: 700;
+        color: {p.text};
+    }}
+
+    QLabel#collapsibleSubtitle {{
+        font-size: 10px;
+        color: {p.text_muted};
+    }}
+
+    /* All Labels placed inside Cards/GroupBoxes must be 100% transparent */
+    QFrame#Card QLabel,
+    QFrame#cardSurface QLabel,
+    QFrame#operatorCard QLabel,
+    QFrame#rndCard QLabel,
+    QFrame#stepCard QLabel,
+    QFrame#pageContextHeader QLabel,
+    QFrame#headerRibbon QLabel,
+    QFrame#collapsibleCard QLabel,
+    QFrame#collapsibleHeader QLabel,
+    QFrame#statCard QLabel,
+    QGroupBox QLabel {{
+        background: transparent;
+        background-color: transparent;
+    }}
+
+    /* Cockpit Tools KPI Stat Cards */
+    QFrame#statCard {{
+        background-color: {p.surface};
+        border: 1px solid {p.border};
+        border-radius: 8px;
+    }}
+
+    QFrame#statCard:hover {{
+        border: 1px solid {p.primary};
+    }}
+
+    QLabel#statIconBadge {{
+        border-radius: 8px;
+        font-size: 16px;
+        background-color: {p.surface_raised};
+        border: 1px solid {p.border};
+    }}
+
+    QLabel#statCardTitle {{
+        color: {p.text_muted};
+        font-size: 9.5px;
+        font-weight: 800;
+        letter-spacing: 0.8px;
+        background: transparent;
+    }}
+
+    QLabel#statCardValue {{
+        color: {p.text};
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.2px;
+        background: transparent;
+    }}
+
+    QLabel#statCardSubtitle {{
+        color: {p.text_secondary};
+        font-size: 10px;
+        font-weight: 500;
+        background: transparent;
+    }}
+
+    QLabel#CardTitle {{
+        font-size: 11.5px;
+        font-weight: 800;
+        color: {p.text};
+        letter-spacing: 0.5px;
+        background: transparent;
+    }}
+
+    QLabel#fieldLabel {{
+        color: {p.text_secondary};
+        font-size: 11px;
+        font-weight: 600;
+        background: transparent;
     }}
 
     QFrame#sidebarPanel {{
@@ -245,14 +384,14 @@ def generate_stylesheet(p: ThemePalette) -> str:
     QFrame#headerRibbon {{
         background-color: {p.surface_raised};
         border: 1px solid {p.border};
-        border-radius: 8px;
-        padding: 8px 12px;
+        border-radius: 10px;
+        padding: 10px 14px;
     }}
 
     QFrame#pageContextHeader {{
         background-color: {p.surface};
         border: 1px solid {p.border};
-        border-radius: 8px;
+        border-radius: 10px;
         margin-bottom: 4px;
     }}
 
@@ -262,20 +401,23 @@ def generate_stylesheet(p: ThemePalette) -> str:
         font-weight: 800;
         color: {p.text};
         letter-spacing: 0.3px;
+        background: transparent;
     }}
 
     QLabel#pageContextSubtitle {{
         font-size: 12px;
         color: {p.text_secondary};
         line-height: 1.4;
+        background: transparent;
     }}
 
     QLabel#eyebrowLabel {{
-        color: {p.primary};
-        font-size: 11px;
-        font-weight: 700;
-        letter-spacing: 0.7px;
+        color: {p.text_secondary};
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.8px;
         text-transform: uppercase;
+        background: transparent;
     }}
 
     QLabel#navSectionTitle {{
@@ -285,13 +427,15 @@ def generate_stylesheet(p: ThemePalette) -> str:
         letter-spacing: 0.8px;
         padding: 4px 8px;
         text-transform: uppercase;
+        background: transparent;
     }}
 
     QLabel#headerBrandTitle, QLabel#brandLogo {{
         font-size: 15px;
         font-weight: 900;
-        color: {p.primary};
+        color: {p.text};
         letter-spacing: 0.8px;
+        background: transparent;
     }}
 
     /* Syntax Highlighting Labels for Technical Data */
@@ -300,6 +444,7 @@ def generate_stylesheet(p: ThemePalette) -> str:
         font-size: 12px;
         font-weight: 600;
         color: {p.text};
+        background: transparent;
     }}
 
     QLabel#monoAddress {{
@@ -307,6 +452,7 @@ def generate_stylesheet(p: ThemePalette) -> str:
         font-size: 12px;
         font-weight: 700;
         color: {p.accent_cyan};
+        background: transparent;
     }}
 
     QLabel#monoCrc {{
@@ -314,6 +460,7 @@ def generate_stylesheet(p: ThemePalette) -> str:
         font-size: 12px;
         font-weight: 700;
         color: {p.success};
+        background: transparent;
     }}
 
     QLabel#monoSize {{
@@ -321,6 +468,7 @@ def generate_stylesheet(p: ThemePalette) -> str:
         font-size: 12px;
         font-weight: 700;
         color: {p.accent_purple};
+        background: transparent;
     }}
 
     QLabel#monoRegister {{
@@ -328,6 +476,22 @@ def generate_stylesheet(p: ThemePalette) -> str:
         font-size: 12px;
         font-weight: 700;
         color: {p.accent_amber};
+        background: transparent;
+    }}
+
+    QLabel#targetSummaryBox, QLabel#imageSummaryBox, QLabel#recommendedFlashFlow {{
+        color: {p.text_muted};
+        font-size: 11px;
+        font-weight: 500;
+        padding: 2px 0;
+        background: transparent;
+    }}
+
+    QFrame#pageContextHeader {{
+        background-color: {p.surface};
+        border: 1px solid {p.border};
+        border-radius: 8px;
+        padding: 3px 10px;
     }}
 
     QLabel#statusBanner {{
@@ -335,25 +499,35 @@ def generate_stylesheet(p: ThemePalette) -> str:
         color: {p.text};
         border: 1px solid {p.border};
         border-radius: 6px;
-        padding: 6px 12px;
-        font-size: 12px;
+        padding: 2px 10px;
+        font-size: 11px;
         font-weight: 600;
+    }}
+
+    QLabel#flashPlanBadge {{
+        background-color: {p.surface_raised};
+        color: {p.text_secondary};
+        border: 1px solid {p.border};
+        border-radius: 6px;
+        padding: 5px 10px;
+        font-weight: 600;
+        font-size: 11px;
     }}
 
     /* Buttons */
     QPushButton {{
         background-color: {p.surface_raised};
         color: {p.text};
-        border: 1px solid {p.border_strong};
-        border-radius: 6px;
+        border: 1px solid {p.border};
+        border-radius: 7px;
         padding: 6px 14px;
-        font-weight: 600;
+        font-weight: 700;
         font-size: 12px;
-        min-height: 18px;
+        min-height: 20px;
     }}
 
     QPushButton:hover {{
-        background-color: {p.border_strong};
+        background-color: {p.surface};
         border-color: {p.primary};
         color: {p.text};
     }}
@@ -361,6 +535,7 @@ def generate_stylesheet(p: ThemePalette) -> str:
     QPushButton:pressed {{
         background-color: {p.surface_sunken};
         border-color: {p.border_active};
+        color: {p.primary};
     }}
 
     QPushButton:focus {{
@@ -374,72 +549,73 @@ def generate_stylesheet(p: ThemePalette) -> str:
         border-color: {p.border_muted};
     }}
 
-    QPushButton#primaryButton {{
-        background-color: {p.primary};
-        color: {p.text_on_accent};
-        border: 1px solid {p.primary_hover};
-        border-radius: 6px;
-        font-weight: 700;
-    }}
-
-    QPushButton#primaryButton:hover {{
-        background-color: {p.primary_hover};
-        border-color: {p.primary_hover};
-    }}
-
-    QPushButton#primaryButton:pressed {{
-        background-color: {p.primary};
-        border-color: {p.text_on_accent};
-    }}
-
-    QPushButton#operatorFlashBtn {{
-        background-color: {p.success};
-        color: {p.text_on_accent};
-        border: 1px solid {p.success_hover};
-        border-radius: 8px;
-        font-size: 14px;
+    QPushButton#primaryButton,
+    QPushButton#flashButton,
+    QPushButton#operatorFlashBtn,
+    QPushButton[variant="primary"] {{
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #059669, stop:1 #10B981);
+        color: #FFFFFF;
+        border: 1px solid #10B981;
+        border-radius: 7px;
         font-weight: 800;
-        letter-spacing: 0.5px;
-        padding: 10px 20px;
+        font-size: 12px;
+        padding: 7px 18px;
     }}
 
-    QPushButton#operatorFlashBtn:hover {{
-        background-color: {p.success_hover};
+    QPushButton#primaryButton:hover,
+    QPushButton#flashButton:hover,
+    QPushButton#operatorFlashBtn:hover,
+    QPushButton[variant="primary"]:hover {{
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #047857, stop:1 #059669);
+        border-color: #34D399;
     }}
 
-    QPushButton#operatorFlashBtn:pressed {{
-        background-color: {p.success};
-        border-color: {p.text_on_accent};
-    }}
-
-    QPushButton#operatorFlashBtn:disabled {{
+    QPushButton#primaryButton:disabled,
+    QPushButton#flashButton:disabled,
+    QPushButton#operatorFlashBtn:disabled,
+    QPushButton[variant="primary"]:disabled {{
         background-color: {p.surface_raised};
         color: {p.text_muted};
         border-color: {p.border};
     }}
 
-    QPushButton#dangerButton {{
+    QPushButton#dryRunButton {{
+        background-color: {p.surface};
+        color: {p.text};
+        border: 1px solid {p.border};
+        border-radius: 7px;
+        padding: 7px 16px;
+        font-weight: 700;
+        font-size: 12px;
+    }}
+
+    QPushButton#dryRunButton:hover {{
+        background-color: {p.surface_raised};
+        border-color: {p.border_strong};
+    }}
+
+    QPushButton#dangerButton, QPushButton[variant="danger"] {{
         background-color: {p.danger_light};
         color: {p.danger};
         border: 1px solid {p.danger};
-        border-radius: 6px;
-        font-weight: 600;
+        border-radius: 7px;
+        font-weight: 700;
     }}
 
-    QPushButton#dangerButton:hover {{
+    QPushButton#dangerButton:hover, QPushButton[variant="danger"]:hover {{
         background-color: {p.danger};
         color: {p.text_on_accent};
     }}
 
-    QPushButton#ghostButton {{
+    QPushButton#ghostButton, QPushButton[variant="outline"] {{
         background-color: transparent;
         color: {p.text_secondary};
         border: 1px solid {p.border};
-        border-radius: 6px;
+        border-radius: 7px;
         padding: 6px 12px;
     }}
 
-    QPushButton#ghostButton:hover {{
+    QPushButton#ghostButton:hover, QPushButton[variant="outline"]:hover {{
         background-color: {p.surface_raised};
         color: {p.text};
         border-color: {p.border_strong};
@@ -449,7 +625,7 @@ def generate_stylesheet(p: ThemePalette) -> str:
         background-color: transparent;
         color: {p.text_secondary};
         border: 1px solid transparent;
-        border-radius: 6px;
+        border-radius: 7px;
         padding: 8px 12px;
         text-align: left;
         font-weight: 600;
@@ -472,7 +648,7 @@ def generate_stylesheet(p: ThemePalette) -> str:
         background-color: transparent;
         color: {p.text_secondary};
         border: 1px solid {p.border};
-        border-radius: 6px;
+        border-radius: 7px;
         padding: 7px 12px;
         text-align: left;
         font-size: 12px;
@@ -513,7 +689,7 @@ def generate_stylesheet(p: ThemePalette) -> str:
         background-color: {p.surface_raised};
         color: {p.text_secondary};
         border: 1px solid {p.border};
-        border-radius: 6px;
+        border-radius: 7px;
         font-size: 11px;
         font-weight: 700;
     }}
@@ -527,31 +703,32 @@ def generate_stylesheet(p: ThemePalette) -> str:
     QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox {{
         background-color: {p.input_bg};
         color: {p.text};
-        border: 1px solid {p.border_strong};
-        border-radius: 6px;
-        padding: 6px 10px;
+        border: 1px solid {p.border};
+        border-radius: 7px;
+        padding: 7px 11px;
         selection-background-color: {p.primary};
         selection-color: {p.text_on_accent};
     }}
 
     QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QSpinBox:focus {{
         border: 1px solid {p.border_active};
-        background-color: {p.surface};
+        background-color: {p.surface_raised};
     }}
 
     QLineEdit:read-only, QPlainTextEdit:read-only {{
         background-color: {p.surface_raised};
         color: {p.text_secondary};
+        border: 1px solid {p.border_muted};
     }}
 
     /* ComboBox */
     QComboBox {{
         background-color: {p.input_bg};
         color: {p.text};
-        border: 1px solid {p.border_strong};
-        border-radius: 6px;
+        border: 1px solid {p.border};
+        border-radius: 7px;
         padding: 6px 10px;
-        min-height: 20px;
+        min-height: 22px;
     }}
 
     QComboBox:hover {{
@@ -565,7 +742,7 @@ def generate_stylesheet(p: ThemePalette) -> str:
     QComboBox::drop-down {{
         subcontrol-origin: padding;
         subcontrol-position: top right;
-        width: 20px;
+        width: 22px;
         border-left: 1px solid {p.border};
     }}
 
@@ -573,10 +750,44 @@ def generate_stylesheet(p: ThemePalette) -> str:
         background-color: {p.surface};
         color: {p.text};
         border: 1px solid {p.border_strong};
-        border-radius: 6px;
+        border-radius: 7px;
         selection-background-color: {p.surface_raised};
         selection-color: {p.primary};
         padding: 4px;
+    }}
+
+    /* Popup Menus & Context Menus (E.g. Help Menu, Context Actions) */
+    QMenu {{
+        background-color: {p.surface};
+        color: {p.text};
+        border: 1px solid {p.border_strong};
+        border-radius: 8px;
+        padding: 5px;
+    }}
+
+    QMenu::item {{
+        background-color: transparent;
+        color: {p.text};
+        padding: 6px 24px 6px 12px;
+        border-radius: 5px;
+        font-size: 11.5px;
+        font-weight: 500;
+    }}
+
+    QMenu::item:selected {{
+        background-color: {p.primary};
+        color: {p.text_on_accent};
+        font-weight: 700;
+    }}
+
+    QMenu::item:disabled {{
+        color: {p.text_muted};
+    }}
+
+    QMenu::separator {{
+        height: 1px;
+        background-color: {p.border};
+        margin: 4px 6px;
     }}
 
     /* Precision Hex & Memory Table */
@@ -607,6 +818,39 @@ def generate_stylesheet(p: ThemePalette) -> str:
         color: {p.primary};
     }}
 
+    /* Modern Industrial Tab Bars */
+    QTabWidget::pane {{
+        border: 1px solid {p.border};
+        border-radius: 8px;
+        background-color: {p.surface};
+        top: -1px;
+    }}
+
+    QTabBar::tab {{
+        background-color: {p.surface_sunken};
+        color: {p.text_secondary};
+        border: 1px solid {p.border};
+        border-bottom: none;
+        border-top-left-radius: 7px;
+        border-top-right-radius: 7px;
+        padding: 6px 16px;
+        margin-right: 4px;
+        font-weight: 700;
+        font-size: 11px;
+    }}
+
+    QTabBar::tab:hover {{
+        background-color: {p.surface_raised};
+        color: {p.text};
+    }}
+
+    QTabBar::tab:selected {{
+        background-color: {p.surface};
+        color: {p.primary};
+        border-color: {p.border};
+        border-top: 2px solid {p.primary};
+    }}
+
     /* Terminal & Log Viewers */
     QPlainTextEdit#terminalView, QPlainTextEdit#logView {{
         background-color: {p.terminal_bg};
@@ -614,15 +858,15 @@ def generate_stylesheet(p: ThemePalette) -> str:
         font-family: "Cascadia Code", "JetBrains Mono", "Consolas", monospace;
         font-size: 12px;
         border: 1px solid {p.border};
-        border-radius: 6px;
-        padding: 8px;
+        border-radius: 8px;
+        padding: 10px;
     }}
 
     /* Progress Bar */
     QProgressBar {{
         background-color: {p.surface_sunken};
         border: 1px solid {p.border};
-        border-radius: 4px;
+        border-radius: 5px;
         text-align: center;
         color: {p.text};
         font-weight: 700;
@@ -633,7 +877,25 @@ def generate_stylesheet(p: ThemePalette) -> str:
 
     QProgressBar::chunk {{
         background-color: {p.primary};
-        border-radius: 3px;
+        border-radius: 4px;
+    }}
+
+    /* Reading & Documentation Panels */
+    QTextBrowser, QTextBrowser#whatsNewNotes {{
+        background-color: {p.surface_raised};
+        color: {p.text};
+        border: 1px solid {p.border};
+        border-radius: 8px;
+        padding: 12px 14px;
+        font-size: 13px;
+        line-height: 1.5;
+        selection-background-color: {p.primary};
+        selection-color: {p.text_on_accent};
+    }}
+
+    QTextBrowser:focus, QTextBrowser#whatsNewNotes:focus {{
+        border: 1px solid {p.border};
+        outline: none;
     }}
 
     /* Vivid Glowing Status Pills */
@@ -732,9 +994,19 @@ def generate_stylesheet(p: ThemePalette) -> str:
     /* Stepper Steps */
     QFrame#stepCard {{
         background-color: {p.surface_raised};
-        border: 1px solid {p.border};
+        border: 1px solid {p.border_muted};
         border-radius: 8px;
-        padding: 6px;
+        padding: 6px 8px;
+    }}
+
+    QFrame#stepCard:hover {{
+        border: 1px solid {p.border};
+        background-color: {p.surface_raised};
+    }}
+
+    QFrame#stepCard[state="idle"] {{
+        background-color: {p.surface_raised};
+        border: 1px solid {p.border_muted};
     }}
 
     QFrame#stepCard[state="active"] {{
@@ -752,14 +1024,20 @@ def generate_stylesheet(p: ThemePalette) -> str:
         border: 1px solid {p.danger};
     }}
 
-    QLabel#stepBadge {{
+    QLabel#stepBadge,
+    QFrame#stepCard QLabel#stepBadge {{
         background-color: {p.surface_sunken};
         color: {p.text_secondary};
-        border: 1px solid {p.border_strong};
-        border-radius: 10px;
+        border: 1px solid {p.border};
+        border-radius: 11px;
+        min-width: 22px;
+        max-width: 22px;
+        min-height: 22px;
+        max-height: 22px;
         font-family: "Cascadia Code", "JetBrains Mono", monospace;
         font-size: 10px;
         font-weight: 800;
+        qproperty-alignment: AlignCenter;
     }}
 
     QFrame#stepCard[state="active"] QLabel#stepBadge {{
@@ -778,6 +1056,34 @@ def generate_stylesheet(p: ThemePalette) -> str:
         background-color: {p.danger};
         color: {p.text_on_accent};
         border: 1px solid {p.danger_hover};
+    }}
+
+    QLabel#stepTitle {{
+        color: {p.text};
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.3px;
+        background: transparent;
+    }}
+
+    QLabel#stepSubtitle {{
+        color: {p.text_muted};
+        font-size: 11px;
+        background: transparent;
+    }}
+
+    QFrame#stepCard[state="active"] QLabel#stepTitle {{
+        color: {p.text_on_accent};
+        font-weight: 800;
+    }}
+
+    QFrame#stepCard[state="active"] QLabel#stepSubtitle {{
+        color: {p.text_on_accent};
+    }}
+
+    QFrame#stepCard[state="success"] QLabel#stepTitle {{
+        color: {p.text};
+        font-weight: 800;
     }}
 
     /* Pass / Fail Banner */

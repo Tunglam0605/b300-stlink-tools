@@ -110,7 +110,7 @@ class DebugTab(QWidget):
         self.scroll_area.setWidget(self.scroll_content)
         root_layout.addWidget(self.scroll_area)
 
-        # Safety-first mode guide. Keep the non-halting path visually primary.
+        # Safety-first mode guide. Redundant banner hidden to prioritize workspace view.
         self.safety_guide = QFrame(self.scroll_content)
         self.safety_guide.setObjectName("debugSafetyGuide")
         safety_layout = QHBoxLayout(self.safety_guide)
@@ -120,6 +120,7 @@ class DebugTab(QWidget):
         safe.setObjectName("debugSafeModeBadge")
         safe.setWordWrap(True)
         safety_layout.addWidget(safe, 1)
+        self.safety_guide.setVisible(False)
         layout.addWidget(self.safety_guide)
 
         # 1. Top Section: Connection & Environment Panel

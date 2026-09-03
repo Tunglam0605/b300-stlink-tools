@@ -130,6 +130,7 @@ class GuiPackagingTests(unittest.TestCase):
         self.assertTrue((ROOT / "branding" / "b300-stlink-icon.png").is_file())
         self.assertTrue((ROOT / "branding" / "b300-stlink-icon.ico").is_file())
         self.assertTrue((ROOT / "branding" / "b300-stlink-wordmark.png").is_file())
+        self.assertTrue((ROOT / "branding" / "b300-stlink-wordmark-dark.png").is_file())
         self.assertTrue(
             (ROOT / "packaging" / "linux" / "b300-stlink-gui.svg").is_file()
         )
@@ -140,6 +141,7 @@ class GuiPackagingTests(unittest.TestCase):
         self.assertIn('icon=str(project_root / "branding" / "b300-stlink-icon.ico")',
                       gui_spec)
         self.assertIn('project_root / "CHANGELOG.md"', gui_spec)
+        self.assertIn('project_root / "branding" / "b300-stlink-wordmark-dark.png"', gui_spec)
         self.assertIn('"BUILD-COMMIT.txt"', gui_spec)
         self.assertIn("load_trusted_bootloader", gui_spec)
         self.assertNotIn("v00050001.hex", gui_spec)
