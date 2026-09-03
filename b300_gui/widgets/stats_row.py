@@ -7,6 +7,7 @@ from typing import Optional
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QVBoxLayout,
@@ -77,9 +78,12 @@ class StatsRow(QWidget):
         super().__init__(parent)
         self.setObjectName("statsRowContainer")
 
-        layout = QHBoxLayout(self)
+        layout = QGridLayout(self)
         layout.setContentsMargins(0, 0, 0, 4)
-        layout.setSpacing(8)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(8)
+        self._layout = layout
+        self._columns = 0
 
         # Card 1: Probe
         self.probe_card = StatCard(
@@ -90,29 +94,26 @@ class StatsRow(QWidget):
             variant="probe",
             parent=self,
         )
-        layout.addWidget(self.probe_card, 1)
 
         # Card 2: Target MCU
         self.target_card = StatCard(
             icon="🎯",
             title="Target MCU",
-            value="STM32F407VG",
-            subtitle="Cortex-M4 · 168MHz",
+            value="Chưa đọc target",
+            subtitle="Dùng Kiểm tra target",
             variant="target",
             parent=self,
         )
-        layout.addWidget(self.target_card, 1)
 
         # Card 3: Flash Map
         self.flash_card = StatCard(
             icon="💾",
             title="Flash Memory",
-            value="1024 KB",
+            value="Chưa đọc flash",
             subtitle="S0–S2 BL · S4–S7 App",
             variant="flash",
             parent=self,
         )
-        layout.addWidget(self.flash_card, 1)
 
         # Card 4: System State
         self.status_card = StatCard(
@@ -123,7 +124,43 @@ class StatsRow(QWidget):
             variant="status",
             parent=self,
         )
-        layout.addWidget(self.status_card, 1)
+        self._cards = (
+            self.probe_card,
+            self.target_card,
+            self.flash_card,
+            self.status_card,
+        )
+        for card in self._cards:
+            card.setMinimumWidth(0)
+            card.setSizePolicy(card.sizePolicy().horizontalPolicy(), card.sizePolicy().verticalPolicy())
+        self._arrange_cards(1)
+
+    def _arrange_cards(self, columns: int) -> None:
+        if columns == self._columns:
+            return
+        while self._layout.count():
+            self._layout.takeAt(0)
+        for index, card in enumerate(self._cards):
+            row, column = divmod(index, columns)
+            self._layout.addWidget(card, row, column)
+        for column in range(columns):
+            self._layout.setColumnStretch(column, 1)
+        self._columns = columns
+
+    def _minimum_width_for_columns(self, columns: int) -> int:
+        column_widths = [0] * columns
+        for index, card in enumerate(self._cards):
+            column = index % columns
+            column_widths[column] = max(column_widths[column], card.minimumSizeHint().width())
+        return sum(column_widths) + self._layout.horizontalSpacing() * (columns - 1)
+
+    def resizeEvent(self, event) -> None:
+        width = event.size().width()
+        columns = 4 if width >= self._minimum_width_for_columns(4) else 2
+        if width < self._minimum_width_for_columns(2):
+            columns = 1
+        self._arrange_cards(columns)
+        super().resizeEvent(event)
 
     def update_probe(self, name: str, details: str = "") -> None:
         self.probe_card.set_value(name, details)

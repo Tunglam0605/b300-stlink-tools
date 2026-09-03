@@ -36,13 +36,16 @@ class DebugConnectionPanel(QFrame):
         card_header.addStretch(1)
         main_layout.addLayout(card_header)
 
-        # 1. Compact responsive connection bar (All controls aligned in one row)
-        conn_bar = QHBoxLayout()
-        conn_bar.setSpacing(8)
+        # 1. Responsive connection controls.  Compact windows must wrap rather
+        # than clipping critical connection and status controls.
+        conn_bar = QGridLayout()
+        conn_bar.setHorizontalSpacing(8)
+        conn_bar.setVerticalSpacing(6)
+        conn_bar.setColumnStretch(1, 1)
 
         lbl_src = QLabel("Nguồn:")
         lbl_src.setObjectName("fieldLabel")
-        conn_bar.addWidget(lbl_src)
+        conn_bar.addWidget(lbl_src, 0, 0)
 
         self.mode_combo = QComboBox()
         self.mode_combo.setObjectName("debugModeSelector")
@@ -59,27 +62,24 @@ class DebugConnectionPanel(QFrame):
         self.mode_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.mode_combo.setMinimumContentsLength(10)
         self.mode_combo.setMinimumWidth(220)
-        conn_bar.addWidget(self.mode_combo)
+        conn_bar.addWidget(self.mode_combo, 0, 1)
 
-        self.btn_open_gateway = QPushButton("Cầu nối Từ xa…")
+        self.btn_open_gateway = QPushButton("SSH…")
         self.btn_open_gateway.setObjectName("ghostButton")
         self.btn_open_gateway.setToolTip("Mở tab Cầu nối Từ xa (SSH Gateway) để cấu hình máy chủ/client.")
         self.btn_open_gateway.clicked.connect(self.open_gateway_requested.emit)
-        conn_bar.addWidget(self.btn_open_gateway)
-
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.VLine)
-        sep.setObjectName("borderMuted")
-        conn_bar.addWidget(sep)
+        conn_bar.addWidget(self.btn_open_gateway, 0, 2)
 
         lbl_target = QLabel("Target:")
         lbl_target.setObjectName("fieldLabel")
-        conn_bar.addWidget(lbl_target)
+        conn_bar.addWidget(lbl_target, 1, 0)
 
         self.probe_display = QLabel("ST-Link: Tự động")
         self.probe_display.setObjectName("pageContextTitle")
         self.probe_display.setWordWrap(False)
-        conn_bar.addWidget(self.probe_display)
+        self.probe_display.setMinimumWidth(0)
+        self.probe_display.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        conn_bar.addWidget(self.probe_display, 1, 1)
 
         self.status_label = QLabel("CHƯA KẾT NỐI")
         self.status_label.setObjectName("debugStateBadge")
@@ -87,9 +87,7 @@ class DebugConnectionPanel(QFrame):
         self.status_label.setWordWrap(False)
         self.status_label.setMinimumWidth(100)
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        conn_bar.addWidget(self.status_label)
-
-        conn_bar.addStretch(1)
+        conn_bar.addWidget(self.status_label, 1, 2)
 
         # Gateway-only actions integrated into top connection row
         self.gateway_actions = QWidget()
@@ -113,7 +111,7 @@ class DebugConnectionPanel(QFrame):
         )
         gateway_actions_layout.addWidget(self.remote_kit_button)
         self.gateway_actions.setVisible(False)
-        conn_bar.addWidget(self.gateway_actions)
+        conn_bar.addWidget(self.gateway_actions, 2, 0, 1, 3)
 
         main_layout.addLayout(conn_bar)
 
@@ -209,4 +207,3 @@ class DebugConnectionPanel(QFrame):
         self.advanced_card.content_layout.addLayout(advanced_layout)
         self.connection_box = self.advanced_card
         main_layout.addWidget(self.advanced_card)
-

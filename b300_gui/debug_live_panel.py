@@ -61,27 +61,33 @@ class DebugLivePanel(QFrame):
 
         panel_layout.addLayout(header_row)
 
-        # Single-row Unified Sampling Toolbar
-        controls = QHBoxLayout()
-        controls.setSpacing(6)
+        # Responsive sampling toolbar.  Status occupies its own line so the
+        # compact Debug workspace never clips an action or connection state.
+        controls = QVBoxLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(5)
+        action_row = QGridLayout()
+        action_row.setHorizontalSpacing(6)
+        action_row.setVerticalSpacing(5)
+        action_row.setColumnStretch(0, 1)
+        action_row.setColumnStretch(1, 1)
 
         self.start_button = QPushButton("▶ Bắt đầu")
         self.start_button.setObjectName("primaryButton")
-        controls.addWidget(self.start_button)
+        action_row.addWidget(self.start_button, 0, 0)
 
         self.stop_button = QPushButton("⏹ Dừng")
         self.stop_button.setObjectName("ghostButton")
         self.stop_button.setEnabled(False)
-        controls.addWidget(self.stop_button)
-
-        sep1 = QFrame()
-        sep1.setFrameShape(QFrame.Shape.VLine)
-        sep1.setObjectName("borderMuted")
-        controls.addWidget(sep1)
+        action_row.addWidget(self.stop_button, 0, 1)
 
         lbl_spd = QLabel("Tốc độ:")
         lbl_spd.setObjectName("fieldLabel")
-        controls.addWidget(lbl_spd)
+        self.clear_button = QPushButton("Xóa")
+        self.clear_button.setObjectName("ghostButton")
+        self.export_button = QPushButton("Xuất…")
+        self.export_button.setObjectName("ghostButton")
+        action_row.addWidget(self.clear_button, 1, 0)
 
         self.interval_preset_combo = QComboBox()
         self.interval_preset_combo.addItem("0.1 s", 0.1)
@@ -93,7 +99,15 @@ class DebugLivePanel(QFrame):
         self.interval_preset_combo.addItem("Tùy chỉnh", -1.0)
         self.interval_preset_combo.setCurrentIndex(2)  # default 0.5s
         self.interval_preset_combo.currentIndexChanged.connect(self._on_interval_preset_changed)
-        controls.addWidget(self.interval_preset_combo)
+        action_row.addWidget(self.export_button, 1, 1)
+        controls.addLayout(action_row)
+
+        sampling_row = QGridLayout()
+        sampling_row.setHorizontalSpacing(6)
+        sampling_row.setVerticalSpacing(5)
+        sampling_row.setColumnStretch(1, 1)
+        sampling_row.addWidget(lbl_spd, 0, 0)
+        sampling_row.addWidget(self.interval_preset_combo, 0, 1)
 
         self.interval = QDoubleSpinBox()
         self.interval.setObjectName("debugSampleInterval")
@@ -104,13 +118,17 @@ class DebugLivePanel(QFrame):
         self.interval.setSuffix(" s")
         self.interval.setVisible(False)
         self.interval.valueChanged.connect(self._on_custom_interval_changed)
-        controls.addWidget(self.interval)
 
         self.limit_samples = QCheckBox("Giới hạn")
         self.limit_samples.setObjectName("debugLimitSamples")
         self.limit_samples.setChecked(False)
         self.limit_samples.setToolTip("Mặc định chạy liên tục đến khi bấm Dừng.")
-        controls.addWidget(self.limit_samples)
+        sampling_row.addWidget(self.limit_samples, 1, 0, 1, 2)
+        controls.addLayout(sampling_row)
+
+        detail_row = QHBoxLayout()
+        detail_row.setSpacing(6)
+        detail_row.addWidget(self.interval)
 
         self.cycles_label = QLabel("Số mẫu:")
         self.cycles_label.setObjectName("fieldLabel")
@@ -121,23 +139,10 @@ class DebugLivePanel(QFrame):
         self.cycles_label.setVisible(False)
         self.cycles.setVisible(False)
         self.limit_samples.toggled.connect(self._on_limit_samples_toggled)
-        controls.addWidget(self.cycles_label)
-        controls.addWidget(self.cycles)
-
-        sep2 = QFrame()
-        sep2.setFrameShape(QFrame.Shape.VLine)
-        sep2.setObjectName("borderMuted")
-        controls.addWidget(sep2)
-
-        self.clear_button = QPushButton("Xóa")
-        self.clear_button.setObjectName("ghostButton")
-        controls.addWidget(self.clear_button)
-
-        self.export_button = QPushButton("Xuất…")
-        self.export_button.setObjectName("ghostButton")
-        controls.addWidget(self.export_button)
-
-        controls.addStretch(1)
+        detail_row.addWidget(self.cycles_label)
+        detail_row.addWidget(self.cycles)
+        detail_row.addStretch(1)
+        controls.addLayout(detail_row)
 
         self.status = QLabel("Sẵn sàng · 0 mẫu")
         self.status.setObjectName("debugSampleStatus")
@@ -800,5 +805,3 @@ class DebugLivePanel(QFrame):
             self.import_preset()
         except Exception as exc:
             self.status.setText("Lỗi nạp preset: %s" % exc)
-
-

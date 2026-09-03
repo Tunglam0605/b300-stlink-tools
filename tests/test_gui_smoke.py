@@ -209,6 +209,74 @@ class GuiSmokeTests(unittest.TestCase):
         self.assertIn("Core v%s" % __version__, window.log_view.toPlainText())
         window.close()
 
+    def test_dashboard_stats_are_neutral_until_target_inspection_then_use_target_info(self) -> None:
+        window = MainWindow(service=FakeService(), probe_loader=lambda: ())
+        self.assertEqual(window.stats_row.target_card.value_label.text(), "Chưa đọc target")
+        self.assertEqual(window.stats_row.flash_card.value_label.text(), "Chưa đọc flash")
+        info = TargetInfo(
+            0x101F6413, 512, 3.09, "S0-S2 protected", (0, 1, 2), True,
+        )
+        window.apply_target_info(info)
+        self.assertEqual(window.stats_row.target_card.value_label.text(), "STM32F407")
+        self.assertIn("512 KiB", window.stats_row.target_card.subtitle_label.text())
+        self.assertEqual(window.stats_row.flash_card.value_label.text(), "512 KiB")
+        window.close()
+
+    def test_compact_debug_workspace_keeps_controls_and_stats_unclipped(self) -> None:
+        window = MainWindow(service=FakeService(), probe_loader=lambda: ())
+        window.resize(760, 460)
+        window.show()
+        window.tabs.setCurrentIndex(2)
+        self.app.processEvents()
+        tab = window.debug_tab
+        controls = (
+            tab.conn_panel.mode_combo,
+            tab.conn_panel.btn_open_gateway,
+            tab.conn_panel.status_label,
+            tab.live_panel.start_button,
+            tab.live_panel.interval_preset_combo,
+            tab.live_panel.status,
+        )
+        for control in controls:
+            self.assertGreaterEqual(
+                control.width(), control.minimumSizeHint().width(),
+                "%s is clipped in the compact Debug workspace" % control.objectName(),
+            )
+        for card in (
+            window.stats_row.probe_card,
+            window.stats_row.target_card,
+            window.stats_row.flash_card,
+            window.stats_row.status_card,
+        ):
+            self.assertGreaterEqual(card.width(), card.minimumSizeHint().width())
+        window.close()
+
+    def test_stats_row_uses_two_columns_until_four_cards_can_fit(self) -> None:
+        window = MainWindow(service=FakeService(), probe_loader=lambda: ())
+        window.resize(1450, 700)
+        window.show()
+        self.app.processEvents()
+        self.assertEqual(window.stats_row._columns, 2)
+        for card in (
+            window.stats_row.probe_card,
+            window.stats_row.target_card,
+            window.stats_row.flash_card,
+            window.stats_row.status_card,
+        ):
+            self.assertGreaterEqual(card.width(), card.minimumSizeHint().width())
+        window.close()
+
+    def test_unsupported_target_does_not_claim_b300_flash_map(self) -> None:
+        window = MainWindow(service=FakeService(), probe_loader=lambda: ())
+        info = TargetInfo(
+            0x12345678, 256, 3.21, "unrecognised target", (), False,
+        )
+        window.apply_target_info(info)
+        self.assertEqual(window.stats_row.flash_card.value_label.text(), "256 KiB")
+        self.assertIn("Không hỗ trợ", window.stats_row.flash_card.subtitle_label.text())
+        self.assertNotIn("S0–S2", window.stats_row.flash_card.subtitle_label.text())
+        window.close()
+
     def test_debug_workspace_remains_simple_and_scroll_free_at_minimum_window(self) -> None:
         window = MainWindow(service=FakeService(), probe_loader=lambda: ())
         window.resize(760, 460)

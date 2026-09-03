@@ -1767,6 +1767,14 @@ class MainWindow(QMainWindow):
         # Keep valid F407 target information for the separate Factory workflow even
         # when S0-S2 WRP is currently off. RDP/security still blocks destructive plans.
         self.target_info = info
+        if hasattr(self, "stats_row"):
+            target_name = "STM32F407" if is_f407 else "STM32 · 0x%03X" % (info.device_id & 0xFFF)
+            target_detail = "%d KiB · %.2f V" % (info.flash_kib, info.target_voltage)
+            self.stats_row.update_target(target_name, target_detail)
+            self.stats_row.update_flash(
+                "%d KiB" % info.flash_kib,
+                "S0–S2 BL · S4–S7 App" if is_f407 else "Không hỗ trợ · không áp dụng bản đồ B300",
+            )
         if hasattr(self, "operator_view"):
             self.operator_view.set_target_info(info) if is_f407 else None
         rdp_text = "ENABLED (blocked)" if info.readout_protected else "Level 0 / not reported as secured"
