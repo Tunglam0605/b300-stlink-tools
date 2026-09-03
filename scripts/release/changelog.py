@@ -9,18 +9,22 @@ from pathlib import Path
 from b300_core.release_notes import extract_release_notes
 
 
-def _release_notes(version: str, changelog: Path) -> str:
+def _release_notes(
+    version: str,
+    changelog: Path,
+    *,
+    release_notes_root: Path = Path("docs/releases"),
+) -> str:
     """Read CHANGELOG first, then an exact per-version release note file.
 
-    The fallback keeps historical CHANGELOG extraction intact while allowing a large
-    engineering release to carry a focused, immutable note file at
-    ``docs/releases/<version>.md``. A different version can never accidentally reuse
-    those notes.
+    Historical releases remain sourced from CHANGELOG.md. Large engineering releases
+    may carry focused immutable notes at ``docs/releases/<version>.md``. The exact
+    version filename prevents notes from one release being reused by another.
     """
     try:
         return extract_release_notes(changelog.read_text(encoding="utf-8"), version)
     except ValueError as changelog_error:
-        dedicated = Path("docs") / "releases" / (version + ".md")
+        dedicated = Path(release_notes_root) / (version + ".md")
         if not dedicated.is_file():
             raise changelog_error
         notes = dedicated.read_text(encoding="utf-8").strip()
