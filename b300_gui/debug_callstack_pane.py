@@ -24,7 +24,8 @@ from .debug_view_models import DebugFrame
 class DebugCallStackPane(QWidget):
     """Structured table displaying stack frames: # | Function | File | Line | Address."""
 
-    frame_selected = Signal(object)  # DebugFrame
+    frame_selected = Signal(int)     # level (int) as requested by architecture
+    frame_activated = Signal(object) # DebugFrame object for local navigation
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -103,4 +104,6 @@ class DebugCallStackPane(QWidget):
         if selected_rows:
             row = selected_rows[0].row()
             if 0 <= row < len(self._frames):
-                self.frame_selected.emit(self._frames[row])
+                frame = self._frames[row]
+                self.frame_selected.emit(frame.level)
+                self.frame_activated.emit(frame)

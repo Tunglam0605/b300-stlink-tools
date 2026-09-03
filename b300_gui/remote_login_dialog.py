@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
     QFormLayout,
-    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -23,14 +22,12 @@ from PySide6.QtWidgets import (
 class RemoteLoginDialog(QDialog):
     """Single login dialog for SSH Gateway connection.
 
-    Guarantees:
-    - Password is typed into a masked QLineEdit.
-    - Password is NEVER logged or passed to status labels.
-    - No external CMD or PowerShell terminal is spawned.
-    - Password field is destroyed / closed upon successful connection.
+    Features masked password input and zero password persistence in frontend.
+    Designed for async lifecycle with backend RemoteSession controller.
     """
 
-    connect_requested = Signal(str, str, str, int, bool)  # host, user, password, port, remember
+    login_requested = Signal(str, str, str, int, bool)    # host, user, password, port, remember
+    connect_requested = Signal(str, str, str, int, bool)  # alias for backward compatibility
 
     def __init__(
         self,
@@ -42,13 +39,15 @@ class RemoteLoginDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Client Connection — Remote Debug")
         self.setObjectName("remoteLoginDialog")
-        self.resize(380, 240)
+        self.resize(390, 270)
+        self._is_connecting = False
+        self._has_remembered = False
         self._build_ui(default_host, default_user, default_port)
 
     def _build_ui(self, default_host: str, default_user: str, default_port: int) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(14)
+        layout.setSpacing(12)
 
         # Header title
         title = QLabel("CLIENT CONNECTION")
@@ -89,6 +88,13 @@ class RemoteLoginDialog(QDialog):
         self.remember_checkbox.setChecked(True)
         layout.addWidget(self.remember_checkbox)
 
+        # Inline status / error banner (no traceback, clean text)
+        self.status_banner = QLabel("")
+        self.status_banner.setObjectName("loginStatusBanner")
+        self.status_banner.setWordWrap(True)
+        self.status_banner.setVisible(False)
+        layout.addWidget(self.status_banner)
+
         # Action buttons
         btn_box = QHBoxLayout()
         btn_box.setSpacing(8)
@@ -107,14 +113,62 @@ class RemoteLoginDialog(QDialog):
 
         layout.addLayout(btn_box)
 
+    def set_has_remembered_credential(self, has_remembered: bool) -> None:
+        """Indicate remembered credential without exposing plaintext."""
+        self._has_remembered = has_remembered
+        if has_remembered:
+            self.password_input.setPlaceholderText("Password: Saved on this PC")
+            self.remember_checkbox.setChecked(True)
+
+    def set_connecting(self, connecting: bool = True) -> None:
+        """Disable inputs and show connecting indicator without closing dialog."""
+        self._is_connecting = connecting
+        self.btn_connect.setEnabled(not connecting)
+        self.host_input.setEnabled(not connecting)
+        self.user_input.setEnabled(not connecting)
+        self.password_input.setEnabled(not connecting)
+        self.port_input.setEnabled(not connecting)
+        self.remember_checkbox.setEnabled(not connecting)
+        if connecting:
+            self.btn_connect.setText("CONNECTING…")
+            self.status_banner.setText("● Đang kết nối SSH tới trạm Gateway...")
+            self.status_banner.setStyleSheet("color: #38BDF8; font-size: 11px;")
+            self.status_banner.setVisible(True)
+        else:
+            self.btn_connect.setText("CONNECT")
+
+    def set_login_success(self) -> None:
+        """Called when SSH connection is verified."""
+        self.status_banner.setText("SSH ● CONNECTED")
+        self.status_banner.setStyleSheet("color: #10B981; font-weight: bold; font-size: 11px;")
+        self.status_banner.setVisible(True)
+        self.password_input.clear()
+        self.accept()
+
+    def set_login_error(self, error_message: str) -> None:
+        """Keep dialog open, keep password masked, show inline short error, re-enable inputs."""
+        self.set_connecting(False)
+        clean_msg = error_message.strip().split("\n")[0] if error_message else "Xác thực SSH thất bại."
+        # Never leak passwords into error banner
+        self.status_banner.setText(f"✕ {clean_msg}")
+        self.status_banner.setStyleSheet("color: #EF4444; font-size: 11px; font-weight: 600;")
+        self.status_banner.setVisible(True)
+        self.password_input.setFocus()
+        self.password_input.selectAll()
+
     def _on_connect_clicked(self) -> None:
         host = self.host_input.text().strip()
         user = self.user_input.text().strip()
         pwd = self.password_input.text()
         port = self.port_input.value()
         remember = self.remember_checkbox.isChecked()
+        self.set_connecting(True)
+        self.login_requested.emit(host, user, pwd, port, remember)
         self.connect_requested.emit(host, user, pwd, port, remember)
-        self.accept()
+
+    def reject(self) -> None:
+        self.password_input.clear()
+        super().reject()
 
     def get_credentials(self) -> tuple[str, str, str, int, bool]:
         """Retrieve credentials and immediately clear memory password input."""

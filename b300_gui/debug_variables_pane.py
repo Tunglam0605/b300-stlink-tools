@@ -27,6 +27,8 @@ class DebugVariablesPane(QWidget):
 
     variable_write_requested = Signal(str, str, str)  # id, name, new_value
     add_watch_requested = Signal(str)                 # expression
+    request_children = Signal(str)                    # variable_id (lazy load)
+    children_requested = Signal(str)                  # alias
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -85,6 +87,7 @@ class DebugVariablesPane(QWidget):
         header_view.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         header_view.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
 
+        self.tree.expanded.connect(self._on_node_expanded)
         layout.addWidget(self.tree, 1)
 
     def set_target_state(self, state: str, interactive_connected: bool = True) -> None:
@@ -92,8 +95,20 @@ class DebugVariablesPane(QWidget):
         self.model.set_target_state(state, interactive_connected)
 
     def set_variables(self, nodes: List[DebugVariableNode]) -> None:
+        """Set root variable nodes. Nodes are collapsed by default for debugger scalability."""
         self.model.set_root_nodes(nodes)
-        self.tree.expandAll()
+
+    def insert_children(self, parent_id: str, children: Sequence[DebugVariableNode]) -> None:
+        """Insert lazily loaded child variables while preserving expansion state."""
+        self.model.insert_children(parent_id, children)
+
+    def _on_node_expanded(self, index: QModelIndex) -> None:
+        if not index.isValid():
+            return
+        node = index.internalPointer()
+        if getattr(node, "has_children", False) and not getattr(node, "children_loaded", False):
+            self.request_children.emit(node.id)
+            self.children_requested.emit(node.id)
 
     def _on_add_watch(self) -> None:
         expr = self.watch_input.text().strip()

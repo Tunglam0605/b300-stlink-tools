@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
     QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -21,19 +20,24 @@ from PySide6.QtWidgets import (
 )
 
 from .collapsible_card import CollapsibleCard
-from .debug_mode_selector import DebugModeSelector
 from .remote_login_dialog import RemoteLoginDialog
 
 
 class DebugConnectionPanel(QFrame):
-    """Clean engineering connection ribbon with mode selection, probe info, symbols, and collapsible settings."""
+    """Mode-specific setup form for B300 Debugging.
+
+    In v0.15 Mode-First flow, this panel is shown ONLY after a mode is selected.
+    The legacy mode combo is hidden from normal view.
+    """
 
     open_gateway_requested = Signal()
     client_login_requested = Signal(str, str, str, int, bool)
+    change_mode_requested = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("headerRibbon")
+        self.login_dialog: Optional[RemoteLoginDialog] = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -41,21 +45,35 @@ class DebugConnectionPanel(QFrame):
         main_layout.setContentsMargins(12, 10, 12, 10)
         main_layout.setSpacing(10)
 
-        # 0. Mode-First Selector: 3 balanced technical tiles
-        self.mode_selector = DebugModeSelector(parent=self)
-        self.mode_selector.mode_selected.connect(self._on_mode_tile_selected)
-        main_layout.addWidget(self.mode_selector)
+        # 0. Navigation breadcrumb bar
+        nav_bar = QHBoxLayout()
+        nav_bar.setContentsMargins(0, 0, 0, 0)
+        nav_bar.setSpacing(8)
 
-        # 1. Responsive connection controls row
-        conn_bar = QGridLayout()
-        conn_bar.setHorizontalSpacing(8)
-        conn_bar.setVerticalSpacing(6)
-        conn_bar.setColumnStretch(1, 1)
+        self.btn_change_mode = QPushButton("← Đổi Chế Độ")
+        self.btn_change_mode.setObjectName("ghostButton")
+        self.btn_change_mode.setToolTip("Quay lại màn hình chọn chế độ (Local, Gateway, Client)")
+        self.btn_change_mode.clicked.connect(self.change_mode_requested.emit)
+        nav_bar.addWidget(self.btn_change_mode)
 
-        lbl_src = QLabel("Nguồn:")
-        lbl_src.setObjectName("fieldLabel")
-        conn_bar.addWidget(lbl_src, 0, 0)
+        self.mode_title_label = QLabel("LOCAL DEBUG SETUP")
+        self.mode_title_label.setObjectName("debugModeActiveTitle")
+        self.mode_title_label.setStyleSheet("font-size: 13px; font-weight: 800; color: #38BDF8; letter-spacing: 0.5px;")
+        nav_bar.addWidget(self.mode_title_label)
 
+        nav_bar.addStretch(1)
+
+        self.status_label = QLabel("CHƯA KẾT NỐI")
+        self.status_label.setObjectName("debugStateBadge")
+        self.status_label.setProperty("state", "stopped")
+        self.status_label.setWordWrap(False)
+        self.status_label.setMinimumWidth(100)
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        nav_bar.addWidget(self.status_label)
+
+        main_layout.addLayout(nav_bar)
+
+        # 1. Hidden mode combo (maintained for internal & backward test compatibility)
         self.mode_combo = QComboBox()
         self.mode_combo.setObjectName("debugModeSelector")
         for label, value in (
@@ -65,39 +83,32 @@ class DebugConnectionPanel(QFrame):
             ("Máy Client · Từ xa", "client"),
         ):
             self.mode_combo.addItem(label, value)
-        self.mode_combo.setToolTip(
-            "Tự động: dùng ST-Link trên máy này nếu có; nếu không sẽ dùng Gateway đã lưu."
-        )
-        self.mode_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.mode_combo.setMinimumContentsLength(10)
-        self.mode_combo.setMinimumWidth(220)
         self.mode_combo.currentIndexChanged.connect(self._on_combo_mode_changed)
-        conn_bar.addWidget(self.mode_combo, 0, 1)
+        self.mode_combo.setVisible(False)  # Hidden in normal v0.15 Mode-First flow
+        main_layout.addWidget(self.mode_combo)
 
-        self.btn_open_gateway = QPushButton("SSH…")
-        self.btn_open_gateway.setObjectName("ghostButton")
-        self.btn_open_gateway.setToolTip("Mở tab Cầu nối Từ xa (SSH Gateway) để cấu hình máy chủ/client.")
-        self.btn_open_gateway.clicked.connect(self.open_gateway_requested.emit)
-        conn_bar.addWidget(self.btn_open_gateway, 0, 2)
+        # 2. Responsive connection controls row
+        conn_bar = QGridLayout()
+        conn_bar.setHorizontalSpacing(8)
+        conn_bar.setVerticalSpacing(6)
+        conn_bar.setColumnStretch(1, 1)
 
         lbl_target = QLabel("Target:")
         lbl_target.setObjectName("fieldLabel")
-        conn_bar.addWidget(lbl_target, 1, 0)
+        conn_bar.addWidget(lbl_target, 0, 0)
 
         self.probe_display = QLabel("ST-Link: Tự động")
         self.probe_display.setObjectName("pageContextTitle")
         self.probe_display.setWordWrap(False)
         self.probe_display.setMinimumWidth(0)
         self.probe_display.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        conn_bar.addWidget(self.probe_display, 1, 1)
+        conn_bar.addWidget(self.probe_display, 0, 1)
 
-        self.status_label = QLabel("CHƯA KẾT NỐI")
-        self.status_label.setObjectName("debugStateBadge")
-        self.status_label.setProperty("state", "stopped")
-        self.status_label.setWordWrap(False)
-        self.status_label.setMinimumWidth(100)
-        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        conn_bar.addWidget(self.status_label, 1, 2)
+        self.btn_open_gateway = QPushButton("SSH…")
+        self.btn_open_gateway.setObjectName("ghostButton")
+        self.btn_open_gateway.setToolTip("Mở cấu hình SSH Gateway.")
+        self.btn_open_gateway.clicked.connect(self.open_gateway_requested.emit)
+        conn_bar.addWidget(self.btn_open_gateway, 0, 2)
 
         # Gateway-only actions integrated into top connection row
         self.gateway_actions = QWidget()
@@ -121,11 +132,11 @@ class DebugConnectionPanel(QFrame):
         )
         gateway_actions_layout.addWidget(self.remote_kit_button)
         self.gateway_actions.setVisible(False)
-        conn_bar.addWidget(self.gateway_actions, 2, 0, 1, 3)
+        conn_bar.addWidget(self.gateway_actions, 1, 0, 1, 3)
 
         main_layout.addLayout(conn_bar)
 
-        # 2. Symbol selection row (Single unified row)
+        # 3. Symbol selection row (Single unified row)
         self.symbols_box = QWidget()
         symbols_layout = QHBoxLayout(self.symbols_box)
         symbols_layout.setContentsMargins(0, 0, 0, 0)
@@ -194,6 +205,7 @@ class DebugConnectionPanel(QFrame):
         self.client_ssh_port.setValue(22)
         client_layout.addWidget(self.client_ssh_port, 1, 3)
         client_layout.setColumnStretch(1, 1)
+        self.client_box.setVisible(False)
         main_layout.addWidget(self.client_box)
 
         # Advanced Settings (Collapsible)
@@ -224,22 +236,50 @@ class DebugConnectionPanel(QFrame):
         self.connection_box = self.advanced_card
         main_layout.addWidget(self.advanced_card)
 
-    def _on_mode_tile_selected(self, mode: str) -> None:
+    def set_mode(self, mode: str) -> None:
+        """Configure visible controls for the selected mode."""
         idx = self.mode_combo.findData(mode)
-        if idx >= 0 and self.mode_combo.currentIndex() != idx:
+        if idx >= 0:
             self.mode_combo.setCurrentIndex(idx)
+        else:
+            self._apply_mode_visibility(mode)
 
     def _on_combo_mode_changed(self, index: int) -> None:
         data = self.mode_combo.itemData(index)
-        if data in ("local", "gateway", "client"):
-            self.mode_selector.set_mode(data)
+        self._apply_mode_visibility(str(data or "auto"))
+
+    def _apply_mode_visibility(self, mode: str) -> None:
+        if mode == "local":
+            self.mode_title_label.setText("CẤU HÌNH LOCAL (USB ST-LINK)")
+            self.symbols_box.setVisible(True)
+            self.client_box.setVisible(False)
+            self.gateway_actions.setVisible(False)
+            self.btn_open_gateway.setVisible(False)
+        elif mode == "gateway":
+            self.mode_title_label.setText("CẤU HÌNH GATEWAY SERVER")
+            self.symbols_box.setVisible(False)
+            self.client_box.setVisible(False)
+            self.gateway_actions.setVisible(True)
+            self.btn_open_gateway.setVisible(True)
+        elif mode == "client":
+            self.mode_title_label.setText("CẤU HÌNH CLIENT (REMOTE SSH)")
+            self.symbols_box.setVisible(True)
+            self.client_box.setVisible(True)
+            self.gateway_actions.setVisible(False)
+            self.btn_open_gateway.setVisible(True)
+        else:
+            self.mode_title_label.setText("CẤU HÌNH DEBUG (TỰ ĐỘNG)")
+            self.symbols_box.setVisible(True)
+            self.client_box.setVisible(False)
+            self.gateway_actions.setVisible(False)
+            self.btn_open_gateway.setVisible(True)
 
     def _open_login_dialog(self) -> None:
-        dlg = RemoteLoginDialog(
+        self.login_dialog = RemoteLoginDialog(
             default_host=self.client_host.text().strip(),
             default_user=self.client_user.text().strip(),
             default_port=self.client_ssh_port.value(),
             parent=self.window(),
         )
-        dlg.connect_requested.connect(self.client_login_requested.emit)
-        dlg.exec()
+        self.login_dialog.login_requested.connect(self.client_login_requested.emit)
+        self.login_dialog.exec()

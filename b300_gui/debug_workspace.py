@@ -10,8 +10,11 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
+    QPlainTextEdit,
     QPushButton,
     QSizePolicy,
+    QSpinBox,
     QSplitter,
     QTabWidget,
     QVBoxLayout,
@@ -257,6 +260,10 @@ class DebugToolbar(QFrame):
 class DebugWorkstationWidget(QWidget):
     """Full Engineering Debug Workstation container integrating 3 split columns and bottom dock tabs."""
 
+    frame_selected = Signal(int)                  # level
+    request_variable_children = Signal(str)       # variable_id
+    step_out_requested = Signal()
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("debugWorkstationWidget")
@@ -314,19 +321,103 @@ class DebugWorkstationWidget(QWidget):
         self.horizontal_splitter.setSizes([260, 520, 280])
         self.vertical_splitter.addWidget(self.horizontal_splitter)
 
-        # 4. Bottom Dock Tabs: Live Expressions, Memory, Console, Technical Log
+        # 4. Bottom Dock Tabs: LIVE, MEMORY, CONSOLE, TECHNICAL LOG
         self.bottom_tabs = QTabWidget(self.vertical_splitter)
         self.bottom_tabs.setObjectName("wsBottomTabs")
         self.bottom_tabs.setTabPosition(QTabWidget.TabPosition.South)
+
+        # Tab 0: LIVE (Live Expressions / Live Monitor host)
+        self.live_tab = QWidget()
+        self.live_tab.setObjectName("wsLiveTab")
+        self.live_layout = QVBoxLayout(self.live_tab)
+        self.live_layout.setContentsMargins(4, 4, 4, 4)
+        self.live_expressions_tab = self.live_tab
+
+        # Tab 1: MEMORY (Technical Hex Viewer placeholder)
+        self.memory_tab = QWidget()
+        self.memory_tab.setObjectName("wsMemoryTab")
+        mem_layout = QVBoxLayout(self.memory_tab)
+        mem_layout.setContentsMargins(6, 6, 6, 6)
+        mem_layout.setSpacing(6)
+
+        mem_top = QHBoxLayout()
+        mem_top.setSpacing(8)
+        mem_lbl = QLabel("Address:")
+        mem_lbl.setStyleSheet("font-size: 11px; font-weight: 700; color: #94A3B8;")
+        mem_top.addWidget(mem_lbl)
+
+        self.memory_addr_input = QLineEdit("0x20000000")
+        self.memory_addr_input.setMaximumWidth(120)
+        self.memory_addr_input.setStyleSheet("font-family: monospace; font-size: 11px;")
+        mem_top.addWidget(self.memory_addr_input)
+
+        len_lbl = QLabel("Length:")
+        len_lbl.setStyleSheet("font-size: 11px; font-weight: 700; color: #94A3B8;")
+        mem_top.addWidget(len_lbl)
+
+        self.memory_len_spin = QSpinBox()
+        self.memory_len_spin.setRange(16, 4096)
+        self.memory_len_spin.setValue(256)
+        self.memory_len_spin.setMaximumWidth(80)
+        mem_top.addWidget(self.memory_len_spin)
+
+        self.btn_read_memory = QPushButton("Read Hex")
+        self.btn_read_memory.setEnabled(False)
+        self.btn_read_memory.setToolTip("Memory Hex Viewer sẽ được kích hoạt khi backend hỗ trợ.")
+        mem_top.addWidget(self.btn_read_memory)
+        mem_top.addStretch(1)
+        mem_layout.addLayout(mem_top)
+
+        self.memory_view = QPlainTextEdit()
+        self.memory_view.setReadOnly(True)
+        mono_font = QFont("Consolas", 9)
+        mono_font.setStyleHint(QFont.StyleHint.Monospace)
+        self.memory_view.setFont(mono_font)
+        self.memory_view.setPlainText(
+            "; Memory Hex Viewer (SRAM: 0x20000000..0x2001FFFF, Flash: 0x08000000..0x080FFFFF)\n"
+            "; Trạng thái: Chờ kết nối mục tiêu và lệnh đọc từ backend v0.15."
+        )
+        mem_layout.addWidget(self.memory_view, 1)
+
+        # Tab 2: CONSOLE (Diagnostic Console)
+        self.console_tab = QWidget()
+        self.console_tab.setObjectName("wsConsoleTab")
+        console_layout = QVBoxLayout(self.console_tab)
+        console_layout.setContentsMargins(4, 4, 4, 4)
+        self.console_view = QPlainTextEdit()
+        self.console_view.setReadOnly(True)
+        self.console_view.setFont(mono_font)
+        self.console_view.setPlaceholderText("Console output (GDB / OpenOCD diagnostics)...")
+        console_layout.addWidget(self.console_view, 1)
+
+        # Tab 3: TECHNICAL LOG
+        self.log_tab = QWidget()
+        self.log_tab.setObjectName("wsLogTab")
+        log_layout = QVBoxLayout(self.log_tab)
+        log_layout.setContentsMargins(4, 4, 4, 4)
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setFont(mono_font)
+        self.log_view.setPlaceholderText("Technical debug and connection log...")
+        log_layout.addWidget(self.log_view, 1)
+
+        self.bottom_tabs.addTab(self.live_tab, "LIVE")
+        self.bottom_tabs.addTab(self.memory_tab, "MEMORY")
+        self.bottom_tabs.addTab(self.console_tab, "CONSOLE")
+        self.bottom_tabs.addTab(self.log_tab, "TECHNICAL LOG")
+        self.bottom_tabs.setCurrentIndex(0)
 
         self.vertical_splitter.addWidget(self.bottom_tabs)
         self.vertical_splitter.setSizes([580, 200])
 
         main_layout.addWidget(self.vertical_splitter, 1)
 
-        # Connect internal cross-pane navigation
+        # Connect internal cross-pane navigation and signals
         self.symbols_pane.symbol_activated.connect(self._on_symbol_activated)
-        self.callstack_pane.frame_selected.connect(self._on_frame_selected)
+        self.callstack_pane.frame_activated.connect(self._on_frame_selected)
+        self.callstack_pane.frame_selected.connect(self.frame_selected.emit)
+        self.variables_pane.request_children.connect(self.request_variable_children.emit)
+        self.toolbar.step_out_requested.connect(self.step_out_requested.emit)
 
     def _on_symbol_activated(self, name: str, address: str, file_path: str, line: int) -> None:
         self.source_view.show_location(file_path, line, address, function=name)

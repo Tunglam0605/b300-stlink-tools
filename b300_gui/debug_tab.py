@@ -47,6 +47,7 @@ from .debug_view_models import (
     DebugRegister,
     DebugVariableNode,
 )
+from .debug_adapter import DefaultDebugAdapter, DebugWorkstationAdapter
 
 
 class DebugTab(QWidget):
@@ -121,8 +122,14 @@ class DebugTab(QWidget):
         self.main_stack.setObjectName("debugMainStack")
         root_layout.addWidget(self.main_stack)
 
+        # Page 0: Dedicated Mode-First Screen
+        self.mode_selector = DebugModeSelector(self)
+        self.main_stack.addWidget(self.mode_selector)
+
+        # Page 1: Mode-Specific Setup Screen
         self.main_stack.addWidget(self.scroll_area)
 
+        # Page 2: Engineering Debug Workstation
         self.workstation = DebugWorkstationWidget(self)
         self.main_stack.addWidget(self.workstation)
 
@@ -265,19 +272,47 @@ class DebugTab(QWidget):
         self.sample_cycles.valueChanged.connect(self._save_debug_preferences)
         self.sample_limit_enabled.toggled.connect(self._save_debug_preferences)
         self.sample_interval.valueChanged.connect(self._save_debug_preferences)
-        self.mode_selector = self.conn_panel.mode_selector
+        self.mode_selector.mode_selected.connect(self._on_mode_screen_selected)
+        self.conn_panel.change_mode_requested.connect(self.show_mode_selector)
         self.conn_panel.client_login_requested.connect(self._on_client_login_requested)
         self.workstation.toolbar.run_requested.connect(self.continue_target)
         self.workstation.toolbar.halt_requested.connect(self.halt_target)
         self.workstation.toolbar.reset_requested.connect(self.reset_halt_target)
         self.workstation.toolbar.step_in_requested.connect(self.step_into_target)
         self.workstation.toolbar.step_over_requested.connect(self.step_over_target)
+        self.workstation.toolbar.step_out_requested.connect(self.step_out_target)
         self.workstation.toolbar.break_requested.connect(self.break_once)
         self.workstation.toolbar.disconnect_requested.connect(self.stop_debug)
+        self.workstation.frame_selected.connect(self.select_stack_frame)
+        self.workstation.request_variable_children.connect(self.request_variable_children)
+        self.workstation.symbols_pane.symbol_activated.connect(self._on_workstation_symbol_activated)
+
+        self._adapter = DefaultDebugAdapter(self.session, self.service, self.log.emit)
 
         self._restore_debug_preferences()
         self._refresh_controls()
         self._sync_workstation_state()
+
+        if self._settings is None:
+            self.main_stack.setCurrentWidget(self.scroll_area)
+        else:
+            saved_mode = self._setting_value("debug/mode")
+            if saved_mode and saved_mode in ("local", "gateway", "client"):
+                self.select_mode(saved_mode)
+                self.main_stack.setCurrentWidget(self.scroll_area)
+            else:
+                self.main_stack.setCurrentWidget(self.mode_selector)
+
+    def _on_mode_screen_selected(self, mode: str) -> None:
+        self.select_mode(mode)
+        self.show_setup()
+
+    def select_mode(self, mode: str) -> None:
+        idx = self.mode_combo.findData(mode)
+        if idx >= 0:
+            self.mode_combo.setCurrentIndex(idx)
+        self.conn_panel.set_mode(mode)
+        self.mode_selector.set_mode(mode)
 
     def _sync_workstation_state(self) -> None:
         target_norm = "DISCONNECTED"
@@ -288,12 +323,10 @@ class DebugTab(QWidget):
         elif self.session.active:
             target_norm = "CONNECTED"
 
-        conn_state = DebugConnectionState(
+        conn_state = self._adapter.connection_state(
             mode=self._resolved_role(),
-            ssh=self._client_mode_active or (self._client_tunnel is not None and self._client_tunnel.active),
-            gdb=self.session.active,
-            tcl=self.session.active or (self._remote_tcl is not None),
-            target=target_norm,
+            ssh_active=bool(self._client_mode_active or (self._client_tunnel is not None and self._client_tunnel.active)),
+            target_state=target_norm,
             pc=getattr(self, "_last_pc", "—"),
             sample_rate="10 Hz" if self._sampling_active else "—",
         )
@@ -305,19 +338,111 @@ class DebugTab(QWidget):
         self.client_host.setText(host)
         self.client_user.setText(user)
         self.client_ssh_port.setValue(port)
-        if remember:
+
+        if remember and self._settings is not None:
             self._save_debug_preferences()
+
+        dlg = getattr(self.conn_panel, "login_dialog", None)
+        if dlg:
+            dlg.set_connecting(True)
+
+        if hasattr(self, "_workstation_controller") and hasattr(self._workstation_controller, "remote_login"):
+            try:
+                self._workstation_controller.remote_login(password, remember=remember)
+                if dlg:
+                    dlg.set_login_success()
+                self._workstation_controller.start_client(self.symbol_path.text().strip() or None)
+                self.show_workstation()
+            except Exception as e:
+                clean_err = str(e).strip().split("\n")[0]
+                if dlg:
+                    dlg.set_login_error(clean_err)
+                else:
+                    self.log.emit("Đăng nhập Client thất bại: %s" % clean_err)
+            return
+
+        self._login_via_adapter_seam(host, user, password, port, remember, dlg)
+
+    def _login_via_adapter_seam(
+        self, host: str, user: str, password: str, port: int, remember: bool, dlg: Optional[RemoteLoginDialog]
+    ) -> None:
+        """Adapter seam preparing RemoteSession / DebugWorkstationController."""
+        try:
+            from b300_core.remote_session import RemoteSession  # type: ignore
+            session = RemoteSession(host=host, user=user, port=port)
+            session.authenticate(password=password, remember=remember)
+            if dlg:
+                dlg.set_login_success()
+            self.show_workstation()
+            return
+        except ImportError:
+            pass
+        except Exception as err:
+            clean_err = str(err).strip().split("\n")[0]
+            if dlg:
+                dlg.set_login_error(clean_err)
+            return
+
+        if dlg:
+            dlg.set_login_success()
         self.start_client_debug()
 
     def show_mode_selector(self) -> None:
-        self.main_stack.setCurrentWidget(self.scroll_area)
-        self.conn_panel.mode_selector.setFocus()
+        self.main_stack.setCurrentWidget(self.mode_selector)
 
     def show_workstation(self) -> None:
+        if self.live_panel.parent() != self.workstation.live_tab:
+            self.workstation.live_layout.addWidget(self.live_panel)
         self.main_stack.setCurrentWidget(self.workstation)
 
     def show_setup(self) -> None:
         self.main_stack.setCurrentWidget(self.scroll_area)
+
+    def step_out_target(self) -> None:
+        """Step out of current function to caller."""
+        if hasattr(self.session, "step_out"):
+            self._run_control("Step Out", self.session.step_out)
+        elif hasattr(self, "_adapter") and hasattr(self._adapter, "step_out"):
+            self._adapter.step_out()
+        else:
+            self.log.emit("Step Out: Đang đợi backend DebugWorkspaceBackend.step_out() tích hợp.")
+
+    def select_stack_frame(self, level: int) -> None:
+        """Forward frame selection to backend controller adapter without faking state."""
+        if hasattr(self, "_adapter") and hasattr(self._adapter, "select_frame"):
+            self._adapter.select_frame(level)
+        else:
+            self.log.emit(f"Stack frame #{level} selected (controller frame navigation pending backend merge).")
+
+    def request_variable_children(self, variable_id: str) -> None:
+        """Lazy-load child variables for struct/array."""
+        if hasattr(self, "_adapter") and hasattr(self._adapter, "request_variable_children"):
+            self._adapter.request_variable_children(variable_id)
+        else:
+            self.log.emit(f"Lazy load requested for variable '{variable_id}'.")
+
+    def _on_workstation_symbol_activated(self, name: str, address: str, file_path: str, line: int) -> None:
+        """Navigate source view to symbol location using addr2line via OfflineSymbolTable when needed."""
+        if file_path and line > 0:
+            self.workstation.source_view.show_location(file_path, line, address, function=name)
+            return
+
+        if hasattr(self, "_symbol_table") and self._symbol_table and address:
+            try:
+                addr_int = int(address, 16) if address.startswith("0x") else int(address)
+                loc = self._symbol_table.source_location(addr_int)
+                if loc:
+                    self.workstation.source_view.show_location(
+                        loc.file or file_path,
+                        loc.line or line,
+                        address,
+                        function=name,
+                    )
+                    return
+            except Exception:
+                pass
+
+        self.workstation.source_view.show_location(file_path, line, address, function=name)
 
     def _on_open_gateway_clicked(self) -> None:
         window = self.window()
@@ -1255,7 +1380,17 @@ class DebugTab(QWidget):
         elif label == "Variable":
             expr = getattr(result, "expression", "") or ""
             val = getattr(result, "value", "") or ""
-            node = DebugVariableNode(id=expr, name=expr, value=val, type="auto", address="RAM", editable=True)
+            v_type = getattr(result, "type", "") or ""
+            v_addr = getattr(result, "address", "") or ""
+            v_editable = bool(getattr(result, "editable", False))
+            node = DebugVariableNode(
+                id=expr,
+                name=expr,
+                value=val,
+                type=v_type,
+                address=v_addr,
+                editable=v_editable,
+            )
             self.workstation.variables_pane.set_variables([node])
         self.log.emit("Diagnostic completed: %s · target restored=%s" % (label, state.upper()))
         self._refresh_controls()

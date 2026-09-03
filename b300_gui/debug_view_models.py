@@ -52,20 +52,22 @@ class DebugVariableNode:
     """Node in hierarchical variable tree (structs, arrays, primitives)."""
     id: str
     name: str
-    value: str
+    value: str = ""
     type: str = ""
     address: str = ""
-    editable: bool = True
+    editable: bool = False
     has_children: bool = False
-    children_loaded: bool = True
-    children: List["DebugVariableNode"] = field(default_factory=list)
+    children_loaded: bool = False
     changed: bool = False
+    in_scope: bool = True
+    children: List["DebugVariableNode"] = field(default_factory=list)
     parent: Optional["DebugVariableNode"] = None
 
     def add_child(self, child: "DebugVariableNode") -> None:
         child.parent = self
         self.children.append(child)
         self.has_children = True
+        self.children_loaded = True
 
 
 @dataclass
@@ -131,6 +133,44 @@ class VariablesTreeModel(QAbstractItemModel):
             self._bind_parents(node)
         self.endResetModel()
 
+    def set_variables(self, nodes: List[DebugVariableNode]) -> None:
+        """Alias for set_root_nodes for test and controller compatibility."""
+        self.set_root_nodes(nodes)
+
+    def insert_children(self, parent_id: str, children: Sequence[DebugVariableNode]) -> bool:
+        """Insert lazily-loaded children under node matching parent_id."""
+        target_node, _ = self._find_node_by_id(parent_id)
+        if target_node is None:
+            return False
+
+        self.beginResetModel()
+        target_node.children = list(children)
+        target_node.children_loaded = True
+        target_node.has_children = len(children) > 0
+        for child in target_node.children:
+            child.parent = target_node
+            self._bind_parents(child)
+        self.endResetModel()
+        return True
+
+    def _find_node_by_id(self, node_id: str) -> tuple[Optional[DebugVariableNode], QModelIndex]:
+        for row, root in enumerate(self._root_nodes):
+            if root.id == node_id:
+                return root, self.createIndex(row, 0, root)
+            res = self._find_child_by_id(root, node_id)
+            if res[0] is not None:
+                return res
+        return None, QModelIndex()
+
+    def _find_child_by_id(self, parent: DebugVariableNode, node_id: str) -> tuple[Optional[DebugVariableNode], QModelIndex]:
+        for row, child in enumerate(parent.children):
+            if child.id == node_id:
+                return child, self.createIndex(row, 0, child)
+            res = self._find_child_by_id(child, node_id)
+            if res[0] is not None:
+                return res
+        return None, QModelIndex()
+
     def _bind_parents(self, node: DebugVariableNode) -> None:
         for child in node.children:
             child.parent = node
@@ -138,6 +178,16 @@ class VariablesTreeModel(QAbstractItemModel):
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return len(self.COLUMNS)
+
+    def hasChildren(self, parent: QModelIndex = QModelIndex()) -> bool:
+        if not parent.isValid():
+            return len(self._root_nodes) > 0
+        node = parent.internalPointer()
+        if isinstance(node, DebugVariableNode):
+            if node.children:
+                return True
+            return getattr(node, "has_children", False)
+        return False
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         if not parent.isValid():

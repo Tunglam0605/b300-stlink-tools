@@ -28,6 +28,10 @@ class DebugBreakpointsPane(QWidget):
     add_requested = Signal()
     toggle_requested = Signal(int, bool)  # number, enabled
     delete_requested = Signal(int)        # number
+    create_hardware_breakpoint_requested = Signal(str)  # location
+    create_watchpoint_requested = Signal(str)           # expression
+    set_breakpoint_enabled_requested = Signal(int, bool)# number, enabled
+    delete_breakpoint_requested = Signal(int)           # number
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -103,13 +107,16 @@ class DebugBreakpointsPane(QWidget):
 
         layout.addWidget(self.table, 1)
 
+    def update_usage(self, bp_used: int, bp_max: int = 6, wp_used: int = 0, wp_max: int = 4) -> None:
+        self.status_badge.setText(f"BP {bp_used}/{bp_max} · WP {wp_used}/{wp_max}")
+
     def set_breakpoints(self, breakpoints: Sequence[DebugBreakpoint]) -> None:
         self._breakpoints = list(breakpoints)
         self.table.setRowCount(len(self._breakpoints))
 
-        bp_count = sum(1 for b in self._breakpoints if "BP" in b.kind)
-        wp_count = sum(1 for b in self._breakpoints if "WATCH" in b.kind)
-        self.status_badge.setText(f"BP {bp_count}/6 · WP {wp_count}/4")
+        bp_count = sum(1 for b in self._breakpoints if "break" in b.kind.lower() or "bp" in b.kind.lower())
+        wp_count = sum(1 for b in self._breakpoints if "watch" in b.kind.lower() or "wp" in b.kind.lower())
+        self.update_usage(bp_count, 6, wp_count, 4)
 
         for row, bp in enumerate(self._breakpoints):
             item_state = QTableWidgetItem("●" if bp.enabled else "○")
