@@ -60,6 +60,18 @@ class V018SimplifiedUiTests(unittest.TestCase):
         finally:
             self._close(window)
 
+    def test_production_window_does_not_construct_hidden_legacy_workbenches(self) -> None:
+        window = self._make_window()
+        try:
+            self.assertFalse(hasattr(window, "debug_tab"))
+            self.assertFalse(hasattr(window, "gateway_tab"))
+            self.assertFalse(hasattr(window, "memory_tab"))
+            self.assertFalse(hasattr(window, "operator_view"))
+            self.assertIs(window.monitor_view.live_panel.parent(), window.monitor_view)
+            self.assertIs(window.monitor_view.controller.panel, window.monitor_view.live_panel)
+        finally:
+            self._close(window)
+
     def test_sidebar_navigation_switches_pages_without_hardware_side_effects(self) -> None:
         window = self._make_window()
         try:
@@ -191,7 +203,7 @@ class V018SimplifiedUiTests(unittest.TestCase):
         try:
             controller = window.monitor_view.controller
             self.assertIs(controller.panel, window.monitor_view.live_panel)
-            self.assertIsNot(window.monitor_view.live_panel, window.debug_tab.live_panel)
+            self.assertFalse(hasattr(window, "debug_tab"))
             self.assertIs(window.monitor_view.live_panel.parent(), window.monitor_view)
             self.assertIsNotNone(controller._selected_probe)
             window.show_page("monitor")

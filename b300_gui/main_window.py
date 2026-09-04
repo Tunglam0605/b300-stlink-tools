@@ -109,7 +109,8 @@ class MainWindow(QMainWindow):
                  update_client=None, automatic_updates: bool = True,
                  update_installer=None, settings=None,
                  debug_service: Optional[DebugService] = None,
-                 first_run_setup: bool = False) -> None:
+                 first_run_setup: bool = False,
+                 legacy_workbenches: bool = True) -> None:
         super().__init__()
         ThemeManager.instance().apply()
         self.service = service or B300Service()
@@ -142,6 +143,7 @@ class MainWindow(QMainWindow):
         self._downloaded_update = None
         self._automatic_updates = bool(automatic_updates)
         self._first_run_setup_requested = bool(first_run_setup)
+        self._legacy_workbenches = bool(legacy_workbenches)
         self._update_poll_timer = QTimer(self)
         self._update_poll_timer.setInterval(15 * 60 * 1000)
         self._update_poll_timer.timeout.connect(self._automatic_update_tick)
@@ -363,22 +365,23 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.tabBar().setVisible(False)
         self.tabs.addTab(self._build_flash_tab(), "Nạp firmware")
-        self.memory_tab = MemoryTab(
-            self.service, self._selected_probe, log_sink=self.append_log
-        )
-        self.memory_tab.operation_state_changed.connect(self._hardware_activity_changed)
-        self.tabs.addTab(self.memory_tab, "Memory / Metadata")
-        self.debug_tab = DebugTab(
-            self.debug_service, self._selected_probe, self,
-            settings=self.settings, probe_count=lambda: len(self._probes),
-        )
-        self.debug_tab.log.connect(self.append_log)
-        self.debug_tab.operation_state_changed.connect(self._hardware_activity_changed)
-        self.tabs.addTab(self.debug_tab, "Debug")
-        self.gateway_tab = GatewaySetupTab(self, auto_refresh=False)
-        self.gateway_tab.log.connect(self.append_log)
-        self.gateway_tab.operation_state_changed.connect(self._hardware_activity_changed)
-        self.tabs.addTab(self.gateway_tab, "Gateway Setup")
+        if self._legacy_workbenches:
+            self.memory_tab = MemoryTab(
+                self.service, self._selected_probe, log_sink=self.append_log
+            )
+            self.memory_tab.operation_state_changed.connect(self._hardware_activity_changed)
+            self.tabs.addTab(self.memory_tab, "Memory / Metadata")
+            self.debug_tab = DebugTab(
+                self.debug_service, self._selected_probe, self,
+                settings=self.settings, probe_count=lambda: len(self._probes),
+            )
+            self.debug_tab.log.connect(self.append_log)
+            self.debug_tab.operation_state_changed.connect(self._hardware_activity_changed)
+            self.tabs.addTab(self.debug_tab, "Debug")
+            self.gateway_tab = GatewaySetupTab(self, auto_refresh=False)
+            self.gateway_tab.log.connect(self.append_log)
+            self.gateway_tab.operation_state_changed.connect(self._hardware_activity_changed)
+            self.tabs.addTab(self.gateway_tab, "Gateway Setup")
         self.tabs.currentChanged.connect(self._tab_changed)
         content_v_layout.addWidget(self.tabs, 1)
         self._update_page_context(0)
@@ -393,10 +396,11 @@ class MainWindow(QMainWindow):
         self.main_stack.addWidget(self.rnd_workspace)
 
         # Mode 1: Dedicated 1-Click Production Operator Workspace
-        self.operator_view = OperatorView(self)
-        self.operator_view.flash_requested.connect(self._on_operator_flash_requested)
-        self.operator_view.file_selected.connect(lambda p: self.load_image_path(p, quiet=True))
-        self.main_stack.addWidget(self.operator_view)
+        if self._legacy_workbenches:
+            self.operator_view = OperatorView(self)
+            self.operator_view.flash_requested.connect(self._on_operator_flash_requested)
+            self.operator_view.file_selected.connect(lambda p: self.load_image_path(p, quiet=True))
+            self.main_stack.addWidget(self.operator_view)
 
         self.main_stack.setCurrentWidget(self.rnd_workspace)
 
@@ -2124,10 +2128,7 @@ class MainWindow(QMainWindow):
         self._update_controls()
 
     def _has_active_operation(self) -> bool:
-        return bool(
-            self.busy or self._threads or self.memory_tab.has_active_operation or
-            self.debug_tab.has_active_operation or self.gateway_tab.has_active_operation
-        )
+        return bool(self._operation_state().is_hardware_busy)
 
     def _finish_pending_close(self) -> None:
         if self._close_after_active_operation and not self._has_active_operation():
@@ -2138,12 +2139,15 @@ class MainWindow(QMainWindow):
         self._close_after_active_operation = True
         if self._cancellable_worker is not None:
             self.cancel_operation()
-        if self.memory_tab.has_active_operation:
-            self.memory_tab.cancel_current()
-        if self.gateway_tab.has_active_operation:
-            self.gateway_tab.request_shutdown()
-        if self.debug_tab.has_active_operation:
-            self.debug_tab.request_shutdown()
+        memory_tab = getattr(self, "memory_tab", None)
+        gateway_tab = getattr(self, "gateway_tab", None)
+        debug_tab = getattr(self, "debug_tab", None)
+        if memory_tab is not None and memory_tab.has_active_operation:
+            memory_tab.cancel_current()
+        if gateway_tab is not None and gateway_tab.has_active_operation:
+            gateway_tab.request_shutdown()
+        if debug_tab is not None and debug_tab.has_active_operation:
+            debug_tab.request_shutdown()
         self._set_status("Đang hủy an toàn các thao tác có thể hủy; cửa sổ sẽ tự đóng khi hoàn tất.", "busy")
         self._finish_pending_close()
 
@@ -2171,7 +2175,8 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self._update_poll_timer.stop()
-        if not self.debug_tab.prepare_shutdown():
+        debug_tab = getattr(self, "debug_tab", None)
+        if debug_tab is not None and not debug_tab.prepare_shutdown():
             event.ignore()
             self._set_status("Debug worker chưa dừng sạch; thử đóng lại sau vài giây.", "error")
             return

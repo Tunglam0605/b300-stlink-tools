@@ -15,7 +15,6 @@ from PySide6.QtWidgets import QMessageBox, QPushButton, QStackedWidget
 from b300_core.models import ProbeInfo, TargetInfo
 from b300_core.remote_profile import RemoteGatewayProfile, load_remote_profile, save_remote_profile
 from b300_core.remote_session import RemoteSession
-from b300_core.vscode_bridge import BridgeState
 from .main_window import MainWindow
 from .operation_state import OperationState
 from .remote_login_dialog import RemoteLoginDialog
@@ -31,6 +30,7 @@ class MainWindowV18(MainWindow):
     """v0.18 simplified window and explicit VS Code debug orchestration."""
 
     def __init__(self, *args, **kwargs) -> None:
+        kwargs.setdefault("legacy_workbenches", False)
         super().__init__(*args, **kwargs)
         # Reuse the base DebugService so HardwareSession arbitration remains
         # authoritative across flash, monitor and interactive debug.
@@ -463,17 +463,12 @@ class MainWindowV18(MainWindow):
     # Explicit legacy diagnostics only
     # ------------------------------------------------------------------
     def _on_v18_open_legacy_ide(self) -> None:
-        state = self._vscode_controller.state
-        if state.state == BridgeState.READY:
-            QMessageBox.information(
-                self, "Debug bridge đang hoạt động",
-                "Hãy STOP DEBUG BRIDGE trước khi mở Internal Debug Workbench."
-            )
-            return
-        self.tabs.setCurrentIndex(2)
-        self.tabs.setVisible(True)
-        self.v18_stack.setVisible(False)
-        self.append_log("Internal Debug Workbench mở ở chế độ diagnostics/legacy.")
+        QMessageBox.information(
+            self,
+            "Debug trong VS Code",
+            "B300 v0.18 dùng VS Code + Cortex-Debug cho debug tương tác. "
+            "Diagnostics của B300 vẫn có trong PROGRAM và DEVICE.",
+        )
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         if not self.monitor_view.controller.prepare_shutdown():
