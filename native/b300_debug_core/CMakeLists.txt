@@ -14,6 +14,17 @@ add_library(b300_debug_core STATIC
 
 target_include_directories(b300_debug_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(b300_debug_core PUBLIC cxx_std_17)
+set_target_properties(b300_debug_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+option(B300_NATIVE_BUILD_PYTHON "Build optional pybind11 Python module" OFF)
+if(B300_NATIVE_BUILD_PYTHON)
+    set(PYBIND11_FINDPYTHON ON)
+    find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
+    find_package(pybind11 CONFIG REQUIRED)
+    pybind11_add_module(_b300_debug_core bindings/python/module.cpp)
+    target_link_libraries(_b300_debug_core PRIVATE b300_debug_core)
+    target_compile_features(_b300_debug_core PRIVATE cxx_std_17)
+endif()
 
 option(B300_NATIVE_BUILD_TESTS "Build native debug-core tests" ON)
 if(B300_NATIVE_BUILD_TESTS)
