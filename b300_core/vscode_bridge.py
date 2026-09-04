@@ -20,8 +20,10 @@ from .debug_service import DebugConfig, DebugService, DebugState
 from .gdb_runtime import resolve_gdb
 from .models import ProbeRef
 from .process_startup import child_process_kwargs
+from .remote_debug_guard import RemoteDebugGuard
 from .remote_session import RemoteForward, RemoteSession
 from .remote_vscode import workspace_executable
+from .tcl_client import SafeTclClient, TclEndpoint
 
 
 class DebugRole(str, Enum):
@@ -43,6 +45,7 @@ class VsCodeBridgeState:
     gdb_target: Optional[str]
     openocd_state: Optional[str] = None
     tunnel_name: Optional[str] = None
+    initial_target_state: Optional[str] = None
     detail: str = ""
 
 
@@ -114,6 +117,8 @@ class VsCodeExternalProfile:
 
 
 ProcessFactory = Callable[..., object]
+TclFactory = Callable[[TclEndpoint], SafeTclClient]
+GuardFactory = Callable[..., RemoteDebugGuard]
 
 
 def _windows_code_exe_from_launcher(path: Path) -> Optional[Path]:
@@ -202,18 +207,25 @@ class VsCodeDebugBridge:
     """One high-level control plane for LOCAL/GATEWAY/CLIENT VS Code debug.
 
     LOCAL/GATEWAY start OpenOCD through DebugService, which owns the long-lived
-    DEBUGGING HardwareSession lease. CLIENT only opens a loopback SSH forward to
-    an already-running Gateway OpenOCD instance. GDB itself always belongs to
-    Cortex-Debug on the VS Code machine.
+    DEBUGGING HardwareSession lease. A loopback-only TCL endpoint is retained
+    internally for RemoteDebugGuard; TCL is never forwarded to a Client. CLIENT
+    only opens a loopback SSH GDB forward to an already-running Gateway OpenOCD
+    instance. GDB itself always belongs to Cortex-Debug on the VS Code machine.
     """
 
     CLIENT_FORWARD_NAME = "vscode_gdb"
 
-    def __init__(self, debug_service: Optional[DebugService] = None) -> None:
+    def __init__(self, debug_service: Optional[DebugService] = None,
+                 *, tcl_factory: TclFactory = SafeTclClient,
+                 guard_factory: GuardFactory = RemoteDebugGuard) -> None:
         self.debug_service = debug_service or DebugService()
+        self._tcl_factory = tcl_factory
+        self._guard_factory = guard_factory
         self._role: Optional[DebugRole] = None
         self._remote_session: Optional[RemoteSession] = None
         self._remote_forward: Optional[RemoteForward] = None
+        self._server_config: Optional[DebugConfig] = None
+        self._guard: Optional[RemoteDebugGuard] = None
         self._last_detail = ""
 
     @property
@@ -227,14 +239,18 @@ class VsCodeDebugBridge:
             else:
                 bridge_state = BridgeState.STOPPED
             target = None
-            config = getattr(self, "_server_config", None)
-            if config is not None and bridge_state == BridgeState.READY:
-                target = "127.0.0.1:%d" % config.gdb_port
+            if self._server_config is not None and bridge_state == BridgeState.READY:
+                target = "127.0.0.1:%d" % self._server_config.gdb_port
+            initial = (
+                getattr(self._guard, "initial_target_state", None)
+                if self._guard is not None else None
+            )
             return VsCodeBridgeState(
                 role=self._role,
                 state=bridge_state,
                 gdb_target=target,
                 openocd_state=openocd.value,
+                initial_target_state=initial,
                 detail=self._last_detail,
             )
 
@@ -267,17 +283,39 @@ class VsCodeDebugBridge:
             self.stop()
 
     def start_local(self, probe: ProbeRef, *, gdb_port: int = 3333,
-                    event_sink=None) -> VsCodeBridgeState:
-        return self._start_server(DebugRole.LOCAL, probe, gdb_port=gdb_port,
-                                  event_sink=event_sink)
+                    tcl_port: int = 6666, event_sink=None) -> VsCodeBridgeState:
+        return self._start_server(
+            DebugRole.LOCAL, probe, gdb_port=gdb_port,
+            tcl_port=tcl_port, event_sink=event_sink,
+        )
 
     def start_gateway(self, probe: ProbeRef, *, gdb_port: int = 3333,
-                      event_sink=None) -> VsCodeBridgeState:
-        return self._start_server(DebugRole.GATEWAY, probe, gdb_port=gdb_port,
-                                  event_sink=event_sink)
+                      tcl_port: int = 6666, event_sink=None) -> VsCodeBridgeState:
+        return self._start_server(
+            DebugRole.GATEWAY, probe, gdb_port=gdb_port,
+            tcl_port=tcl_port, event_sink=event_sink,
+        )
+
+    def _guard_event(self, event: str, message: str) -> None:
+        self._last_detail = "Run-state guard %s: %s" % (event, message)
+
+    def _openocd_event(self, line: str, event_sink=None) -> None:
+        if event_sink is not None:
+            try:
+                event_sink(line)
+            except Exception:
+                # Presentation/log consumers must never take down the safety guard.
+                pass
+        guard = self._guard
+        if guard is None:
+            return
+        try:
+            guard.handle_openocd_line(line)
+        except Exception as error:
+            self._last_detail = "Run-state guard warning: %s" % error
 
     def _start_server(self, role: DebugRole, probe: ProbeRef, *, gdb_port: int,
-                      event_sink=None) -> VsCodeBridgeState:
+                      tcl_port: int, event_sink=None) -> VsCodeBridgeState:
         if role not in (DebugRole.LOCAL, DebugRole.GATEWAY):
             raise ValueError("Only LOCAL/GATEWAY roles may start local OpenOCD.")
         self._require_stopped()
@@ -286,22 +324,32 @@ class VsCodeDebugBridge:
             bind_address="127.0.0.1",
             gdb_port=int(gdb_port),
             telnet_port=None,
-            tcl_port=None,
+            tcl_port=int(tcl_port),
         )
         config.validate()
+        self._server_config = config
         try:
-            self.debug_service.start(config, event_sink=event_sink)
+            self.debug_service.start(
+                config,
+                event_sink=lambda line: self._openocd_event(line, event_sink),
+            )
+            tcl = self._tcl_factory(TclEndpoint("127.0.0.1", config.tcl_port))
+            guard = self._guard_factory(tcl, event_sink=self._guard_event)
+            guard.capture_initial_state()
+            self._guard = guard
         except Exception:
-            self._role = role
-            self._server_config = config
-            self._last_detail = "OpenOCD failed to start."
+            try:
+                self.debug_service.stop()
+            finally:
+                self._guard = None
+                self._server_config = None
+                self._last_detail = "OpenOCD/run-state guard failed to start."
             raise
         self._role = role
-        self._server_config = config
         self._last_detail = (
-            "OpenOCD is private on gateway loopback."
+            "OpenOCD GDB/TCL are private on gateway loopback; only GDB may be SSH-forwarded."
             if role == DebugRole.GATEWAY else
-            "OpenOCD is private on local loopback."
+            "OpenOCD GDB/TCL are private on local loopback."
         )
         return self.state
 
@@ -325,8 +373,20 @@ class VsCodeDebugBridge:
 
     def stop(self) -> VsCodeBridgeState:
         role = self._role
+        cleanup_detail = ""
         try:
             if role in (DebugRole.LOCAL, DebugRole.GATEWAY):
+                guard = self._guard
+                if guard is not None:
+                    try:
+                        snapshot = guard.restore_initial_state(reason="bridge_stop")
+                        cleanup_detail = (
+                            "Target state restored to %s." % snapshot.final_target_state
+                            if snapshot.restored else
+                            "Target state checked: %s." % snapshot.final_target_state
+                        )
+                    except Exception as error:
+                        cleanup_detail = "WARNING: target run-state restoration failed: %s" % error
                 self.debug_service.stop()
             elif role == DebugRole.CLIENT and self._remote_session is not None:
                 self._remote_session.close_forward(self.CLIENT_FORWARD_NAME)
@@ -335,7 +395,8 @@ class VsCodeDebugBridge:
             self._remote_session = None
             self._remote_forward = None
             self._server_config = None
-            self._last_detail = ""
+            self._guard = None
+            self._last_detail = cleanup_detail
         return self.state
 
     def profile(self, *, program_relative: str, gdb_path: Optional[str] = None,
