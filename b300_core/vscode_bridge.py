@@ -116,40 +116,67 @@ class VsCodeExternalProfile:
 ProcessFactory = Callable[..., object]
 
 
+def _windows_code_exe_from_launcher(path: Path) -> Optional[Path]:
+    """Map VS Code's PATH-facing code.cmd to the shell-free Code.exe binary."""
+    selected = Path(path)
+    if selected.suffix.lower() not in {".cmd", ".bat"}:
+        return selected if selected.is_file() else None
+    candidate = selected.parent.parent / "Code.exe"
+    return candidate if candidate.is_file() else None
+
+
+def _usable_vscode_launcher(value: str) -> Optional[str]:
+    selected = Path(value).expanduser()
+    if selected.is_file():
+        if os.name == "nt":
+            executable = _windows_code_exe_from_launcher(selected)
+            return str(executable.resolve()) if executable is not None else None
+        return str(selected.resolve())
+    found = shutil.which(value)
+    if not found:
+        return None
+    found_path = Path(found)
+    if os.name == "nt":
+        executable = _windows_code_exe_from_launcher(found_path)
+        return str(executable.resolve()) if executable is not None else None
+    return str(found_path.resolve())
+
+
 def resolve_vscode(explicit: Optional[str] = None) -> str:
-    """Resolve the VS Code launcher without invoking a shell."""
+    """Resolve the VS Code launcher without invoking a command shell."""
     if explicit:
-        selected = Path(explicit).expanduser()
-        if selected.is_file():
-            return str(selected.resolve())
-        found = shutil.which(explicit)
-        if found:
-            return found
+        launcher = _usable_vscode_launcher(explicit)
+        if launcher:
+            return launcher
         raise FileNotFoundError("VS Code launcher was not found: %s" % explicit)
 
     configured = os.environ.get("B300_VSCODE")
     if configured:
-        try:
-            return resolve_vscode(configured)
-        except FileNotFoundError:
-            pass
-
-    for command in ("code", "code.cmd"):
-        found = shutil.which(command)
-        if found:
-            return found
+        launcher = _usable_vscode_launcher(configured)
+        if launcher:
+            return launcher
 
     if os.name == "nt":
         candidates = []
         local_app_data = os.environ.get("LOCALAPPDATA")
         program_files = os.environ.get("ProgramFiles")
         if local_app_data:
-            candidates.append(Path(local_app_data) / "Programs" / "Microsoft VS Code" / "bin" / "code.cmd")
+            candidates.append(Path(local_app_data) / "Programs" / "Microsoft VS Code" / "Code.exe")
         if program_files:
-            candidates.append(Path(program_files) / "Microsoft VS Code" / "bin" / "code.cmd")
+            candidates.append(Path(program_files) / "Microsoft VS Code" / "Code.exe")
         for candidate in candidates:
             if candidate.is_file():
-                return str(candidate)
+                return str(candidate.resolve())
+        # PATH commonly exposes code.cmd. Convert it back to Code.exe so
+        # subprocess can remain shell=False and no console shell is spawned.
+        for command in ("code", "code.cmd", "Code.exe"):
+            launcher = _usable_vscode_launcher(command)
+            if launcher:
+                return launcher
+    else:
+        launcher = _usable_vscode_launcher("code")
+        if launcher:
+            return launcher
 
     raise FileNotFoundError(
         "VS Code launcher was not found. Install VS Code or set B300_VSCODE."
