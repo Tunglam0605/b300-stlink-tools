@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QApplication, QLineEdit
 
 from b300_gui.debug_connection_panel import DebugConnectionPanel
 from b300_gui.debug_mode_selector import DebugModeSelector
+from b300_gui.debug_tab_v160 import DebugTabV160
 from b300_gui.main_window_v15 import MainWindowV15
 from b300_gui.remote_login_dialog import RemoteLoginDialog
 from b300_version import __version__
@@ -17,8 +18,8 @@ class V015ReleaseUxTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_source_version_is_current_v015_patch(self) -> None:
-        self.assertEqual(__version__, "0.15.2")
+    def test_source_version_is_current_release(self) -> None:
+        self.assertEqual(__version__, "0.16.0")
 
     def test_mode_first_surface_explains_connection_roles(self) -> None:
         selector = DebugModeSelector()
@@ -86,6 +87,24 @@ class V015ReleaseUxTests(unittest.TestCase):
         window._update_page_context(3)
         self.assertIn("Gateway", window.page_title.text())
         self.assertIn("Studio Debug", window.page_subtitle.text())
+        window.close()
+        window.deleteLater()
+        self.app.processEvents()
+
+    def test_production_debug_studio_owns_v016_intelligence_tabs_without_stealing_live_monitor(self) -> None:
+        window = MainWindowV15(
+            probe_loader=lambda: (),
+            automatic_updates=False,
+            first_run_setup=False,
+        )
+        tab = window.debug_tab
+        self.assertIsInstance(tab, DebugTabV160)
+        labels = [tab.workstation.bottom_tabs.tabText(index)
+                  for index in range(tab.workstation.bottom_tabs.count())]
+        for expected in ("TARGET", "PERIPHERALS", "FREERTOS", "FAULT"):
+            self.assertIn(expected, labels)
+        self.assertIs(tab.live_panel.parentWidget(), tab.scroll_content)
+        self.assertGreaterEqual(tab.scroll_content.layout().indexOf(tab.live_panel), 0)
         window.close()
         window.deleteLater()
         self.app.processEvents()

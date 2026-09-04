@@ -67,6 +67,24 @@ Safety
 
 - Flash/OTA/Bootloader/metadata/Option Bytes policy, protected Sector 0-2 behavior, loopback-only GDB/TCL, and zero-halt Live Monitor behavior are unchanged.
 """.strip(),
+    "0.16.0": """Target-aware engineering Debug
+
+- Adds STM32F407ZE Target Description with explicit Flash/RAM/peripheral/system regions and Cortex-M capabilities.
+- Adds CMSIS-SVD Peripheral Inspector with HALT-only, read-only, lazy register reads and bit-field decoding.
+- Adds Cortex-M Fault Analyzer for CFSR/HFSR/BFAR/MMFAR, MSP/PSP exception-frame reconstruction and fault-PC source mapping when DWARF is available.
+- Adds offline DWARF type/source introspection for ELF/AXF images using pyelftools.
+- Adds a DWARF-driven FreeRTOS Task Inspector that derives TCB/List layouts from the firmware image instead of hard-coding kernel offsets.
+- Engineering Workstation now includes TARGET, PERIPHERALS, FREERTOS and FAULT tabs.
+
+Lifecycle stability
+
+- Includes the v0.15.2 Interactive Debug lifecycle fix: zero-halt Live Monitor stays owned by the normal Studio and remains available after Disconnect.
+
+Safety
+
+- Peripheral/RTOS/Fault features are read-only and HALT-only where target RAM/register access is required.
+- Flash/OTA/Bootloader/metadata/Option Bytes policy, protected Sector 0-2 behavior, loopback-only GDB/TCL and zero-halt Live Monitor safety remain unchanged.
+""".strip(),
 }
 
 
