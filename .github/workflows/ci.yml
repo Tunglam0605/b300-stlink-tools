@@ -56,7 +56,7 @@ jobs:
             module="tests.${test%.py}"
             echo "=== $module ==="
             case "$module" in
-              tests.test_gui_smoke|tests.test_gui_updater)
+              tests.test_gui_interlocks|tests.test_gui_smoke|tests.test_gui_updater)
                 timeout --signal=TERM --kill-after=10s 300 python scripts/run_unittest_module.py --split-cases --case-timeout 60 "$module"
                 ;;
               *)
@@ -72,8 +72,8 @@ jobs:
           python -m pip install -r requirements-test.txt
           # PySide/Qt native state can leak across unittest modules on Windows
           # runners and terminate the shared interpreter without a Python
-          # traceback. Run each module in a fresh process so a module owns its
-          # QApplication/QThread lifecycle and failures remain attributable.
+          # traceback. Run each module in a fresh process; split the long-lived
+          # GUI suites by test case so each case gets a fresh Qt lifecycle.
           $tests = Get-ChildItem tests -Filter 'test_*.py' | Sort-Object Name
           $resultDir = Join-Path $env:RUNNER_TEMP 'b300-unit-results'
           New-Item -ItemType Directory -Force -Path $resultDir | Out-Null
@@ -83,11 +83,16 @@ jobs:
             Remove-Item $resultFile -Force -ErrorAction SilentlyContinue
             $env:B300_UNITTEST_RESULT_FILE = $resultFile
             Write-Host "=== $module ==="
-            python scripts/run_unittest_module.py $module
+            if ($module -in @('tests.test_gui_interlocks','tests.test_gui_smoke','tests.test_gui_updater')) {
+              python scripts/run_unittest_module.py --split-cases --case-timeout 60 $module
+            } else {
+              python scripts/run_unittest_module.py $module
+            }
             $exitCode = $LASTEXITCODE
             $verdict = if (Test-Path $resultFile) { (Get-Content $resultFile -Raw).Trim() } else { '' }
             if ($exitCode -ne 0 -and $verdict -eq 'PASS') {
               Write-Warning "$module passed unittest assertions but Qt native teardown returned $exitCode; accepting verified PASS sentinel."
+              $global:LASTEXITCODE = 0
               continue
             }
             if ($exitCode -ne 0) { exit $exitCode }
@@ -97,6 +102,7 @@ jobs:
             }
           }
           Remove-Item Env:B300_UNITTEST_RESULT_FILE -ErrorAction SilentlyContinue
+          exit 0
 
       - name: Compile Python sources
         run: >-

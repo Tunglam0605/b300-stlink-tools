@@ -33,6 +33,24 @@ Safety
 
 - Flash/OTA/Bootloader/metadata safety policy is unchanged: no mass erase, no RDP changes, no normal writes to Bootloader Sector 0-2, no arbitrary debugger memory writes.
 """.strip(),
+    "0.15.1": """Unified remote Debug workflow
+
+- Studio Debug is now the single place to choose LOCAL, GATEWAY, or CLIENT.
+- The separate top-level SSH workflow is removed from production navigation.
+- Gateway host preparation remains available from GATEWAY as an internal infrastructure page.
+- CLIENT has one visible SSH login entry; Gateway/User/Password/Port are not duplicated elsewhere in the production flow.
+- Legacy public-key authorization is hidden from the normal production workflow.
+
+Clearer engineering roles
+
+- LOCAL means ST-Link and Debug run on this workstation.
+- GATEWAY means this workstation owns ST-Link/OpenOCD and serves remote Debug.
+- CLIENT means this workstation debugs STM32 through the authenticated Gateway session.
+
+Safety
+
+- Flash, OTA, Bootloader, metadata, Option Bytes, protected flash boundaries, loopback-only GDB/TCL, and zero-halt Live Monitor behavior are unchanged.
+""".strip(),
 }
 
 

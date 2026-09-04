@@ -45,13 +45,13 @@ class DebugConnectionPanel(QFrame):
         nav_bar.setContentsMargins(0, 0, 0, 0)
         nav_bar.setSpacing(8)
 
-        self.btn_change_mode = QPushButton("← MODE")
+        self.btn_change_mode = QPushButton("← KIỂU KẾT NỐI")
         self.btn_change_mode.setObjectName("ghostButton")
         self.btn_change_mode.setToolTip("Chọn lại LOCAL / GATEWAY / CLIENT")
         self.btn_change_mode.clicked.connect(self.change_mode_requested.emit)
         nav_bar.addWidget(self.btn_change_mode)
 
-        self.mode_title_label = QLabel("LOCAL SETUP")
+        self.mode_title_label = QLabel("LOCAL · TRỰC TIẾP")
         self.mode_title_label.setObjectName("debugModeActiveTitle")
         self.mode_title_label.setStyleSheet(
             "font-size: 12px; font-weight: 800; color: #38BDF8; letter-spacing: 0.5px;"
@@ -63,15 +63,12 @@ class DebugConnectionPanel(QFrame):
         self.status_label.setObjectName("debugStateBadge")
         self.status_label.setProperty("state", "stopped")
         self.status_label.setWordWrap(False)
-        # Windows font metrics make the localized stopped badge slightly wider
-        # than the old 90 px floor. Keep enough fixed minimum room for all normal
-        # state labels rather than allowing the compact layout to clip by 1 px.
         self.status_label.setMinimumWidth(104)
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         nav_bar.addWidget(self.status_label)
         main_layout.addLayout(nav_bar)
 
-        # Hidden compatibility selector. Normal v0.15 always enters through Mode-First.
+        # Hidden compatibility selector. Production enters through Mode-First.
         self.mode_combo = QComboBox()
         self.mode_combo.setObjectName("debugModeSelector")
         for label, value in (
@@ -101,9 +98,15 @@ class DebugConnectionPanel(QFrame):
         self.probe_display.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         conn_bar.addWidget(self.probe_display, 0, 1)
 
-        self.btn_open_gateway = QPushButton("SSH SETUP")
+        # The active mode header already states GATEWAY, so repeating the word on
+        # the action wastes compact workspace width. Keep the action concise and
+        # move the full meaning into the tooltip.
+        self.btn_open_gateway = QPushButton("CẤU HÌNH")
         self.btn_open_gateway.setObjectName("ghostButton")
-        self.btn_open_gateway.setToolTip("Mở Gateway Setup")
+        self.btn_open_gateway.setMinimumWidth(128)
+        self.btn_open_gateway.setToolTip(
+            "Cấu hình Gateway trên máy này: OpenSSH, OpenOCD và trạng thái kết nối"
+        )
         self.btn_open_gateway.clicked.connect(self.open_gateway_requested.emit)
         conn_bar.addWidget(self.btn_open_gateway, 0, 2)
 
@@ -112,13 +115,12 @@ class DebugConnectionPanel(QFrame):
         gateway_actions_layout.setContentsMargins(0, 0, 0, 0)
         gateway_actions_layout.setSpacing(6)
 
-        # Keep established labels because DebugTab remains an internal compatibility API.
-        # Production v0.15 still reaches this panel only after the explicit Mode-First screen.
         self.remote_server_button = QPushButton("Bật Gateway")
         self.remote_server_button.setObjectName("debugRemoteServerButton")
+        self.remote_server_button.setToolTip("Khởi động OpenOCD loopback cho Client từ xa")
         gateway_actions_layout.addWidget(self.remote_server_button)
 
-        self.gateway_stop_button = QPushButton("Dừng")
+        self.gateway_stop_button = QPushButton("Dừng Gateway")
         self.gateway_stop_button.setObjectName("debugGatewayStopButton")
         self.gateway_stop_button.setEnabled(False)
         gateway_actions_layout.addWidget(self.gateway_stop_button)
@@ -147,6 +149,7 @@ class DebugConnectionPanel(QFrame):
         self.symbol_path.setMinimumWidth(0)
         symbols_layout.addWidget(self.symbol_path, 1)
 
+        # Keep established file labels because DebugTab remains a compatibility API.
         self.symbol_browse_button = QPushButton("Chọn file…")
         self.symbol_browse_button.setObjectName("ghostButton")
         symbols_layout.addWidget(self.symbol_browse_button)
@@ -162,19 +165,19 @@ class DebugConnectionPanel(QFrame):
         main_layout.addWidget(self.role_summary)
 
         # Client has ONE visible authentication entry. Hidden endpoint widgets retain
-        # the established settings/backend contract without duplicating credentials UI.
+        # the settings/backend contract without duplicating credentials UI.
         self.client_box = QWidget()
         client_layout = QHBoxLayout(self.client_box)
         client_layout.setContentsMargins(0, 0, 0, 0)
         client_layout.setSpacing(8)
 
-        client_label = QLabel("SSH SESSION")
+        client_label = QLabel("KẾT NỐI TỪ XA")
         client_label.setObjectName("fieldLabel")
         client_layout.addWidget(client_label)
 
-        self.btn_open_login_dialog = QPushButton("LOGIN")
+        self.btn_open_login_dialog = QPushButton("ĐĂNG NHẬP SSH")
         self.btn_open_login_dialog.setObjectName("debugClientLoginBtn")
-        self.btn_open_login_dialog.setToolTip("Gateway / User / Password / Port")
+        self.btn_open_login_dialog.setToolTip("Gateway / User / Password / Port · chỉ nhập tại đây")
         self.btn_open_login_dialog.clicked.connect(self._open_login_dialog)
         client_layout.addWidget(self.btn_open_login_dialog)
         client_layout.addStretch(1)
@@ -196,7 +199,7 @@ class DebugConnectionPanel(QFrame):
         self.client_box.setVisible(False)
         main_layout.addWidget(self.client_box)
 
-        self.advanced_card = CollapsibleCard("Details", "Ports / runtime", expanded=False)
+        self.advanced_card = CollapsibleCard("Chi tiết kỹ thuật", "GDB / TCL loopback", expanded=False)
         advanced_layout = QGridLayout()
         advanced_layout.setContentsMargins(4, 4, 4, 4)
         advanced_layout.setHorizontalSpacing(10)
@@ -237,19 +240,19 @@ class DebugConnectionPanel(QFrame):
 
     def _apply_mode_visibility(self, mode: str) -> None:
         if mode == "local":
-            self.mode_title_label.setText("LOCAL SETUP")
+            self.mode_title_label.setText("LOCAL · TRỰC TIẾP")
             self.symbols_box.setVisible(True)
             self.client_box.setVisible(False)
             self.gateway_actions.setVisible(False)
             self.btn_open_gateway.setVisible(False)
         elif mode == "gateway":
-            self.mode_title_label.setText("GATEWAY SETUP")
+            self.mode_title_label.setText("GATEWAY · MÁY CẮM ST-LINK")
             self.symbols_box.setVisible(False)
             self.client_box.setVisible(False)
             self.gateway_actions.setVisible(True)
             self.btn_open_gateway.setVisible(True)
         elif mode == "client":
-            self.mode_title_label.setText("CLIENT SETUP")
+            self.mode_title_label.setText("CLIENT · DEBUG TỪ XA")
             self.symbols_box.setVisible(True)
             self.client_box.setVisible(True)
             self.gateway_actions.setVisible(False)

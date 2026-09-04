@@ -53,12 +53,12 @@ class ModeTile(QFrame):
         )
         top_row.addWidget(self.tag_lbl)
 
-        title_lbl = QLabel(title)
-        title_lbl.setObjectName("debugModeTileTitle")
-        title_lbl.setStyleSheet(
+        self.title_label = QLabel(title)
+        self.title_label.setObjectName("debugModeTileTitle")
+        self.title_label.setStyleSheet(
             "font-size: 14px; font-weight: 900; letter-spacing: 0.8px; color: #F8FAFC;"
         )
-        top_row.addWidget(title_lbl)
+        top_row.addWidget(self.title_label)
         top_row.addStretch(1)
 
         if detail_badge:
@@ -71,15 +71,15 @@ class ModeTile(QFrame):
             top_row.addWidget(badge)
         layout.addLayout(top_row)
 
-        sub_lbl = QLabel(subtitle)
-        sub_lbl.setObjectName("debugModeTileSubtitle")
-        sub_lbl.setStyleSheet("font-size: 11px; color: #94A3B8;")
-        sub_lbl.setWordWrap(True)
-        layout.addWidget(sub_lbl)
+        self.subtitle_label = QLabel(subtitle)
+        self.subtitle_label.setObjectName("debugModeTileSubtitle")
+        self.subtitle_label.setStyleSheet("font-size: 11px; color: #94A3B8;")
+        self.subtitle_label.setWordWrap(True)
+        layout.addWidget(self.subtitle_label)
         layout.addStretch(1)
 
-        # Kept as a real button for keyboard navigation and regression compatibility.
-        self.button = QPushButton("SELECT")
+        # Real button for keyboard navigation and accessibility.
+        self.button = QPushButton("CHỌN")
         self.button.setObjectName("debugModeTileButton")
         self.button.setMaximumWidth(74)
         self.button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -109,7 +109,7 @@ class ModeTile(QFrame):
 
 
 class DebugModeSelector(QWidget):
-    """Explicit LOCAL/GATEWAY/CLIENT role selection before setup."""
+    """Explicit LOCAL/GATEWAY/CLIENT connection selection before setup."""
 
     mode_selected = Signal(str)
 
@@ -130,31 +130,37 @@ class DebugModeSelector(QWidget):
         main_layout.setSpacing(14)
         main_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        title = QLabel("DEBUG MODE")
-        title.setObjectName("debugModeHeaderTitle")
-        title.setStyleSheet(
+        self.header_title = QLabel("KẾT NỐI DEBUG")
+        self.header_title.setObjectName("debugModeHeaderTitle")
+        self.header_title.setStyleSheet(
             "font-size: 17px; font-weight: 900; letter-spacing: 1.4px; color: #F8FAFC;"
         )
-        main_layout.addWidget(title, 0, Qt.AlignmentFlag.AlignCenter)
+        main_layout.addWidget(self.header_title, 0, Qt.AlignmentFlag.AlignCenter)
 
-        target = QLabel("STM32F407 · SELECT ROLE")
-        target.setStyleSheet(
+        self.header_subtitle = QLabel("STM32F407 · CHỌN CÁCH KẾT NỐI")
+        self.header_subtitle.setStyleSheet(
             "font-size: 10px; color: #64748B; font-family: 'Cascadia Code', monospace;"
         )
-        main_layout.addWidget(target, 0, Qt.AlignmentFlag.AlignCenter)
+        main_layout.addWidget(self.header_subtitle, 0, Qt.AlignmentFlag.AlignCenter)
 
         tiles_layout = QHBoxLayout()
         tiles_layout.setSpacing(14)
         tiles_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.tile_local = ModeTile(
-            "local", "[L]", "LOCAL", "ST-Link on this workstation", "USB SWD", self
+            "local", "[L]", "LOCAL",
+            "Debug trực tiếp qua ST-Link trên máy này",
+            "USB SWD", self,
         )
         self.tile_gateway = ModeTile(
-            "gateway", "[G]", "GATEWAY", "ST-Link + OpenOCD + SSH endpoint", "ST-LINK + SSH", self
+            "gateway", "[G]", "GATEWAY",
+            "Máy này cắm ST-Link và cung cấp Debug từ xa cho Client",
+            "ST-LINK + SSH", self,
         )
         self.tile_client = ModeTile(
-            "client", "[C]", "CLIENT", "Remote debug through Gateway", "SSH", self
+            "client", "[C]", "CLIENT",
+            "Máy này Debug STM32 thông qua Gateway từ xa",
+            "SSH", self,
         )
         for tile in (self.tile_local, self.tile_gateway, self.tile_client):
             tile.clicked.connect(self.select_mode)
