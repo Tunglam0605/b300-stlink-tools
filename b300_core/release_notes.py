@@ -1,4 +1,4 @@
-"""Read one version's notes from the project changelog."""
+"""Read one version's release notes for source and packaged runtimes."""
 
 from __future__ import annotations
 
@@ -10,6 +10,30 @@ from .versioning import SemVer
 
 
 HEADING_RE = re.compile(r"(?m)^## \[([^\]]+)\](?: - [^\r\n]+)?\s*$")
+
+# Keep a compact runtime fallback for releases whose full engineering notes live in
+# docs/releases/<version>.md. This dictionary is Python code, so PyInstaller always
+# bundles it; What's New does not depend on an external docs directory being present.
+BUNDLED_RELEASE_NOTES = {
+    "0.15.0": """Engineering Debug Workstation
+
+- Mode-first LOCAL / GATEWAY / CLIENT entry with a compact debugger-oriented workspace.
+- Structured Symbols, Source, Locals/Watch, Call Stack, Breakpoints, Registers, Live, Memory, Console, and Technical Log panes.
+- Expandable GDB/MI variables for structs/arrays, HALT-only value editing with readback, Step Out, persistent BP/WP management, source navigation, and coherent HALT snapshots.
+- Read-only HALT Memory view while Live Monitor remains zero-halt and read-only.
+
+One-login Client SSH
+
+- Client authenticates once inside B300; normal v0.15 GUI no longer opens a CMD/PowerShell SSH password window.
+- One embedded SSH session is reused by GDB, Safe TCL, Interactive Debug, and Client Live Monitor.
+- Password text is never stored in profile/log/command-line/status output; optional remembered credentials stay local and encrypted at rest.
+- GDB/TCL forwards remain loopback-only.
+
+Safety
+
+- Flash/OTA/Bootloader/metadata safety policy is unchanged: no mass erase, no RDP changes, no normal writes to Bootloader Sector 0-2, no arbitrary debugger memory writes.
+""".strip(),
+}
 
 
 def extract_release_notes(text: str, version: str) -> str:
@@ -39,6 +63,13 @@ def bundled_changelog_path() -> Path:
 
 
 def current_release_notes(version: str) -> str:
-    return extract_release_notes(
-        bundled_changelog_path().read_text(encoding="utf-8"), version
-    )
+    SemVer.parse(version)
+    try:
+        return extract_release_notes(
+            bundled_changelog_path().read_text(encoding="utf-8"), version
+        )
+    except (OSError, ValueError):
+        notes = BUNDLED_RELEASE_NOTES.get(version)
+        if notes:
+            return notes
+        raise
