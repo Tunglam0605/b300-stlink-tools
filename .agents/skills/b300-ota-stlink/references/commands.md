@@ -6,8 +6,8 @@
 b300-stlink doctor
 b300-stlink flash "C:\firmware\Main_V2_F407.hex" --dry-run --json
 b300-stlink flash "C:\firmware\Main_V2_F407.hex" --probe-serial <ST-LINK-SN> --json
-b300-stlink debug --gdb-port 3333
-arm-none-eabi-gdb "C:\firmware\Main_V2_F407.axf"
+b300-stlink debug gateway --json
+b300-stlink debug vscode --ssh-host <IPC-IP> --ssh-user <SSH-USER> --program-relative build/Main_V2_F407.axf --output-dir . --json
 ```
 
 ## Ubuntu IPC
@@ -16,8 +16,7 @@ arm-none-eabi-gdb "C:\firmware\Main_V2_F407.axf"
 b300-stlink doctor
 b300-stlink flash /opt/firmware/Main_V2_F407.hex --dry-run --json
 b300-stlink flash /opt/firmware/Main_V2_F407.hex --probe-serial <ST-LINK-SN> --json
-b300-stlink debug --gdb-port 3333
-gdb-multiarch /opt/firmware/Main_V2_F407.axf
+b300-stlink debug gateway --json
 ```
 
 If Ubuntu does not expose the ST-Link to the non-root user, repair the udev rule
@@ -30,16 +29,18 @@ and the client runs on another machine, keep OpenOCD on loopback:
 b300-stlink debug gateway
 ```
 
-From the client, use the managed SSH profile and local forwarding:
+From the CLIENT, use the managed SSH profile and the matching ELF/AXF:
 
 ```text
 b300-stlink debug client --ssh-host <IPC-IP> --ssh-user <SSH-USER> \
   --symbols <application.axf> --client-action inspect --json
+b300-stlink debug vscode --ssh-host <IPC-IP> --ssh-user <SSH-USER> \
+  --program-relative build/application.axf --output-dir . --json
 ```
 
 Only SSH TCP/22 is LAN-facing; do not expose or NAT GDB/TCL ports 3333/6666.
-Never use GDB `load`, `restore`, or flash commands in this debug workflow. End
-with `monitor reset run`, `detach`, and `quit`, then stop OpenOCD.
+Open the generated workspace with VS Code + Cortex-Debug. Manual GDB is an
+Advanced workflow only. Never use GDB `load`, `restore`, or flash commands.
 
 ## Useful output
 

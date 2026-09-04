@@ -1440,8 +1440,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             if args.debug_mode == "client":
                 return run_debug_client(args, reporter)
             if args.debug_mode == "server":
-                validate_debug_args(args)
-                return run_debug(args, reporter)
+                reporter.emit(
+                    "warning",
+                    reason_code="DEPRECATED_ALIAS",
+                    message="debug server is a deprecated alias for debug gateway.",
+                    replacement="debug gateway",
+                    next_action="Use 'b300-stlink debug gateway' in scripts and documentation.",
+                )
+                return run_debug_gateway(args, reporter)
             if args.debug_mode == "vscode":
                 return run_vscode_profile(args)
             if args.debug_mode == "symbols":

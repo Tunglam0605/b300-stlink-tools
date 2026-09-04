@@ -304,7 +304,7 @@ class B300StlinkTests(unittest.TestCase):
         record = json.loads(output.getvalue().splitlines()[-1])
         self.assertEqual(record["reason_code"], "PROBE_NOT_FOUND")
 
-    def test_debug_can_explicitly_listen_for_remote_gdb(self) -> None:
+    def test_legacy_server_alias_cannot_listen_for_remote_gdb(self) -> None:
         output = io.StringIO()
         with redirect_stdout(output):
             result = tool().main([
@@ -312,24 +312,21 @@ class B300StlinkTests(unittest.TestCase):
                 "--gdb-port", "4333",
                 "--probe-serial", "TEST-PROBE", "--dry-run", "--json",
             ])
-        self.assertEqual(result, 0)
+        self.assertEqual(result, 1)
         records = [json.loads(line) for line in output.getvalue().splitlines()]
-        command = next(record["command"] for record in records if record["event"] == "openocd")
-        self.assertIn("bindto 0.0.0.0", command)
-        self.assertIn("gdb port 4333", command)
-        self.assertIn("telnet port disabled", command)
-        self.assertIn("tcl port disabled", command)
-        self.assertIn("adapter serial TEST-PROBE", command)
+        self.assertEqual(records[0]["reason_code"], "DEPRECATED_ALIAS")
+        self.assertIn("loopback-only", records[-1]["message"])
+        self.assertFalse(any(record["event"] == "openocd" for record in records))
 
-    def test_debug_allows_explicit_telnet_on_loopback(self) -> None:
+    def test_legacy_server_alias_keeps_telnet_disabled_on_loopback(self) -> None:
         output = io.StringIO()
         with redirect_stdout(output):
             result = tool().main([
                 "debug", "server", "--telnet-port", "4444", "--dry-run", "--json",
             ])
-        self.assertEqual(result, 0)
-        command = json.loads(output.getvalue())["command"]
-        self.assertIn("telnet port 4444", command)
+        self.assertEqual(result, 1)
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertIn("Telnet", records[-1]["message"])
 
     def test_remote_debug_rejects_telnet_listener(self) -> None:
         output = io.StringIO()
@@ -339,7 +336,7 @@ class B300StlinkTests(unittest.TestCase):
                 "--dry-run", "--json",
             ])
         self.assertEqual(result, 1)
-        self.assertIn("Telnet", output.getvalue())
+        self.assertIn("loopback-only", output.getvalue())
 
     def test_debug_allows_explicit_tcl_on_loopback(self) -> None:
         output = io.StringIO()
@@ -349,7 +346,8 @@ class B300StlinkTests(unittest.TestCase):
                 "--dry-run", "--json",
             ])
         self.assertEqual(result, 0)
-        command = json.loads(output.getvalue())["command"]
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        command = next(record["command"] for record in records if record["event"] == "openocd")
         self.assertIn("gdb port 3333", command)
         self.assertIn("tcl port 6666", command)
 
@@ -361,7 +359,7 @@ class B300StlinkTests(unittest.TestCase):
                 "--dry-run", "--json",
             ])
         self.assertEqual(result, 1)
-        self.assertIn("TCL", output.getvalue())
+        self.assertIn("loopback-only", output.getvalue())
 
     def test_debug_rejects_duplicate_openocd_ports(self) -> None:
         output = io.StringIO()

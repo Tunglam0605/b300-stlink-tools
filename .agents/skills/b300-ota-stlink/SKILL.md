@@ -1,11 +1,12 @@
 ---
 name: b300-ota-stlink
-description: Use when provisioning a B300 STM32F407 Application HEX through ST-Link, checking a safe flash transaction, verifying post-flash boot state, or starting OpenOCD debugging.
+description: Use when provisioning or verifying a B300 STM32F407 through ST-Link, monitoring a running target, or opening LOCAL, GATEWAY, or CLIENT debug with B300 v0.18+.
 ---
 
-# B300 ST-Link Provisioning
+# B300 ST-Link Tools v0.18+
 
-Use `b300-stlink` for B300 F407 Application provisioning. The safety boundary is
+Use the GUI for the shortest setup and daily workflow. Use `b300-stlink` for
+terminal automation and structured `--json` evidence. The safety boundary is
 fixed: Bootloader is Sector 0--2; metadata is Sector 3; Application is Sector
 4--7 (`0x08010000..0x0807FFFF`).
 
@@ -15,8 +16,9 @@ fixed: Bootloader is Sector 0--2; metadata is Sector 3; Application is Sector
    are present.
 2. Run `b300-stlink doctor --json`.
 3. Run `b300-stlink flash <application.hex> --dry-run --json`.
-4. Confirm the transaction contains only `flash erase_sector 0 3 7`,
-   `program {...} verify`, and `reset run`.
+4. Confirm the plan contains `flash erase_sector 0 3 7`, Application
+   `flash write_image`, `verify_image`, the exact 44-byte metadata write/read-back,
+   and `reset run` only after verification.
 
 The preview must show two separate conditional transactions: program/verify and
 reset with `condition=after_verified_ok`.
@@ -55,23 +57,31 @@ b300-stlink provision-bootloader --dry-run --json
 ```
 
 Real factory programming additionally requires explicit authorization from the
-user, `--confirm-factory-provision`, an explicit CLI `--probe-serial`, and the
-exact typed GUI acknowledgement `PROVISION BOOTLOADER`. Never use it for an
+user and `--confirm-factory-provision`. Select `--probe-serial` when multiple
+probes are present; one physical probe without a serial may use safe auto-select.
+The GUI requires the exact typed acknowledgement `PROVISION BOOTLOADER`. Never use it for an
 ordinary Application update. It must not use mass erase, RDP operations,
 `stm32f2x lock`, or `stm32f2x unlock`.
 
-## Debug
+## Monitor and debug
 
-Use `b300-stlink debug --gdb-port 3333` only when halting or
-resetting the CPU is acceptable. Debug does not flash, but a connected debugger
-can halt/reset the board. It binds to `127.0.0.1` by default. For remote work,
-run `b300-stlink debug gateway` with GDB/TCL still on loopback, then use
-`b300-stlink debug client` or an SSH/VPN local-forwarding workflow. Do not expose
-or NAT GDB/TCL ports to the LAN or Internet. Keep Telnet disabled.
+Choose one v0.18 role:
 
-Use the AXF/ELF matching the firmware already on the board for symbols. Do not
-run GDB `load`, `restore`, or flash commands. Before stopping OpenOCD, resume the
-target, detach GDB, and confirm the server ports close.
+- **LOCAL**: ST-Link is attached to this computer. Select the matching ELF/AXF,
+  then use Live Monitor or **Open Debug in VS Code**.
+- **GATEWAY**: ST-Link is attached to this computer for a remote operator. Run
+  `b300-stlink debug gateway`; OpenOCD remains loopback-only.
+- **CLIENT**: source and ELF/AXF are local, while ST-Link is on a Gateway. Use the
+  saved SSH profile and `b300-stlink debug client` or `debug vscode`.
+
+VS Code + Cortex-Debug is the normal interactive-debug UI. B300 owns ST-Link,
+OpenOCD, SSH forwarding, attach-only launch configuration, HardwareSession, and
+RUNNING restoration. Live Monitor uses Safe TCL and must not halt the target.
+Manual GDB and one-shot diagnostics are Advanced workflows.
+
+`debug server` is a deprecated alias for `debug gateway`; do not use it in new
+scripts. Both stay loopback-only. Never expose or NAT GDB/TCL, remotely forward
+TCL for VS Code, enable Telnet, or run GDB `load`, `restore`, or flash commands.
 
 ## Detailed references
 

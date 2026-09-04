@@ -118,6 +118,21 @@ class ReleaseDocumentationTests(unittest.TestCase):
                 self.assertNotIn("--bind-address 0.0.0.0", text)
                 self.assertIn("SSH", text)
 
+    def test_agent_skill_leads_with_v018_roles_and_vscode_workflow(self) -> None:
+        skill = (ROOT / ".agents" / "skills" / "b300-ota-stlink" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        commands = (
+            ROOT / ".agents" / "skills" / "b300-ota-stlink" / "references" / "commands.md"
+        ).read_text(encoding="utf-8")
+        for role in ("LOCAL", "GATEWAY", "CLIENT"):
+            self.assertIn(role, skill)
+        self.assertIn("VS Code + Cortex-Debug", skill)
+        self.assertIn("b300-stlink debug gateway", commands)
+        self.assertIn("b300-stlink debug client", commands)
+        self.assertIn("b300-stlink debug vscode", commands)
+        self.assertIn("deprecated alias", skill)
+
     def test_v0141_acceptance_tracks_software_and_field_gates(self) -> None:
         path = (
             ROOT

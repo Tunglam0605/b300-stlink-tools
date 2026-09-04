@@ -268,6 +268,7 @@ class DebugCliCompatibilityTests(unittest.TestCase):
         gateway_command = next(record["command"] for record in gateway if record["event"] == "openocd")
         server_command = next(record["command"] for record in server if record["event"] == "openocd")
         self.assertEqual(direct_command, gateway_command)
+        self.assertEqual(server_command, gateway_command)
         role = next(record for record in direct if record["event"] == "debug_role")
         self.assertEqual(role["role"], "gateway")
         self.assertFalse(role["requires_local_gdb"])
@@ -275,7 +276,11 @@ class DebugCliCompatibilityTests(unittest.TestCase):
         self.assertIn("bindto 127.0.0.1", direct_command)
         self.assertIn("telnet port disabled", direct_command)
         self.assertIn("tcl port 6666", direct_command)
-        self.assertIn("tcl port disabled", server_command)
+        alias_warning = next(
+            record for record in server
+            if record["event"] == "warning" and record.get("reason_code") == "DEPRECATED_ALIAS"
+        )
+        self.assertEqual(alias_warning["replacement"], "debug gateway")
         self.assertIn("gdb flash_program disable", rendered)
         self.assertIn("gdb breakpoint_override hard", rendered)
         self.assertNotIn("flash erase_sector", rendered)
@@ -283,15 +288,12 @@ class DebugCliCompatibilityTests(unittest.TestCase):
         self.assertNotIn("program {", rendered)
         self.assertNotIn("mww ", rendered)
 
-    def test_remote_debug_emits_stable_gdb_security_warning(self) -> None:
+    def test_legacy_server_alias_rejects_public_bind_like_gateway(self) -> None:
         result, records = self.debug_records("server", "--bind-address", "0.0.0.0")
 
-        self.assertEqual(result, 0)
-        warning = next(record for record in records if record["event"] == "warning")
-        self.assertEqual(warning["reason_code"], "REMOTE_GDB_INSECURE")
-        self.assertIn("unauthenticated", warning["message"].lower())
-        self.assertIn("unencrypted", warning["message"].lower())
-        self.assertIn("SSH tunnel", warning["next_action"])
+        self.assertEqual(result, 1)
+        error = next(record for record in records if record["event"] == "error")
+        self.assertIn("loopback-only", error["message"])
 
 
 if __name__ == "__main__":
