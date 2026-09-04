@@ -10,7 +10,7 @@ from unittest import mock
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QPushButton
 
 from b300_core.models import ImageInfo, ProbeInfo, TargetInfo
 from b300_gui.main_window_v18 import MainWindowV18
@@ -69,6 +69,28 @@ class V018SimplifiedUiTests(unittest.TestCase):
             self.assertFalse(hasattr(window, "operator_view"))
             self.assertIs(window.monitor_view.live_panel.parent(), window.monitor_view)
             self.assertIs(window.monitor_view.controller.panel, window.monitor_view.live_panel)
+        finally:
+            self._close(window)
+
+    def test_global_actions_are_unique_and_page_tools_are_not_duplicated(self) -> None:
+        window = self._make_window()
+        try:
+            self.assertEqual(
+                len(window.findChildren(QPushButton, "refreshProbeAction")), 1
+            )
+            self.assertEqual(
+                len(window.findChildren(QPushButton, "machineSetupAction")), 1
+            )
+            self.assertEqual(
+                len(window.findChildren(QPushButton, "checkUpdateAction")), 1
+            )
+            self.assertTrue(window.program_view.btn_refresh_probe.isHidden())
+            self.assertTrue(window.device_view.btn_refresh.isHidden())
+            self.assertTrue(window.settings_view.btn_run_setup.isHidden())
+            self.assertTrue(window.settings_view.btn_toggle_theme.isHidden())
+            self.assertTrue(window.machine_setup_button.isHidden())
+            self.assertTrue(window.update_channel_label.isHidden())
+            self.assertTrue(window.header_bar.segmented_control.isHidden())
         finally:
             self._close(window)
 

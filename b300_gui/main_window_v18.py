@@ -47,6 +47,13 @@ class MainWindowV18(MainWindow):
     # Main navigation
     # ------------------------------------------------------------------
     def _configure_v18_navigation(self) -> None:
+        # Keep global utilities in one predictable place. Page-local duplicates
+        # remain as compatibility attributes but are not part of production UX.
+        self.header_bar.segmented_control.hide()
+        self.header_bar.probe_refresh_btn.setObjectName("refreshProbeAction")
+        self.header_bar.machine_setup_btn.setObjectName("machineSetupAction")
+        self.machine_setup_button.hide()
+        self.update_channel_label.hide()
         for btn_name in ("nav_flash_btn", "nav_memory_btn", "nav_debug_btn", "nav_gateway_btn"):
             button = getattr(self, btn_name, None)
             if button is not None:
@@ -90,6 +97,7 @@ class MainWindowV18(MainWindow):
         self.program_view.file_selected.connect(self._on_v18_file_selected)
         self.program_view.probe_refresh_requested.connect(self.refresh_probes)
         self.program_view.target_inspect_requested.connect(self.inspect_target)
+        self.program_view.btn_refresh_probe.hide()
         self.v18_stack.addWidget(self.program_view)
 
         self.monitor_view = MonitorView(
@@ -115,6 +123,7 @@ class MainWindowV18(MainWindow):
         self.device_view = DeviceView(self)
         self.device_view.refresh_requested.connect(self.refresh_probes)
         self.device_view.doctor_requested.connect(self.inspect_target)
+        self.device_view.btn_refresh.hide()
         self.v18_stack.addWidget(self.device_view)
 
         self.settings_view = SettingsView(self)
@@ -124,6 +133,9 @@ class MainWindowV18(MainWindow):
         self.settings_view.export_support_bundle_requested.connect(self.export_support_bundle)
         self.settings_view.about_requested.connect(self.show_about)
         self.settings_view.release_notes_requested.connect(self.show_release_notes)
+        self.settings_view.btn_run_setup.hide()
+        self.settings_view.btn_toggle_theme.hide()
+        self.settings_view.btn_check_updates.setObjectName("checkUpdateAction")
         self.v18_stack.addWidget(self.settings_view)
 
         content_area = self.tabs.parentWidget()
