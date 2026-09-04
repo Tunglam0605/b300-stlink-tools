@@ -28,8 +28,8 @@ jobs:
       - name: Enforce Windows base bundle size budgets
         shell: pwsh
         run: |
-          python scripts/release/check_size_budget.py release\B300-STLink-GUI-Windows-x64.zip --max-mib 80
-          python scripts/release/check_size_budget.py release\B300-STLink-CLI-Windows-x64.zip --max-mib 25
+          python scripts/release/check_size_budget.py release\B300-STLink-GUI-Windows-x64.zip --max-mib 100
+          python scripts/release/check_size_budget.py release\B300-STLink-CLI-Windows-x64.zip --max-mib 45
       - name: Smoke-test native executables
         shell: pwsh
         run: |
@@ -60,6 +60,8 @@ jobs:
           if ($doctorExit -notin 0,1) { exit $doctorExit }
           .\release\windows-cli-bundle\vendor\openocd\bin\openocd.exe --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\release\windows-cli-bundle\vendor\gdb\bin\arm-none-eabi-gdb.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "Bundled ARM GDB cannot execute from packaged Windows CLI" }
           $pythonDll = Get-ChildItem release\windows-cli-bundle\_internal -Filter "python*.dll" | Select-Object -First 1
           if ($null -eq $pythonDll) { throw "Self-contained CLI Python runtime missing" }
       - name: Build Windows installer
@@ -74,8 +76,8 @@ jobs:
             "/DAppVersion=$version" packaging\windows\b300-stlink-gui.iss
       - name: Enforce Windows installer size budget
         shell: pwsh
-        run: python scripts/release/check_size_budget.py release\B300-STLink-GUI-Windows-x64.exe --max-mib 90
-      - name: Smoke-test fresh Windows install with bundled OpenOCD
+        run: python scripts/release/check_size_budget.py release\B300-STLink-GUI-Windows-x64.exe --max-mib 110
+      - name: Smoke-test fresh Windows install with bundled OpenOCD and GDB
         shell: pwsh
         run: |
           $installer = (Resolve-Path release\B300-STLink-GUI-Windows-x64.exe).Path
@@ -87,10 +89,14 @@ jobs:
           if ($setup.ExitCode -ne 0) { exit $setup.ExitCode }
           $installed = Join-Path $installRoot "b300-stlink-gui.exe"
           $openocd = Join-Path $installRoot "vendor\openocd\bin\openocd.exe"
+          $gdb = Join-Path $installRoot "vendor\gdb\bin\arm-none-eabi-gdb.exe"
           if (-not (Test-Path $installed)) { throw "Installed GUI executable missing" }
           if (-not (Test-Path $openocd)) { throw "Fresh install is missing bundled OpenOCD" }
+          if (-not (Test-Path $gdb)) { throw "Fresh install is missing managed ARM GDB" }
           & $openocd --version
           if ($LASTEXITCODE -ne 0) { throw "Bundled OpenOCD cannot execute after fresh install" }
+          & $gdb --version
+          if ($LASTEXITCODE -ne 0) { throw "Managed ARM GDB cannot execute after fresh install" }
           $process = Start-Process -FilePath $installed `
             -ArgumentList --smoke-test -Wait -PassThru -WindowStyle Hidden
           exit $process.ExitCode
@@ -138,7 +144,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: python3 build_native_bundle.py --internal-distribution-approved
       - name: Enforce Linux CLI size budget
-        run: python3 scripts/release/check_size_budget.py "release/${{ matrix.cli }}" --max-mib 25
+        run: python3 scripts/release/check_size_budget.py "release/${{ matrix.cli }}" --max-mib 50
       - run: |
           ./release/b300-stlink-gui --smoke-test
           ./release/b300-stlink-gui --apply-verified-update --help
@@ -159,6 +165,7 @@ jobs:
           ./release/linux-cli-bundle/b300-stlink doctor --json || doctor_code=$?
           if [ "$doctor_code" -ne 0 ] && [ "$doctor_code" -ne 1 ]; then exit "$doctor_code"; fi
           ./release/linux-cli-bundle/vendor/openocd/bin/openocd --version
+          ./release/linux-cli-bundle/vendor/gdb/bin/arm-none-eabi-gdb --version
       - name: Build AppImage and DEB
         env:
           APPIMAGE_EXTRACT_AND_RUN: "1"
