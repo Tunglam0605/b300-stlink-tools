@@ -104,6 +104,18 @@ Safety
 - Zero-halt Live Monitor remains outside HALT-capable Interactive Debug.
 - Flash/OTA/Bootloader/metadata policy, protected Sector 0-2 behavior, HardwareSession ownership, target-state restoration and loopback-only GDB/TCL remain unchanged.
 """.strip(),
+    "0.17.1": """First-class Debug IDE entry
+
+- Engineering Debug Studio now opens directly into the dockable Keil/STM-Studio-style IDE shell instead of hiding it behind the legacy realtime/setup surface.
+- Adds a persistent Debug IDE / Theo dõi realtime switch so both workflows are explicit first-class surfaces.
+- Adds Kết nối Debug and Cấu hình controls inside the IDE. Opening the IDE alone never starts OpenOCD/GDB/TCL and never halts or resets the MCU.
+- Zero-halt Live Monitor remains owned by the normal Studio page and is never reparented into the HALT-capable IDE.
+
+Safety
+
+- Interactive target control still begins only after an explicit connect action.
+- Flash/OTA/Bootloader/metadata/Option Bytes policy, protected Sector 0-2 behavior, HardwareSession ownership, target-state restoration and loopback-only GDB/TCL remain unchanged.
+""".strip(),
 }
 
 
