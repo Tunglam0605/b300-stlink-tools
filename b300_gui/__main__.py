@@ -14,9 +14,9 @@ if __name__ == "__main__" and not __package__:
         sys.path.insert(0, str(root))
 
 try:
-    from .main_window_v15 import MainWindowV15 as MainWindow
+    from .main_window_v18 import MainWindowV18 as MainWindow
 except ImportError:
-    from b300_gui.main_window_v15 import MainWindowV15 as MainWindow
+    from b300_gui.main_window_v18 import MainWindowV18 as MainWindow
 
 from b300_core.update_platform import detect_update_platform
 from b300_core.update_public_key import MINISIGN_PUBLIC_KEY
