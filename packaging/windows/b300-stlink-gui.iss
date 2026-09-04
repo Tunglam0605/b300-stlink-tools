@@ -22,9 +22,17 @@ SolidCompression=yes
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+CloseApplications=no
 LicenseFile={#SourceRoot}\LICENSE
 SetupIconFile={#SourceRoot}\b300-stlink-icon.ico
 UninstallDisplayIcon={app}\b300-stlink-gui.exe
+
+[InstallDelete]
+; PyInstaller onedir files are one private, version-coupled runtime. Remove the
+; previous owned trees before extraction so obsolete .pyc/.pyd/DLL files cannot
+; survive an upgrade and mix Python runtimes. Never wildcard-delete {app}.
+Type: filesandordirs; Name: "{app}\_internal"
+Type: filesandordirs; Name: "{app}\vendor"
 
 [Files]
 Source: "{#SourceRoot}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

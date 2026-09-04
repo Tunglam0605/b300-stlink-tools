@@ -185,6 +185,29 @@ class GuiPackagingTests(unittest.TestCase):
         self.assertIn("& $openocd --version", workflow)
         self.assertIn("VCRUNTIME140*.dll", workflow)
 
+    def test_windows_installer_replaces_owned_runtime_tree_and_upgrade_ci_catches_stale_files(self) -> None:
+        installer = (
+            ROOT / "packaging" / "windows" / "b300-stlink-gui.iss"
+        ).read_text(encoding="utf-8")
+        release = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
+        dry_run = (
+            ROOT / ".github" / "workflows" / "release-dry-run.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("[InstallDelete]", installer)
+        self.assertIn('Name: "{app}\\_internal"', installer)
+        self.assertIn('Name: "{app}\\vendor"', installer)
+        self.assertNotIn('Name: "{app}\\*"', installer)
+        for workflow in (release, dry_run):
+            self.assertIn("stale-runtime.pyc", workflow)
+            self.assertIn("Smoke-test Windows installer upgrade", workflow)
+            self.assertIn("Stale runtime survived installer upgrade", workflow)
+            self.assertIn("Smoke-test failed Windows installer upgrade rollback", workflow)
+            self.assertIn("Failed upgrade unexpectedly returned success", workflow)
+            self.assertIn("FileShare]::None", workflow)
+
     def test_application_root_packaging_preserves_windows_onedir_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
