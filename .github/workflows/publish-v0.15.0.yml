@@ -1,0 +1,216 @@
+name: Publish v0.15.0 from validated artifacts
+
+on:
+  push:
+    branches:
+      - "release/publish-v0.15.0"
+    paths:
+      - ".github/workflows/publish-v0.15.0.yml"
+
+permissions:
+  contents: write
+  actions: read
+
+env:
+  VERSION: "0.15.0"
+  TAG: "v0.15.0"
+  SOURCE_SHA: "3fc178e90f22c849483d142707078c718270eec5"
+  DRY_RUN_SHA: "309d15177390ef1f0c589192218d9636efc32df1"
+  DRY_RUN_ID: "33822791727"
+  MAIN_CI_RUN_ID: "33825668499"
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    environment: release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.9"
+
+      - name: Wait for main CI and require green
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            status=$(gh run view "$MAIN_CI_RUN_ID" --repo "$GITHUB_REPOSITORY" --json status --jq .status)
+            conclusion=$(gh run view "$MAIN_CI_RUN_ID" --repo "$GITHUB_REPOSITORY" --json conclusion --jq '.conclusion // ""')
+            echo "main CI: status=$status conclusion=$conclusion"
+            if [ "$status" = "completed" ]; then
+              test "$conclusion" = "success"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "Timed out waiting for main CI" >&2
+          exit 1
+
+      - name: Validate source version and artifact tree parity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python -m scripts.release.validate_version --check-tag "$TAG"
+          source_tree=$(gh api "repos/$GITHUB_REPOSITORY/git/commits/$SOURCE_SHA" --jq .tree.sha)
+          dry_tree=$(gh api "repos/$GITHUB_REPOSITORY/git/commits/$DRY_RUN_SHA" --jq .tree.sha)
+          echo "source tree:  $source_tree"
+          echo "dry-run tree: $dry_tree"
+          test "$source_tree" = "$dry_tree"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; refusing duplicate publication" >&2
+            exit 1
+          fi
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists without the expected release; refusing overwrite" >&2
+            exit 1
+          fi
+
+      - name: Download validated dry-run packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p dry-run/windows dry-run/linux-x64 dry-run/linux-arm64 release-assets
+          gh run download "$DRY_RUN_ID" --repo "$GITHUB_REPOSITORY" --name dry-run-windows --dir dry-run/windows
+          gh run download "$DRY_RUN_ID" --repo "$GITHUB_REPOSITORY" --name dry-run-linux-x64 --dir dry-run/linux-x64
+          gh run download "$DRY_RUN_ID" --repo "$GITHUB_REPOSITORY" --name dry-run-linux-arm64 --dir dry-run/linux-arm64
+          find dry-run -type f -print
+          for name in \
+            B300-STLink-GUI-Windows-x64.exe \
+            B300-STLink-GUI-Windows-x64.zip \
+            B300-STLink-CLI-Windows-x64.zip \
+            B300-STLink-GUI-Ubuntu-x64.AppImage \
+            b300-stlink-gui_amd64.deb \
+            B300-STLink-CLI-Linux-x64.tar.gz \
+            B300-STLink-GUI-Ubuntu-arm64.AppImage \
+            b300-stlink-gui_arm64.deb \
+            B300-STLink-CLI-Linux-arm64.tar.gz; do
+            src=$(find dry-run -type f -name "$name" -print -quit)
+            test -n "$src"
+            cp "$src" "release-assets/$name"
+          done
+          test "$(find release-assets -maxdepth 1 -type f | wc -l)" -eq 9
+
+      - name: Extract release notes
+        run: python -m scripts.release.changelog "$VERSION" --output release-notes.md
+
+      - name: Generate deterministic metadata
+        run: |
+          published_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          python -m scripts.release.build_metadata \
+            --asset-dir release-assets \
+            --version "$VERSION" \
+            --commit "$SOURCE_SHA" \
+            --published-at "$published_at" \
+            --base-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}" \
+            --release-page "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}" \
+            --notes-file release-notes.md
+
+      - name: Sign and verify release manifests
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PUBLIC_KEY: ${{ secrets.MINISIGN_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$MINISIGN_SECRET_KEY"
+          test -n "$MINISIGN_PUBLIC_KEY"
+          archive="$RUNNER_TEMP/minisign-0.12-linux.tar.gz"
+          curl -fL --retry 3 -o "$archive" https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz
+          echo "9A599B48BA6EB7B1E80F12F36B94CECA7C00B7A5173C95C3EFC88D9822957E73  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          minisign="$RUNNER_TEMP/minisign-linux/x86_64/minisign"
+          chmod +x "$minisign"
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$RUNNER_TEMP/minisign.key"
+          chmod 600 "$RUNNER_TEMP/minisign.key"
+          for manifest in release-manifest.json latest.json latest-cli.json; do
+            "$minisign" -S -W -s "$RUNNER_TEMP/minisign.key" -m "release-assets/$manifest" -x "release-assets/$manifest.minisig"
+            "$minisign" -Vm "release-assets/$manifest" -x "release-assets/$manifest.minisig" -P "$MINISIGN_PUBLIC_KEY"
+          done
+          rm -f "$RUNNER_TEMP/minisign.key"
+
+      - name: Verify exact publication set
+        run: |
+          set -euo pipefail
+          expected=(
+            B300-STLink-GUI-Windows-x64.exe
+            B300-STLink-GUI-Windows-x64.zip
+            B300-STLink-CLI-Windows-x64.zip
+            B300-STLink-GUI-Ubuntu-x64.AppImage
+            b300-stlink-gui_amd64.deb
+            B300-STLink-CLI-Linux-x64.tar.gz
+            B300-STLink-GUI-Ubuntu-arm64.AppImage
+            b300-stlink-gui_arm64.deb
+            B300-STLink-CLI-Linux-arm64.tar.gz
+            SHA256SUMS.txt
+            release-manifest.json
+            release-manifest.json.minisig
+            latest.json
+            latest.json.minisig
+            latest-cli.json
+            latest-cli.json.minisig
+          )
+          for name in "${expected[@]}"; do test -s "release-assets/$name"; done
+          test "${#expected[@]}" -eq 16
+          test "$(find release-assets -maxdepth 1 -type f | wc -l)" -eq 16
+
+      - name: Create draft release and upload exact assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$SOURCE_SHA" \
+            --title "B300 ST-Link Tools v$VERSION" \
+            --notes-file release-notes.md \
+            --draft \
+            release-assets/B300-STLink-GUI-Windows-x64.exe \
+            release-assets/B300-STLink-GUI-Windows-x64.zip \
+            release-assets/B300-STLink-CLI-Windows-x64.zip \
+            release-assets/B300-STLink-GUI-Ubuntu-x64.AppImage \
+            release-assets/b300-stlink-gui_amd64.deb \
+            release-assets/B300-STLink-CLI-Linux-x64.tar.gz \
+            release-assets/B300-STLink-GUI-Ubuntu-arm64.AppImage \
+            release-assets/b300-stlink-gui_arm64.deb \
+            release-assets/B300-STLink-CLI-Linux-arm64.tar.gz \
+            release-assets/SHA256SUMS.txt \
+            release-assets/release-manifest.json \
+            release-assets/release-manifest.json.minisig \
+            release-assets/latest.json \
+            release-assets/latest.json.minisig \
+            release-assets/latest-cli.json \
+            release-assets/latest-cli.json.minisig
+          test "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')" -eq 16
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+
+      - name: Verify published signed updater state
+        env:
+          MINISIGN_PUBLIC_KEY: ${{ secrets.MINISIGN_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          minisign="$RUNNER_TEMP/minisign-linux/x86_64/minisign"
+          python -m scripts.release.verify_published \
+            --version "$VERSION" --audience gui \
+            --manifest-url "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json" \
+            --signature-url "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json.minisig" \
+            --minisign "$minisign" --public-key "$MINISIGN_PUBLIC_KEY" \
+            --attempts 8 --delay 5 --timeout 30
+          python -m scripts.release.verify_published \
+            --version "$VERSION" --audience cli \
+            --manifest-url "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest-cli.json" \
+            --signature-url "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest-cli.json.minisig" \
+            --minisign "$minisign" --public-key "$MINISIGN_PUBLIC_KEY" \
+            --attempts 8 --delay 5 --timeout 30
+
+      - name: Verify stable direct-download links
+        run: |
+          set -euo pipefail
+          for asset in B300-STLink-GUI-Windows-x64.exe B300-STLink-GUI-Ubuntu-x64.AppImage B300-STLink-GUI-Ubuntu-arm64.AppImage latest.json latest.json.minisig latest-cli.json latest-cli.json.minisig; do
+            curl -fIL --retry 8 --retry-all-errors --retry-delay 5 "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/${asset}"
+          done
