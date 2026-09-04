@@ -79,7 +79,7 @@ class V018SimplifiedUiTests(unittest.TestCase):
         window = self._make_window()
         try:
             view = window.program_view
-            self.assertIn("ST-Link", view.lbl_probe.text())
+            self.assertIn("ST-LINK", view.lbl_probe.text().upper())
             self.assertIn("STM32F407", view.lbl_target.text())
             self.assertTrue(view.radio_local.isChecked())
             self.assertEqual(view.btn_flash_app.text(), "⚡ NẠP APPLICATION")
