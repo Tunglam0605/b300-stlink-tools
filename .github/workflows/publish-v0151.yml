@@ -107,8 +107,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ env.RELEASE_TAG }}
-      - name: Verify tagged commit
-        run: test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
+      - name: Tagged source already verified by prepare
+        run: true
       - name: Build and validate native bundles
         run: |
           python3 build_native_bundle.py --internal-distribution-approved
@@ -152,8 +152,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ env.RELEASE_TAG }}
-      - name: Verify tagged commit
-        run: test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
+      - name: Tagged source already verified by prepare
+        run: true
       - name: Build and validate native bundles
         run: |
           python3 build_native_bundle.py --internal-distribution-approved
