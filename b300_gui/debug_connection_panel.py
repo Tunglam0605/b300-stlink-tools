@@ -63,7 +63,10 @@ class DebugConnectionPanel(QFrame):
         self.status_label.setObjectName("debugStateBadge")
         self.status_label.setProperty("state", "stopped")
         self.status_label.setWordWrap(False)
-        self.status_label.setMinimumWidth(90)
+        # Windows font metrics make the localized stopped badge slightly wider
+        # than the old 90 px floor. Keep enough fixed minimum room for all normal
+        # state labels rather than allowing the compact layout to clip by 1 px.
+        self.status_label.setMinimumWidth(104)
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         nav_bar.addWidget(self.status_label)
         main_layout.addLayout(nav_bar)
