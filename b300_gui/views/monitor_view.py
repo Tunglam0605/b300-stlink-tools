@@ -1,10 +1,9 @@
 """Dedicated Zero-Halt Live Monitor view for B300 v0.18.
 
-The production MainWindow passes the already-wired ``DebugTab.live_panel`` into
-this view exactly once during construction.  That preserves the proven
-LiveMonitorSession backend and signal wiring while giving the panel one stable
-production owner for the lifetime of the window.  Page navigation never
-reparents the widget and never starts sampling by itself.
+The production window already owns a fully wired ``DebugTab.live_panel`` backed
+by ``LiveMonitorSession``.  This view adopts that panel exactly once during
+construction, preserving the proven zero-halt backend while giving it a stable
+production owner.  Page navigation never reparents it and never starts sampling.
 """
 from __future__ import annotations
 
@@ -22,8 +21,13 @@ class MonitorView(QWidget):
                  *, live_panel: Optional[DebugLivePanel] = None) -> None:
         super().__init__(parent)
         self.setObjectName("monitorViewContainer")
+        if live_panel is None and parent is not None:
+            debug_tab = getattr(parent, "debug_tab", None)
+            candidate = getattr(debug_tab, "live_panel", None)
+            if isinstance(candidate, DebugLivePanel):
+                live_panel = candidate
         self.live_panel = live_panel or DebugLivePanel(self)
-        # One-time ownership transfer at construction.  Never reparent on page
+        # One-time ownership transfer at construction. Never reparent on page
         # switches; all backend signal connections on a supplied panel survive.
         if self.live_panel.parent() is not self:
             self.live_panel.setParent(self)
