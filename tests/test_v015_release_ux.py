@@ -17,8 +17,8 @@ class V015ReleaseUxTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_source_version_is_v0150(self) -> None:
-        self.assertEqual(__version__, "0.15.0")
+    def test_source_version_is_v0151(self) -> None:
+        self.assertEqual(__version__, "0.15.1")
 
     def test_mode_first_surface_explains_connection_roles(self) -> None:
         selector = DebugModeSelector()
@@ -55,6 +55,7 @@ class V015ReleaseUxTests(unittest.TestCase):
         self.app.processEvents()
         self.assertTrue(panel.btn_open_gateway.isVisible())
         self.assertEqual(panel.btn_open_gateway.text(), "CẤU HÌNH GATEWAY")
+        self.assertEqual(panel.remote_server_button.text(), "BẮT ĐẦU GATEWAY")
         self.assertEqual(panel.mode_title_label.text(), "GATEWAY · MÁY CẮM ST-LINK")
         self.assertFalse(panel.client_box.isVisible())
         panel.close()
