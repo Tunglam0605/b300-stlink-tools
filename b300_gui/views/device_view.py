@@ -1,30 +1,23 @@
-"""Target MCU and ST-Link Hardware Information View for B300 (v0.18).
+"""Evidence-based Device / Target status view for B300 v0.18.
 
-Displays hardware health, Option Bytes, Write Protection (WRP), and target readiness.
+No healthy/protected target state is shown until B300 has actually inspected the
+MCU.  This prevents a fresh GUI from visually claiming WRP/VDD/device identity
+before read-only target evidence exists.
 """
-
 from __future__ import annotations
 
 from typing import List, Optional, Sequence
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QFrame,
-    QGridLayout,
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
-    QScrollArea,
-    QVBoxLayout,
-    QWidget,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
+    QVBoxLayout, QWidget,
 )
 
 from b300_core.models import ProbeInfo, TargetInfo
 
 
 class DeviceView(QWidget):
-    """Clean Device & Target Health inspection dashboard."""
-
     refresh_requested = Signal()
     doctor_requested = Signal()
 
@@ -38,193 +31,149 @@ class DeviceView(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-
-        container = QWidget()
-        container.setObjectName("deviceContent")
-        self.layout = QVBoxLayout(container)
+        content = QWidget()
+        content.setObjectName("deviceContent")
+        self.layout = QVBoxLayout(content)
         self.layout.setContentsMargins(16, 12, 16, 14)
         self.layout.setSpacing(12)
-
         self._build_ui()
-        scroll.setWidget(container)
-
+        scroll.setWidget(content)
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.addWidget(scroll)
 
     def _build_ui(self) -> None:
-        # Header banner
         header = QFrame()
         header.setObjectName("headerRibbon")
-        h_layout = QVBoxLayout(header)
-        h_layout.setContentsMargins(12, 8, 12, 8)
-        h_layout.setSpacing(3)
-
-        title_row = QHBoxLayout()
-        title_lbl = QLabel("DEVICE · THIẾT BỊ & TARGET MCU")
-        title_lbl.setStyleSheet("font-size: 14px; font-weight: 800; color: #F8FAFC; letter-spacing: 0.6px;")
-        title_row.addWidget(title_lbl)
-        title_row.addStretch(1)
-
-        self.btn_refresh = QPushButton("🔄 Quét lại phần cứng")
-        self.btn_refresh.setObjectName("ghostButton")
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(12, 8, 12, 8)
+        row = QHBoxLayout()
+        title = QLabel("DEVICE · ST-LINK & TARGET MCU")
+        title.setObjectName("sectionTitle")
+        row.addWidget(title)
+        row.addStretch(1)
+        self.btn_refresh = QPushButton("↻ Quét ST-Link")
         self.btn_refresh.clicked.connect(self.refresh_requested.emit)
-        title_row.addWidget(self.btn_refresh)
-
-        self.btn_doctor = QPushButton("🩺 Chẩn đoán (Doctor)")
-        self.btn_doctor.setObjectName("ghostButton")
+        self.btn_doctor = QPushButton("🩺 Kiểm tra Target")
         self.btn_doctor.clicked.connect(self.doctor_requested.emit)
-        title_row.addWidget(self.btn_doctor)
-        h_layout.addLayout(title_row)
-
-        desc = QLabel("Kiểm tra thông số vật lý của vi điều khiển STM32F407, điện áp VDD, Option Bytes và WRP Bootloader.")
-        desc.setStyleSheet("font-size: 11px; color: #94A3B8;")
-        h_layout.addWidget(desc)
+        row.addWidget(self.btn_refresh)
+        row.addWidget(self.btn_doctor)
+        header_layout.addLayout(row)
+        description = QLabel(
+            "Các giá trị Target chỉ hiển thị sau khi đọc bằng B300; trạng thái mặc định không giả định WRP/VDD/Device ID."
+        )
+        description.setWordWrap(True)
+        description.setObjectName("pageSubtitle")
+        header_layout.addWidget(description)
         self.layout.addWidget(header)
 
-        # 1. Target MCU Card
-        tgt_card = QFrame()
-        tgt_card.setObjectName("cardSurface")
-        tgt_layout = QVBoxLayout(tgt_card)
-        tgt_layout.setContentsMargins(14, 12, 14, 12)
-        tgt_layout.setSpacing(8)
+        target = QFrame()
+        target.setObjectName("cardSurface")
+        target_layout = QVBoxLayout(target)
+        target_layout.setContentsMargins(14, 12, 14, 12)
+        target_layout.addWidget(self._eyebrow("1. TARGET MCU · READ-ONLY EVIDENCE"))
+        grid = QGridLayout()
+        grid.addWidget(QLabel("MCU"), 0, 0)
+        self.val_mcu_family = QLabel("STM32F407 family · chưa xác minh target")
+        grid.addWidget(self.val_mcu_family, 0, 1)
+        grid.addWidget(QLabel("Device ID"), 0, 2)
+        self.val_dev_id = QLabel("Chưa kiểm tra")
+        grid.addWidget(self.val_dev_id, 0, 3)
+        grid.addWidget(QLabel("Flash"), 1, 0)
+        self.val_flash_size = QLabel("Chưa kiểm tra")
+        grid.addWidget(self.val_flash_size, 1, 1)
+        grid.addWidget(QLabel("VDD"), 1, 2)
+        self.val_voltage = QLabel("Chưa kiểm tra")
+        grid.addWidget(self.val_voltage, 1, 3)
+        target_layout.addLayout(grid)
+        self.layout.addWidget(target)
 
-        tgt_title = QLabel("1. THÔNG SỐ TARGET MCU")
-        tgt_title.setObjectName("eyebrowLabel")
-        tgt_layout.addWidget(tgt_title)
+        safety = QFrame()
+        safety.setObjectName("cardSurface")
+        safety_layout = QVBoxLayout(safety)
+        safety_layout.setContentsMargins(14, 12, 14, 12)
+        safety_layout.addWidget(self._eyebrow("2. FLASH SAFETY · OPTION BYTES / WRP / RDP"))
+        safety_grid = QGridLayout()
+        safety_grid.addWidget(QLabel("Bootloader WRP"), 0, 0)
+        self.val_wrp = QLabel("Chưa kiểm tra")
+        safety_grid.addWidget(self.val_wrp, 0, 1)
+        safety_grid.addWidget(QLabel("RDP"), 0, 2)
+        self.val_rdp = QLabel("Chưa kiểm tra")
+        safety_grid.addWidget(self.val_rdp, 0, 3)
+        safety_grid.addWidget(QLabel("OTA Metadata"), 1, 0)
+        self.val_meta = QLabel("S3 · 0x0800C000 · contract do B300 quản lý")
+        safety_grid.addWidget(self.val_meta, 1, 1)
+        safety_grid.addWidget(QLabel("Normal App policy"), 1, 2)
+        policy = QLabel("Không mass erase · không ghi S0–S2")
+        safety_grid.addWidget(policy, 1, 3)
+        safety_layout.addLayout(safety_grid)
+        self.layout.addWidget(safety)
 
-        grid_tgt = QGridLayout()
-        grid_tgt.setHorizontalSpacing(14)
-        grid_tgt.setVerticalSpacing(6)
-
-        grid_tgt.addWidget(QLabel("Dòng vi điều khiển:"), 0, 0)
-        self.val_mcu_family = QLabel("STM32F407 (ARM Cortex-M4 with FPU)")
-        self.val_mcu_family.setStyleSheet("font-weight: 700; color: #F8FAFC;")
-        grid_tgt.addWidget(self.val_mcu_family, 0, 1)
-
-        grid_tgt.addWidget(QLabel("Target Device ID:"), 0, 2)
-        self.val_dev_id = QLabel("0x101F6413 (B300 Supported)")
-        self.val_dev_id.setStyleSheet("font-family: monospace; font-weight: 700; color: #38BDF8;")
-        grid_tgt.addWidget(self.val_dev_id, 0, 3)
-
-        grid_tgt.addWidget(QLabel("Dung lượng Flash:"), 1, 0)
-        self.val_flash_size = QLabel("512 KB (Sector 0..7)")
-        self.val_flash_size.setStyleSheet("font-weight: 700; color: #F8FAFC;")
-        grid_tgt.addWidget(self.val_flash_size, 1, 1)
-
-        grid_tgt.addWidget(QLabel("Điện áp nguồn VDD:"), 1, 2)
-        self.val_voltage = QLabel("3.30 V · Bình thường")
-        self.val_voltage.setStyleSheet("font-weight: 700; color: #10B981;")
-        grid_tgt.addWidget(self.val_voltage, 1, 3)
-
-        tgt_layout.addLayout(grid_tgt)
-        self.layout.addWidget(tgt_card)
-
-        # 2. Bootloader & Option Bytes Safety Card
-        sec_card = QFrame()
-        sec_card.setObjectName("cardSurface")
-        sec_layout = QVBoxLayout(sec_card)
-        sec_layout.setContentsMargins(14, 12, 14, 12)
-        sec_layout.setSpacing(8)
-
-        sec_title = QLabel("2. BẢO MẬT & BẢO VỆ BOOTLOADER (SAFETY INTERLOCKS)")
-        sec_title.setObjectName("eyebrowLabel")
-        sec_layout.addWidget(sec_title)
-
-        grid_sec = QGridLayout()
-        grid_sec.setHorizontalSpacing(14)
-        grid_sec.setVerticalSpacing(6)
-
-        grid_sec.addWidget(QLabel("Bảo vệ ghi Bootloader:"), 0, 0)
-        self.val_wrp = QLabel("Sector 0–2 WRP: ĐƯỢC BẢO VỆ (Locked)")
-        self.val_wrp.setStyleSheet("font-weight: 700; color: #10B981;")
-        grid_sec.addWidget(self.val_wrp, 0, 1)
-
-        grid_sec.addWidget(QLabel("Bảo vệ đọc RDP:"), 0, 2)
-        self.val_rdp = QLabel("Level 0 (Normal / Unlocked)")
-        self.val_rdp.setStyleSheet("font-weight: 700; color: #38BDF8;")
-        grid_sec.addWidget(self.val_rdp, 0, 3)
-
-        grid_sec.addWidget(QLabel("Khu vực OTA Metadata:"), 1, 0)
-        self.val_meta = QLabel("Sector 3 (0x0800C000) · 44B STLM Record")
-        self.val_meta.setStyleSheet("color: #94A3B8; font-family: monospace;")
-        grid_sec.addWidget(self.val_meta, 1, 1)
-
-        grid_sec.addWidget(QLabel("Chính sách an toàn Flash:"), 1, 2)
-        val_policy = QLabel("Mass Erase BỊ CẤM · Chỉ xóa S4–S7")
-        val_policy.setStyleSheet("font-weight: 700; color: #10B981;")
-        grid_sec.addWidget(val_policy, 1, 3)
-
-        sec_layout.addLayout(grid_sec)
-        self.layout.addWidget(sec_card)
-
-        # 3. ST-Link Hardware Card
-        probe_card = QFrame()
-        probe_card.setObjectName("cardSurface")
-        pr_layout = QVBoxLayout(probe_card)
-        pr_layout.setContentsMargins(14, 12, 14, 12)
-        pr_layout.setSpacing(8)
-
-        pr_title = QLabel("3. MẠCH NẠP ST-LINK PHẦN CỨNG")
-        pr_title.setObjectName("eyebrowLabel")
-        pr_layout.addWidget(pr_title)
-
-        grid_pr = QGridLayout()
-        grid_pr.setHorizontalSpacing(14)
-        grid_pr.setVerticalSpacing(6)
-
-        grid_pr.addWidget(QLabel("Tên mạch nạp:"), 0, 0)
-        self.val_probe_name = QLabel("ST-Link V2 USB")
-        self.val_probe_name.setStyleSheet("font-weight: 700; color: #F8FAFC;")
-        grid_pr.addWidget(self.val_probe_name, 0, 1)
-
-        grid_pr.addWidget(QLabel("Serial phần cứng:"), 0, 2)
-        self.val_probe_serial = QLabel("Chưa quét")
-        self.val_probe_serial.setStyleSheet("font-family: monospace; color: #94A3B8;")
-        grid_pr.addWidget(self.val_probe_serial, 0, 3)
-
-        grid_pr.addWidget(QLabel("Giao thức nạp:"), 1, 0)
-        self.val_protocol = QLabel("SWD (Serial Wire Debug) · Tốc độ: 2000 kHz")
-        self.val_protocol.setStyleSheet("color: #94A3B8;")
-        grid_pr.addWidget(self.val_protocol, 1, 1)
-
-        grid_pr.addWidget(QLabel("Trạng thái kết nối:"), 1, 2)
-        self.val_conn_state = QLabel("● Đã kết nối")
-        self.val_conn_state.setStyleSheet("font-weight: 700; color: #10B981;")
-        grid_pr.addWidget(self.val_conn_state, 1, 3)
-
-        pr_layout.addLayout(grid_pr)
-        self.layout.addWidget(probe_card)
+        probe = QFrame()
+        probe.setObjectName("cardSurface")
+        probe_layout = QVBoxLayout(probe)
+        probe_layout.setContentsMargins(14, 12, 14, 12)
+        probe_layout.addWidget(self._eyebrow("3. ST-LINK PROBE"))
+        probe_grid = QGridLayout()
+        probe_grid.addWidget(QLabel("Probe"), 0, 0)
+        self.val_probe_name = QLabel("Chưa quét")
+        probe_grid.addWidget(self.val_probe_name, 0, 1)
+        probe_grid.addWidget(QLabel("Serial"), 0, 2)
+        self.val_probe_serial = QLabel("N/A")
+        probe_grid.addWidget(self.val_probe_serial, 0, 3)
+        probe_grid.addWidget(QLabel("Transport"), 1, 0)
+        self.val_protocol = QLabel("SWD · B300/OpenOCD managed")
+        probe_grid.addWidget(self.val_protocol, 1, 1)
+        probe_grid.addWidget(QLabel("Probe state"), 1, 2)
+        self.val_conn_state = QLabel("○ DISCONNECTED")
+        probe_grid.addWidget(self.val_conn_state, 1, 3)
+        probe_layout.addLayout(probe_grid)
+        self.layout.addWidget(probe)
         self.layout.addStretch(1)
+
+    @staticmethod
+    def _eyebrow(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("eyebrowLabel")
+        return label
 
     def set_probes(self, probes: Sequence[ProbeInfo]) -> None:
         self._probes = list(probes)
         if not self._probes:
             self.val_probe_name.setText("Không tìm thấy ST-Link")
             self.val_probe_serial.setText("N/A")
-            self.val_conn_state.setText("○ Ngắt kết nối")
-            self.val_conn_state.setStyleSheet("font-weight: 700; color: #EF4444;")
-        else:
-            p = self._probes[0]
-            name = getattr(p, "description", None) or "ST-Link V2"
-            serial = getattr(p, "serial", None) or "Auto"
-            self.val_probe_name.setText(f"{name} ({len(self._probes)} probe)")
-            self.val_probe_serial.setText(str(serial))
-            self.val_conn_state.setText("● Sẵn sàng")
-            self.val_conn_state.setStyleSheet("font-weight: 700; color: #10B981;")
+            self.val_conn_state.setText("○ DISCONNECTED")
+            return
+        selected = self._probes[0]
+        suffix = " · +%d probe" % (len(self._probes) - 1) if len(self._probes) > 1 else ""
+        self.val_probe_name.setText("%s%s" % (selected.name, suffix))
+        self.val_probe_serial.setText(selected.serial or "Auto-select / serial unavailable")
+        self.val_conn_state.setText("● PROBE READY")
+        source = selected.source or "USB"
+        self.val_protocol.setText("SWD · source=%s · B300/OpenOCD managed" % source)
 
     def set_target_info(self, info: Optional[TargetInfo]) -> None:
         self._target_info = info
-        if info is not None:
-            self.val_dev_id.setText(f"0x{info.device_id:08X}")
-            self.val_flash_size.setText(f"{info.flash_kib} KB")
-            self.val_voltage.setText(f"{info.target_voltage:.2f} V")
-            self.val_wrp.setText(f"S0–S2 WRP: {info.protection_summary}")
-            rdp_text = "Level 1 (Read Protected)" if info.readout_protected else "Level 0 (Normal / Unlocked)"
-            self.val_rdp.setText(rdp_text)
-            self.val_rdp.setStyleSheet(
-                f"font-weight: 700; color: {'#EF4444' if info.readout_protected else '#10B981'};"
-            )
+        if info is None:
+            self.val_mcu_family.setText("STM32F407 family · chưa xác minh target")
+            self.val_dev_id.setText("Chưa kiểm tra")
+            self.val_flash_size.setText("Chưa kiểm tra")
+            self.val_voltage.setText("Chưa kiểm tra")
+            self.val_wrp.setText("Chưa kiểm tra")
+            self.val_rdp.setText("Chưa kiểm tra")
+            return
+        self.val_mcu_family.setText("STM32F407 · target evidence available")
+        self.val_dev_id.setText("0x%08X" % info.device_id)
+        self.val_flash_size.setText("%d KB" % info.flash_kib)
+        self.val_voltage.setText("%.2f V" % info.target_voltage)
+        if info.protection_reported:
+            protected = set(info.protected_sectors)
+            required = {0, 1, 2}
+            wrp_state = "PROTECTED" if required.issubset(protected) else "NOT FULLY PROTECTED"
+            self.val_wrp.setText("S0–S2 · %s · %s" % (wrp_state, info.protection_summary))
+        else:
+            self.val_wrp.setText("Không có bằng chứng WRP · %s" % info.protection_summary)
+        self.val_rdp.setText("Read protected" if info.readout_protected else "Level 0 / readable")
 
 
 __all__ = ["DeviceView"]
