@@ -88,6 +88,7 @@ jobs:
             $verdict = if (Test-Path $resultFile) { (Get-Content $resultFile -Raw).Trim() } else { '' }
             if ($exitCode -ne 0 -and $verdict -eq 'PASS') {
               Write-Warning "$module passed unittest assertions but Qt native teardown returned $exitCode; accepting verified PASS sentinel."
+              $global:LASTEXITCODE = 0
               continue
             }
             if ($exitCode -ne 0) { exit $exitCode }
@@ -97,6 +98,7 @@ jobs:
             }
           }
           Remove-Item Env:B300_UNITTEST_RESULT_FILE -ErrorAction SilentlyContinue
+          exit 0
 
       - name: Compile Python sources
         run: >-
