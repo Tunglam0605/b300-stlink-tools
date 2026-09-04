@@ -53,8 +53,8 @@ jobs:
       - name: Enforce Windows base bundle size budgets
         shell: pwsh
         run: |
-          python scripts/release/check_size_budget.py release\B300-STLink-GUI-Windows-x64.zip --max-mib 80
-          python scripts/release/check_size_budget.py release\B300-STLink-CLI-Windows-x64.zip --max-mib 25
+          python scripts/release/check_size_budget.py release\B300-STLink-GUI-Windows-x64.zip --max-mib 100
+          python scripts/release/check_size_budget.py release\B300-STLink-CLI-Windows-x64.zip --max-mib 45
       - name: Smoke-test executables
         shell: pwsh
         run: |
@@ -85,6 +85,8 @@ jobs:
           if ($doctorExit -notin 0,1) { exit $doctorExit }
           .\release\windows-cli-bundle\vendor\openocd\bin\openocd.exe --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\release\windows-cli-bundle\vendor\gdb\bin\arm-none-eabi-gdb.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "Bundled ARM GDB cannot execute from packaged Windows CLI" }
           $pythonDll = Get-ChildItem release\windows-cli-bundle\_internal -Filter "python*.dll" | Select-Object -First 1
           if ($null -eq $pythonDll) { throw "Self-contained CLI Python runtime missing" }
       - name: Stage Windows installer source
@@ -100,8 +102,12 @@ jobs:
           if (-not (Test-Path "$root\b300-stlink-gui.exe")) { throw "Packaged GUI executable missing" }
           $pythonDll = Get-ChildItem "$root\_internal" -Filter "python*.dll" | Select-Object -First 1
           $vcRuntime = Get-ChildItem "$root\_internal" -Filter "VCRUNTIME140*.dll" | Select-Object -First 1
+          $gdb = Join-Path $root "vendor\gdb\bin\arm-none-eabi-gdb.exe"
           if ($null -eq $pythonDll) { throw "Packaged Python DLL missing from onedir runtime" }
           if ($null -eq $vcRuntime) { throw "Packaged VC runtime missing from onedir runtime" }
+          if (-not (Test-Path $gdb)) { throw "Packaged GUI is missing managed ARM GDB" }
+          & $gdb --version
+          if ($LASTEXITCODE -ne 0) { throw "Packaged GUI managed ARM GDB cannot execute" }
           $process = Start-Process -FilePath "$root\b300-stlink-gui.exe" `
             -ArgumentList --smoke-test -Wait -PassThru -WindowStyle Hidden
           exit $process.ExitCode
@@ -118,8 +124,8 @@ jobs:
             packaging\windows\b300-stlink-gui.iss
       - name: Enforce Windows installer size budget
         shell: pwsh
-        run: python scripts/release/check_size_budget.py release\B300-STLink-GUI-Windows-x64.exe --max-mib 90
-      - name: Smoke-test fresh Windows install with bundled OpenOCD
+        run: python scripts/release/check_size_budget.py release\B300-STLink-GUI-Windows-x64.exe --max-mib 110
+      - name: Smoke-test fresh Windows install with bundled OpenOCD and GDB
         shell: pwsh
         run: |
           $installer = (Resolve-Path release\B300-STLink-GUI-Windows-x64.exe).Path
@@ -131,10 +137,14 @@ jobs:
           if ($setup.ExitCode -ne 0) { exit $setup.ExitCode }
           $installed = Join-Path $installRoot "b300-stlink-gui.exe"
           $openocd = Join-Path $installRoot "vendor\openocd\bin\openocd.exe"
+          $gdb = Join-Path $installRoot "vendor\gdb\bin\arm-none-eabi-gdb.exe"
           if (-not (Test-Path $installed)) { throw "Installed GUI executable missing" }
           if (-not (Test-Path $openocd)) { throw "Fresh install is missing bundled OpenOCD" }
+          if (-not (Test-Path $gdb)) { throw "Fresh install is missing managed ARM GDB" }
           & $openocd --version
           if ($LASTEXITCODE -ne 0) { throw "Bundled OpenOCD cannot execute after fresh install" }
+          & $gdb --version
+          if ($LASTEXITCODE -ne 0) { throw "Managed ARM GDB cannot execute after fresh install" }
           $process = Start-Process -FilePath $installed `
             -ArgumentList --smoke-test -Wait -PassThru -WindowStyle Hidden
           exit $process.ExitCode
@@ -163,7 +173,7 @@ jobs:
       - name: Build independent native GUI and CLI bundles
         run: python3 build_native_bundle.py --internal-distribution-approved
       - name: Enforce Linux x64 CLI size budget
-        run: python3 scripts/release/check_size_budget.py release/B300-STLink-CLI-Linux-x64.tar.gz --max-mib 25
+        run: python3 scripts/release/check_size_budget.py release/B300-STLink-CLI-Linux-x64.tar.gz --max-mib 50
       - name: Smoke-test executables
         run: |
           ./release/b300-stlink-gui --smoke-test
@@ -185,10 +195,12 @@ jobs:
           ./release/linux-cli-bundle/b300-stlink doctor --json || doctor_code=$?
           if [ "$doctor_code" -ne 0 ] && [ "$doctor_code" -ne 1 ]; then exit "$doctor_code"; fi
           ./release/linux-cli-bundle/vendor/openocd/bin/openocd --version
+          ./release/linux-cli-bundle/vendor/gdb/bin/arm-none-eabi-gdb --version
       - name: Stage Linux GUI bundle
         run: |
           mkdir -p release/linux-gui-bundle
           tar -xzf release/B300-STLink-GUI-Linux-x64.tar.gz -C release/linux-gui-bundle
+          ./release/linux-gui-bundle/vendor/gdb/bin/arm-none-eabi-gdb --version
       - name: Smoke-test Linux GUI on X11
         run: |
           env -u QT_QPA_PLATFORM xvfb-run -a ./release/linux-gui-bundle/b300-stlink-gui --smoke-test
@@ -238,7 +250,7 @@ jobs:
       - name: Build independent native GUI and CLI bundles
         run: python3 build_native_bundle.py --internal-distribution-approved
       - name: Enforce Linux ARM64 CLI size budget
-        run: python3 scripts/release/check_size_budget.py release/B300-STLink-CLI-Linux-arm64.tar.gz --max-mib 25
+        run: python3 scripts/release/check_size_budget.py release/B300-STLink-CLI-Linux-arm64.tar.gz --max-mib 50
       - name: Smoke-test executables
         run: |
           ./release/b300-stlink-gui --smoke-test
@@ -258,10 +270,12 @@ jobs:
           ./release/linux-cli-bundle/b300-stlink doctor --json || doctor_code=$?
           if [ "$doctor_code" -ne 0 ] && [ "$doctor_code" -ne 1 ]; then exit "$doctor_code"; fi
           ./release/linux-cli-bundle/vendor/openocd/bin/openocd --version
+          ./release/linux-cli-bundle/vendor/gdb/bin/arm-none-eabi-gdb --version
       - name: Stage Linux GUI bundle
         run: |
           mkdir -p release/linux-gui-bundle
           tar -xzf release/B300-STLink-GUI-Linux-arm64.tar.gz -C release/linux-gui-bundle
+          ./release/linux-gui-bundle/vendor/gdb/bin/arm-none-eabi-gdb --version
       - name: Smoke-test Linux GUI on X11
         run: |
           env -u QT_QPA_PLATFORM xvfb-run -a ./release/linux-gui-bundle/b300-stlink-gui --smoke-test
