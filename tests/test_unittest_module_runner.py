@@ -68,6 +68,16 @@ class IsolatedUnittestRunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 124, result.stdout + result.stderr)
         self.assertEqual(verdict, "FAIL")
 
+    def test_split_cases_records_aggregate_pass_sentinel(self):
+        result, verdict = self.run_case(
+            "import unittest\nclass T(unittest.TestCase):\n"
+            "    def test_one(self): self.assertTrue(True)\n"
+            "    def test_two(self): self.assertEqual(2, 2)\n",
+            "--split-cases",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(verdict, "PASS")
+
 
 if __name__ == "__main__":
     unittest.main()
