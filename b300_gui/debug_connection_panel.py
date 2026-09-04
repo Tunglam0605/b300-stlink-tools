@@ -100,6 +100,10 @@ class DebugConnectionPanel(QFrame):
 
         self.btn_open_gateway = QPushButton("CẤU HÌNH GATEWAY")
         self.btn_open_gateway.setObjectName("ghostButton")
+        # The compact 760 px regression window can otherwise let QGridLayout
+        # compress this translated label a few pixels below minimumSizeHint()
+        # on Windows. Keep the operator action readable and unclipped.
+        self.btn_open_gateway.setMinimumWidth(218)
         self.btn_open_gateway.setToolTip(
             "Thiết lập máy này làm Gateway: OpenSSH, OpenOCD và trạng thái kết nối"
         )
