@@ -22,12 +22,18 @@ class FakeDebugService:
         self.last_config = None
         self.starts = 0
         self.stops = 0
+        self.event_sink = None
 
     def start(self, config, readiness_timeout_seconds=3.0, event_sink=None):
         self.last_config = config
         self.starts += 1
+        self.event_sink = event_sink
         self.current = DebugState.READY
         return self.current
+
+    def emit(self, line: str) -> None:
+        if self.event_sink is not None:
+            self.event_sink(line)
 
     def poll(self):
         return self.current
@@ -36,6 +42,20 @@ class FakeDebugService:
         self.stops += 1
         self.current = DebugState.STOPPED
         return self.current
+
+
+class FakeTclClient:
+    def __init__(self, state: str = "running") -> None:
+        self.state = state
+        self.resume_count = 0
+
+    def wait_target_state(self):
+        return self.state
+
+    def resume_target(self):
+        self.resume_count += 1
+        self.state = "running"
+        return self.state
 
 
 class FakeRemoteSession:
@@ -66,6 +86,15 @@ class FakeRemoteSession:
 
 
 class V018VsCodeBridgeTests(unittest.TestCase):
+    def make_server_bridge(self, debug=None, *, initial_state="running"):
+        selected_debug = debug or FakeDebugService()
+        tcl = FakeTclClient(initial_state)
+        bridge = VsCodeDebugBridge(
+            debug_service=selected_debug,
+            tcl_factory=lambda _endpoint: tcl,
+        )
+        return bridge, selected_debug, tcl
+
     def test_external_profile_is_attach_only_and_loopback_only(self) -> None:
         profile = VsCodeExternalProfile(
             name="B300 local",
@@ -88,29 +117,49 @@ class V018VsCodeBridgeTests(unittest.TestCase):
                 gdb_target="192.168.1.10:3333",
             ).validate()
 
-    def test_local_mode_starts_openocd_loopback_with_gdb_only(self) -> None:
-        debug = FakeDebugService()
-        bridge = VsCodeDebugBridge(debug_service=debug)
+    def test_local_mode_starts_openocd_loopback_with_private_guard_tcl(self) -> None:
+        bridge, debug, _tcl = self.make_server_bridge()
         state = bridge.start_local(ProbeRef("STLINK123"), gdb_port=3333)
         self.assertEqual(state.role, DebugRole.LOCAL)
         self.assertEqual(state.state, BridgeState.READY)
         self.assertEqual(state.gdb_target, "127.0.0.1:3333")
+        self.assertEqual(state.initial_target_state, "running")
         self.assertEqual(debug.last_config.bind_address, "127.0.0.1")
         self.assertEqual(debug.last_config.gdb_port, 3333)
         self.assertIsNone(debug.last_config.telnet_port)
-        self.assertIsNone(debug.last_config.tcl_port)
+        self.assertEqual(debug.last_config.tcl_port, 6666)
         bridge.stop()
         self.assertEqual(debug.stops, 1)
 
     def test_gateway_mode_never_requests_public_openocd(self) -> None:
-        debug = FakeDebugService()
-        bridge = VsCodeDebugBridge(debug_service=debug)
+        bridge, debug, _tcl = self.make_server_bridge()
         state = bridge.start_gateway(ProbeRef("STLINK123"), gdb_port=3333)
         self.assertEqual(state.role, DebugRole.GATEWAY)
         self.assertEqual(debug.last_config.bind_address, "127.0.0.1")
+        self.assertEqual(debug.last_config.tcl_port, 6666)
         self.assertIn("private", state.detail.lower())
 
-    def test_client_mode_forwards_gateway_loopback_to_dynamic_local_port(self) -> None:
+    def test_gdb_disconnect_restores_running_target_without_forwarding_tcl(self) -> None:
+        bridge, debug, tcl = self.make_server_bridge(initial_state="running")
+        bridge.start_gateway(ProbeRef("STLINK123"))
+        debug.emit("Info : accepting 'gdb' connection on tcp/3333")
+        tcl.state = "halted"
+        debug.emit("Info : dropped 'gdb' connection")
+        self.assertEqual(tcl.state, "running")
+        self.assertEqual(tcl.resume_count, 1)
+        self.assertIn("restored", bridge.state.detail.lower())
+
+    def test_bridge_stop_restores_target_if_debugger_left_it_halted(self) -> None:
+        bridge, _debug, tcl = self.make_server_bridge(initial_state="running")
+        bridge.start_local(ProbeRef("STLINK123"))
+        tcl.state = "halted"
+        stopped = bridge.stop()
+        self.assertEqual(stopped.state, BridgeState.STOPPED)
+        self.assertEqual(tcl.state, "running")
+        self.assertEqual(tcl.resume_count, 1)
+        self.assertIn("restored", stopped.detail.lower())
+
+    def test_client_mode_forwards_gateway_loopback_gdb_only_to_dynamic_local_port(self) -> None:
         debug = FakeDebugService()
         session = FakeRemoteSession(local_port=43333)
         bridge = VsCodeDebugBridge(debug_service=debug)
@@ -133,7 +182,7 @@ class V018VsCodeBridgeTests(unittest.TestCase):
             bridge.start_client(FakeRemoteSession(connected=False))
 
     def test_profile_uses_bridge_endpoint_and_workspace_relative_symbols(self) -> None:
-        bridge = VsCodeDebugBridge(debug_service=FakeDebugService())
+        bridge, _debug, _tcl = self.make_server_bridge()
         bridge.start_local(ProbeRef("STLINK123"))
         profile = bridge.profile(
             program_relative="build/application.elf",
