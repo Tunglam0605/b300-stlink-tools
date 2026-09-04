@@ -22,6 +22,7 @@ from typing import Optional
 from b300_version import __version__ as TOOL_VERSION
 from b300_core.factory_resource import load_trusted_bootloader
 from b300_core.machine_setup import BUNDLED_STLINK_DRIVER_NAME, BUNDLED_STLINK_DRIVER_SHA256
+from b300_core.managed_gdb_bundle import stage_managed_gdb_runtime, smoke_test_managed_gdb
 from b300_core.offline_setup import (
     TRUSTED_OPENOCD_PACKAGES,
     extract_trusted_openocd_package,
@@ -358,7 +359,7 @@ def extract_trusted_gdb_package(package: Path, destination: Path, platform_name:
             infos = archive.infolist()
             if len(infos) > MAX_GDB_ENTRIES:
                 raise ValueError("GDB archive has too many entries.")
-            for member in archive.infolist():
+            for member in infos:
                 count += 1
                 if member.flag_bits & 0x1:
                     raise ValueError("Encrypted GDB archive entries are not supported.")
@@ -428,6 +429,29 @@ def extract_trusted_gdb_package(package: Path, destination: Path, platform_name:
     return executable
 
 
+def prepare_managed_gdb(temp: Path, platform_name: str):
+    """Download, pin-verify, compact and smoke-test the B300-managed GDB."""
+    filename, pinned_sha256 = TRUSTED_GDB_PACKAGES[platform_name]
+    archive = temp / filename
+    checksum = temp / (filename + ".sha")
+    fetch("%s/%s" % (GDB_BASE, filename), archive)
+    fetch("%s/%s.sha" % (GDB_BASE, filename), checksum)
+    upstream_sha256 = checksum.read_text(encoding="utf-8").split()[0].lower()
+    actual_sha256 = hash_file(archive)
+    if actual_sha256 != upstream_sha256:
+        raise RuntimeError("GNU Arm GDB archive checksum mismatch.")
+    if actual_sha256 != pinned_sha256.lower():
+        raise RuntimeError("GNU Arm GDB archive does not match the B300 pinned SHA-256.")
+    validate_trusted_gdb_package(platform_name, filename, actual_sha256)
+
+    extracted = temp / "gdb-toolchain-extracted"
+    extract_trusted_gdb_package(archive, extracted, platform_name)
+    runtime = temp / "gdb-runtime"
+    executable = stage_managed_gdb_runtime(extracted, runtime, platform_name)
+    smoke_test_managed_gdb(executable)
+    return archive, actual_sha256, runtime
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=ROOT / "release")
@@ -450,12 +474,12 @@ def main(argv=None) -> int:
         validate_trusted_package(platform_name, filename, verified_sha256)
         openocd_root = temp / "openocd-runtime"
         extract_trusted_openocd_package(archive, openocd_root, platform_name)
-        # Keep the base GUI/CLI lean. GDB is discovered from an installed toolchain
-        # (for example STM32CubeIDE) or a separately managed optional debug runtime.
-        # Never embed the full GNU Arm toolchain in the base application bundle.
-        gdb_archive = None
-        gdb_sha256 = None
-        gdb_root = None
+
+        # v0.18 ships a managed debugger runtime so a clean PC does not need a
+        # separately installed Arm GNU toolchain.  Only GDB + host runtime files
+        # are staged; GCC/linker/target libraries remain intentionally excluded.
+        gdb_archive, gdb_sha256, gdb_root = prepare_managed_gdb(temp, platform_name)
+
         subprocess.check_call([sys.executable, "-m", "pip", "install", "--user",
                                "-r", str(ROOT / "requirements-build.txt")])
         cli_plan = None
@@ -493,15 +517,12 @@ def main(argv=None) -> int:
                 "--openocd-archive", filename,
                 "--openocd-sha256", verified_sha256,
                 "--openocd-package", str(archive),
+                "--gdb-root", str(gdb_root),
+                "--gdb-archive", gdb_archive.name,
+                "--gdb-sha256", gdb_sha256,
             ]
             if application_root is not None:
                 command.extend(["--application-root", str(application_root)])
-            if gdb_root is not None:
-                assert gdb_archive is not None and gdb_sha256 is not None
-                command.extend([
-                    "--gdb-root", str(gdb_root), "--gdb-archive", gdb_archive.name,
-                    "--gdb-sha256", gdb_sha256,
-                ])
             for resource in resources:
                 command.extend(["--resource", str(resource)])
             subprocess.check_call(command)
