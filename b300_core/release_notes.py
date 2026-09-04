@@ -104,6 +104,44 @@ Safety
 - Zero-halt Live Monitor remains outside HALT-capable Interactive Debug.
 - Flash/OTA/Bootloader/metadata policy, protected Sector 0-2 behavior, HardwareSession ownership, target-state restoration and loopback-only GDB/TCL remain unchanged.
 """.strip(),
+    "0.17.1": """First-class Debug IDE entry
+
+- Engineering Debug Studio now opens directly into the dockable Keil/STM-Studio-style IDE shell instead of hiding it behind the legacy realtime/setup surface.
+- Adds a persistent Debug IDE / Theo dõi realtime switch so both workflows are explicit first-class surfaces.
+- Adds Kết nối Debug and Cấu hình controls inside the IDE. Opening the IDE alone never starts OpenOCD/GDB/TCL and never halts or resets the MCU.
+- Zero-halt Live Monitor remains owned by the normal Studio page and is never reparented into the HALT-capable IDE.
+
+Safety
+
+- Interactive target control still begins only after an explicit connect action.
+- Flash/OTA/Bootloader/metadata/Option Bytes policy, protected Sector 0-2 behavior, HardwareSession ownership, target-state restoration and loopback-only GDB/TCL remain unchanged.
+""".strip(),
+    "0.18.0": """Simplified production UX
+
+- Primary production navigation is PROGRAM / MONITOR / DEBUG / DEVICE / SETTINGS.
+- DEBUG delegates source-level debugging to VS Code + Cortex-Debug instead of expanding B300 into a full IDE.
+- Opening DEBUG or switching pages does not start OpenOCD/GDB, acquire the debug HardwareSession, reset the target, or halt the MCU.
+- MONITOR remains the dedicated zero-halt realtime observation path.
+
+VS Code Debug Bridge
+
+- Adds explicit LOCAL / GATEWAY / CLIENT roles with attach-only Cortex-Debug profiles.
+- LOCAL and GATEWAY OpenOCD GDB/TCL endpoints remain loopback-only; Telnet is disabled.
+- CLIENT forwards only GDB through the authenticated SSH session while TCL stays Gateway-local for target run-state restoration.
+- If the target was RUNNING before interactive debug, B300 restores RUNNING when GDB disconnects or the bridge stops while the target is left halted.
+
+Managed ARM GDB runtime
+
+- B300 bundles a pinned, SHA-256 verified GNU Arm GDB 15.2.1-1.1 runtime for Windows x64, Ubuntu x64, and Ubuntu ARM64.
+- Managed GDB is resolved before system PATH fallbacks, so a clean machine does not need a separate Arm GNU Toolchain installation just to debug through B300.
+- Compiler/linker/target libraries remain excluded; B300 stays a programmer, safety layer, remote gateway, and VS Code debug bridge.
+
+Programming and safety
+
+- Normal Application programming continues to use the existing B300Service safety transaction and does not mass erase or write Bootloader sectors 0-2.
+- HardwareSession arbitration, OTA metadata policy, Option Byte/WRP safety, zero-halt Live Monitor behavior, and target-state restoration remain authoritative.
+- Remote programming exposes no FULL_ERASE, MASS_ERASE, arbitrary raw-write, or remote Bootloader operation in the standard path.
+""".strip(),
 }
 
 

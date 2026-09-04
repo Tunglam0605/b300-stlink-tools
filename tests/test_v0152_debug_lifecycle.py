@@ -6,6 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 from b300_core.debug_service import DebugService
+from b300_core.versioning import SemVer
 from b300_gui.debug_tab_v152 import DebugTabV152
 from b300_version import __version__
 
@@ -24,7 +25,9 @@ class V0152DebugLifecycleTests(unittest.TestCase):
         )
 
     def test_lifecycle_regression_remains_enabled_in_current_release(self) -> None:
-        self.assertEqual(__version__, "0.17.0")
+        # This suite protects the v0.15.2 lifecycle invariant in every later
+        # release; it must not pin an unrelated current release number.
+        self.assertGreaterEqual(SemVer.parse(__version__), SemVer.parse("0.15.2"))
 
     def test_interactive_workstation_never_steals_realtime_panel(self) -> None:
         tab = self._make_tab()

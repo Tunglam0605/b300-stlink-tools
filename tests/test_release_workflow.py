@@ -21,18 +21,44 @@ def load_workflow(name: str):
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
-    def test_linux_ci_splits_qt_gui_smoke_cases_without_extending_other_timeouts(self) -> None:
-        """Qt state is bounded per GUI test, while every child keeps the normal cap."""
-        text = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
-            encoding="utf-8"
+    def test_ci_splits_required_qt_gui_suites_with_bounded_timeouts(self) -> None:
+        """Required GUI suites get isolated cases without weakening time budgets."""
+        workflow = load_workflow("ci.yml")
+        steps = workflow["jobs"]["test"]["steps"]
+        linux_command = next(
+            step["run"] for step in steps if step.get("name") == "Run unit tests (Linux)"
         )
-        self.assertIn(
-            "tests.test_gui_smoke|tests.test_gui_updater)",
-            text,
+        windows_command = next(
+            step["run"] for step in steps if step.get("name") == "Run unit tests (Windows)"
         )
+        required_suites = {
+            "tests.test_gui_interlocks",
+            "tests.test_gui_smoke",
+            "tests.test_gui_updater",
+            "tests.test_v018_simplified_ui",
+        }
+
+        linux_group = re.search(
+            r"(?m)^\s*(tests\.test_[A-Za-z0-9_]+(?:\|tests\.test_[A-Za-z0-9_]+)*)\)\s*$",
+            linux_command,
+        )
+        self.assertIsNotNone(linux_group)
+        self.assertLessEqual(required_suites, set(linux_group.group(1).split("|")))
         self.assertIn(
             "timeout --signal=TERM --kill-after=10s 300 python scripts/run_unittest_module.py --split-cases --case-timeout 60 \"$module\"",
-            text,
+            linux_command,
+        )
+
+        windows_group = re.search(
+            r"if \(\$module -in @\(([^)]*)\)\)",
+            windows_command,
+        )
+        self.assertIsNotNone(windows_group)
+        windows_suites = set(re.findall(r"'([^']+)'", windows_group.group(1)))
+        self.assertLessEqual(required_suites, windows_suites)
+        self.assertIn(
+            "python scripts/run_unittest_module.py --split-cases --case-timeout 60 $module",
+            windows_command,
         )
 
     def test_windows_dry_run_smokes_the_gui_onedir_executable(self) -> None:

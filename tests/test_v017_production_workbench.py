@@ -33,6 +33,43 @@ class V017ProductionWorkbenchTests(unittest.TestCase):
             window.deleteLater()
             self.app.processEvents()
 
+    def test_ide_is_first_class_view_without_starting_interactive_debug(self) -> None:
+        window = self._window()
+        try:
+            tab = window.debug_tab
+            self.assertIs(tab.main_stack.currentWidget(), tab.workstation)
+            self.assertTrue(tab.v170_ide_button.isChecked())
+            self.assertFalse(tab.v170_realtime_button.isChecked())
+            self.assertFalse(tab._workstation_controller.interactive_active)
+            self.assertIs(tab.live_panel.parentWidget(), tab.scroll_content)
+            self.assertGreaterEqual(tab.scroll_content.layout().indexOf(tab.live_panel), 0)
+            self.assertEqual(tab.ide_connect_button.text(), "Kết nối Debug")
+            self.assertTrue(tab.ide_connect_button.isEnabled())
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
+    def test_studio_view_switch_does_not_attach_or_reparent_live_monitor(self) -> None:
+        window = self._window()
+        try:
+            tab = window.debug_tab
+            tab.v170_realtime_button.click()
+            self.assertIs(tab.main_stack.currentWidget(), tab.scroll_area)
+            self.assertTrue(tab.v170_realtime_button.isChecked())
+            self.assertFalse(tab._workstation_controller.interactive_active)
+            self.assertIs(tab.live_panel.parentWidget(), tab.scroll_content)
+
+            tab.v170_ide_button.click()
+            self.assertIs(tab.main_stack.currentWidget(), tab.workstation)
+            self.assertTrue(tab.v170_ide_button.isChecked())
+            self.assertFalse(tab._workstation_controller.interactive_active)
+            self.assertIs(tab.live_panel.parentWidget(), tab.scroll_content)
+        finally:
+            window.close()
+            window.deleteLater()
+            self.app.processEvents()
+
     def test_real_intelligence_panes_replace_placeholders(self) -> None:
         window = self._window()
         try:
