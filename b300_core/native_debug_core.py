@@ -16,6 +16,7 @@ _NATIVE_MODULE = "_b300_debug_core"
 _NATIVE_ABI_VERSION = 1
 _VALID_MODES = {"auto", "off", "on"}
 _TRACE_TYPE_SAMPLE = 6
+_UNSET = object()
 
 
 class NativeCoreUnavailable(RuntimeError):
@@ -62,14 +63,21 @@ def _python_decode_fixed_width(
     return DecodeResult(consumed=count * width, events=tuple(events))
 
 
+def _is_compatible_native(module: Any) -> bool:
+    try:
+        return int(getattr(module, "ABI_VERSION", -1)) == _NATIVE_ABI_VERSION and callable(
+            getattr(module, "decode_fixed_width", None)
+        )
+    except (TypeError, ValueError):
+        return False
+
+
 def _load_native_module() -> Optional[Any]:
     try:
         module = import_module(_NATIVE_MODULE)
     except (ImportError, OSError):
         return None
-    if int(getattr(module, "ABI_VERSION", -1)) != _NATIVE_ABI_VERSION:
-        return None
-    return module
+    return module if _is_compatible_native(module) else None
 
 
 def _normalize_native_result(raw: Any) -> DecodeResult:
@@ -98,13 +106,19 @@ def _normalize_native_result(raw: Any) -> DecodeResult:
 class NativeDebugCoreAdapter:
     """Select native or Python data-plane without changing safety ownership."""
 
-    def __init__(self, mode: str = "auto", native_module: Optional[Any] = None) -> None:
+    def __init__(self, mode: str = "auto", native_module: Any = _UNSET) -> None:
         normalized = str(mode).strip().lower()
         if normalized not in _VALID_MODES:
             raise ValueError("native debug mode must be one of: auto, off, on")
 
         self._mode = normalized
-        self._native = None if normalized == "off" else (native_module or _load_native_module())
+        if normalized == "off":
+            self._native = None
+        elif native_module is _UNSET:
+            self._native = _load_native_module()
+        else:
+            self._native = native_module if _is_compatible_native(native_module) else None
+
         if normalized == "on" and self._native is None:
             raise NativeCoreUnavailable("native debug core is required but unavailable or ABI-incompatible")
 
@@ -138,7 +152,10 @@ class NativeDebugCoreAdapter:
             )
 
         raw = self._native.decode_fixed_width(data, channel, timestamp_ns, source_id)
-        return _normalize_native_result(raw)
+        result = _normalize_native_result(raw)
+        if result.consumed > len(data):
+            raise RuntimeError("native debug core consumed more bytes than supplied")
+        return result
 
 
 __all__ = [
