@@ -1,0 +1,37 @@
+name: Patch v0.15.1 publish orchestration
+
+on:
+  push:
+    branches:
+      - "publish/v0.15.1"
+    paths:
+      - ".github/workflows/patch-publish-v0151.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: publish/v0.15.1
+      - name: Add container safe-directory before SHA verification
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/publish-v0151.yml')
+          s = p.read_text()
+          old = 'run: test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"'
+          new = 'run: |\n          git config --global --add safe.directory "$GITHUB_WORKSPACE"\n          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"'
+          count = s.count(old)
+          if count != 2:
+              raise SystemExit(f'expected 2 verification steps, found {count}')
+          p.write_text(s.replace(old, new))
+          PY
+          git config user.name "Tùng Lâm Automation"
+          git config user.email "183681608+Tunglam0605@users.noreply.github.com"
+          git add .github/workflows/publish-v0151.yml
+          git commit -m "ops(release): allow tagged SHA verification in containers"
+          git push origin HEAD:publish/v0.15.1
