@@ -22,7 +22,7 @@ int main() {
         });
 
         if ((index % 1024) == 1023) {
-            (void)buffer.drain(768);
+            (void)buffer.drain(1024);
         }
     }
 
@@ -39,6 +39,11 @@ int main() {
               << " events_per_second=" << rate
               << " dropped=" << buffer.dropped()
               << '\n';
+
+    if (buffer.dropped() != 0) {
+        std::cerr << "native benchmark unexpectedly dropped events\n";
+        return EXIT_FAILURE;
+    }
 
     if (rate < minimum_events_per_second) {
         std::cerr << "native throughput gate failed: " << rate
