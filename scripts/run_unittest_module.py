@@ -73,32 +73,81 @@ def write_split_verdict(successful: bool) -> None:
     path.write_text("PASS\n" if successful else "FAIL\n", encoding="ascii")
 
 
+def write_case_list(module: str, destination: Path) -> None:
+    """Discover case ids in a disposable interpreter and hard-exit afterwards.
+
+    Importing a PySide-backed test module can initialize native Qt state even before
+    QApplication is created.  On Windows that state has proven capable of crashing
+    the long-lived split-case parent after several otherwise passing children.  Case
+    discovery therefore runs in its own process and exits with os._exit(), leaving
+    the orchestrator process completely Qt-free.
+    """
+    suite = unittest.defaultTestLoader.loadTestsFromName(module)
+    case_ids = [case.id() for case in iter_test_cases(suite)]
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text("\n".join(case_ids) + ("\n" if case_ids else ""), encoding="utf-8")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0 if case_ids else 1)
+
+
+def discover_case_ids(module: str, directory: Path) -> tuple[str, ...]:
+    """Return case ids without importing the target test module in this process."""
+    case_list_file = directory / "cases.txt"
+    child_env = dict(os.environ)
+    child_env.pop("B300_UNITTEST_RESULT_FILE", None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--list-cases-file",
+            str(case_list_file),
+            module,
+        ],
+        cwd=ROOT,
+        env=child_env,
+        timeout=30,
+    )
+    if result.returncode != 0 or not case_list_file.exists():
+        return ()
+    return tuple(
+        line.strip()
+        for line in case_list_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    )
+
+
 def run_split_cases(module: str, *, case_timeout: int | None = None) -> int:
     """Run every test case in a new interpreter to bound native Qt state."""
-    suite = unittest.defaultTestLoader.loadTestsFromName(module)
-    cases = tuple(iter_test_cases(suite))
-    if not cases:
-        print("No tests found in %s" % module, file=sys.stderr)
-        write_split_verdict(False)
-        return 1
-
     with tempfile.TemporaryDirectory(prefix="b300-unittest-cases-") as directory:
         case_result_root = Path(directory)
-        for index, case in enumerate(cases):
-            print("=== %s ===" % case.id(), flush=True)
+        try:
+            cases = discover_case_ids(module, case_result_root)
+        except subprocess.TimeoutExpired:
+            print("Timed out discovering tests in %s" % module, file=sys.stderr)
+            write_split_verdict(False)
+            return 124
+
+        if not cases:
+            print("No tests found in %s" % module, file=sys.stderr)
+            write_split_verdict(False)
+            return 1
+
+        for index, case_id in enumerate(cases):
+            print("=== %s ===" % case_id, flush=True)
             case_result_file = case_result_root / ("case-%04d.txt" % index)
             child_env = dict(os.environ)
             child_env["B300_UNITTEST_RESULT_FILE"] = str(case_result_file)
             try:
                 result = subprocess.run(
-                    [sys.executable, str(Path(__file__).resolve()), case.id()],
+                    [sys.executable, str(Path(__file__).resolve()), case_id],
                     cwd=ROOT,
                     env=child_env,
                     timeout=case_timeout,
                 )
             except subprocess.TimeoutExpired:
                 print(
-                    "Timed out after %ss: %s" % (case_timeout, case.id()),
+                    "Timed out after %ss: %s" % (case_timeout, case_id),
                     file=sys.stderr,
                 )
                 write_split_verdict(False)
@@ -112,7 +161,7 @@ def run_split_cases(module: str, *, case_timeout: int | None = None) -> int:
             if result.returncode and verdict == "PASS":
                 print(
                     "Accepted verified PASS for %s despite native teardown exit %s"
-                    % (case.id(), result.returncode),
+                    % (case_id, result.returncode),
                     file=sys.stderr,
                     flush=True,
                 )
@@ -122,7 +171,7 @@ def run_split_cases(module: str, *, case_timeout: int | None = None) -> int:
                 return result.returncode
             if verdict != "PASS":
                 print(
-                    "Child exited without a verified PASS sentinel: %s" % case.id(),
+                    "Child exited without a verified PASS sentinel: %s" % case_id,
                     file=sys.stderr,
                 )
                 write_split_verdict(False)
@@ -146,6 +195,11 @@ def run_and_exit(argv=None) -> int:
         type=int,
         help="maximum seconds for each child test case (requires --split-cases)",
     )
+    parser.add_argument(
+        "--list-cases-file",
+        type=Path,
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("module", help="Dotted unittest module name, e.g. tests.test_gui_smoke")
     args = parser.parse_args(argv)
 
@@ -153,6 +207,11 @@ def run_and_exit(argv=None) -> int:
         parser.error("--case-timeout must be positive")
     if args.case_timeout is not None and not args.split_cases:
         parser.error("--case-timeout requires --split-cases")
+    if args.list_cases_file is not None:
+        if args.split_cases or args.case_timeout is not None:
+            parser.error("--list-cases-file cannot be combined with split execution options")
+        write_case_list(args.module, args.list_cases_file)
+        raise RuntimeError("case discovery hard-exit returned unexpectedly")
     if args.split_cases:
         return run_split_cases(args.module, case_timeout=args.case_timeout)
 
