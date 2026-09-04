@@ -1,0 +1,49 @@
+name: Native C++ CI
+
+on:
+  push:
+    paths:
+      - "native/**"
+      - ".github/workflows/native-ci.yml"
+      - "docs/plans/0.17.0-native-debug-core.md"
+  pull_request:
+    paths:
+      - "native/**"
+      - ".github/workflows/native-ci.yml"
+      - "docs/plans/0.17.0-native-debug-core.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: ${{ matrix.name }} / C++17
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu x64
+            runner: ubuntu-latest
+          - name: Ubuntu ARM64
+            runner: ubuntu-24.04-arm
+          - name: Windows x64
+            runner: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Configure
+        run: cmake -S native/b300_debug_core -B build/native -DB300_NATIVE_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build/native --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build/native -C Release --output-on-failure
