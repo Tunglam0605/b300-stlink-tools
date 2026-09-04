@@ -51,6 +51,22 @@ Safety
 
 - Flash, OTA, Bootloader, metadata, Option Bytes, protected flash boundaries, loopback-only GDB/TCL, and zero-halt Live Monitor behavior are unchanged.
 """.strip(),
+    "0.15.2": """Interactive Debug lifecycle fix
+
+- Interactive Debug no longer reparents the normal zero-halt realtime monitor into the Engineering Workstation.
+- Disconnect returns to the normal Debug Studio with the realtime monitor still present and usable.
+- A defensive recovery path restores the realtime panel if legacy or accidental Qt reparenting is detected.
+- The Interactive Workstation shows a clear boundary notice instead of embedding the realtime monitor in its lower dock.
+
+UI stability
+
+- Removes the Qt layout ownership conflict that could produce broken frames or geometry after entering Interactive Debug.
+- Realtime monitoring and Interactive Debug remain separate so it is clear which path may HALT the MCU.
+
+Safety
+
+- Flash/OTA/Bootloader/metadata/Option Bytes policy, protected Sector 0-2 behavior, loopback-only GDB/TCL, and zero-halt Live Monitor behavior are unchanged.
+""".strip(),
 }
 
 

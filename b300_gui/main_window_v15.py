@@ -8,7 +8,7 @@ not as a second top-level SSH workflow.
 
 from __future__ import annotations
 
-from .debug_tab_v15 import DebugTabV15
+from .debug_tab_v152 import DebugTabV152
 from .main_window import MainWindow
 
 
@@ -36,7 +36,7 @@ class MainWindowV15(MainWindow):
         previous.setParent(None)
         previous.deleteLater()
 
-        self.debug_tab = DebugTabV15(
+        self.debug_tab = DebugTabV152(
             self.debug_service,
             self._selected_probe,
             self,

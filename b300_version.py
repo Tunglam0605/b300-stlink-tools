@@ -2,7 +2,7 @@
 
 import argparse
 
-__version__ = "0.15.1"
+__version__ = "0.15.2"
 
 
 def main(argv=None) -> int:
