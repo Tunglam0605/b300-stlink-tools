@@ -9,6 +9,7 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QApplication
 
 from b300_core.models import ImageInfo, ProbeInfo, TargetInfo
@@ -185,15 +186,18 @@ class V018SimplifiedUiTests(unittest.TestCase):
         finally:
             self._close(window)
 
-    def test_live_monitor_reuses_the_proven_wired_backend_panel(self) -> None:
+    def test_live_monitor_owns_a_production_controller_and_panel(self) -> None:
         window = self._make_window()
         try:
-            self.assertIs(window.monitor_view.live_panel, window.debug_tab.live_panel)
+            controller = window.monitor_view.controller
+            self.assertIs(controller.panel, window.monitor_view.live_panel)
+            self.assertIsNot(window.monitor_view.live_panel, window.debug_tab.live_panel)
             self.assertIs(window.monitor_view.live_panel.parent(), window.monitor_view)
+            self.assertIsNotNone(controller._selected_probe)
             window.show_page("monitor")
             self.assertFalse(window.busy)
             self.assertIsNone(window._cancellable_worker)
-            self.assertFalse(window.debug_tab._sampling_active)
+            self.assertFalse(controller.active)
         finally:
             self._close(window)
 
@@ -229,6 +233,36 @@ class V018SimplifiedUiTests(unittest.TestCase):
             self.assertEqual(window.device_view.val_dev_id.text(), "0x101F6413")
             self.assertIn("PROTECTED", window.device_view.val_wrp.text())
         finally:
+            self._close(window)
+
+    def test_window_close_is_refused_until_monitor_cleanup_finishes(self) -> None:
+        window = self._make_window()
+        original = window.monitor_view.controller.prepare_shutdown
+        try:
+            window.monitor_view.controller.prepare_shutdown = lambda: False
+            event = QCloseEvent()
+            window.closeEvent(event)
+            self.assertFalse(event.isAccepted())
+        finally:
+            window.monitor_view.controller.prepare_shutdown = original
+            self._close(window)
+
+    def test_monitor_activity_participates_in_global_hardware_interlock(self) -> None:
+        window = self._make_window()
+        try:
+            window.monitor_view.controller._active = True
+            state = window._operation_state()
+            self.assertTrue(state.debug_hardware_busy)
+            window._hardware_activity_changed(True)
+            self.assertFalse(window.program_view.btn_inspect_target.isEnabled())
+            self.assertFalse(window.device_view.btn_refresh.isEnabled())
+            self.assertFalse(window.device_view.btn_doctor.isEnabled())
+            self.assertFalse(window.debug_vscode_view.btn_open_local_vscode.isEnabled())
+            self.assertFalse(window.debug_vscode_view.btn_start_gateway.isEnabled())
+            self.assertFalse(window.debug_vscode_view.btn_test_client_conn.isEnabled())
+            self.assertFalse(window.debug_vscode_view.btn_open_remote_vscode.isEnabled())
+        finally:
+            window.monitor_view.controller._active = False
             self._close(window)
 
 

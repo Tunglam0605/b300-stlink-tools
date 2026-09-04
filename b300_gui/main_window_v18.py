@@ -17,6 +17,7 @@ from b300_core.remote_profile import RemoteGatewayProfile, load_remote_profile, 
 from b300_core.remote_session import RemoteSession
 from b300_core.vscode_bridge import BridgeState
 from .main_window import MainWindow
+from .operation_state import OperationState
 from .remote_login_dialog import RemoteLoginDialog
 from .vscode_debug_controller import VsCodeDebugController
 from .views.debug_vscode_view import DebugVsCodeView
@@ -91,7 +92,13 @@ class MainWindowV18(MainWindow):
         self.program_view.target_inspect_requested.connect(self.inspect_target)
         self.v18_stack.addWidget(self.program_view)
 
-        self.monitor_view = MonitorView(self)
+        self.monitor_view = MonitorView(
+            self,
+            selected_probe=self._selected_probe,
+            openocd_executable=str(self.debug_service.executable),
+        )
+        self.monitor_view.log.connect(self.append_log)
+        self.monitor_view.operation_state_changed.connect(self._hardware_activity_changed)
         self.v18_stack.addWidget(self.monitor_view)
 
         self.debug_vscode_view = DebugVsCodeView(self)
@@ -158,6 +165,28 @@ class MainWindowV18(MainWindow):
     # ------------------------------------------------------------------
     # Shared hardware state
     # ------------------------------------------------------------------
+    def _operation_state(self) -> OperationState:
+        base = super()._operation_state()
+        monitor = getattr(self, "monitor_view", None)
+        monitor_busy = bool(
+            monitor is not None and monitor.controller.active
+        )
+        return OperationState(
+            main_hardware_busy=base.main_hardware_busy,
+            memory_hardware_busy=base.memory_hardware_busy,
+            debug_hardware_busy=base.debug_hardware_busy or monitor_busy,
+        )
+
+    def _update_controls(self) -> None:
+        super()._update_controls()
+        hardware_busy = self._operation_state().is_hardware_busy
+        if hasattr(self, "program_view"):
+            self.program_view.set_busy(hardware_busy)
+        if hasattr(self, "device_view"):
+            self.device_view.set_busy(hardware_busy)
+        if hasattr(self, "debug_vscode_view"):
+            self.debug_vscode_view.set_hardware_busy(hardware_busy)
+
     def refresh_probes(self) -> None:
         super().refresh_probes()
         if hasattr(self, "program_view"):
@@ -447,6 +476,9 @@ class MainWindowV18(MainWindow):
         self.append_log("Internal Debug Workbench mở ở chế độ diagnostics/legacy.")
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if not self.monitor_view.controller.prepare_shutdown():
+            event.ignore()
+            return
         # Restore target state before the base window tears down shared services.
         try:
             self._vscode_controller.stop()

@@ -175,5 +175,10 @@ class DeviceView(QWidget):
             self.val_wrp.setText("Không có bằng chứng WRP · %s" % info.protection_summary)
         self.val_rdp.setText("Read protected" if info.readout_protected else "Level 0 / readable")
 
+    def set_busy(self, busy: bool) -> None:
+        """Block new target access while another HardwareSession owns the probe."""
+        self.btn_refresh.setEnabled(not busy)
+        self.btn_doctor.setEnabled(not busy)
+
 
 __all__ = ["DeviceView"]

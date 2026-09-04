@@ -346,6 +346,14 @@ class DebugVsCodeView(QWidget):
         )
         self.client_state_label.setToolTip(detail)
 
+    def set_hardware_busy(self, busy: bool) -> None:
+        """Prevent starting another debug transport while hardware is owned."""
+        enabled = not busy
+        self.btn_open_local_vscode.setEnabled(enabled)
+        self.btn_start_gateway.setEnabled(enabled)
+        self.btn_test_client_conn.setEnabled(enabled)
+        self.btn_open_remote_vscode.setEnabled(enabled)
+
     def _emit_local_request(self) -> None:
         self.open_local_vscode_requested.emit(
             Path(self.local_workspace.text().strip()).expanduser(),
