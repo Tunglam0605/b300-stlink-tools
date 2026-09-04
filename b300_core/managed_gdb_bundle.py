@@ -2,12 +2,12 @@
 
 The release builder downloads and verifies the pinned xPack GNU Arm Embedded GCC
 archive because that upstream package provides a portable ``arm-none-eabi-gdb``
-for every B300 release architecture.  B300 does not need to ship a compiler,
+for every B300 release architecture. B300 does not need to ship a compiler,
 linker, C library, or the target runtime just to attach Cortex-Debug to an
 external OpenOCD server, so this module stages only the host-side files needed
 by the non-Python GDB executable plus upstream notices.
 
-This module is build-time only.  It never downloads software and never touches
+This module is build-time only. It never downloads software and never touches
 the target MCU.
 """
 from __future__ import annotations
@@ -65,12 +65,14 @@ def _unique_files(candidates: Iterable[Path]) -> tuple[Path, ...]:
 
 
 def _host_runtime_files(source_root: Path, platform_name: str) -> tuple[Path, ...]:
-    """Return host-side shared libraries that the portable GDB may load.
+    """Return host-side shared libraries required by the portable GDB.
 
-    The xPack release keeps Windows DLLs beneath ``bin`` and GNU/Linux shared
-    libraries primarily beside the host tools.  A few releases also place
-    shared objects at the top level of ``lib`` or ``lib64``.  We intentionally
-    do not recurse into compiler-specific subdirectories such as ``lib/gcc``.
+    The pinned xPack 15.2.1-1.1 layout stores Windows DLLs under ``bin``.
+    On GNU/Linux the debugger dependencies are primarily top-level shared
+    objects under ``libexec`` (for example ``libiconv.so.2``), with a small
+    number of host libraries under ``lib``/``lib64``. Only top-level shared
+    objects are selected; compiler-specific trees such as ``libexec/gcc`` and
+    ``lib/gcc`` remain excluded from the B300 debug runtime.
     """
     bin_root = source_root / "bin"
     candidates = []
@@ -80,9 +82,16 @@ def _host_runtime_files(source_root: Path, platform_name: str) -> tuple[Path, ..
         if dll_root.is_dir():
             candidates.extend(path for path in dll_root.rglob("*") if path.is_file())
     else:
+        # Keep the upstream relative layout. xPack GDB is linked to find its
+        # portable host libraries relative to the executable, so flattening
+        # libexec into bin would make the release less reproducible.
         candidates.extend(bin_root.glob("*.so"))
         candidates.extend(bin_root.glob("*.so.*"))
-        for library_root in (source_root / "lib", source_root / "lib64"):
+        for library_root in (
+                source_root / "lib",
+                source_root / "lib64",
+                source_root / "libexec",
+        ):
             if library_root.is_dir():
                 candidates.extend(library_root.glob("*.so"))
                 candidates.extend(library_root.glob("*.so.*"))
@@ -113,7 +122,7 @@ def stage_managed_gdb_runtime(
     for runtime_file in _host_runtime_files(source, platform_name):
         _copy_file(runtime_file, source, destination)
 
-    # Preserve upstream documentation and the complete license inventory.  The
+    # Preserve upstream documentation and the complete license inventory. The
     # public release gate must still perform the project's normal third-party
     # redistribution review; this staging step does not make a legal judgment.
     for root_name in ("README.md", "LICENSE", "COPYING", "COPYING3"):
@@ -123,7 +132,7 @@ def stage_managed_gdb_runtime(
     _copy_tree_files(source / "distro-info", source, destination)
 
     # GDB data files are optional in some xPack layouts but required when
-    # present.  Copy only the GDB-specific subtree, not GCC documentation.
+    # present. Copy only the GDB-specific subtree, not GCC documentation.
     _copy_tree_files(source / "share" / "gdb", source, destination)
 
     (destination / NOTICE_NAME).write_text(
@@ -140,14 +149,24 @@ def stage_managed_gdb_runtime(
     if platform_name != "windows-x64":
         staged.chmod(staged.stat().st_mode | 0o111)
 
-    compiler_name = "arm-none-eabi-gcc.exe" if platform_name == "windows-x64" else "arm-none-eabi-gcc"
+    compiler_name = (
+        "arm-none-eabi-gcc.exe"
+        if platform_name == "windows-x64"
+        else "arm-none-eabi-gcc"
+    )
     if (destination / "bin" / compiler_name).exists():
         raise AssertionError("Managed GDB runtime must not contain the GCC compiler.")
     return staged
 
 
 def smoke_test_managed_gdb(executable: Path) -> str:
-    """Prove the staged GDB can actually start before a release is packaged."""
+    """Prove the staged GDB can actually start before a release is packaged.
+
+    No B300-only ``LD_LIBRARY_PATH`` is injected here. The staged runtime must
+    remain self-contained in the same relative layout expected by upstream so
+    the exact executable path handed to Cortex-Debug also works on a clean
+    client machine.
+    """
     binary = Path(executable)
     if not binary.is_file():
         raise RuntimeError("Managed GDB smoke test executable is missing.")
