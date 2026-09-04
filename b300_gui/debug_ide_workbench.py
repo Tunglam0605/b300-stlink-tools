@@ -61,9 +61,6 @@ class DebugIdeWorkstationWidget(QWidget):
         self._wire_internal_navigation()
         self._default_layout_state = self.ide_window.saveState(1)
 
-    # ------------------------------------------------------------------
-    # Construction
-    # ------------------------------------------------------------------
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -162,7 +159,6 @@ class DebugIdeWorkstationWidget(QWidget):
         layout.addWidget(self.editor_tabs, 1)
         self.ide_window.setCentralWidget(center)
 
-        # Keep menu actions and toolbar actions on exactly the same controller path.
         self.action_run.triggered.connect(self.toolbar.run_requested.emit)
         self.action_halt.triggered.connect(self.toolbar.halt_requested.emit)
         self.action_reset.triggered.connect(self.toolbar.reset_requested.emit)
@@ -199,15 +195,17 @@ class DebugIdeWorkstationWidget(QWidget):
 
     def _build_right_dock(self) -> None:
         self.right_dock = self._new_dock(
-            "Inspect", "debugInspectDock", Qt.DockWidgetArea.RightDockWidgetArea
+            "Watch / Inspect", "debugInspectDock", Qt.DockWidgetArea.RightDockWidgetArea
         )
         tabs = QTabWidget(self.right_dock)
         tabs.setObjectName("debugInspectTabs")
         tabs.setDocumentMode(True)
 
-        self.variables_pane = DebugVariablesPane(tabs)
+        # Watch 1 is intentionally the primary pane, matching desktop embedded
+        # debuggers: Name | Value | Type with recursively expandable members.
+        self.variables_pane = DebugVariablesPane(tabs, title="WATCH 1")
         self.registers_pane = DebugRegistersPane(tabs)
-        tabs.addTab(self.variables_pane, "Locals / Watch")
+        tabs.addTab(self.variables_pane, "Watch 1")
         tabs.addTab(self.registers_pane, "CPU Registers")
 
         self.peripherals_placeholder = QPlainTextEdit(tabs)
@@ -221,7 +219,7 @@ class DebugIdeWorkstationWidget(QWidget):
 
         self.right_tabs = tabs
         self.right_dock.setWidget(tabs)
-        self.right_dock.setMinimumWidth(260)
+        self.right_dock.setMinimumWidth(340)
 
     def _build_bottom_dock(self) -> None:
         self.bottom_dock = self._new_dock(
@@ -312,9 +310,8 @@ class DebugIdeWorkstationWidget(QWidget):
         self.bottom_dock.setWidget(self.bottom_tabs)
         self.bottom_dock.setMinimumHeight(150)
 
-        # Similar initial proportions to desktop embedded IDEs.
         self.ide_window.resizeDocks([self.left_dock], [240], Qt.Orientation.Horizontal)
-        self.ide_window.resizeDocks([self.right_dock], [300], Qt.Orientation.Horizontal)
+        self.ide_window.resizeDocks([self.right_dock], [360], Qt.Orientation.Horizontal)
         self.ide_window.resizeDocks([self.bottom_dock], [210], Qt.Orientation.Vertical)
 
     def _wire_internal_navigation(self) -> None:
@@ -324,9 +321,6 @@ class DebugIdeWorkstationWidget(QWidget):
         self.variables_pane.request_children.connect(self.request_variable_children.emit)
         self.toolbar.step_out_requested.connect(self.step_out_requested.emit)
 
-    # ------------------------------------------------------------------
-    # Compatibility / controller surface
-    # ------------------------------------------------------------------
     def _on_symbol_activated(self, name: str, address: str, file_path: str, line: int) -> None:
         self.editor_tabs.setCurrentWidget(self.source_view)
         self.source_view.show_location(file_path, line, address, function=name)
