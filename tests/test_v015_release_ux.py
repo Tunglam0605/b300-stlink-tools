@@ -62,13 +62,14 @@ class V015ReleaseUxTests(unittest.TestCase):
         panel.close()
 
     def test_production_window_has_no_second_top_level_ssh_workflow(self) -> None:
+        # Do not navigate into the live Gateway infrastructure page here: doing so
+        # intentionally starts its asynchronous readiness inspection. This regression
+        # test validates hierarchy/visibility without exercising host networking.
         window = MainWindowV15(
             probe_loader=lambda: (),
             automatic_updates=False,
             first_run_setup=False,
         )
-        window.show()
-        self.app.processEvents()
         self.assertTrue(window.nav_gateway_btn.isHidden())
         self.assertIn("Studio Debug", window.nav_debug_btn.text())
         self.assertEqual(window.gateway_tab.role_stack.currentIndex(), 0)
@@ -81,12 +82,12 @@ class V015ReleaseUxTests(unittest.TestCase):
         self.assertIsNotNone(authorize_group)
         self.assertTrue(authorize_group.isHidden())
 
-        # Internal Gateway setup remains reachable, but belongs visually to Debug.
-        window.tabs.setCurrentIndex(3)
-        self.app.processEvents()
-        self.assertTrue(window.nav_debug_btn.isChecked())
+        window._update_page_context(3)
         self.assertIn("Gateway", window.page_title.text())
+        self.assertIn("Studio Debug", window.page_subtitle.text())
         window.close()
+        window.deleteLater()
+        self.app.processEvents()
 
     def test_login_dialog_masks_password_and_stays_compact(self) -> None:
         dialog = RemoteLoginDialog("192.168.1.10", "Admin", 22)
