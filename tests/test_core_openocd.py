@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import argparse
-import os
 import io
+import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -127,7 +128,8 @@ class OpenOcdCoreTests(unittest.TestCase):
         self.assertNotIn("mass_erase", rendered)
 
     def test_metadata_transaction_is_hard_bounded_to_sector_three_record(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        # A staging path may contain an OpenOCD command name by coincidence.
+        with tempfile.TemporaryDirectory(prefix="mdw-path-") as directory:
             metadata = Path(directory) / "appmeta.bin"
             metadata.write_bytes(bytes(range(44)))
             readback = Path(directory) / "appmeta-readback.bin"
@@ -139,8 +141,17 @@ class OpenOcdCoreTests(unittest.TestCase):
         self.assertIn("flash write_image {%s} 0x0800C000 bin" % metadata.resolve(), rendered)
         self.assertIn("verify_image {%s} 0x0800C000 bin" % metadata.resolve(), rendered)
         self.assertIn("dump_image {%s} 0x0800C000 44" % readback.resolve(), rendered)
-        self.assertNotIn("mww", rendered)
-        self.assertNotIn("mdw", rendered)
+        openocd_commands = [
+            command[index + 1]
+            for index, argument in enumerate(command[:-1])
+            if argument == "-c"
+        ]
+        for forbidden in ("mww", "mdw"):
+            with self.subTest(forbidden=forbidden):
+                self.assertFalse(any(
+                    re.search(r"(?:^|[;{}]\s*)%s(?:\s|$)" % forbidden, script)
+                    for script in openocd_commands
+                ))
         self.assertNotIn("erase_sector", rendered)
         for forbidden in ("mass_erase", "flash protect", "erase_sector 0 0", "erase_sector 0 1",
                           "erase_sector 0 2", "stm32f2x lock", "stm32f2x unlock"):
