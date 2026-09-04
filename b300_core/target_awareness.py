@@ -1,8 +1,8 @@
-"""Facade for the next B300 Target Awareness milestone.
+"""Read-only Target Awareness facade for the B300 engineering Debug Workstation.
 
-This module intentionally sits beside DebugWorkstationController until the v0.15.2
-hotfix is released. It can be attached to the existing halted workspace without
-changing Flash, OTA, Live Monitor, SSH, GDB/TCL binding, or target lifecycle code.
+The facade attaches Target Description, CMSIS-SVD Peripheral inspection and
+Cortex-M Fault analysis to the existing halted workspace. It does not own or
+change Flash/OTA policy, Live Monitor, SSH, GDB/TCL binding, or target lifecycle.
 """
 
 from __future__ import annotations
