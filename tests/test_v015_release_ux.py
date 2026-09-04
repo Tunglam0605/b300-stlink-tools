@@ -6,8 +6,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication, QLineEdit
 
 from b300_gui.debug_connection_panel import DebugConnectionPanel
+from b300_gui.debug_ide_workbench import DebugIdeWorkstationWidget
 from b300_gui.debug_mode_selector import DebugModeSelector
-from b300_gui.debug_tab_v160 import DebugTabV160
+from b300_gui.debug_tab_v170 import DebugTabV170
 from b300_gui.main_window_v15 import MainWindowV15
 from b300_gui.remote_login_dialog import RemoteLoginDialog
 from b300_version import __version__
@@ -19,7 +20,7 @@ class V015ReleaseUxTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def test_source_version_is_current_release(self) -> None:
-        self.assertEqual(__version__, "0.16.0")
+        self.assertEqual(__version__, "0.17.0")
 
     def test_mode_first_surface_explains_connection_roles(self) -> None:
         selector = DebugModeSelector()
@@ -64,9 +65,6 @@ class V015ReleaseUxTests(unittest.TestCase):
         panel.close()
 
     def test_production_window_has_no_second_top_level_ssh_workflow(self) -> None:
-        # Do not navigate into the live Gateway infrastructure page here: doing so
-        # intentionally starts its asynchronous readiness inspection. This regression
-        # test validates hierarchy/visibility without exercising host networking.
         window = MainWindowV15(
             probe_loader=lambda: (),
             automatic_updates=False,
@@ -91,18 +89,25 @@ class V015ReleaseUxTests(unittest.TestCase):
         window.deleteLater()
         self.app.processEvents()
 
-    def test_production_debug_studio_owns_v016_intelligence_tabs_without_stealing_live_monitor(self) -> None:
+    def test_production_debug_studio_owns_v017_ide_and_intelligence_without_stealing_live_monitor(self) -> None:
         window = MainWindowV15(
             probe_loader=lambda: (),
             automatic_updates=False,
             first_run_setup=False,
         )
         tab = window.debug_tab
-        self.assertIsInstance(tab, DebugTabV160)
-        labels = [tab.workstation.bottom_tabs.tabText(index)
-                  for index in range(tab.workstation.bottom_tabs.count())]
-        for expected in ("TARGET", "PERIPHERALS", "FREERTOS", "FAULT"):
-            self.assertIn(expected, labels)
+        self.assertIsInstance(tab, DebugTabV170)
+        self.assertIsInstance(tab.workstation, DebugIdeWorkstationWidget)
+
+        right_labels = [tab.workstation.right_tabs.tabText(index)
+                        for index in range(tab.workstation.right_tabs.count())]
+        bottom_labels = [tab.workstation.bottom_tabs.tabText(index)
+                         for index in range(tab.workstation.bottom_tabs.count())]
+        self.assertIn("Watch 1", right_labels)
+        self.assertIn("Peripherals", right_labels)
+        for expected in ("Target", "FreeRTOS", "Fault"):
+            self.assertIn(expected, bottom_labels)
+
         self.assertIs(tab.live_panel.parentWidget(), tab.scroll_content)
         self.assertGreaterEqual(tab.scroll_content.layout().indexOf(tab.live_panel), 0)
         window.close()
