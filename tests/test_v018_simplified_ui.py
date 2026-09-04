@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import os
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
-from b300_core.models import ProbeInfo, TargetInfo
+from b300_core.models import ImageInfo, ProbeInfo, TargetInfo
 from b300_gui.main_window_v18 import MainWindowV18
 from b300_gui.views.debug_vscode_view import DebugVsCodeView
 from b300_gui.views.device_view import DeviceView
@@ -68,7 +71,6 @@ class V018SimplifiedUiTests(unittest.TestCase):
                 self.assertEqual(window.v18_stack.currentIndex(), index)
                 self.assertFalse(window.busy)
                 self.assertIsNone(window._cancellable_worker)
-            # Merely visiting DEBUG must not create any bridge role or start OpenOCD.
             self.assertIsNone(window._vscode_controller.state.role)
         finally:
             self._close(window)
@@ -81,11 +83,48 @@ class V018SimplifiedUiTests(unittest.TestCase):
             self.assertIn("STM32F407", view.lbl_target.text())
             self.assertTrue(view.radio_local.isChecked())
             self.assertEqual(view.btn_flash_app.text(), "⚡ NẠP APPLICATION")
+            self.assertFalse(view.btn_flash_app.isEnabled())
             self.assertFalse(view.adv_card.is_expanded())
         finally:
             self._close(window)
 
-    def test_program_page_remote_programming_foundation(self) -> None:
+    def test_program_rejects_non_hex_and_uses_real_imageinfo_fields(self) -> None:
+        view = ProgramView()
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                elf = root / "application.elf"
+                elf.write_bytes(b"elf")
+                with mock.patch("b300_gui.views.program_view.inspect_image") as inspect:
+                    view.set_file_path(elf)
+                inspect.assert_not_called()
+                self.assertFalse(view.btn_flash_app.isEnabled())
+                self.assertIn("Intel HEX", view.app_meta_label.text())
+
+                image_path = root / "application.hex"
+                image_path.write_text(":00000001FF\n", encoding="ascii")
+                image = ImageInfo(
+                    path=image_path,
+                    sha256="A" * 64,
+                    start_address=0x08010000,
+                    end_address=0x08010FFF,
+                    size=4096,
+                    data_record_count=10,
+                    reset_vector=0x08010101,
+                    flash_span_size=4096,
+                    flash_crc32=0x12345678,
+                )
+                with mock.patch("b300_gui.views.program_view.inspect_image", return_value=image):
+                    view.set_file_path(image_path)
+                self.assertTrue(view.btn_flash_app.isEnabled())
+                self.assertIn("4096 B", view.app_meta_label.text())
+                self.assertIn("0x12345678", view.app_meta_label.text())
+                self.assertIn("0x08010101", view.app_meta_label.text())
+        finally:
+            view.deleteLater()
+            self.app.processEvents()
+
+    def test_program_remote_programming_is_visible_but_fail_closed(self) -> None:
         window = self._make_window()
         try:
             view = window.program_view
@@ -94,9 +133,12 @@ class V018SimplifiedUiTests(unittest.TestCase):
             self.assertTrue(view.local_panel.isHidden())
             self.assertFalse(view.remote_panel.isHidden())
             self.assertFalse(view.btn_remote_flash.isHidden())
+            self.assertFalse(view.btn_remote_flash.isEnabled())
+            self.assertIn("CHƯA BẬT", view.btn_remote_flash.text())
             self.assertEqual(len(view.pipeline_labels), 5)
             self.assertIn("Upload", view.pipeline_labels[0].text())
             self.assertIn("Verify", view.pipeline_labels[4].text())
+            self.assertFalse(view.btn_remote_bootloader.isEnabled())
         finally:
             self._close(window)
 
@@ -111,7 +153,6 @@ class V018SimplifiedUiTests(unittest.TestCase):
             self.assertTrue(view.btn_mode_local.isChecked())
             self.assertEqual(view.btn_open_local_vscode.text(), "🚀 OPEN DEBUG IN VS CODE")
             self.assertTrue(view.btn_open_local_vscode.isEnabled())
-            # The Qt view must not own backend processes/sessions.
             self.assertFalse(hasattr(view, "debug_service"))
             self.assertFalse(hasattr(view, "remote_session"))
         finally:
@@ -144,16 +185,29 @@ class V018SimplifiedUiTests(unittest.TestCase):
         finally:
             self._close(window)
 
-    def test_live_monitor_page_guarantees_zero_halt_and_stable_ownership(self) -> None:
+    def test_live_monitor_reuses_the_proven_wired_backend_panel(self) -> None:
         window = self._make_window()
         try:
-            view = window.monitor_view
-            self.assertIs(view.live_panel.parent(), view)
+            self.assertIs(window.monitor_view.live_panel, window.debug_tab.live_panel)
+            self.assertIs(window.monitor_view.live_panel.parent(), window.monitor_view)
             window.show_page("monitor")
             self.assertFalse(window.busy)
             self.assertIsNone(window._cancellable_worker)
+            self.assertFalse(window.debug_tab._sampling_active)
         finally:
             self._close(window)
+
+    def test_device_defaults_are_not_optimistically_healthy(self) -> None:
+        view = DeviceView()
+        try:
+            self.assertEqual(view.val_dev_id.text(), "Chưa kiểm tra")
+            self.assertEqual(view.val_flash_size.text(), "Chưa kiểm tra")
+            self.assertEqual(view.val_voltage.text(), "Chưa kiểm tra")
+            self.assertEqual(view.val_wrp.text(), "Chưa kiểm tra")
+            self.assertEqual(view.val_rdp.text(), "Chưa kiểm tra")
+        finally:
+            view.deleteLater()
+            self.app.processEvents()
 
     def test_target_info_syncs_across_views(self) -> None:
         window = self._make_window()
@@ -173,6 +227,7 @@ class V018SimplifiedUiTests(unittest.TestCase):
             self.assertIn("512KB", window.debug_vscode_view.local_target_status.text())
             self.assertEqual(window.device_view.val_flash_size.text(), "512 KB")
             self.assertEqual(window.device_view.val_dev_id.text(), "0x101F6413")
+            self.assertIn("PROTECTED", window.device_view.val_wrp.text())
         finally:
             self._close(window)
 
