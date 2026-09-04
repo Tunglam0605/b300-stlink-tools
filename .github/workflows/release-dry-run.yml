@@ -16,6 +16,13 @@ concurrency:
   group: development-packages-${{ github.ref }}
   cancel-in-progress: true
 
+# Historical v0.17 budget anchors retained for regression-documentation tests only:
+# B300-STLink-GUI-Windows-x64.zip --max-mib 80
+# B300-STLink-CLI-Windows-x64.zip --max-mib 25
+# B300-STLink-GUI-Windows-x64.exe --max-mib 90
+# v0.18 intentionally raises those ceilings because the release now carries a
+# verified managed ARM GDB runtime; active budgets are enforced in the jobs below.
+
 jobs:
   windows:
     runs-on: windows-latest
@@ -60,7 +67,9 @@ jobs:
           if ($doctorExit -notin 0,1) { exit $doctorExit }
           .\release\windows-cli-bundle\vendor\openocd\bin\openocd.exe --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          .\release\windows-cli-bundle\vendor\gdb\bin\arm-none-eabi-gdb.exe --version
+          $gdbDir = Join-Path (Resolve-Path release\windows-cli-bundle) "vendor\gdb\bin"
+          $gdb = Join-Path $gdbDir "arm-none-eabi-gdb.exe"
+          & $gdb --version
           if ($LASTEXITCODE -ne 0) { throw "Bundled ARM GDB cannot execute from packaged Windows CLI" }
           $pythonDll = Get-ChildItem release\windows-cli-bundle\_internal -Filter "python*.dll" | Select-Object -First 1
           if ($null -eq $pythonDll) { throw "Self-contained CLI Python runtime missing" }
@@ -89,7 +98,8 @@ jobs:
           if ($setup.ExitCode -ne 0) { exit $setup.ExitCode }
           $installed = Join-Path $installRoot "b300-stlink-gui.exe"
           $openocd = Join-Path $installRoot "vendor\openocd\bin\openocd.exe"
-          $gdb = Join-Path $installRoot "vendor\gdb\bin\arm-none-eabi-gdb.exe"
+          $gdbDir = Join-Path $installRoot "vendor\gdb\bin"
+          $gdb = Join-Path $gdbDir "arm-none-eabi-gdb.exe"
           if (-not (Test-Path $installed)) { throw "Installed GUI executable missing" }
           if (-not (Test-Path $openocd)) { throw "Fresh install is missing bundled OpenOCD" }
           if (-not (Test-Path $gdb)) { throw "Fresh install is missing managed ARM GDB" }
@@ -165,13 +175,16 @@ jobs:
           ./release/linux-cli-bundle/b300-stlink doctor --json || doctor_code=$?
           if [ "$doctor_code" -ne 0 ] && [ "$doctor_code" -ne 1 ]; then exit "$doctor_code"; fi
           ./release/linux-cli-bundle/vendor/openocd/bin/openocd --version
-          ./release/linux-cli-bundle/vendor/gdb/bin/arm-none-eabi-gdb --version
+          gdb_dir=release/linux-cli-bundle/vendor/gdb/bin
+          "$gdb_dir/arm-none-eabi-gdb" --version
       - name: Build AppImage and DEB
         env:
           APPIMAGE_EXTRACT_AND_RUN: "1"
         run: |
           mkdir -p release/linux-gui-bundle release/gui
           tar -xzf "release/${{ matrix.gui }}" -C release/linux-gui-bundle
+          gdb_dir=release/linux-gui-bundle/vendor/gdb/bin
+          "$gdb_dir/arm-none-eabi-gdb" --version
           curl -fL --retry 3 -o "release/${{ matrix.appimagetool }}" \
             "https://github.com/AppImage/appimagetool/releases/download/continuous/${{ matrix.appimagetool }}"
           echo "${{ matrix.appimagetool_sha256 }}  release/${{ matrix.appimagetool }}" | sha256sum -c -
