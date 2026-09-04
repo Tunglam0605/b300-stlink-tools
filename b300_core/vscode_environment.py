@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
+from platform import system
 from typing import Callable, Optional
 
 from .gdb_runtime import resolve_gdb
@@ -28,6 +30,18 @@ class VsCodeEnvironmentStatus:
 RunFactory = Callable[..., object]
 
 
+def _extension_list_launcher(vscode_path: str,
+                             platform_name: Optional[str]) -> str:
+    """Use VS Code's CLI shim when Code.exe cannot emit CLI output."""
+    selected_platform = (platform_name or system()).lower()
+    selected = Path(vscode_path)
+    if selected_platform in {"windows", "win32", "nt"} and selected.name.lower() == "code.exe":
+        command_shim = selected.parent / "bin" / "code.cmd"
+        if command_shim.is_file():
+            return str(command_shim)
+    return vscode_path
+
+
 def inspect_vscode_environment(*, vscode: Optional[str] = None,
                                gdb: Optional[str] = None,
                                run_factory: RunFactory = subprocess.run,
@@ -48,8 +62,9 @@ def inspect_vscode_environment(*, vscode: Optional[str] = None,
         )
 
     try:
+        extension_launcher = _extension_list_launcher(vscode_path, platform_name)
         result = run_factory(
-            (vscode_path, "--list-extensions"),
+            (extension_launcher, "--list-extensions"),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,

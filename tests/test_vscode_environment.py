@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -8,6 +10,43 @@ from b300_core.vscode_environment import inspect_vscode_environment
 
 
 class VsCodeEnvironmentTests(unittest.TestCase):
+    def test_windows_uses_code_cli_launcher_to_list_extensions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            code_exe = root / "Code.exe"
+            code_exe.write_bytes(b"")
+            code_cmd = root / "bin" / "code.cmd"
+            code_cmd.parent.mkdir()
+            code_cmd.write_text("@echo off\n", encoding="ascii")
+            invocations = []
+
+            def run_factory(args, **kwargs):
+                invocations.append((args, kwargs))
+                output = (
+                    "marus25.cortex-debug\n"
+                    if Path(args[0]).name.lower() == "code.cmd"
+                    else ""
+                )
+                return SimpleNamespace(returncode=0, stdout=output)
+
+            with patch(
+                "b300_core.vscode_environment.resolve_vscode",
+                return_value=str(code_exe),
+            ), patch(
+                "b300_core.vscode_environment.resolve_gdb",
+                return_value="C:/B300/vendor/gdb/bin/arm-none-eabi-gdb.exe",
+            ):
+                status = inspect_vscode_environment(
+                    run_factory=run_factory,
+                    platform_name="windows",
+                )
+
+        self.assertTrue(status.cortex_debug_ready)
+        self.assertTrue(status.ready)
+        self.assertEqual(status.vscode_path, str(code_exe))
+        self.assertEqual(Path(invocations[0][0][0]), code_cmd)
+        self.assertIs(invocations[0][1]["shell"], False)
+
     def test_ready_when_vscode_cortex_debug_and_gdb_are_available(self) -> None:
         def run_factory(*_args, **_kwargs):
             return SimpleNamespace(
