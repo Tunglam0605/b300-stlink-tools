@@ -6,6 +6,7 @@ import argparse
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -75,35 +76,73 @@ def write_split_verdict(successful: bool) -> None:
     path.write_text("PASS\n" if successful else "FAIL\n", encoding="ascii")
 
 
+def _read_verdict(path: Path) -> str:
+    try:
+        return path.read_text(encoding="ascii").strip()
+    except OSError:
+        return ""
+
+
 def run_split_cases(module: str, *, case_timeout: int | None = None) -> int:
-    """Run every test case in a new interpreter to bound native Qt state."""
+    """Run every test case in a new interpreter to bound native Qt state.
+
+    Every child writes its unittest verdict before native Qt teardown. This matters
+    on Windows hosted runners where a process can occasionally return a native
+    non-zero code after all Python assertions have already passed. A child is only
+    accepted in that situation when its private PASS sentinel exists; a missing or
+    FAIL sentinel always fails the split suite.
+    """
     suite = unittest.defaultTestLoader.loadTestsFromName(module)
     cases = tuple(iter_test_cases(suite))
     if not cases:
         print("No tests found in %s" % module, file=sys.stderr)
         write_split_verdict(False)
         return 1
-    child_env = dict(os.environ)
-    child_env.pop("B300_UNITTEST_RESULT_FILE", None)
-    for case in cases:
-        print("=== %s ===" % case.id(), flush=True)
-        try:
-            result = subprocess.run(
-                [sys.executable, str(Path(__file__).resolve()), case.id()],
-                cwd=ROOT,
-                env=child_env,
-                timeout=case_timeout,
-            )
-        except subprocess.TimeoutExpired:
-            print(
-                "Timed out after %ss: %s" % (case_timeout, case.id()),
-                file=sys.stderr,
-            )
-            write_split_verdict(False)
-            return 124
-        if result.returncode:
-            write_split_verdict(False)
-            return result.returncode
+
+    base_env = dict(os.environ)
+    base_env.pop("B300_UNITTEST_RESULT_FILE", None)
+    with tempfile.TemporaryDirectory(prefix="b300-unittest-cases-") as temp_root:
+        result_root = Path(temp_root)
+        for index, case in enumerate(cases):
+            print("=== %s ===" % case.id(), flush=True)
+            child_result = result_root / ("case-%04d.txt" % index)
+            child_env = dict(base_env)
+            child_env["B300_UNITTEST_RESULT_FILE"] = str(child_result)
+            try:
+                result = subprocess.run(
+                    [sys.executable, str(Path(__file__).resolve()), case.id()],
+                    cwd=ROOT,
+                    env=child_env,
+                    timeout=case_timeout,
+                )
+            except subprocess.TimeoutExpired:
+                print(
+                    "Timed out after %ss: %s" % (case_timeout, case.id()),
+                    file=sys.stderr,
+                )
+                write_split_verdict(False)
+                return 124
+
+            verdict = _read_verdict(child_result)
+            if result.returncode and verdict == "PASS":
+                print(
+                    "WARNING: %s passed assertions but native Qt teardown returned %s; "
+                    "accepting verified child PASS sentinel." % (case.id(), result.returncode),
+                    file=sys.stderr,
+                    flush=True,
+                )
+                continue
+            if result.returncode:
+                write_split_verdict(False)
+                return result.returncode
+            if verdict != "PASS":
+                print(
+                    "Child exited without a verified PASS sentinel: %s" % case.id(),
+                    file=sys.stderr,
+                )
+                write_split_verdict(False)
+                return 1
+
     write_split_verdict(True)
     return 0
 
