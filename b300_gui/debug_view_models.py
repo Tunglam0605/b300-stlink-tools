@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from PySide6.QtCore import (
     QAbstractItemModel,
@@ -102,6 +102,9 @@ class VariablesTreeModel(QAbstractItemModel):
 
     Strictly enforces: Value editing is ONLY enabled when MCU is HALTED
     and the variable node is marked editable.
+
+    Expanded struct/array children are cached across halted-snapshot refreshes so
+    a Keil-style Watch tree does not collapse every time the debugger refreshes.
     """
 
     variable_value_changed = Signal(str, str, str)  # id, name, new_value
@@ -126,10 +129,36 @@ class VariablesTreeModel(QAbstractItemModel):
                     [Qt.ItemDataRole.DisplayRole],
                 )
 
+    def _collect_nodes(self) -> Dict[str, DebugVariableNode]:
+        found: Dict[str, DebugVariableNode] = {}
+
+        def visit(node: DebugVariableNode) -> None:
+            found[node.id] = node
+            for child in node.children:
+                visit(child)
+
+        for root in self._root_nodes:
+            visit(root)
+        return found
+
+    def _restore_cached_children(
+        self, node: DebugVariableNode, cached: Dict[str, DebugVariableNode]
+    ) -> None:
+        previous = cached.get(node.id)
+        if previous is not None and previous.children_loaded:
+            node.children = list(previous.children)
+            node.children_loaded = True
+            node.has_children = bool(node.children) or node.has_children
+        for child in node.children:
+            child.parent = node
+            self._restore_cached_children(child, cached)
+
     def set_root_nodes(self, nodes: List[DebugVariableNode]) -> None:
+        cached = self._collect_nodes()
         self.beginResetModel()
         self._root_nodes = list(nodes)
         for node in self._root_nodes:
+            self._restore_cached_children(node, cached)
             self._bind_parents(node)
         self.endResetModel()
 
@@ -138,20 +167,35 @@ class VariablesTreeModel(QAbstractItemModel):
         self.set_root_nodes(nodes)
 
     def insert_children(self, parent_id: str, children: Sequence[DebugVariableNode]) -> bool:
-        """Insert lazily-loaded children under node matching parent_id."""
-        target_node, _ = self._find_node_by_id(parent_id)
-        if target_node is None:
+        """Insert lazily-loaded children without resetting/collapsing the whole tree."""
+        target_node, parent_index = self._find_node_by_id(parent_id)
+        if target_node is None or not parent_index.isValid():
             return False
 
-        self.beginResetModel()
-        target_node.children = list(children)
+        old_count = len(target_node.children)
+        if old_count:
+            self.beginRemoveRows(parent_index, 0, old_count - 1)
+            target_node.children = []
+            self.endRemoveRows()
+
+        incoming = list(children)
+        if incoming:
+            self.beginInsertRows(parent_index, 0, len(incoming) - 1)
+            target_node.children = incoming
+            for child in target_node.children:
+                child.parent = target_node
+                self._bind_parents(child)
+            self.endInsertRows()
+
         target_node.children_loaded = True
-        target_node.has_children = len(children) > 0
-        for child in target_node.children:
-            child.parent = target_node
-            self._bind_parents(child)
-        self.endResetModel()
+        target_node.has_children = bool(incoming)
+        self.dataChanged.emit(parent_index, parent_index, [Qt.ItemDataRole.DisplayRole])
         return True
+
+    def index_for_id(self, node_id: str) -> QModelIndex:
+        """Return the Name-column index for a variable-object id."""
+        _node, index = self._find_node_by_id(node_id)
+        return index
 
     def _find_node_by_id(self, node_id: str) -> tuple[Optional[DebugVariableNode], QModelIndex]:
         for row, root in enumerate(self._root_nodes):
@@ -257,8 +301,6 @@ class VariablesTreeModel(QAbstractItemModel):
             return Qt.ItemFlag.NoItemFlags
         flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
         node = index.internalPointer()
-        # Edit-in-place is ONLY allowed for Value column (1) when MCU is HALTED,
-        # interactive debug is active, and the variable itself is marked editable.
         if (
             index.column() == 1
             and isinstance(node, DebugVariableNode)
