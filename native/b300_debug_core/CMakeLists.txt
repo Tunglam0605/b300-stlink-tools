@@ -9,6 +9,7 @@ add_library(b300_debug_core STATIC
     src/sample_buffer.cpp
     src/event_buffer.cpp
     src/trace_decoder.cpp
+    src/trace_pipeline.cpp
 )
 
 target_include_directories(b300_debug_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -29,6 +30,10 @@ if(B300_NATIVE_BUILD_TESTS)
     add_executable(b300_trace_decoder_tests tests/test_trace_decoder.cpp)
     target_link_libraries(b300_trace_decoder_tests PRIVATE b300_debug_core)
     add_test(NAME b300_trace_decoder_tests COMMAND b300_trace_decoder_tests)
+
+    add_executable(b300_trace_pipeline_tests tests/test_trace_pipeline.cpp)
+    target_link_libraries(b300_trace_pipeline_tests PRIVATE b300_debug_core)
+    add_test(NAME b300_trace_pipeline_tests COMMAND b300_trace_pipeline_tests)
 
     add_executable(b300_event_buffer_benchmark benchmarks/benchmark_event_buffer.cpp)
     target_link_libraries(b300_event_buffer_benchmark PRIVATE b300_debug_core)
