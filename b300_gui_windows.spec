@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
 import tempfile
 from pathlib import Path
 
@@ -13,10 +14,18 @@ build_commit_file = Path(tempfile.mkdtemp(prefix="b300-stlink-build-")) / "BUILD
 build_commit_file.parent.mkdir(parents=True, exist_ok=True)
 build_commit_file.write_text(build_commit + "\n", encoding="ascii")
 
+native_extension_text = os.environ.get("B300_NATIVE_EXTENSION", "").strip()
+native_binaries = []
+if native_extension_text:
+    native_extension = Path(native_extension_text).expanduser().resolve()
+    if not native_extension.is_file():
+        raise SystemExit(f"B300_NATIVE_EXTENSION does not exist: {native_extension}")
+    native_binaries.append((str(native_extension), "."))
+
 a = Analysis(
     [str(project_root / "b300_gui_entry.py")],
     pathex=[str(project_root)],
-    binaries=[],
+    binaries=native_binaries,
     datas=[
         (str(project_root / "branding" / "b300-stlink-icon.png"), "branding"),
         (str(project_root / "branding" / "b300-stlink-wordmark.png"), "branding"),
