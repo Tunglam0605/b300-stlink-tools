@@ -24,7 +24,7 @@ class V0152DebugLifecycleTests(unittest.TestCase):
         )
 
     def test_lifecycle_regression_remains_enabled_in_current_release(self) -> None:
-        self.assertEqual(__version__, "0.16.0")
+        self.assertEqual(__version__, "0.17.0")
 
     def test_interactive_workstation_never_steals_realtime_panel(self) -> None:
         tab = self._make_tab()
