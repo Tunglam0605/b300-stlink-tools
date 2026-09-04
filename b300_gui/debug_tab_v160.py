@@ -18,7 +18,6 @@ from .debug_intelligence_tabs import (
     TargetSummaryPane,
 )
 from .debug_tab_v152 import DebugTabV152
-from .workers import WorkerFailure
 
 
 class DebugTabV160(DebugTabV152):
@@ -64,10 +63,19 @@ class DebugTabV160(DebugTabV152):
     def _v160_symbol_file(self) -> Path:
         text = self.symbol_path.text().strip()
         if not text:
-            raise RuntimeError("FreeRTOS/Fault source mapping cần AXF/ELF đã xác minh.")
+            raise RuntimeError("FreeRTOS/source mapping cần AXF/ELF đã xác minh.")
         path = Path(text).expanduser().resolve()
         if not path.is_file() or path.suffix.lower() not in {".axf", ".elf"}:
             raise RuntimeError("AXF/ELF hiện tại không hợp lệ.")
+        return path
+
+    def _v160_optional_symbol_file(self):
+        text = self.symbol_path.text().strip()
+        if not text:
+            return None
+        path = Path(text).expanduser().resolve()
+        if not path.is_file() or path.suffix.lower() not in {".axf", ".elf"}:
+            return None
         return path
 
     def _v160_require_dwarf(self) -> DwarfTypeService:
@@ -154,17 +162,17 @@ class DebugTabV160(DebugTabV152):
     def _v160_analyze_fault(self) -> None:
         try:
             facade = self._v160_require_facade()
-            symbol_file = self._v160_symbol_file()
         except Exception as error:
             self.fault_pane.set_error(str(error))
             return
+        symbol_file = self._v160_optional_symbol_file()
 
         def operation(_log, _phase, _cancel):
             analysis = facade.faults.capture()
             region = facade.faults.classify_fault_address(analysis)
             source = None
             dwarf = None
-            if analysis.exception_frame is not None:
+            if analysis.exception_frame is not None and symbol_file is not None:
                 try:
                     dwarf = DwarfTypeService(symbol_file)
                     source = dwarf.resolve_address(analysis.exception_frame.pc)
@@ -174,7 +182,7 @@ class DebugTabV160(DebugTabV152):
 
         def completed(result) -> None:
             analysis, region, source, dwarf = result
-            if dwarf is not None:
+            if dwarf is not None and symbol_file is not None:
                 self._v160_dwarf = dwarf
                 self._v160_dwarf_path = symbol_file
             self.fault_pane.set_analysis(analysis, region=region, source=source)
