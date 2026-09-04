@@ -11,7 +11,7 @@ namespace py = pybind11;
 
 namespace {
 
-py::list decode_fixed_width(
+py::dict decode_fixed_width(
     py::bytes payload,
     std::uint16_t channel,
     std::uint64_t timestamp_ns,
@@ -41,7 +41,7 @@ py::list decode_fixed_width(
     py::dict result;
     result["consumed"] = consumed;
     result["events"] = std::move(out);
-    return py::list(py::make_tuple(std::move(result)));
+    return result;
 }
 
 } // namespace
