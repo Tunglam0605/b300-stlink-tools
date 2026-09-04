@@ -1,22 +1,12 @@
-"""Settings & Workstation Environment View for B300 (v0.18).
-
-Consolidates machine setup, theme switching, updater checks, and diagnostic support.
-"""
-
+"""Settings / workstation environment view for B300 v0.18."""
 from __future__ import annotations
 
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QFrame,
-    QGridLayout,
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
-    QScrollArea,
-    QVBoxLayout,
-    QWidget,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea,
+    QVBoxLayout, QWidget,
 )
 
 from b300_core import __version__ as CORE_VERSION
@@ -24,8 +14,6 @@ from b300_version import __version__
 
 
 class SettingsView(QWidget):
-    """Clean configuration & environment preparation hub."""
-
     machine_setup_requested = Signal()
     toggle_theme_requested = Signal()
     check_updates_requested = Signal()
@@ -36,161 +24,131 @@ class SettingsView(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("settingsViewContainer")
-
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-
-        container = QWidget()
-        container.setObjectName("settingsContent")
-        self.layout = QVBoxLayout(container)
+        content = QWidget()
+        self.layout = QVBoxLayout(content)
         self.layout.setContentsMargins(16, 12, 16, 14)
         self.layout.setSpacing(12)
-
         self._build_ui()
-        scroll.setWidget(container)
-
+        scroll.setWidget(content)
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.addWidget(scroll)
 
     def _build_ui(self) -> None:
-        # Header
         header = QFrame()
         header.setObjectName("headerRibbon")
-        h_layout = QVBoxLayout(header)
-        h_layout.setContentsMargins(12, 8, 12, 8)
-        h_layout.setSpacing(3)
-
-        title = QLabel("SETTINGS · THIẾT LẬP & MÔI TRƯỜNG MÁY")
-        title.setStyleSheet("font-size: 14px; font-weight: 800; color: #F8FAFC; letter-spacing: 0.6px;")
-        h_layout.addWidget(title)
-
-        desc = QLabel("Cài đặt môi trường máy tính làm việc: OpenOCD, ST-Link Driver, giao diện và cập nhật phần mềm.")
-        desc.setStyleSheet("font-size: 11px; color: #94A3B8;")
-        h_layout.addWidget(desc)
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(12, 8, 12, 8)
+        title = QLabel("SETTINGS · WORKSTATION & B300 RUNTIME")
+        title.setObjectName("sectionTitle")
+        header_layout.addWidget(title)
+        desc = QLabel(
+            "B300 tự quản lý OpenOCD và ARM GDB runtime; VS Code/Cortex-Debug chỉ là giao diện interactive debug bên ngoài."
+        )
+        desc.setWordWrap(True)
+        desc.setObjectName("pageSubtitle")
+        header_layout.addWidget(desc)
         self.layout.addWidget(header)
 
-        # 1. Machine Setup Card
-        setup_card = QFrame()
-        setup_card.setObjectName("cardSurface")
-        s_layout = QVBoxLayout(setup_card)
-        s_layout.setContentsMargins(14, 12, 14, 12)
-        s_layout.setSpacing(8)
-
-        s_title = QLabel("1. MÔI TRƯỜNG & DRIVER MÁY TÍNH")
-        s_title.setObjectName("eyebrowLabel")
-        s_layout.addWidget(s_title)
-
-        s_desc = QLabel(
-            "Tự động phát hiện và cài đặt các thành phần còn thiếu: ST-Link USB Driver (WinUSB), "
-            "gói runtime OpenOCD 0.12.0-7 offline và cấu hình SSH/udev."
+        setup = QFrame()
+        setup.setObjectName("cardSurface")
+        setup_layout = QVBoxLayout(setup)
+        setup_layout.setContentsMargins(14, 12, 14, 12)
+        setup_layout.addWidget(self._eyebrow("1. THIẾT LẬP MÁY"))
+        setup_desc = QLabel(
+            "Setup Wizard kiểm tra/cài các prerequisite do B300 hỗ trợ theo hệ điều hành, ví dụ ST-Link driver trên Windows, "
+            "udev trên Linux và SSH khi dùng Gateway/Client. OpenOCD được bundle; ARM GDB được B300 managed trong gói v0.18."
         )
-        s_desc.setStyleSheet("font-size: 11px; color: #94A3B8;")
-        s_desc.setWordWrap(True)
-        s_layout.addWidget(s_desc)
-
-        s_btn_row = QHBoxLayout()
-        self.btn_run_setup = QPushButton("⚙ CHẠY THUẬT TOÁN THIẾT LẬP MÁY (SETUP WIZARD)")
+        setup_desc.setWordWrap(True)
+        setup_layout.addWidget(setup_desc)
+        self.btn_run_setup = QPushButton("⚙ MỞ SETUP WIZARD")
         self.btn_run_setup.setObjectName("primaryActionButton")
-        self.btn_run_setup.setStyleSheet(
-            "QPushButton { background: #0284C7; color: white; font-weight: 800; "
-            "font-size: 12px; padding: 8px 18px; border-radius: 4px; }"
-            "QPushButton:hover { background: #0369A1; }"
-        )
         self.btn_run_setup.clicked.connect(self.machine_setup_requested.emit)
-        s_btn_row.addWidget(self.btn_run_setup)
-        s_btn_row.addStretch(1)
-        s_layout.addLayout(s_btn_row)
+        setup_layout.addWidget(self.btn_run_setup)
+        self.layout.addWidget(setup)
 
-        self.layout.addWidget(setup_card)
+        debug = QFrame()
+        debug.setObjectName("cardSurface")
+        debug_layout = QVBoxLayout(debug)
+        debug_layout.setContentsMargins(14, 12, 14, 12)
+        debug_layout.addWidget(self._eyebrow("2. DEBUG TOOLCHAIN"))
+        grid = QGridLayout()
+        grid.addWidget(QLabel("OpenOCD"), 0, 0)
+        self.lbl_openocd = QLabel("B300 managed · 0.12.0-7")
+        grid.addWidget(self.lbl_openocd, 0, 1)
+        grid.addWidget(QLabel("ARM GDB"), 0, 2)
+        self.lbl_gdb = QLabel("B300 managed · GNU Arm GDB 15.2.1-1.1")
+        grid.addWidget(self.lbl_gdb, 0, 3)
+        grid.addWidget(QLabel("VS Code"), 1, 0)
+        self.lbl_vscode = QLabel("Cài bên ngoài · B300 tự phát hiện")
+        grid.addWidget(self.lbl_vscode, 1, 1)
+        grid.addWidget(QLabel("Cortex-Debug"), 1, 2)
+        self.lbl_cortex = QLabel("marus25.cortex-debug · required cho VS Code debug")
+        grid.addWidget(self.lbl_cortex, 1, 3)
+        debug_layout.addLayout(grid)
+        note = QLabel(
+            "C/C++ extension của VS Code được khuyến nghị cho IntelliSense/code navigation nhưng không phải thành phần của debug transport. "
+            "B300 không yêu cầu người dùng tự cài OpenOCD hay thêm arm-none-eabi-gdb vào PATH."
+        )
+        note.setWordWrap(True)
+        debug_layout.addWidget(note)
+        self.layout.addWidget(debug)
 
-        # 2. Appearance & Preferences
-        pref_card = QFrame()
-        pref_card.setObjectName("cardSurface")
-        p_layout = QVBoxLayout(pref_card)
-        p_layout.setContentsMargins(14, 12, 14, 12)
-        p_layout.setSpacing(8)
-
-        p_title = QLabel("2. GIAO DIỆN & TÙY CHỌN")
-        p_title.setObjectName("eyebrowLabel")
-        p_layout.addWidget(p_title)
-
-        p_row = QHBoxLayout()
-        p_row.addWidget(QLabel("Chế độ giao diện (Dark / Light Theme):"))
-        self.btn_toggle_theme = QPushButton("🌓 Đổi giao diện Sáng / Tối (Ctrl+T)")
-        self.btn_toggle_theme.setObjectName("ghostButton")
+        preference = QFrame()
+        preference.setObjectName("cardSurface")
+        preference_layout = QVBoxLayout(preference)
+        preference_layout.setContentsMargins(14, 12, 14, 12)
+        preference_layout.addWidget(self._eyebrow("3. GIAO DIỆN"))
+        pref_row = QHBoxLayout()
+        pref_row.addWidget(QLabel("Theme"))
+        self.btn_toggle_theme = QPushButton("🌓 Sáng / Tối (Ctrl+T)")
         self.btn_toggle_theme.clicked.connect(self.toggle_theme_requested.emit)
-        p_row.addWidget(self.btn_toggle_theme)
-        p_row.addStretch(1)
-        p_layout.addLayout(p_row)
+        pref_row.addWidget(self.btn_toggle_theme)
+        pref_row.addStretch(1)
+        preference_layout.addLayout(pref_row)
+        self.layout.addWidget(preference)
 
-        self.layout.addWidget(pref_card)
-
-        # 3. Version & Updates
-        upd_card = QFrame()
-        upd_card.setObjectName("cardSurface")
-        u_layout = QVBoxLayout(upd_card)
-        u_layout.setContentsMargins(14, 12, 14, 12)
-        u_layout.setSpacing(8)
-
-        u_title = QLabel("3. PHIÊN BẢN & CẬP NHẬT")
-        u_title.setObjectName("eyebrowLabel")
-        u_layout.addWidget(u_title)
-
-        u_grid = QGridLayout()
-        u_grid.setHorizontalSpacing(14)
-        u_grid.setVerticalSpacing(4)
-
-        u_grid.addWidget(QLabel("Phiên bản GUI:"), 0, 0)
-        lbl_ver = QLabel(f"v{__version__} (Simplified UX)")
-        lbl_ver.setStyleSheet("font-weight: 700; color: #38BDF8;")
-        u_grid.addWidget(lbl_ver, 0, 1)
-
-        u_grid.addWidget(QLabel("Phiên bản Core:"), 0, 2)
-        lbl_core = QLabel(f"v{CORE_VERSION}")
-        lbl_core.setStyleSheet("font-weight: 700; color: #F8FAFC;")
-        u_grid.addWidget(lbl_core, 0, 3)
-
-        u_grid.addWidget(QLabel("OpenOCD Profile:"), 1, 0)
-        lbl_ocd = QLabel("0.12.0-7 (Strict Loopback)")
-        lbl_ocd.setStyleSheet("color: #94A3B8;")
-        u_grid.addWidget(lbl_ocd, 1, 1)
-
-        u_grid.addWidget(QLabel("Kênh cập nhật:"), 1, 2)
-        lbl_chan = QLabel("Official Signed Releases (Minisign)")
-        lbl_chan.setStyleSheet("color: #10B981;")
-        u_grid.addWidget(lbl_chan, 1, 3)
-
-        u_layout.addLayout(u_grid)
-
-        act_row = QHBoxLayout()
-        self.btn_check_updates = QPushButton("🔄 Kiểm tra cập nhật")
-        self.btn_check_updates.setObjectName("ghostButton")
+        version = QFrame()
+        version.setObjectName("cardSurface")
+        version_layout = QVBoxLayout(version)
+        version_layout.setContentsMargins(14, 12, 14, 12)
+        version_layout.addWidget(self._eyebrow("4. PHIÊN BẢN / HỖ TRỢ"))
+        version_grid = QGridLayout()
+        version_grid.addWidget(QLabel("GUI"), 0, 0)
+        self.lbl_gui_version = QLabel("v%s" % __version__)
+        version_grid.addWidget(self.lbl_gui_version, 0, 1)
+        version_grid.addWidget(QLabel("Core"), 0, 2)
+        self.lbl_core_version = QLabel("v%s" % CORE_VERSION)
+        version_grid.addWidget(self.lbl_core_version, 0, 3)
+        version_layout.addLayout(version_grid)
+        actions = QHBoxLayout()
+        self.btn_check_updates = QPushButton("↻ Kiểm tra cập nhật")
         self.btn_check_updates.clicked.connect(self.check_updates_requested.emit)
-        act_row.addWidget(self.btn_check_updates)
-
-        self.btn_release_notes = QPushButton("📋 Ghi chú phiên bản")
-        self.btn_release_notes.setObjectName("ghostButton")
+        self.btn_release_notes = QPushButton("📋 Release notes")
         self.btn_release_notes.clicked.connect(self.release_notes_requested.emit)
-        act_row.addWidget(self.btn_release_notes)
-
-        self.btn_export_support = QPushButton("📦 Xuất gói chẩn đoán hỗ trợ")
-        self.btn_export_support.setObjectName("ghostButton")
+        self.btn_export_support = QPushButton("📦 Support bundle")
         self.btn_export_support.clicked.connect(self.export_support_bundle_requested.emit)
-        act_row.addWidget(self.btn_export_support)
-
-        self.btn_about = QPushButton("ℹ️ Giới thiệu")
-        self.btn_about.setObjectName("ghostButton")
+        self.btn_about = QPushButton("ℹ Giới thiệu")
         self.btn_about.clicked.connect(self.about_requested.emit)
-        act_row.addWidget(self.btn_about)
-
-        act_row.addStretch(1)
-        u_layout.addLayout(act_row)
-
-        self.layout.addWidget(upd_card)
+        for button in (
+            self.btn_check_updates, self.btn_release_notes,
+            self.btn_export_support, self.btn_about,
+        ):
+            actions.addWidget(button)
+        actions.addStretch(1)
+        version_layout.addLayout(actions)
+        self.layout.addWidget(version)
         self.layout.addStretch(1)
+
+    @staticmethod
+    def _eyebrow(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("eyebrowLabel")
+        return label
 
 
 __all__ = ["SettingsView"]
