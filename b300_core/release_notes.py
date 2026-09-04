@@ -85,6 +85,25 @@ Safety
 - Peripheral/RTOS/Fault features are read-only and HALT-only where target RAM/register access is required.
 - Flash/OTA/Bootloader/metadata/Option Bytes policy, protected Sector 0-2 behavior, loopback-only GDB/TCL and zero-halt Live Monitor safety remain unchanged.
 """.strip(),
+    "0.17.0": """Dockable engineering Debug IDE
+
+- Production Interactive Debug now uses a Keil/STM-Studio-style dockable workbench with Source central, navigation on the left, Watch/Registers/Peripherals on the right and engineering tools below.
+- Watch 1 presents Name / Value / Type and recursively expands GDB/MI variable objects for structs, unions and arrays with lazy child loading.
+- Expanded variable paths are preserved across child loads and debugger refreshes where the same variable-object path remains available.
+- Target, SVD Peripherals, FreeRTOS and Fault inspection from v0.16 are mounted into the new workbench.
+
+Native C++17 data-plane
+
+- Adds bounded native sample/event buffers, trace contracts, decoder/pipeline foundations, throughput gates, pybind11 ABI v1 and the NativeDebugCoreAdapter with Python fallback.
+- Release packaging supports the architecture-matched native module and a frozen-executable native-core self-test.
+- Real SWO/ITM hardware transport is not claimed in v0.17.0 and remains isolated until its hardware gates are complete.
+
+Safety
+
+- Python remains the control/safety plane. Native code has no Flash/Erase/Option-Bytes or target-control ownership.
+- Zero-halt Live Monitor remains outside HALT-capable Interactive Debug.
+- Flash/OTA/Bootloader/metadata policy, protected Sector 0-2 behavior, HardwareSession ownership, target-state restoration and loopback-only GDB/TCL remain unchanged.
+""".strip(),
 }
 
 
