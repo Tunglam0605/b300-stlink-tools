@@ -6,6 +6,7 @@ import argparse
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -18,9 +19,6 @@ class HardExitTextResult(unittest.TextTestResult):
     """Report the module result, then exit before Qt/PySide native teardown."""
 
     def stopTestRun(self) -> None:
-        # Record the unittest verdict before any Qt/PySide finalization can crash
-        # the hosted process. CI may accept a non-zero native teardown exit only
-        # when this sentinel proves every unittest assertion already passed.
         successful = self.wasSuccessful()
         exit_code = 0 if successful else 1
         result_file = os.environ.get("B300_UNITTEST_RESULT_FILE", "").strip()
@@ -83,27 +81,53 @@ def run_split_cases(module: str, *, case_timeout: int | None = None) -> int:
         print("No tests found in %s" % module, file=sys.stderr)
         write_split_verdict(False)
         return 1
-    child_env = dict(os.environ)
-    child_env.pop("B300_UNITTEST_RESULT_FILE", None)
-    for case in cases:
-        print("=== %s ===" % case.id(), flush=True)
-        try:
-            result = subprocess.run(
-                [sys.executable, str(Path(__file__).resolve()), case.id()],
-                cwd=ROOT,
-                env=child_env,
-                timeout=case_timeout,
+
+    with tempfile.TemporaryDirectory(prefix="b300-unittest-cases-") as directory:
+        case_result_root = Path(directory)
+        for index, case in enumerate(cases):
+            print("=== %s ===" % case.id(), flush=True)
+            case_result_file = case_result_root / ("case-%04d.txt" % index)
+            child_env = dict(os.environ)
+            child_env["B300_UNITTEST_RESULT_FILE"] = str(case_result_file)
+            try:
+                result = subprocess.run(
+                    [sys.executable, str(Path(__file__).resolve()), case.id()],
+                    cwd=ROOT,
+                    env=child_env,
+                    timeout=case_timeout,
+                )
+            except subprocess.TimeoutExpired:
+                print(
+                    "Timed out after %ss: %s" % (case_timeout, case.id()),
+                    file=sys.stderr,
+                )
+                write_split_verdict(False)
+                return 124
+
+            verdict = (
+                case_result_file.read_text(encoding="ascii").strip()
+                if case_result_file.exists()
+                else ""
             )
-        except subprocess.TimeoutExpired:
-            print(
-                "Timed out after %ss: %s" % (case_timeout, case.id()),
-                file=sys.stderr,
-            )
-            write_split_verdict(False)
-            return 124
-        if result.returncode:
-            write_split_verdict(False)
-            return result.returncode
+            if result.returncode and verdict == "PASS":
+                print(
+                    "Accepted verified PASS for %s despite native teardown exit %s"
+                    % (case.id(), result.returncode),
+                    file=sys.stderr,
+                    flush=True,
+                )
+                continue
+            if result.returncode:
+                write_split_verdict(False)
+                return result.returncode
+            if verdict != "PASS":
+                print(
+                    "Child exited without a verified PASS sentinel: %s" % case.id(),
+                    file=sys.stderr,
+                )
+                write_split_verdict(False)
+                return 1
+
     write_split_verdict(True)
     return 0
 
@@ -133,7 +157,6 @@ def run_and_exit(argv=None) -> int:
         return run_split_cases(args.module, case_timeout=args.case_timeout)
 
     suite = unittest.defaultTestLoader.loadTestsFromName(args.module)
-    # Retain all nested test cases until HardExitTextResult.stopTestRun().
     pending = [suite]
     while pending:
         current = pending.pop()
