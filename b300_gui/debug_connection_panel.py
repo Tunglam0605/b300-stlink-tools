@@ -111,12 +111,12 @@ class DebugConnectionPanel(QFrame):
         gateway_actions_layout.setContentsMargins(0, 0, 0, 0)
         gateway_actions_layout.setSpacing(6)
 
-        self.remote_server_button = QPushButton("BẮT ĐẦU GATEWAY")
+        self.remote_server_button = QPushButton("Bật Gateway")
         self.remote_server_button.setObjectName("debugRemoteServerButton")
         self.remote_server_button.setToolTip("Khởi động OpenOCD loopback cho Client từ xa")
         gateway_actions_layout.addWidget(self.remote_server_button)
 
-        self.gateway_stop_button = QPushButton("DỪNG GATEWAY")
+        self.gateway_stop_button = QPushButton("Dừng Gateway")
         self.gateway_stop_button.setObjectName("debugGatewayStopButton")
         self.gateway_stop_button.setEnabled(False)
         gateway_actions_layout.addWidget(self.gateway_stop_button)
