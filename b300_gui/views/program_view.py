@@ -389,16 +389,7 @@ class ProgramView(QWidget):
         self.flash_application_requested.emit(self._selected_file, self.cb_dry_run.isChecked())
 
     def _on_flash_bootloader_clicked(self) -> None:
-        answer = QMessageBox.question(
-            self,
-            "Xác nhận Factory Bootloader Provisioning",
-            "Thao tác đặc quyền này ghi trusted Bootloader vào Sector 0–2.\n"
-            "Chỉ dùng cho bo mới hoặc bảo trì được ủy quyền. B300 không mass erase.\n\nTiếp tục?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if answer == QMessageBox.StandardButton.Yes:
-            self.flash_bootloader_requested.emit(True)
+        self.flash_bootloader_requested.emit(True)
 
 
 __all__ = ["ProgramView"]

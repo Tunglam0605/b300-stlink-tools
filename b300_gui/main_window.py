@@ -1401,6 +1401,7 @@ class MainWindow(QMainWindow):
             ),
             confirm_text="Tôi hiểu · Bắt đầu preflight",
             severity="danger",
+            required_text="PROVISION BOOTLOADER",
         ):
             return
 

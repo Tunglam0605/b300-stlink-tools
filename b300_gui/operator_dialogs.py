@@ -2,7 +2,7 @@
 from __future__ import annotations
 from typing import Optional
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QTextBrowser, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTextBrowser, QVBoxLayout, QWidget
 from b300_gui.theme import ThemeManager
 
 
@@ -49,7 +49,7 @@ class TechnicalDetailsDialog(QDialog):
 
 class SafetyActionDialog(QDialog):
     """Focused warning/confirmation dialog with optional hidden details."""
-    def __init__(self, title: str, heading: str, message: str, *, details: str = "", confirm_text: str = "Tiếp tục", cancel_text: str = "Hủy", severity: str = "warning", parent: Optional[QWidget] = None) -> None:
+    def __init__(self, title: str, heading: str, message: str, *, details: str = "", confirm_text: str = "Tiếp tục", cancel_text: str = "Hủy", severity: str = "warning", required_text: str = "", parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("safetyActionDialog")
         self.setWindowTitle(title)
@@ -98,6 +98,14 @@ class SafetyActionDialog(QDialog):
         self.details_view.setVisible(False)
         root.addWidget(self.details_view)
         self.details_button.clicked.connect(self._toggle_details)
+        self.confirm_input = QLineEdit()
+        self.confirm_input.setObjectName("safetyConfirmationInput")
+        self.confirm_input.setPlaceholderText(required_text)
+        self.confirm_input.setAccessibleName("Xác nhận thao tác nguy hiểm")
+        self.confirm_input.setVisible(bool(required_text))
+        if required_text:
+            root.addWidget(QLabel("Nhập chính xác: %s" % required_text))
+            root.addWidget(self.confirm_input)
         actions = QHBoxLayout()
         actions.addStretch(1)
         self.cancel_button = QPushButton(cancel_text)
@@ -110,6 +118,11 @@ class SafetyActionDialog(QDialog):
         else:
             self.confirm_button.setObjectName("primaryButton")
         self.confirm_button.setDefault(True)
+        if required_text:
+            self.confirm_button.setEnabled(False)
+            self.confirm_input.textChanged.connect(
+                lambda value: self.confirm_button.setEnabled(value == required_text)
+            )
         self.confirm_button.clicked.connect(self.accept)
         actions.addWidget(self.confirm_button)
         root.addLayout(actions)
@@ -121,6 +134,6 @@ class SafetyActionDialog(QDialog):
         self.adjustSize()
 
     @classmethod
-    def confirm(cls, parent: QWidget, title: str, heading: str, message: str, *, details: str = "", confirm_text: str = "Tiếp tục", severity: str = "warning") -> bool:
-        d = cls(title, heading, message, details=details, confirm_text=confirm_text, severity=severity, parent=parent)
+    def confirm(cls, parent: QWidget, title: str, heading: str, message: str, *, details: str = "", confirm_text: str = "Tiếp tục", severity: str = "warning", required_text: str = "") -> bool:
+        d = cls(title, heading, message, details=details, confirm_text=confirm_text, severity=severity, required_text=required_text, parent=parent)
         return d.exec() == QDialog.DialogCode.Accepted

@@ -94,6 +94,15 @@ class V018SimplifiedUiTests(unittest.TestCase):
         finally:
             self._close(window)
 
+    def test_bootloader_action_routes_to_the_guarded_factory_workflow(self) -> None:
+        window = self._make_window()
+        try:
+            with mock.patch.object(window, "start_factory_provision") as start:
+                window._on_v18_flash_bootloader(True)
+            start.assert_called_once_with()
+        finally:
+            self._close(window)
+
     def test_sidebar_navigation_switches_pages_without_hardware_side_effects(self) -> None:
         window = self._make_window()
         try:

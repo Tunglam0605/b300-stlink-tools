@@ -246,7 +246,7 @@ class MainWindowV18(MainWindow):
 
     def _on_v18_flash_bootloader(self, confirmed: bool) -> None:
         if confirmed:
-            self.confirm_factory_provision()
+            self.start_factory_provision()
 
     # ------------------------------------------------------------------
     # VS Code environment / bridge
