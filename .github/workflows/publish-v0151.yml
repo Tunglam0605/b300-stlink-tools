@@ -1,0 +1,277 @@
+name: Publish verified B300 v0.15.1
+
+on:
+  push:
+    branches:
+      - "publish/v0.15.1"
+
+permissions:
+  contents: read
+
+env:
+  VERSION: "0.15.1"
+  RELEASE_TAG: "v0.15.1"
+  RELEASE_COMMIT: "f5f5cf3e898cffb270bc7c6f54c738d19dac85c8"
+  QT_QPA_PLATFORM: offscreen
+
+jobs:
+  prepare:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.9"
+      - name: Validate exact verified source
+        run: |
+          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
+          python -m scripts.release.validate_version --check-tag "$RELEASE_TAG"
+          python -m scripts.release.changelog "$VERSION" --output release-notes.md
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-notes
+          path: release-notes.md
+          if-no-files-found: error
+
+  windows:
+    needs: prepare
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.11"
+      - name: Verify tagged commit
+        shell: pwsh
+        run: |
+          $sha = (git rev-parse HEAD).Trim()
+          if ($sha -ne $env:RELEASE_COMMIT) { throw "Unexpected release commit $sha" }
+      - name: Build native GUI and CLI bundles
+        shell: pwsh
+        run: python build_native_bundle.py --internal-distribution-approved
+      - name: Validate base bundles and executables
+        shell: pwsh
+        run: |
+          python scripts/release/check_size_budget.py release\B300-STLink-GUI-Windows-x64.zip --max-mib 80
+          python scripts/release/check_size_budget.py release\B300-STLink-CLI-Windows-x64.zip --max-mib 25
+          $p = Start-Process -FilePath .\release\b300-stlink-gui\b300-stlink-gui.exe -ArgumentList --smoke-test -Wait -PassThru -WindowStyle Hidden
+          if ($p.ExitCode -ne 0) { exit $p.ExitCode }
+          Expand-Archive release\B300-STLink-CLI-Windows-x64.zip release\windows-cli-bundle -Force
+          .\release\windows-cli-bundle\b300-stlink.exe --version --json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Set-Content -LiteralPath release\selftest.axf -Value "ELF" -NoNewline
+          .\release\windows-cli-bundle\b300-stlink.exe debug selftest --symbols release\selftest.axf --dry-run --json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\release\windows-cli-bundle\vendor\openocd\bin\openocd.exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build and smoke-test Windows installer
+        shell: pwsh
+        run: |
+          Expand-Archive release\B300-STLink-GUI-Windows-x64.zip release\windows-gui-bundle -Force
+          choco install innosetup --no-progress -y
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
+            "/DSourceRoot=$((Resolve-Path release\windows-gui-bundle).Path)" `
+            "/DOutputDir=$((Resolve-Path release).Path)" `
+            "/DAppVersion=$env:VERSION" packaging\windows\b300-stlink-gui.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/release/check_size_budget.py release\B300-STLink-GUI-Windows-x64.exe --max-mib 90
+          $installRoot = Join-Path $env:RUNNER_TEMP "b300-v0151"
+          $setup = Start-Process -FilePath (Resolve-Path release\B300-STLink-GUI-Windows-x64.exe) -ArgumentList /VERYSILENT,/SUPPRESSMSGBOXES,/NORESTART,/SP-,/NOICONS,"/DIR=$installRoot" -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { exit $setup.ExitCode }
+          $p = Start-Process -FilePath (Join-Path $installRoot "b300-stlink-gui.exe") -ArgumentList --smoke-test -Wait -PassThru -WindowStyle Hidden
+          if ($p.ExitCode -ne 0) { exit $p.ExitCode }
+          & (Join-Path $installRoot "vendor\openocd\bin\openocd.exe") --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-windows-x64
+          path: |
+            release/B300-STLink-GUI-Windows-x64.exe
+            release/B300-STLink-GUI-Windows-x64.zip
+            release/B300-STLink-CLI-Windows-x64.zip
+          if-no-files-found: error
+
+  linux-x64:
+    needs: prepare
+    runs-on: ubuntu-22.04
+    container: ubuntu:22.04
+    steps:
+      - name: Install build prerequisites
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl file git openssh-client python3 python3-pip xauth xvfb libdbus-1-3 libegl1 libgl1 libglib2.0-0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - name: Verify tagged commit
+        run: test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
+      - name: Build and validate native bundles
+        run: |
+          python3 build_native_bundle.py --internal-distribution-approved
+          python3 scripts/release/check_size_budget.py release/B300-STLink-CLI-Linux-x64.tar.gz --max-mib 25
+          ./release/b300-stlink-gui --smoke-test
+          mkdir -p release/linux-cli && tar -xzf release/B300-STLink-CLI-Linux-x64.tar.gz -C release/linux-cli
+          ./release/linux-cli/b300-stlink --version --json
+          printf ELF > release/selftest.axf
+          ./release/linux-cli/b300-stlink debug selftest --symbols release/selftest.axf --dry-run --json
+          ./release/linux-cli/vendor/openocd/bin/openocd --version
+          mkdir -p release/linux-gui && tar -xzf release/B300-STLink-GUI-Linux-x64.tar.gz -C release/linux-gui
+          env -u QT_QPA_PLATFORM xvfb-run -a ./release/linux-gui/b300-stlink-gui --smoke-test
+      - name: Build AppImage and DEB
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          curl -fL --retry 3 -o release/appimagetool-x86_64.AppImage https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          echo "A6D71E2B6CD66F8E8D16C37AD164658985E0CF5FCAA950C90A482890CB9D13E0  release/appimagetool-x86_64.AppImage" | sha256sum -c -
+          chmod +x release/appimagetool-x86_64.AppImage
+          python3 packaging/build_gui.py --bundle-dir release/linux-gui --output-dir release/gui --architecture x86_64 --version "$VERSION" --appimagetool release/appimagetool-x86_64.AppImage --build-deb
+          python3 scripts/release/check_size_budget.py release/gui/B300-STLink-GUI-Ubuntu-x64.AppImage --max-mib 220
+          python3 scripts/release/check_size_budget.py release/gui/b300-stlink-gui_amd64.deb --max-mib 180
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-linux-x64
+          path: |
+            release/gui/B300-STLink-GUI-Ubuntu-x64.AppImage
+            release/gui/b300-stlink-gui_amd64.deb
+            release/B300-STLink-CLI-Linux-x64.tar.gz
+          if-no-files-found: error
+
+  linux-arm64:
+    needs: prepare
+    runs-on: ubuntu-24.04-arm
+    container: ubuntu:22.04
+    steps:
+      - name: Install build prerequisites
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl file git openssh-client python3 python3-pip xauth xvfb libdbus-1-3 libegl1 libgl1 libglib2.0-0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - name: Verify tagged commit
+        run: test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
+      - name: Build and validate native bundles
+        run: |
+          python3 build_native_bundle.py --internal-distribution-approved
+          python3 scripts/release/check_size_budget.py release/B300-STLink-CLI-Linux-arm64.tar.gz --max-mib 25
+          ./release/b300-stlink-gui --smoke-test
+          mkdir -p release/linux-cli && tar -xzf release/B300-STLink-CLI-Linux-arm64.tar.gz -C release/linux-cli
+          ./release/linux-cli/b300-stlink --version --json
+          printf ELF > release/selftest.axf
+          ./release/linux-cli/b300-stlink debug selftest --symbols release/selftest.axf --dry-run --json
+          ./release/linux-cli/vendor/openocd/bin/openocd --version
+          mkdir -p release/linux-gui && tar -xzf release/B300-STLink-GUI-Linux-arm64.tar.gz -C release/linux-gui
+          env -u QT_QPA_PLATFORM xvfb-run -a ./release/linux-gui/b300-stlink-gui --smoke-test
+      - name: Build AppImage and DEB
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          curl -fL --retry 3 -o release/appimagetool-aarch64.AppImage https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-aarch64.AppImage
+          echo "1B00524BA8C6B678DC15EF88A5C25EC24DEF36CDFC7E3ABB32DDCD068E8007FE  release/appimagetool-aarch64.AppImage" | sha256sum -c -
+          chmod +x release/appimagetool-aarch64.AppImage
+          python3 packaging/build_gui.py --bundle-dir release/linux-gui --output-dir release/gui --architecture aarch64 --version "$VERSION" --appimagetool release/appimagetool-aarch64.AppImage --build-deb
+          python3 scripts/release/check_size_budget.py release/gui/B300-STLink-GUI-Ubuntu-arm64.AppImage --max-mib 220
+          python3 scripts/release/check_size_budget.py release/gui/b300-stlink-gui_arm64.deb --max-mib 180
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-linux-arm64
+          path: |
+            release/gui/B300-STLink-GUI-Ubuntu-arm64.AppImage
+            release/gui/b300-stlink-gui_arm64.deb
+            release/B300-STLink-CLI-Linux-arm64.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: [prepare, windows, linux-x64, linux-arm64]
+    runs-on: ubuntu-22.04
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.9"
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          name: release-windows-x64
+          path: release-assets
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          name: release-linux-x64
+          path: release-assets
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          name: release-linux-arm64
+          path: release-assets
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          name: release-notes
+          path: release-notes
+      - name: Generate signed updater metadata
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PUBLIC_KEY: ${{ secrets.MINISIGN_PUBLIC_KEY }}
+        run: |
+          find release-assets -mindepth 2 -type f -exec mv -t release-assets {} + || true
+          published_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          python -m scripts.release.build_metadata --asset-dir release-assets --version "$VERSION" --commit "$RELEASE_COMMIT" --published-at "$published_at" --base-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}" --release-page "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" --notes-file release-notes/release-notes.md
+          test -n "$MINISIGN_SECRET_KEY" && test -n "$MINISIGN_PUBLIC_KEY"
+          curl -fL --retry 3 -o "$RUNNER_TEMP/minisign.tar.gz" https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz
+          echo "9A599B48BA6EB7B1E80F12F36B94CECA7C00B7A5173C95C3EFC88D9822957E73  $RUNNER_TEMP/minisign.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/minisign.tar.gz" -C "$RUNNER_TEMP"
+          m="$RUNNER_TEMP/minisign-linux/x86_64/minisign"
+          chmod +x "$m"
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$RUNNER_TEMP/minisign.key"
+          chmod 600 "$RUNNER_TEMP/minisign.key"
+          for f in release-manifest.json latest.json latest-cli.json; do
+            "$m" -S -W -s "$RUNNER_TEMP/minisign.key" -m "release-assets/$f" -x "release-assets/$f.minisig"
+            "$m" -Vm "release-assets/$f" -x "release-assets/$f.minisig" -P "$MINISIGN_PUBLIC_KEY"
+          done
+      - name: Publish exact v0.15.1 assets
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
+        with:
+          tag_name: v0.15.1
+          name: B300 ST-Link Tools v0.15.1
+          body_path: release-notes/release-notes.md
+          draft: true
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          preserve_order: true
+          files: |
+            release-assets/B300-STLink-GUI-Windows-x64.exe
+            release-assets/B300-STLink-GUI-Windows-x64.zip
+            release-assets/B300-STLink-CLI-Windows-x64.zip
+            release-assets/B300-STLink-GUI-Ubuntu-x64.AppImage
+            release-assets/b300-stlink-gui_amd64.deb
+            release-assets/B300-STLink-CLI-Linux-x64.tar.gz
+            release-assets/B300-STLink-GUI-Ubuntu-arm64.AppImage
+            release-assets/b300-stlink-gui_arm64.deb
+            release-assets/B300-STLink-CLI-Linux-arm64.tar.gz
+            release-assets/SHA256SUMS.txt
+            release-assets/release-manifest.json
+            release-assets/release-manifest.json.minisig
+            release-assets/latest.json
+            release-assets/latest.json.minisig
+            release-assets/latest-cli.json
+            release-assets/latest-cli.json.minisig
+          token: ${{ github.token }}
+      - name: Publish Latest and verify updater
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MINISIGN_PUBLIC_KEY: ${{ secrets.MINISIGN_PUBLIC_KEY }}
+        run: |
+          test "$(gh release view "$RELEASE_TAG" --json assets --jq '.assets | length')" -eq 16
+          gh release edit "$RELEASE_TAG" --draft=false --latest
+          m="$RUNNER_TEMP/minisign-linux/x86_64/minisign"
+          python -m scripts.release.verify_published --version "$VERSION" --audience gui --manifest-url "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json" --signature-url "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json.minisig" --minisign "$m" --public-key "$MINISIGN_PUBLIC_KEY" --attempts 8 --delay 5 --timeout 30
+          python -m scripts.release.verify_published --version "$VERSION" --audience cli --manifest-url "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest-cli.json" --signature-url "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest-cli.json.minisig" --minisign "$m" --public-key "$MINISIGN_PUBLIC_KEY" --attempts 8 --delay 5 --timeout 30
+          for asset in B300-STLink-GUI-Windows-x64.exe B300-STLink-GUI-Ubuntu-x64.AppImage B300-STLink-GUI-Ubuntu-arm64.AppImage latest.json latest.json.minisig latest-cli.json latest-cli.json.minisig; do
+            curl -fIL --retry 8 --retry-all-errors --retry-delay 5 "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/$asset"
+          done
