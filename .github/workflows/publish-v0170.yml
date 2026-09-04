@@ -1,0 +1,207 @@
+name: Publish verified B300 v0.17.0
+
+on:
+  push:
+    branches:
+      - "publish/v0.17.0"
+
+permissions:
+  contents: write
+  actions: read
+
+env:
+  SOURCE_SHA: 111e106a1d8d860737e590641a692bc2d165ce4b
+  VERSION: 0.17.0
+  TAG: v0.17.0
+  PACKAGE_RUN_ID: "33857318377"
+  DRAFT_RELEASE_ID: "382603907"
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    environment: release
+    timeout-minutes: 30
+    steps:
+      - name: Verify immutable production source and existing draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          main_sha=$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq .commit.sha)
+          test "$main_sha" = "$SOURCE_SHA"
+
+          draft=$(gh api "repos/${GITHUB_REPOSITORY}/releases/${DRAFT_RELEASE_ID}")
+          test "$(printf '%s' "$draft" | jq -r .draft)" = "true"
+          test "$(printf '%s' "$draft" | jq -r .tag_name)" = "$TAG"
+          test "$(printf '%s' "$draft" | jq -r .target_commitish)" = "$SOURCE_SHA"
+          test "$(printf '%s' "$draft" | jq -r .prerelease)" = "false"
+
+          if tag_json=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" 2>/dev/null); then
+            tag_sha=$(printf '%s' "$tag_json" | jq -r .object.sha)
+            test "$tag_sha" = "$SOURCE_SHA"
+          fi
+
+      - name: Checkout exact production commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+
+      - name: Verify source version and release notes
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          python -m b300_version --check "$VERSION"
+          python -m scripts.release.validate_version --check-tag "$TAG"
+          python -m scripts.release.changelog "$VERSION" --output release-notes.md
+          test -s release-notes.md
+
+      - name: Verify and download exact-main package artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PACKAGE_RUN_ID}")
+          test "$(printf '%s' "$run" | jq -r .status)" = "completed"
+          test "$(printf '%s' "$run" | jq -r .conclusion)" = "success"
+
+          mkdir -p staging/windows staging/linux-x64 staging/linux-arm64 release-assets
+          gh run download "$PACKAGE_RUN_ID" -n dry-run-windows -D staging/windows
+          gh run download "$PACKAGE_RUN_ID" -n dry-run-linux-x64 -D staging/linux-x64
+          gh run download "$PACKAGE_RUN_ID" -n dry-run-linux-arm64 -D staging/linux-arm64
+
+          required=(
+            B300-STLink-GUI-Windows-x64.exe
+            B300-STLink-GUI-Windows-x64.zip
+            B300-STLink-CLI-Windows-x64.zip
+            B300-STLink-GUI-Ubuntu-x64.AppImage
+            b300-stlink-gui_amd64.deb
+            B300-STLink-CLI-Linux-x64.tar.gz
+            B300-STLink-GUI-Ubuntu-arm64.AppImage
+            b300-stlink-gui_arm64.deb
+            B300-STLink-CLI-Linux-arm64.tar.gz
+          )
+          for asset in "${required[@]}"; do
+            source=$(find staging -type f -name "$asset" -print -quit)
+            test -n "$source"
+            cp "$source" "release-assets/$asset"
+          done
+          test "$(find release-assets -maxdepth 1 -type f | wc -l)" -eq 9
+
+      - name: Generate deterministic release metadata
+        run: |
+          set -euo pipefail
+          published_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          python -m scripts.release.build_metadata \
+            --asset-dir release-assets \
+            --version "$VERSION" \
+            --commit "$SOURCE_SHA" \
+            --published-at "$published_at" \
+            --base-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}" \
+            --release-page "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}" \
+            --notes-file release-notes.md
+          test "$(find release-assets -maxdepth 1 -type f | wc -l)" -eq 13
+
+      - name: Sign and verify manifests
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PUBLIC_KEY: ${{ secrets.MINISIGN_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$MINISIGN_SECRET_KEY"
+          test -n "$MINISIGN_PUBLIC_KEY"
+          minisign_archive="$RUNNER_TEMP/minisign-0.12-linux.tar.gz"
+          curl -fL --retry 3 -o "$minisign_archive" \
+            "https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz"
+          echo "9A599B48BA6EB7B1E80F12F36B94CECA7C00B7A5173C95C3EFC88D9822957E73  $minisign_archive" | sha256sum -c -
+          tar -xzf "$minisign_archive" -C "$RUNNER_TEMP"
+          minisign_bin="$RUNNER_TEMP/minisign-linux/x86_64/minisign"
+          chmod +x "$minisign_bin"
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$RUNNER_TEMP/minisign.key"
+          chmod 600 "$RUNNER_TEMP/minisign.key"
+          "$minisign_bin" -S -W -s "$RUNNER_TEMP/minisign.key" -m release-assets/release-manifest.json -x release-assets/release-manifest.json.minisig
+          "$minisign_bin" -S -W -s "$RUNNER_TEMP/minisign.key" -m release-assets/latest.json -x release-assets/latest.json.minisig
+          "$minisign_bin" -S -W -s "$RUNNER_TEMP/minisign.key" -m release-assets/latest-cli.json -x release-assets/latest-cli.json.minisig
+          "$minisign_bin" -Vm release-assets/release-manifest.json -x release-assets/release-manifest.json.minisig -P "$MINISIGN_PUBLIC_KEY"
+          "$minisign_bin" -Vm release-assets/latest.json -x release-assets/latest.json.minisig -P "$MINISIGN_PUBLIC_KEY"
+          "$minisign_bin" -Vm release-assets/latest-cli.json -x release-assets/latest-cli.json.minisig -P "$MINISIGN_PUBLIC_KEY"
+          rm -f "$RUNNER_TEMP/minisign.key"
+          test "$(find release-assets -maxdepth 1 -type f | wc -l)" -eq 16
+
+      - name: Create exact immutable tag and upload 16 assets to validated draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if tag_json=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" 2>/dev/null); then
+            test "$(printf '%s' "$tag_json" | jq -r .object.sha)" = "$SOURCE_SHA"
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/${TAG}" -f sha="$SOURCE_SHA" >/dev/null
+          fi
+          tag_json=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}")
+          test "$(printf '%s' "$tag_json" | jq -r .object.sha)" = "$SOURCE_SHA"
+
+          # Reruns are safe only while this exact release remains a draft.
+          draft=$(gh api "repos/${GITHUB_REPOSITORY}/releases/${DRAFT_RELEASE_ID}")
+          test "$(printf '%s' "$draft" | jq -r .draft)" = "true"
+          test "$(printf '%s' "$draft" | jq -r .tag_name)" = "$TAG"
+          test "$(printf '%s' "$draft" | jq -r .target_commitish)" = "$SOURCE_SHA"
+
+          for asset_id in $(printf '%s' "$draft" | jq -r '.assets[].id'); do
+            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
+          done
+
+          for path in release-assets/*; do
+            name=$(basename "$path")
+            curl --fail --silent --show-error \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary "@${path}" \
+              "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${DRAFT_RELEASE_ID}/assets?name=${name}" \
+              >/dev/null
+          done
+
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/releases/${DRAFT_RELEASE_ID}" --jq '.assets | length')" -eq 16
+
+      - name: Publish as Latest and verify signed updater state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MINISIGN_PUBLIC_KEY: ${{ secrets.MINISIGN_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${DRAFT_RELEASE_ID}" \
+            -F draft=false -F prerelease=false -f make_latest=true >/dev/null
+
+          release=$(gh api "repos/${GITHUB_REPOSITORY}/releases/${DRAFT_RELEASE_ID}")
+          test "$(printf '%s' "$release" | jq -r .draft)" = "false"
+          test "$(printf '%s' "$release" | jq -r .prerelease)" = "false"
+          test "$(printf '%s' "$release" | jq -r .tag_name)" = "$TAG"
+          test "$(printf '%s' "$release" | jq -r '.assets | length')" -eq 16
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .id)" = "$DRAFT_RELEASE_ID"
+
+          python -m scripts.release.verify_published \
+            --version "$VERSION" --audience gui \
+            --manifest-url "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json" \
+            --signature-url "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json.minisig" \
+            --minisign "$RUNNER_TEMP/minisign-linux/x86_64/minisign" \
+            --public-key "$MINISIGN_PUBLIC_KEY" --attempts 8 --delay 5 --timeout 30
+          python -m scripts.release.verify_published \
+            --version "$VERSION" --audience cli \
+            --manifest-url "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest-cli.json" \
+            --signature-url "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest-cli.json.minisig" \
+            --minisign "$RUNNER_TEMP/minisign-linux/x86_64/minisign" \
+            --public-key "$MINISIGN_PUBLIC_KEY" --attempts 8 --delay 5 --timeout 30
+
+          for asset in \
+            B300-STLink-GUI-Windows-x64.exe \
+            B300-STLink-GUI-Ubuntu-x64.AppImage \
+            B300-STLink-GUI-Ubuntu-arm64.AppImage \
+            latest.json latest.json.minisig latest-cli.json latest-cli.json.minisig; do
+            curl -fIL --retry 8 --retry-all-errors --retry-delay 5 \
+              "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/${asset}"
+          done
