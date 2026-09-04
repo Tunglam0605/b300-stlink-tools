@@ -27,6 +27,14 @@ class _FakeNative:
         return {"consumed": count * 4, "events": events}
 
 
+class _OverConsumingNative:
+    ABI_VERSION = 1
+
+    @staticmethod
+    def decode_fixed_width(payload, channel, timestamp_ns, source_id):
+        return {"consumed": len(payload) + 1, "events": []}
+
+
 class NativeDebugCoreAdapterTests(unittest.TestCase):
     def test_off_mode_uses_python_fallback(self):
         adapter = NativeDebugCoreAdapter(mode="off", native_module=_FakeNative())
@@ -61,9 +69,19 @@ class NativeDebugCoreAdapterTests(unittest.TestCase):
         self.assertEqual(actual, expected)
         self.assertEqual(native.backend, "native")
 
-    def test_on_mode_fails_closed_without_native_module(self):
+    def test_on_mode_fails_closed_for_incompatible_module(self):
         with self.assertRaises(NativeCoreUnavailable):
-            NativeDebugCoreAdapter(mode="on", native_module=None)
+            NativeDebugCoreAdapter(mode="on", native_module=object())
+
+    def test_native_overconsume_fails_closed(self):
+        adapter = NativeDebugCoreAdapter(mode="on", native_module=_OverConsumingNative())
+        with self.assertRaises(RuntimeError):
+            adapter.decode_fixed_width(
+                b"\x00\x00\x00\x00",
+                channel=1,
+                timestamp_ns=0,
+                source_id=0,
+            )
 
     def test_invalid_mode_is_rejected(self):
         with self.assertRaises(ValueError):
