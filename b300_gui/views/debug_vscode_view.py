@@ -1,7 +1,7 @@
 """Simplified VS Code debug surface for B300 v0.18.
 
-This module is deliberately presentation-only.  It never starts OpenOCD/GDB,
-never launches a shell, never opens SSH itself, and never touches ST-Link.  All
+This module is deliberately presentation-only. It never starts OpenOCD/GDB,
+never launches a shell, never opens SSH itself, and never touches ST-Link. All
 hardware/session work is delegated to :mod:`b300_core.vscode_bridge` by the
 owning MainWindow after an explicit operator action.
 """
@@ -10,9 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable, Optional
 
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QCheckBox,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -35,6 +34,7 @@ class DebugVsCodeView(QWidget):
 
     open_local_vscode_requested = Signal(Path, Path)
     open_remote_vscode_requested = Signal(object)
+    test_client_connection_requested = Signal(object)
     start_gateway_requested = Signal()
     stop_gateway_requested = Signal()
     stop_bridge_requested = Signal()
@@ -49,9 +49,6 @@ class DebugVsCodeView(QWidget):
         self._environment: Optional[VsCodeEnvironmentStatus] = None
         self._build_ui()
 
-    # ------------------------------------------------------------------
-    # UI construction
-    # ------------------------------------------------------------------
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(4, 4, 4, 4)
@@ -72,7 +69,6 @@ class DebugVsCodeView(QWidget):
         subtitle.setWordWrap(True)
         subtitle.setObjectName("pageSubtitle")
         hero_layout.addWidget(subtitle)
-
         mode_row = QHBoxLayout()
         self.btn_mode_local = self._mode_button("LOCAL")
         self.btn_mode_gateway = self._mode_button("GATEWAY")
@@ -86,9 +82,7 @@ class DebugVsCodeView(QWidget):
         hero_layout.addLayout(mode_row)
         root.addWidget(hero)
 
-        self.env_card = self._build_environment_card()
-        root.addWidget(self.env_card)
-
+        root.addWidget(self._build_environment_card())
         self.mode_stack = QStackedWidget()
         self.mode_stack.addWidget(self._build_local_page())
         self.mode_stack.addWidget(self._build_gateway_page())
@@ -158,9 +152,9 @@ class DebugVsCodeView(QWidget):
                 workspace.setText(selected)
 
         def choose_elf() -> None:
-            start = workspace.text() or ""
             selected, _ = QFileDialog.getOpenFileName(
-                self, "Chọn ELF/AXF", start, "Debug symbols (*.elf *.axf);;All files (*)"
+                self, "Chọn ELF/AXF", workspace.text() or "",
+                "Debug symbols (*.elf *.axf);;All files (*)"
             )
             if selected:
                 elf.setText(selected)
@@ -174,11 +168,9 @@ class DebugVsCodeView(QWidget):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
-
         self.local_target_status = QLabel("STM32F407ZE · chưa kiểm tra Target")
         self.local_target_status.setObjectName("debugTargetStatus")
         layout.addWidget(self.local_target_status)
-
         self.local_workspace, ws_btn, self.local_elf, elf_btn = self._workspace_rows(prefix="local")
         grid = QGridLayout()
         grid.addWidget(QLabel("Workspace"), 0, 0)
@@ -188,14 +180,12 @@ class DebugVsCodeView(QWidget):
         grid.addWidget(self.local_elf, 1, 1)
         grid.addWidget(elf_btn, 1, 2)
         layout.addLayout(grid)
-
         safety = QLabel(
-            "LOCAL: nút bên dưới mới được phép khởi động B300 OpenOCD. "
+            "LOCAL: chỉ nút bên dưới mới được phép khởi động B300 OpenOCD. "
             "Profile dùng request=attach + hardware breakpoint/watchpoint."
         )
         safety.setWordWrap(True)
         layout.addWidget(safety)
-
         self.btn_open_local_vscode = QPushButton("🚀 OPEN DEBUG IN VS CODE")
         self.btn_open_local_vscode.setMinimumHeight(42)
         self.btn_open_local_vscode.clicked.connect(self._emit_local_request)
@@ -208,21 +198,18 @@ class DebugVsCodeView(QWidget):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
-
         self.gw_openocd_lbl = QLabel(
             "OpenOCD private endpoints · GDB 127.0.0.1:3333 · TCL 127.0.0.1:6666 · Telnet OFF"
         )
         self.gw_openocd_lbl.setWordWrap(True)
         self.gw_openocd_lbl.setObjectName("gatewayLoopbackStatus")
         layout.addWidget(self.gw_openocd_lbl)
-
         warning = QLabel(
             "Gateway không expose 3333/6666 ra LAN/Internet. Client chỉ forward GDB qua SSH; "
             "TCL giữ nội bộ cho run-state guard."
         )
         warning.setWordWrap(True)
         layout.addWidget(warning)
-
         actions = QHBoxLayout()
         self.btn_start_gateway = QPushButton("▶ START GATEWAY")
         self.btn_stop_gateway = QPushButton("■ STOP GATEWAY")
@@ -232,7 +219,6 @@ class DebugVsCodeView(QWidget):
         actions.addWidget(self.btn_start_gateway)
         actions.addWidget(self.btn_stop_gateway)
         layout.addLayout(actions)
-
         self.gateway_state_label = QLabel("Gateway: STOPPED")
         self.gateway_state_label.setObjectName("gatewayStateLabel")
         layout.addWidget(self.gateway_state_label)
@@ -244,14 +230,12 @@ class DebugVsCodeView(QWidget):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
-
         intro = QLabel(
             "CLIENT giữ source + ELF/AXF cục bộ. B300 xác thực SSH và tạo local GDB forward; "
             "không cần ST-Link/OpenOCD trên máy Client."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
-
         grid = QGridLayout()
         self.client_host = QLineEdit()
         self.client_host.setPlaceholderText("Gateway IP / hostname")
@@ -262,8 +246,6 @@ class DebugVsCodeView(QWidget):
         self.client_ssh_port.setValue(22)
         self.client_local_gdb_spin = QSpinBox()
         self.client_local_gdb_spin.setRange(0, 65535)
-        # Keep the familiar displayed default for compatibility; 0 can be selected
-        # by advanced users to ask B300 for a dynamic free loopback port.
         self.client_local_gdb_spin.setValue(43333)
         self.client_local_gdb_spin.setToolTip("0 = B300 tự chọn local port trống")
         grid.addWidget(QLabel("Gateway"), 0, 0)
@@ -275,7 +257,6 @@ class DebugVsCodeView(QWidget):
         grid.addWidget(QLabel("Local GDB"), 1, 2)
         grid.addWidget(self.client_local_gdb_spin, 1, 3)
         layout.addLayout(grid)
-
         self.client_workspace, ws_btn, self.client_elf, elf_btn = self._workspace_rows(prefix="client")
         files = QGridLayout()
         files.addWidget(QLabel("Workspace"), 0, 0)
@@ -285,28 +266,20 @@ class DebugVsCodeView(QWidget):
         files.addWidget(self.client_elf, 1, 1)
         files.addWidget(elf_btn, 1, 2)
         layout.addLayout(files)
-
         actions = QHBoxLayout()
         self.btn_test_client_conn = QPushButton("⚡ TEST CONNECTION")
-        self.btn_test_client_conn.setToolTip(
-            "Kết nối SSH được thực hiện khi mở remote debug; không expose debug port công khai."
-        )
-        self.btn_test_client_conn.clicked.connect(self._emit_remote_request)
+        self.btn_test_client_conn.clicked.connect(self._emit_client_connection_test)
         self.btn_open_remote_vscode = QPushButton("🚀 OPEN REMOTE DEBUG IN VS CODE")
         self.btn_open_remote_vscode.clicked.connect(self._emit_remote_request)
         actions.addWidget(self.btn_test_client_conn)
         actions.addWidget(self.btn_open_remote_vscode, 1)
         layout.addLayout(actions)
-
         self.client_state_label = QLabel("SSH / GDB tunnel: DISCONNECTED")
         self.client_state_label.setObjectName("clientTunnelStatus")
         layout.addWidget(self.client_state_label)
         layout.addStretch(1)
         return page
 
-    # ------------------------------------------------------------------
-    # Presentation state
-    # ------------------------------------------------------------------
     def select_mode(self, mode: str) -> None:
         selected = str(mode).lower()
         mapping = {"local": 0, "gateway": 1, "client": 2}
@@ -367,16 +340,20 @@ class DebugVsCodeView(QWidget):
             if client_active else "SSH / GDB tunnel: DISCONNECTED"
         )
 
-    # ------------------------------------------------------------------
-    # Explicit operator requests only
-    # ------------------------------------------------------------------
-    def _emit_local_request(self) -> None:
-        workspace = Path(self.local_workspace.text().strip()).expanduser()
-        elf = Path(self.local_elf.text().strip()).expanduser()
-        self.open_local_vscode_requested.emit(workspace, elf)
+    def set_client_connection_status(self, connected: bool, detail: str = "") -> None:
+        self.client_state_label.setText(
+            "SSH: CONNECTED · ready to open GDB tunnel" if connected else "SSH / GDB tunnel: DISCONNECTED"
+        )
+        self.client_state_label.setToolTip(detail)
 
-    def _emit_remote_request(self) -> None:
-        request = {
+    def _emit_local_request(self) -> None:
+        self.open_local_vscode_requested.emit(
+            Path(self.local_workspace.text().strip()).expanduser(),
+            Path(self.local_elf.text().strip()).expanduser(),
+        )
+
+    def _client_request(self) -> dict:
+        return {
             "host": self.client_host.text().strip(),
             "user": self.client_user.text().strip(),
             "ssh_port": self.client_ssh_port.value(),
@@ -384,7 +361,12 @@ class DebugVsCodeView(QWidget):
             "workspace": Path(self.client_workspace.text().strip()).expanduser(),
             "elf": Path(self.client_elf.text().strip()).expanduser(),
         }
-        self.open_remote_vscode_requested.emit(request)
+
+    def _emit_client_connection_test(self) -> None:
+        self.test_client_connection_requested.emit(self._client_request())
+
+    def _emit_remote_request(self) -> None:
+        self.open_remote_vscode_requested.emit(self._client_request())
 
 
 __all__ = ["DebugVsCodeView"]
