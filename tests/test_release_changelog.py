@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from scripts.release.changelog import extract_release_notes, main
+from scripts.release.changelog import _release_notes, extract_release_notes, main
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -67,6 +67,29 @@ class ReleaseChangelogTests(unittest.TestCase):
                 ]), 0)
             self.assertEqual(output.read_text(encoding="utf-8"),
                              extract_release_notes(CHANGELOG, "0.3.0") + "\n")
+
+    def test_dedicated_version_notes_are_fallback_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            changelog = root / "CHANGELOG.md"
+            notes_root = root / "docs" / "releases"
+            notes_root.mkdir(parents=True)
+            changelog.write_text(CHANGELOG, encoding="utf-8")
+            (notes_root / "9.9.9.md").write_text("Focused release notes.\n", encoding="utf-8")
+            self.assertEqual(
+                _release_notes("9.9.9", changelog, release_notes_root=notes_root),
+                "Focused release notes.",
+            )
+            self.assertEqual(
+                _release_notes("0.3.0", changelog, release_notes_root=notes_root),
+                extract_release_notes(CHANGELOG, "0.3.0"),
+            )
+
+    def test_v0150_dedicated_notes_exist_and_cover_debugger_release(self) -> None:
+        notes = (ROOT / "docs" / "releases" / "0.15.0.md").read_text(encoding="utf-8").strip()
+        self.assertIn("Engineering Debug Workstation", notes)
+        self.assertIn("One-login Client SSH", notes)
+        self.assertIn("Safety boundaries preserved", notes)
 
     def test_v0141_notes_cover_integrated_gui_and_ci_fixes(self) -> None:
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
