@@ -1,0 +1,29 @@
+name: Tag verified B300 release
+
+on:
+  push:
+    branches:
+      - "release-trigger/v*"
+
+permissions:
+  contents: write
+
+jobs:
+  tag-verified-main:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - name: Validate and push release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#release-trigger/}"
+          base="$(git rev-parse HEAD^)"
+          test "$base" = "f5f5cf3e898cffb270bc7c6f54c738d19dac85c8"
+          python -m scripts.release.validate_version --check-tag "$tag"
+          git config user.name "Tùng Lâm Automation"
+          git config user.email "183681608+Tunglam0605@users.noreply.github.com"
+          git tag "$tag" "$base"
+          git push origin "$tag"
