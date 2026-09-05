@@ -37,7 +37,7 @@ class EngineeringIntegrationTests(unittest.TestCase):
                 context = window.app_context
                 self.assertIs(window.monitor_view.context, context)
                 self.assertIs(window.debug_vscode_view.context, context)
-                self.assertEqual(window.program_view._selected_file, hexfile)
+                self.assertTrue(os.path.samefile(window.program_view._selected_file, hexfile))
                 context.select_connection(gateway.profile_id)
                 window.service.inspect_target = Mock()
                 window.inspect_target()
