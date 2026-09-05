@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,12 +21,36 @@ class ManagedGdbBundleTests(unittest.TestCase):
         gdb_name = "arm-none-eabi-gdb.exe" if platform_name == "windows-x64" else "arm-none-eabi-gdb"
         gcc_name = "arm-none-eabi-gcc.exe" if platform_name == "windows-x64" else "arm-none-eabi-gcc"
         (bin_root / gdb_name).write_bytes(b"gdb")
+        suffix = ".exe" if platform_name == "windows-x64" else ""
+        for tool in ("nm", "addr2line", "objdump"):
+            (bin_root / ("arm-none-eabi-" + tool + suffix)).write_bytes(tool.encode())
         (bin_root / gcc_name).write_bytes(b"compiler-must-not-ship")
         (source / "README.md").write_text("upstream readme", encoding="utf-8")
         license_root = source / "distro-info" / "licenses"
         license_root.mkdir(parents=True)
         (license_root / "gdb.txt").write_text("license", encoding="utf-8")
         return source
+
+    def test_monitor_and_cortex_tools_are_staged_on_every_platform(self):
+        for platform in ("windows-x64", "linux-x64", "linux-arm64"):
+            with self.subTest(platform=platform), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = self._source(root, platform)
+                stage_managed_gdb_runtime(source, root / "runtime", platform)
+                suffix = ".exe" if platform == "windows-x64" else ""
+                for tool in ("nm", "addr2line", "objdump"):
+                    staged = root / "runtime/bin" / ("arm-none-eabi-" + tool + suffix)
+                    self.assertEqual(staged.read_bytes(), tool.encode())
+                    if not suffix and os.name != "nt":
+                        self.assertTrue(staged.stat().st_mode & 0o111)
+
+    def test_missing_monitor_tool_refuses_staging(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = self._source(root, "windows-x64")
+            (source / "bin/arm-none-eabi-nm.exe").unlink()
+            with self.assertRaisesRegex(ValueError, "arm-none-eabi-nm"):
+                stage_managed_gdb_runtime(source, root / "runtime", "windows-x64")
 
     def test_windows_runtime_keeps_gdb_dlls_and_not_compiler(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -91,18 +116,42 @@ class ManagedGdbBundleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             executable = Path(directory) / "arm-none-eabi-gdb"
             executable.write_bytes(b"gdb")
+            for tool in ("nm", "addr2line", "objdump"):
+                executable.with_name("arm-none-eabi-" + tool).write_bytes(tool.encode())
             architecture = mock.Mock(returncode=0, stdout="The target architecture is set to auto.\n", stderr="")
             version = mock.Mock(returncode=0, stdout="GNU gdb 15.2.1\n", stderr="")
-            with mock.patch("b300_core.managed_gdb_bundle.subprocess.run", side_effect=[architecture, version]) as run:
+            with mock.patch("b300_core.managed_gdb_bundle.subprocess.run", side_effect=[architecture, version, version, version, version]) as run:
                 label = smoke_test_managed_gdb(executable)
             self.assertEqual(label, "GNU gdb 15.2.1")
-            self.assertEqual(run.call_count, 2)
+            self.assertEqual(run.call_count, 5)
             self.assertFalse(run.call_args_list[0].kwargs["shell"])
+
+    def test_smoke_test_refuses_symbol_tool_that_cannot_start(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = self._source(root, "windows-x64")
+            ok = mock.Mock(returncode=0, stdout="GNU gdb architecture", stderr="")
+            failed = mock.Mock(returncode=1, stdout="", stderr="missing DLL")
+            with mock.patch("b300_core.managed_gdb_bundle.subprocess.run",
+                            side_effect=[ok, ok, failed]):
+                with self.assertRaisesRegex(RuntimeError, "arm-none-eabi-nm.exe.*missing DLL"):
+                    smoke_test_managed_gdb(source / "bin/arm-none-eabi-gdb.exe")
+
+    def test_smoke_test_refuses_missing_symbol_tool(self):
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "arm-none-eabi-gdb"
+            executable.write_bytes(b"gdb")
+            ok = mock.Mock(returncode=0, stdout="GNU gdb architecture", stderr="")
+            with mock.patch("b300_core.managed_gdb_bundle.subprocess.run", return_value=ok):
+                with self.assertRaisesRegex(RuntimeError, "arm-none-eabi-nm"):
+                    smoke_test_managed_gdb(executable)
 
     def test_smoke_test_fails_closed_when_gdb_cannot_start_cleanly(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             executable = Path(directory) / "arm-none-eabi-gdb"
             executable.write_bytes(b"gdb")
+            for tool in ("nm", "addr2line", "objdump"):
+                executable.with_name("arm-none-eabi-" + tool).write_bytes(tool.encode())
             failed = mock.Mock(returncode=1, stdout="", stderr="missing runtime")
             with mock.patch("b300_core.managed_gdb_bundle.subprocess.run", return_value=failed):
                 with self.assertRaisesRegex(RuntimeError, "smoke test"):

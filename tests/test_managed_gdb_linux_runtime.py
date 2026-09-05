@@ -14,6 +14,8 @@ class ManagedGdbLinuxRuntimeTests(unittest.TestCase):
             source = root / "xpack"
             destination = root / "managed"
             (source / "bin").mkdir(parents=True)
+            for tool in ("nm", "addr2line", "objdump"):
+                (source / "bin" / ("arm-none-eabi-" + tool)).write_bytes(tool.encode())
             (source / "libexec" / "gcc").mkdir(parents=True)
             (source / "distro-info" / "licenses").mkdir(parents=True)
 
@@ -45,6 +47,8 @@ class ManagedGdbLinuxRuntimeTests(unittest.TestCase):
             source = root / "xpack"
             destination = root / "managed"
             (source / "bin").mkdir(parents=True)
+            for tool in ("nm", "addr2line", "objdump"):
+                (source / "bin" / ("arm-none-eabi-" + tool)).write_bytes(tool.encode())
             (source / "distro-info" / "licenses").mkdir(parents=True)
             (source / "bin" / "arm-none-eabi-gdb").write_bytes(b"gdb")
             (source / "bin" / "arm-none-eabi-gcc").write_bytes(b"gcc")

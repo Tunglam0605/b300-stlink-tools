@@ -5,7 +5,8 @@ archive because that upstream package provides a portable ``arm-none-eabi-gdb``
 for every B300 release architecture. B300 does not need to ship a compiler,
 linker, C library, or the target runtime just to attach Cortex-Debug to an
 external OpenOCD server, so this module stages only the host-side files needed
-by the non-Python GDB executable plus upstream notices.
+by GDB and the nm/addr2line/objdump tools used by Monitor and Cortex-Debug,
+plus upstream notices.
 
 This module is build-time only. It never downloads software and never touches
 the target MCU.
@@ -25,6 +26,7 @@ MANAGED_GDB_UPSTREAM = (
     "releases/tag/v15.2.1-1.1"
 )
 NOTICE_NAME = "B300-MANAGED-GDB.txt"
+SYMBOL_TOOLS = ("nm", "addr2line", "objdump")
 
 
 def _gdb_name(platform_name: str) -> str:
@@ -117,7 +119,16 @@ def stage_managed_gdb_runtime(
     executable = source / "bin" / _gdb_name(platform_name)
     if not executable.is_file():
         raise ValueError("Extracted toolchain does not contain arm-none-eabi-gdb.")
-    _copy_file(executable, source, destination)
+    tools = [source / "bin" / ("arm-none-eabi-" + tool + executable.suffix)
+             for tool in SYMBOL_TOOLS]
+    for tool in tools:
+        if not tool.is_file():
+            raise ValueError("Extracted toolchain does not contain %s." % tool.name)
+    for tool in [executable] + tools:
+        _copy_file(tool, source, destination)
+        if platform_name != "windows-x64":
+            staged_tool = destination / "bin" / tool.name
+            staged_tool.chmod(staged_tool.stat().st_mode | 0o111)
 
     for runtime_file in _host_runtime_files(source, platform_name):
         _copy_file(runtime_file, source, destination)
@@ -139,7 +150,7 @@ def stage_managed_gdb_runtime(
         "B300 managed GNU Arm GDB runtime\n"
         "version=%s\n"
         "upstream=%s\n"
-        "scope=debugger-runtime-only; compiler/linker intentionally excluded\n"
+        "scope=debugger-and-symbol-tools; compiler/linker intentionally excluded\n"
         "licenses=distro-info/licenses (when supplied by upstream)\n"
         % (MANAGED_GDB_VERSION, MANAGED_GDB_UPSTREAM),
         encoding="utf-8",
@@ -198,5 +209,16 @@ def smoke_test_managed_gdb(executable: Path) -> str:
     )
     if version.returncode != 0:
         raise RuntimeError("Managed GDB version probe failed after startup smoke test.")
+    for stem in SYMBOL_TOOLS:
+        tool = binary.with_name("arm-none-eabi-" + stem + binary.suffix)
+        if not tool.is_file():
+            raise RuntimeError("Managed symbol tool is missing: %s" % tool.name)
+        probe = subprocess.run(
+            [str(tool), "--version"], capture_output=True, text=True,
+            timeout=20.0, shell=False, env=env,
+        )
+        if probe.returncode != 0:
+            raise RuntimeError("Managed symbol tool smoke test failed: %s: %s"
+                               % (tool.name, (probe.stderr or probe.stdout).strip()))
     first_line = (version.stdout or version.stderr or "").splitlines()
     return first_line[0].strip() if first_line else "GNU GDB"
