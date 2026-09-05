@@ -154,7 +154,7 @@ class EngineeringMonitorTests(unittest.TestCase):
             with mock.patch.object(view.controller, "start") as start:
                 view.live_panel.start_button.click()
                 self.assertEqual(start.call_args.args[0].role, "LOCAL")
-                self.assertEqual(start.call_args.args[0].symbols, symbols)
+                self.assertTrue(os.path.samefile(start.call_args.args[0].symbols, symbols))
                 context.selected_connection = SimpleNamespace(is_local=False, gateway=SimpleNamespace(
                     endpoint=RemoteGatewayProfile("gateway.local", "operator", 2222)))
                 context.changed.emit()
