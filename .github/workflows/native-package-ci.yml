@@ -11,6 +11,8 @@ on:
       - "scripts/build_native_release_extension.py"
       - ".github/workflows/native-package-ci.yml"
   push:
+    branches:
+      - "**"
     paths:
       - "native/**"
       - "b300_core/native_debug_core.py"

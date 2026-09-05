@@ -21,6 +21,13 @@ def load_workflow(name: str):
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
+    def test_tag_pushes_do_not_repeat_main_or_native_ci(self) -> None:
+        for name in ("ci.yml", "native-ci.yml", "native-package-ci.yml"):
+            workflow = load_workflow(name)
+            push = workflow["on"]["push"]
+            self.assertEqual(push["branches"], ["**"], name)
+            self.assertNotIn("tags", push, name)
+
     def test_ci_splits_required_qt_gui_suites_with_bounded_timeouts(self) -> None:
         """Required GUI suites get isolated cases without weakening time budgets."""
         workflow = load_workflow("ci.yml")

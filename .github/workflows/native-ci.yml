@@ -2,6 +2,8 @@ name: Native C++ CI
 
 on:
   push:
+    branches:
+      - "**"
     paths:
       - "native/**"
       - "requirements-native-build.txt"
