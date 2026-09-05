@@ -5,7 +5,8 @@ from b300_version import __version__
 
 def _preserve_debug_tab_compatibility() -> None:
     # Package-level callers historically import b300_gui.debug_tab.DebugTab directly.
-    # Keep that startup contract stable while the executable opts into DebugTabV15.
+    # COMPAT import contract only. The executable uses MainWindowV18 and does not
+    # construct this legacy workbench.
     from . import debug_tab as _debug_tab_module
     from .debug_tab_compat import DebugTabCompat
 

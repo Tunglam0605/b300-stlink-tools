@@ -4,50 +4,39 @@
 không nạp flash. Khi debugger kết nối, CPU có
 thể bị halt/reset nên chỉ dùng khi board và cơ cấu đang ở trạng thái an toàn.
 
-## GUI safety-first workflow (RC3+)
+## GUI hiện tại: MONITOR và DEBUG
 
-Debug Workstation hiển thị hai mức tác động ngay đầu màn hình:
+Production có năm trang **PROGRAM / MONITOR / DEBUG / DEVICE / SETTINGS**.
 
-- **LIVE MONITOR · KHUYẾN NGHỊ · MCU tiếp tục RUNNING**: đường quan sát non-halting dùng TCL/SWD bounded reads; không GDB attach, không breakpoint/watchpoint, không reset.
-- **INTERACTIVE DEBUG · Có thể HALT/STEP/RESET MCU**: đường GDB source-level có thể tác động realtime; panel này mặc định **thu gọn** để tránh bấm nhầm khi mục tiêu chỉ là quan sát robot đang chạy.
-
-Khi máy đã được cấu hình ở **Remote Gateway / Client**, Debug Client tự điền Gateway profile `host/user/port` nếu các field cũ trống. Profile chỉ nhớ endpoint; OpenSSH sẽ hỏi password tài khoản khi mỗi tunnel mới kết nối.
+- **MONITOR** quan sát qua các SWD/TCL read giới hạn, giữ MCU RUNNING. Chọn trang này khi cần theo dõi mà không halt/step/reset.
+- **DEBUG** chuẩn bị bridge cho **VS Code + Cortex-Debug**. VS Code quản lý source, breakpoint/watchpoint, variables, registers, call stack và step/continue. B300 quản lý ST-Link, OpenOCD, managed GDB, SSH tunnel và cleanup.
+- **LOCAL**: máy này giữ ST-Link, source và AXF/ELF.
+- **GATEWAY**: máy này giữ ST-Link/OpenOCD và phục vụ Client qua SSH; các cổng debug chỉ bind loopback.
+- **CLIENT**: máy này giữ source/AXF/ELF và kết nối Gateway bằng SSH.
 
 ## Cần chuẩn bị
 
-- ST-Link đã kết nối với board và không bị Keil, CubeProgrammer hoặc OpenOCD
-  khác chiếm dụng.
-- File `.axf` hoặc `.elf` có symbol, được build từ đúng source đang chạy trên
-  board. File HEX chỉ dùng để nạp, không thay thế file symbol khi debug.
-- Máy thực sự phân tích source (**Local** hoặc **Client**) cần GDB ARM. Base GUI/CLI
-  không nhúng toàn bộ GNU Arm toolchain để giữ package nhẹ. Tool ưu tiên `B300_GDB`,
-  tự tìm GDB từ STM32CubeIDE/toolchain đã cài, sau đó tìm `arm-none-eabi-gdb` trên
-  `PATH`; Ubuntu có thể dùng `gdb-multiarch` khi phù hợp.
-- **Gateway** không cần GDB, source hay AXF/ELF. Gateway chỉ cần ST-Link, OpenOCD
-  và SSH server; `b300-stlink debug gateway` giữ GDB/TCL ở loopback.
-- **Client** giữ source + AXF/ELF. GUI Client và `b300-stlink debug client` đều tạo
-  SSH local forwarding qua endpoint đã lưu; OpenSSH hỏi password tài khoản khi tạo tunnel mới, còn B300 không lưu password. Tool vẫn xác minh AXF/ELF với Application Flash rồi mới attach GDB.
+ST-Link không bị công cụ khác chiếm dụng. Chọn AXF/ELF từ đúng build đang chạy;
+HEX không thay thế symbol file. Native bundle v0.18 có managed ARM GDB và OpenOCD.
+Không cần cài toàn bộ GNU Arm toolchain chỉ để debug. Có thể xem đường dẫn đã
+resolve trong diagnostics; Gateway không cần source hoặc AXF/ELF.
 
-Nếu Gateway không có GDB local thì Flash, Factory provisioning và Debug Gateway vẫn
-hoạt động bình thường.
+GUI Client dùng phiên SSH nhúng đã xác thực. Tùy chọn nhớ thông tin đăng nhập dùng
+credential mã hóa lưu cục bộ; khóa giải mã cũng nằm trong hồ sơ người dùng,
+không bảo vệ trước người đã kiểm soát tài khoản Windows/Linux. Password không ghi
+vào log hay command line. CLI dùng luồng xác thực của lệnh được chọn.
 
 ## Cách A — Debug Local trên cùng máy
 
-Luồng khuyến nghị trong GUI là mở **Theo dõi / Debug**, giữ **Tự động · Khuyến nghị**,
-chọn hoặc dùng lại AXF/ELF đã lưu rồi bắt đầu bằng **Theo dõi realtime**. Đường này
-chỉ mở OpenOCD TCL loopback, không mở GDB/Telnet và target phải tiếp tục `RUNNING`.
+Mở **DEBUG**, chọn **LOCAL**, chọn workspace và AXF/ELF tương ứng rồi dùng hành động
+mở Debug trong VS Code. B300 chuẩn bị cấu hình Cortex-Debug dạng external attach;
+VS Code thực hiện phiên source debugging. Đóng phiên VS Code rồi dừng bridge B300
+để giải phóng ST-Link. Trước khi thao tác, bảo đảm cơ cấu an toàn vì debugger có
+thể halt CPU. Không dùng GDB `load`, `restore` hoặc lệnh flash trong phiên debug.
 
-Chỉ khi cần Halt/Step/Breakpoint mới mở **Debug tương tác · Nâng cao** rồi bấm
-**Kết nối Debug tương tác**. Khi chỉ có một ST-Link, GUI tự chọn probe. GDB được tự
-tìm từ `B300_GDB`, STM32CubeIDE hoặc `PATH`.
-
-Sau khi attach Interactive Debug, GUI xác nhận target `RUNNING/HALTED`. Nếu GDB attach làm một target
-đang RUNNING bị HALT, `DebugSession` tự Resume ngay. Các thao tác Where, Call Stack,
-Registers và Variable chỉ halt tạm khi cần rồi khôi phục trạng thái trước thao tác.
-Hardware breakpoint/watchpoint là one-shot và được cleanup sau hit/timeout.
-
-Nhấn **Ngắt Debug** để restore trạng thái ban đầu, đóng GDB/OpenOCD và giải phóng
-ST-Link. Không có lệnh flash trong flow này.
+Các giao diện **Debug Workstation / Interactive Debug** trong tài liệu nghiệm thu
+v0.15–v0.17 là lịch sử; chúng không thuộc production GUI hiện tại. Các lệnh one-shot
+phía dưới dành cho diagnostics nâng cao.
 
 ### Manual/legacy external GDB server
 
@@ -198,7 +187,7 @@ STM32 ─SWD─ ST-Link ─ B300 Gateway
                                 │ encrypted local forwarding
                                 ▼
                          B300 GUI Client
-                         ├─ GDB/MI local
+                         ├─ VS Code + Cortex-Debug
                          ├─ AXF/ELF local
                          └─ source code local
 ```
@@ -247,72 +236,21 @@ b300-stlink debug client --ssh-host <gateway> --ssh-user <user> \
 GDB/TCL loopback bằng SSH. Riêng `live` dùng tunnel TCL-only và không forward GDB 3333.
 Không expose raw OpenOCD ra LAN và không có flash/erase/WRP surface.
 
-### B300 GUI: Auto / Local / Gateway / Client
+### B300 GUI: LOCAL / GATEWAY / CLIENT
 
-Tab **Debug** có bốn lựa chọn:
+Trang DEBUG hiện tại có ba vai trò tường minh. Chọn GATEWAY trên máy gắn ST-Link
+và CLIENT trên máy chứa source/AXF. Client đăng nhập bằng hộp thoại SSH của B300,
+sau đó mở Debug trong VS Code. B300 quản lý tunnel và kiểm tra target/symbol theo
+core policy; VS Code thực hiện source debugging.
 
-- **Auto**: có ST-Link local → Local; không có ST-Link → Client.
-- **Local**: máy này cắm ST-Link và dùng GUI để debug trực tiếp.
-- **Gateway**: máy này cắm ST-Link và phục vụ client ngoài; GUI chỉ giám sát
-  Gateway/target, không mở một GDB controller thứ hai.
-- **Client**: máy này không cần ST-Link; source + AXF/ELF nằm tại đây.
+MONITOR dùng phiên SSH đã xác thực với TCL-only forwarding. DEBUG và MONITOR có
+lifecycle riêng và cùng tuân thủ HardwareSession. Dừng phiên đang dùng probe trước
+khi chuyển vai trò hoặc nạp firmware.
 
-Gateway GUI muốn tự debug trực tiếp thì chuyển sang **Local** sau khi remote client
-đã ngắt. Tool không cho hai GDB controller cùng điều khiển một STM32.
+Các mục Auto, card Interactive Debug và debugger nội bộ của v0.15–v0.17 chỉ còn
+trong compatibility/tests; không dùng chúng làm hướng dẫn GUI production.
 
-### Debug tương tác · Nâng cao
-
-GUI đặt toàn bộ Interactive Debug trong card **Debug tương tác · Nâng cao**, mặc định
-đóng để nút attach GDB không cạnh tranh với nút **Bắt đầu** của Live Monitor. Khi mở,
-workspace hiển thị `MCU: RUNNING/HALTED/KHÔNG RÕ/CHƯA KẾT NỐI`, thao tác gần nhất và
-cảnh báo rõ chế độ này có thể halt MCU.
-
-Kết quả được giữ riêng theo các tab:
-
-- **Vị trí** — kết quả `Where`;
-- **Ngăn xếp** — stack frames;
-- **Thanh ghi** — register snapshot;
-- **Biến** — kết quả đọc biến theo yêu cầu;
-- **Chẩn đoán** — breakpoint/watchpoint one-shot và các kết quả tổng quát khác.
-
-Đây là thay đổi presentation/UX. Workspace không tạo thêm GDB request ngoài thao tác người dùng đã bấm, không thay đổi cơ chế auto-resume, không thêm breakpoint/watchpoint nền và không liên quan đến Realtime Live Monitor. Realtime Live vẫn là subsystem non-halting riêng.
-
-### Client one-click
-
-Lần đầu Client cần Gateway host, SSH user và project/AXF. Các lần sau GUI ghi nhớ
-profile. Khi mở **Debug tương tác · Nâng cao** và bấm **Kết nối Debug tương tác**,
-tool tự động:
-
-1. chọn hai local loopback port còn trống;
-2. chạy OpenSSH tương tác với password/keyboard-interactive và
-   `ExitOnForwardFailure=yes`; lần đầu OpenSSH hỏi xác nhận host key như bình thường;
-3. forward GDB và Safe TCL **bên trong SSH mà thôi**; cả hai endpoint vẫn là loopback
-   ở Gateway và Client, không public ra mạng;
-4. xác nhận forwarded TCL hoạt động;
-5. nếu đã chọn AXF/ELF, so machine-code samples với Application Flash; mismatch thì
-   fail-closed;
-6. nếu đã lưu project root, scan bounded project tree và chọn **duy nhất một**
-   AXF/ELF exact-match; nhiều hoặc không có match thì yêu cầu người dùng xử lý;
-7. tự tìm GDB trên Client, load symbols và attach bằng GDB/MI async;
-8. nếu attach làm target đang RUNNING bị HALT, tự Resume về RUNNING;
-9. bật Where, Call Stack, Registers, Variable, hardware breakpoint/watchpoint.
-
-Tool chỉ lưu Gateway `host/user/port`, không lưu password, private key hay host-key
-material. Lần đầu có thể chạy `ssh <user>@<gateway> -p <port>` để OpenSSH hỏi xác nhận
-host key và password; các lần sau OpenSSH dùng `known_hosts` chuẩn của chính người dùng.
-Không đưa password vào CLI, environment, log hay VS Code kit.
-
-Khi Stop Client: tool khôi phục target trước, đóng GDB sau đó mới đóng SSH tunnel.
-Nếu tunnel chết bất ngờ, GUI fail-closed và báo mất kết nối thay vì giả vờ session
-vẫn hoạt động.
-
-### Chọn project một lần
-
-Trong Client, nút **Tự tìm đúng AXF/ELF** khi chưa kết nối chỉ lưu một project root
-bounded. Tool không quét cả ổ đĩa. Khi kết nối lần sau, matcher đọc một số cửa sổ
-Application Flash qua Safe TCL và tự chọn đúng AXF/ELF.
-
-## Cách C — VS Code là client tùy chọn
+## VS Code — client source debugging của production
 
 VS Code không phải con đường bắt buộc. Cùng Gateway ở trên có thể phục vụ
 Cortex-Debug/GDB qua SSH tunnel chỉ forward GDB. TCL không cần forward cho VS Code.
@@ -342,12 +280,13 @@ quản trị và vẫn giữ OpenOCD ở loopback.
 ## GUI Debug safety/lifecycle
 
 Tab Debug dùng cùng `HardwareSessionManager` với Flash, Factory và Memory. Khi một
-phiên local/gateway giữ ST-Link, GUI khóa các thao tác phần cứng xung đột. Backend
-GDB/MI yêu cầu đúng result record cùng token; timeout hoặc `^error` là lỗi thật.
+phiên local/gateway giữ ST-Link, GUI khóa các thao tác phần cứng xung đột. Client
+bridge cũng khóa Monitor/update cho đến khi dừng. Gateway guard ghi nhận trạng thái
+RUN/HALT ban đầu và khôi phục RUNNING khi cần sau disconnect. VS Code quản lý GDB;
+OpenOCD server-side disable GDB flash programming và ép hardware breakpoint.
+Client kiểm tra listener GDB trên Gateway trước khi báo READY.
 
-Local và Client dùng cùng `DebugSession`, nên cùng một logic preserve RUN/HALT.
-OpenOCD server-side luôn disable GDB flash programming và ép hardware breakpoint.
-Watchdog phát hiện OpenOCD/tunnel chết, cleanup session và giải phóng interlock.
+Integrated CLI one-shot vẫn dùng GDB/MI với result token, timeout và cleanup riêng.
 
 ## Phạm vi của tool
 
@@ -359,7 +298,7 @@ Integrated CLI không cung cấp flash/program, arbitrary memory write, raw TCL 
 raw GDB console.
 ## Gateway Setup Wizard (v0.12.0+)
 
-Máy Gateway chưa có SSH có thể dùng tab **Gateway Setup** hoặc CLI `gateway plan` / `gateway prepare --confirm-system-change`. Wizard chỉ quản lý OpenSSH + TCP/22 và giữ OpenOCD GDB/TCL loopback-only. Chi tiết: [Gateway Setup Wizard v0.12.0](19_GATEWAY_SETUP_WIZARD_V0.12.0.md).
+Máy Gateway chưa có SSH có thể dùng chức năng chuẩn bị Gateway trong **DEBUG → GATEWAY** hoặc CLI `gateway plan` / `gateway prepare --confirm-system-change`. Wizard chỉ quản lý OpenSSH + TCP/22 và giữ OpenOCD GDB/TCL loopback-only. Chi tiết: [Gateway Setup Wizard v0.12.0](19_GATEWAY_SETUP_WIZARD_V0.12.0.md).
 ### CLI workflow tự động (RC2+)
 
 Đối với hai máy mới, ưu tiên workflow sau thay vì gọi từng primitive SSH thủ công:

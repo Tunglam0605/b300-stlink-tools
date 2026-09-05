@@ -477,6 +477,40 @@ class RemoteSession:
             self.close_forward(name)
         return self.state
 
+    def require_remote_listener(self, *, remote_port: int,
+                                timeout_seconds: float = 3.0) -> None:
+        """Require a Gateway loopback listener without sending protocol data.
+
+        SSH channel opening checks the remote destination, unlike binding a
+        local forwarding socket. The short-lived channel is closed immediately.
+        """
+        port = int(remote_port)
+        timeout = float(timeout_seconds)
+        if not 1 <= port <= 65535:
+            raise ValueError("Remote listener port is out of range.")
+        if not 0 < timeout <= 10:
+            raise ValueError("Remote listener timeout must be greater than 0 and at most 10 seconds.")
+        with self._lock:
+            if not self.connected:
+                raise RemoteForwardError("SSH session is not connected.")
+            transport = self._transport
+        channel = None
+        try:
+            try:
+                channel = transport.open_channel(
+                    "direct-tcpip", ("127.0.0.1", port), ("127.0.0.1", 0),
+                    timeout=timeout,
+                )
+                if channel is None:
+                    raise OSError("SSH transport did not return a listener channel.")
+            finally:
+                if channel is not None:
+                    channel.close()
+        except Exception as error:
+            raise RemoteForwardError(
+                "Gateway loopback listener 127.0.0.1:%d is unavailable through SSH." % port
+            ) from error
+
     def open_forward(self, name: str, *, remote_port: int, local_port: int = 0,
                      remote_host: str = "127.0.0.1",
                      local_host: str = "127.0.0.1") -> RemoteForward:

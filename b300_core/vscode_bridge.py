@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -21,7 +22,7 @@ from .gdb_runtime import resolve_gdb
 from .models import ProbeRef
 from .process_startup import child_process_kwargs
 from .remote_debug_guard import RemoteDebugGuard
-from .remote_session import RemoteForward, RemoteSession
+from .remote_session import RemoteForward, RemoteForwardError, RemoteSession
 from .remote_vscode import workspace_executable
 from .tcl_client import SafeTclClient, TclEndpoint
 
@@ -47,6 +48,54 @@ class VsCodeBridgeState:
     tunnel_name: Optional[str] = None
     initial_target_state: Optional[str] = None
     detail: str = ""
+
+
+def _read_launch_document(output: Path) -> Dict[str, object]:
+    """Read VS Code JSONC without interpreting comment markers inside strings."""
+    source = output.read_text(encoding="utf-8-sig")
+    tokens = r'"(?:\\.|[^"\\])*"|//[^\r\n]*|/\*[\s\S]*?(?:\*/|\Z)'
+
+    def remove_comment(match):
+        token = match.group()
+        if token.startswith('"'):
+            return token
+        if token.startswith("/*") and not token.endswith("*/"):
+            raise ValueError("Unterminated comment in VS Code launch.json.")
+        return " "
+
+    source = re.sub(tokens, remove_comment, source)
+
+    def remove_trailing_comma(match):
+        if match.group().startswith('"'):
+            return match.group()
+        preceding = source[:match.start()].rstrip()
+        # A comma without a preceding value is malformed, not a trailing comma.
+        if not preceding or preceding[-1] in "[{,:":
+            return match.group()
+        return match.group(1)
+
+    source = re.sub(r'"(?:\\.|[^"\\])*"|,\s*([}\]])', remove_trailing_comma, source)
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Duplicate key in VS Code launch.json: %s" % key)
+            result[key] = value
+        return result
+
+    def reject_constant(value):
+        raise ValueError("Invalid JSON constant in VS Code launch.json: %s" % value)
+
+    document = json.loads(source, object_pairs_hook=unique_object, parse_constant=reject_constant)
+    if not isinstance(document, dict):
+        raise ValueError("VS Code launch.json must contain an object.")
+    configurations = document.get("configurations", [])
+    if not isinstance(configurations, list) or any(
+        not isinstance(item, dict) for item in configurations
+    ):
+        raise ValueError("VS Code launch.json configurations must be an array of objects.")
+    return document
 
 
 @dataclass(frozen=True)
@@ -100,6 +149,11 @@ class VsCodeExternalProfile:
         return {"version": "0.2.0", "configurations": [self.configuration()]}
 
     def write_launch_json(self, workspace: Path, *, force: bool = False) -> Path:
+        """Create a profile; force permits merging only this named configuration.
+
+        Existing JSONC values are preserved semantically; comments/formatting
+        are normalized to JSON. Malformed or ambiguous input is never replaced.
+        """
         root = Path(workspace).expanduser().resolve()
         if not root.is_dir():
             raise ValueError("VS Code workspace directory does not exist.")
@@ -108,11 +162,32 @@ class VsCodeExternalProfile:
             raise FileExistsError(
                 "Refusing to overwrite existing VS Code launch.json: %s" % output
             )
+        configuration = self.configuration()
+        document = _read_launch_document(output) if output.exists() else {"version": "0.2.0"}
+        configurations = document.setdefault("configurations", [])
+        matches = [index for index, item in enumerate(configurations) if item.get("name") == self.name]
+        if len(matches) > 1:
+            raise ValueError("Multiple VS Code configurations have the managed profile name: %s" % self.name)
+        if matches:
+            configurations[matches[0]] = configuration
+        else:
+            configurations.append(configuration)
+        payload = json.dumps(document, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(
-            json.dumps(self.launch_json(), indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+        staged = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", newline="\n", dir=output.parent,
+                prefix=".launch-", suffix=".tmp", delete=False,
+            ) as stream:
+                staged = Path(stream.name)
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(staged, output)
+        finally:
+            if staged is not None:
+                staged.unlink(missing_ok=True)
         return output
 
 
@@ -358,6 +433,14 @@ class VsCodeDebugBridge:
         self._require_stopped()
         if not session.connected:
             raise RuntimeError("Remote B300 SSH session must be connected before Debug Client starts.")
+        try:
+            session.require_remote_listener(remote_port=int(remote_gdb_port))
+        except RemoteForwardError as error:
+            raise RemoteForwardError(
+                "Gateway GDB listener is unavailable. Start Debug Gateway on the remote "
+                "workstation, then retry Debug Client. If Gateway is already running, "
+                "check that SSH TCP forwarding is allowed."
+            ) from error
         forward = session.open_forward(
             self.CLIENT_FORWARD_NAME,
             remote_port=int(remote_gdb_port),

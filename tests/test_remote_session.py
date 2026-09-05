@@ -15,12 +15,29 @@ class FakeTransport:
     def __init__(self):
         self.active = True
         self.keepalive_calls = []
+        self.channel_requests = []
+        self.channel_error = None
+        self.channel = FakeChannel()
+
+    def open_channel(self, kind, destination, origin, *, timeout):
+        self.channel_requests.append((kind, destination, origin, timeout))
+        if self.channel_error:
+            raise self.channel_error
+        return self.channel
 
     def is_active(self):
         return self.active
 
     def set_keepalive(self, seconds):
         self.keepalive_calls.append(seconds)
+
+
+class FakeChannel:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
 
 
 class FakeClient:
@@ -100,6 +117,38 @@ class ForwardFactory:
 class RemoteSessionTests(unittest.TestCase):
     def setUp(self):
         self.profile = RemoteGatewayProfile("192.168.1.145", "Admin", 22)
+
+    def test_listener_preflight_closes_bounded_loopback_channel_without_creating_forward(self):
+        client = FakeClient()
+        session = RemoteSession(self.profile, credential_store=MemoryStore(), ssh_client_factory=lambda: client)
+        session.connect("secret")
+        session.require_remote_listener(remote_port=4333, timeout_seconds=1.5)
+        self.assertEqual(client.transport.channel_requests, [
+            ("direct-tcpip", ("127.0.0.1", 4333), ("127.0.0.1", 0), 1.5),
+        ])
+        self.assertTrue(client.transport.channel.closed)
+        self.assertEqual(session.state.forwards, ())
+        self.assertTrue(session.connected)
+
+    def test_listener_preflight_refusal_timeout_or_missing_channel_fails_closed(self):
+        for failure in (OSError("refused"), TimeoutError("timed out"), None):
+            with self.subTest(failure=failure):
+                client = FakeClient()
+                client.transport.channel_error = failure
+                client.transport.channel = None
+                session = RemoteSession(self.profile, credential_store=MemoryStore(), ssh_client_factory=lambda: client)
+                session.connect("secret")
+                with self.assertRaises(RemoteForwardError):
+                    session.require_remote_listener(remote_port=3333)
+                self.assertEqual(session.state.forwards, ())
+
+    def test_listener_preflight_requires_connected_session_and_bounded_arguments(self):
+        session = RemoteSession(self.profile, credential_store=MemoryStore())
+        with self.assertRaises(RemoteForwardError):
+            session.require_remote_listener(remote_port=3333)
+        for port, timeout in ((0, 3), (65536, 3), (3333, 0), (3333, float("inf")), (3333, float("nan"))):
+            with self.subTest(port=port, timeout=timeout), self.assertRaises(ValueError):
+                session.require_remote_listener(remote_port=port, timeout_seconds=timeout)
 
     def test_connect_once_reuses_authenticated_session_and_remembers_password(self):
         store = MemoryStore()

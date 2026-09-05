@@ -5,6 +5,15 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-09-05
+
+- Kept the five-page PROGRAM / MONITOR / DEBUG / DEVICE / SETTINGS workflow, with an independent Monitor lifecycle and no hidden legacy Debug IDE in production.
+- Preserved unrelated VS Code launch configurations when updating the B300 bridge; configuration writes are atomic and malformed files are left unchanged.
+- Aligned CLI and agent guidance with LOCAL / GATEWAY / CLIENT roles and VS Code source debugging.
+- Hardened Windows upgrades: validate the staged runtime, retain the previous owned files until installation succeeds, restore them after an installation failure, and remove stale runtime files on success.
+- Added a complete versioned runtime-integrity manifest to native bundles and verified Windows installation against it.
+- Kept flash/Factory protection and the hardware acceptance boundary unchanged. HW-P1-001 remains open: B300 APPLICATION ACCEPTANCE is DEFERRED without new board evidence.
+
 ## [0.14.1] - 2026-09-03
 
 - Integrated the Cockpit-inspired frontend refinements across the existing Production and Engineering workspaces while preserving the Core-owned flash, Factory, memory, debug, and SSH safety paths.

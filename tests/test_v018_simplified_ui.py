@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -14,6 +15,8 @@ from PySide6.QtWidgets import QApplication, QPushButton, QTabWidget
 
 from b300_core.models import ImageInfo, ProbeInfo, TargetInfo
 from b300_gui.main_window_v18 import MainWindowV18
+from b300_gui.update_dialog import UpdateDialog
+from b300_core.vscode_bridge import BridgeState, DebugRole, VsCodeBridgeState
 from b300_gui.views.debug_vscode_view import DebugVsCodeView
 from b300_gui.views.device_view import DeviceView
 from b300_gui.views.monitor_view import MonitorView
@@ -44,6 +47,110 @@ class V018SimplifiedUiTests(unittest.TestCase):
         window.close()
         window.deleteLater()
         self.app.processEvents()
+
+    def test_ready_bridge_roles_lock_hardware_and_update_install_until_stopped(self) -> None:
+        window = self._make_window()
+        try:
+            window.program_view._selected_file = Path("application.hex")
+            window.update_dialog = UpdateDialog(
+                "0.18.0", SimpleNamespace(version="0.18.1", notes="", release_page=""),
+                SimpleNamespace(), window,
+            )
+            window.update_dialog.set_ready(Path("update.zip"))
+            locked_controls = (
+                window.monitor_view.live_panel.start_button,
+                window.monitor_view.role_selector,
+                window.monitor_view.symbol_button,
+                window.program_view.btn_flash_app,
+                window.program_view.btn_flash_bootloader,
+                window.program_view.btn_inspect_target,
+                window.device_view.btn_doctor,
+                window.header_bar.machine_setup_btn,
+                window.header_bar.probe_refresh_btn,
+                window.machine_setup_button,
+                window.update_dialog.action_button,
+                window.debug_vscode_view.btn_open_local_vscode,
+                window.debug_vscode_view.btn_start_gateway,
+                window.debug_vscode_view.btn_open_remote_vscode,
+            )
+            for role in DebugRole:
+                with self.subTest(role=role):
+                    with mock.patch.object(type(window._vscode_controller), "state",
+                                           new_callable=mock.PropertyMock) as state:
+                        state.return_value = VsCodeBridgeState(role, BridgeState.READY, "127.0.0.1:3333")
+                        window._render_bridge_state()
+                        self.assertTrue(window._operation_state().is_hardware_busy)
+                        for control in locked_controls:
+                            self.assertFalse(control.isEnabled(), str(control))
+                        self.assertTrue(window.debug_vscode_view.btn_stop_bridge.isEnabled())
+                        self.assertEqual(window.debug_vscode_view.btn_stop_gateway.isEnabled(),
+                                         role == DebugRole.GATEWAY)
+                        state.return_value = VsCodeBridgeState(None, BridgeState.STOPPED, None)
+                        window._render_bridge_state()
+                        self.assertFalse(window._operation_state().is_hardware_busy)
+                        for control in locked_controls:
+                            self.assertTrue(control.isEnabled(), str(control))
+                        self.assertFalse(window.debug_vscode_view.btn_stop_bridge.isEnabled())
+        finally:
+            self._close(window)
+
+    def test_client_monitor_handler_refuses_while_vscode_client_ready(self) -> None:
+        from b300_gui.live_monitor_controller import LiveMonitorRequest
+        window = self._make_window()
+        try:
+            created = []
+            window.monitor_view.controller._session_factory = lambda **kwargs: created.append(kwargs)
+            window.monitor_view.controller._remote_session_provider = lambda request: self.fail("busy Monitor attempted login")
+            with mock.patch.object(type(window._vscode_controller), "state",
+                                   new_callable=mock.PropertyMock) as state:
+                state.return_value = VsCodeBridgeState(DebugRole.CLIENT, BridgeState.READY, "127.0.0.1:43333")
+                with self.assertRaisesRegex(RuntimeError, "busy"):
+                    window.monitor_view.controller.start(LiveMonitorRequest.client(
+                        None, host="gateway.local", user="operator", symbol_roots=(Path.cwd(),)))
+            self.assertEqual(created, [])
+            self.assertFalse(window.monitor_view.controller.active)
+        finally:
+            self._close(window)
+
+    def test_monitor_client_reuses_authenticated_gui_session(self) -> None:
+        from b300_core.remote_profile import RemoteGatewayProfile
+        from tests.test_live_monitor_controller import _InlineWorker, _Session
+        from b300_gui.live_monitor_controller import LiveMonitorRequest
+        window = self._make_window()
+        try:
+            profile = RemoteGatewayProfile("gateway.local", "operator", 22)
+            authenticated = SimpleNamespace(profile=profile, connected=True, disconnect=lambda: None)
+            window._vscode_remote_session = authenticated
+            received = []
+            class ClientSession(_Session):
+                def start_client(self, config, remote_session=None):
+                    received.append(remote_session)
+                    return self.start_local(config)
+            controller = window.monitor_view.controller
+            controller._worker_factory = _InlineWorker
+            controller._session_factory = lambda **kwargs: ClientSession(())
+            controller.start(LiveMonitorRequest.client(
+                None, host="gateway.local", user="operator", symbol_roots=(Path.cwd(),)))
+            self.assertEqual(received, [authenticated])
+            self.assertFalse(controller.active)
+        finally:
+            self._close(window)
+
+    def test_monitor_client_login_cancel_keeps_transport_stopped(self) -> None:
+        from b300_gui.live_monitor_controller import LiveMonitorRequest
+        window = self._make_window()
+        try:
+            created = []
+            window.monitor_view.controller._session_factory = lambda **kwargs: created.append(kwargs)
+            with mock.patch("b300_gui.main_window_v18.RemoteLoginDialog") as dialog:
+                dialog.return_value.exec.return_value = 0
+                with self.assertRaisesRegex(RuntimeError, "cancelled"):
+                    window.monitor_view.controller.start(LiveMonitorRequest.client(
+                        None, host="gateway.local", user="operator", symbol_roots=(Path.cwd(),)))
+            self.assertEqual(created, [])
+            self.assertFalse(window.monitor_view.controller.active)
+        finally:
+            self._close(window)
 
     def test_main_window_renders_with_five_primary_pages(self) -> None:
         window = self._make_window()

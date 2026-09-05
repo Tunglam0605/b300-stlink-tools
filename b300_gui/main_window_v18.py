@@ -13,6 +13,7 @@ from typing import Optional
 from PySide6.QtWidgets import QMessageBox, QPushButton, QStackedWidget
 
 from b300_core.models import ProbeInfo, TargetInfo
+from b300_core.vscode_bridge import BridgeState
 from b300_core.remote_profile import RemoteGatewayProfile, load_remote_profile, save_remote_profile
 from b300_core.remote_session import RemoteSession
 from .main_window import MainWindow
@@ -103,6 +104,8 @@ class MainWindowV18(MainWindow):
         self.monitor_view = MonitorView(
             self,
             selected_probe=self._selected_probe,
+            remote_session_provider=self._monitor_remote_session,
+            hardware_busy=lambda: self._operation_state().is_hardware_busy,
             openocd_executable=str(self.debug_service.executable),
         )
         self.monitor_view.log.connect(self.append_log)
@@ -184,15 +187,21 @@ class MainWindowV18(MainWindow):
         monitor_busy = bool(
             monitor is not None and monitor.controller.active
         )
+        controller = getattr(self, "_vscode_controller", None)
+        bridge_busy = bool(controller is not None and controller.state.state == BridgeState.READY)
         return OperationState(
             main_hardware_busy=base.main_hardware_busy,
             memory_hardware_busy=base.memory_hardware_busy,
-            debug_hardware_busy=base.debug_hardware_busy or monitor_busy,
+            debug_hardware_busy=base.debug_hardware_busy or monitor_busy or bridge_busy,
         )
 
     def _update_controls(self) -> None:
         super()._update_controls()
         hardware_busy = self._operation_state().is_hardware_busy
+        self.header_bar.machine_setup_btn.setEnabled(not hardware_busy)
+        self.header_bar.probe_refresh_btn.setEnabled(not hardware_busy)
+        if hasattr(self, "monitor_view"):
+            self.monitor_view.set_hardware_busy(hardware_busy)
         if hasattr(self, "program_view"):
             self.program_view.set_busy(hardware_busy)
         if hasattr(self, "device_view"):
@@ -272,6 +281,7 @@ class MainWindowV18(MainWindow):
         self.debug_vscode_view.set_bridge_state(
             role, state.state.value, state.detail, state.gdb_target
         )
+        self._update_controls()
 
     def _selected_debug_probe(self):
         probe = self._selected_probe()
@@ -378,6 +388,17 @@ class MainWindowV18(MainWindow):
             current = RemoteSession(profile)
             self._vscode_remote_session = current
         return current
+
+    def _monitor_remote_session(self, request) -> RemoteSession:
+        profile = RemoteGatewayProfile(request.host, request.user, request.ssh_port).validate()
+        if not self._session_matches(profile):
+            self._show_remote_login(
+                {"host": profile.host, "user": profile.user, "ssh_port": profile.port},
+                launch_after=False,
+            )
+        if not self._session_matches(profile):
+            raise RuntimeError("Client Monitor login cancelled or endpoint changed; select the saved Gateway again.")
+        return self._vscode_remote_session
 
     def _show_remote_login(self, request: dict, *, launch_after: bool) -> None:
         try:

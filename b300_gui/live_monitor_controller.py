@@ -60,6 +60,8 @@ class LiveMonitorController(QObject):
         *,
         selected_probe: Optional[Callable[[], ProbeRef]] = None,
         openocd_executable: Optional[str] = None,
+        remote_session_provider=None,
+        hardware_busy: Optional[Callable[[], bool]] = None,
         session_factory=LiveMonitorSession,
         worker_factory=FunctionWorker,
     ) -> None:
@@ -67,6 +69,8 @@ class LiveMonitorController(QObject):
         self.panel = panel
         self._selected_probe = selected_probe
         self._openocd_executable = openocd_executable
+        self._remote_session_provider = remote_session_provider
+        self._hardware_busy = hardware_busy
         self._session_factory = session_factory
         self._worker_factory = worker_factory
         self._active = False
@@ -80,6 +84,8 @@ class LiveMonitorController(QObject):
     def start(self, request: LiveMonitorRequest) -> None:
         if self._active or self._worker is not None:
             raise RuntimeError("Live Monitor is already active.")
+        if self._hardware_busy is not None and self._hardware_busy():
+            raise RuntimeError("Hardware is busy; stop the current operation before starting Monitor.")
         if request.role not in {"LOCAL", "CLIENT"}:
             raise ValueError("Live Monitor request role must be LOCAL or CLIENT.")
 
@@ -104,6 +110,11 @@ class LiveMonitorController(QObject):
                 show_console=False, **common,
             )
         config.validate()
+        remote_session = None
+        if request.role == "CLIENT" and self._remote_session_provider is not None:
+            remote_session = self._remote_session_provider(request)
+            if remote_session is None:
+                raise RuntimeError("Client Live Monitor requires an authenticated session.")
         live = self._session_factory(openocd_executable=self._openocd_executable)
         self._live_session = live
         self.panel.reset_for_sampling()
@@ -113,16 +124,22 @@ class LiveMonitorController(QObject):
         self._active = True
         self.operation_state_changed.emit(True)
 
-        def execute(log, phase, _cancel_event):
+        def execute(log, phase, cancel_event):
             try:
-                info = (
-                    live.start_local(config) if request.role == "LOCAL"
-                    else live.start_client(config)
-                )
+                if request.role == "LOCAL":
+                    info = live.start_local(config)
+                elif remote_session is not None:
+                    info = live.start_client(config, remote_session=remote_session)
+                else:
+                    info = live.start_client(config)
                 log(
                     "LIVE MONITOR CONNECTED: role=%s transport=%s target=%s" %
                     (info.role, info.transport, info.initial_target_state.upper())
                 )
+                # Session startup resets its own event; retain Stop requested
+                # while connecting via the worker's durable cancellation event.
+                if cancel_event.is_set():
+                    live.cancel()
                 summary = live.run(phase)
                 return summary, live.analytics_snapshot(), info
             finally:

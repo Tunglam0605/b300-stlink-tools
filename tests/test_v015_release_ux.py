@@ -20,7 +20,10 @@ class V015ReleaseUxTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def test_source_version_is_current_release(self) -> None:
-        self.assertEqual(__version__, "0.18.0")
+        from b300_core import __version__ as core_version
+        from b300_gui import __version__ as gui_version
+        self.assertEqual(core_version, __version__)
+        self.assertEqual(gui_version, __version__)
 
     def test_mode_first_surface_explains_connection_roles(self) -> None:
         selector = DebugModeSelector()

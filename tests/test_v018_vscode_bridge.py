@@ -4,10 +4,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from b300_core.debug_service import DebugState
 from b300_core.models import ProbeRef
-from b300_core.remote_session import RemoteForward
+from b300_core.remote_session import RemoteForward, RemoteForwardError
 from b300_core.vscode_bridge import (
     BridgeState,
     DebugRole,
@@ -59,12 +60,19 @@ class FakeTclClient:
 
 
 class FakeRemoteSession:
-    def __init__(self, *, connected=True, local_port=43333) -> None:
+    def __init__(self, *, connected=True, local_port=43333, listener_ready=True) -> None:
         self.connected = connected
         self.local_port = local_port
         self.opened = []
         self.closed = []
         self.disconnected = False
+        self.listener_ready = listener_ready
+        self.checked_ports = []
+
+    def require_remote_listener(self, *, remote_port, timeout_seconds=3.0):
+        self.checked_ports.append(remote_port)
+        if not self.listener_ready:
+            raise RemoteForwardError("Gateway listener unavailable")
 
     def open_forward(self, name, *, remote_port, local_port=0,
                      remote_host="127.0.0.1", local_host="127.0.0.1"):
@@ -175,6 +183,17 @@ class V018VsCodeBridgeTests(unittest.TestCase):
         self.assertEqual(session.closed, ["vscode_gdb"])
         self.assertFalse(session.disconnected)
         self.assertEqual(debug.starts, 0)
+        self.assertEqual(session.checked_ports, [3333])
+
+    def test_client_missing_gateway_listener_never_opens_forward_or_becomes_ready(self):
+        session = FakeRemoteSession(listener_ready=False)
+        bridge = VsCodeDebugBridge(debug_service=FakeDebugService())
+        with self.assertRaisesRegex(RemoteForwardError, "Start.*Gateway"):
+            bridge.start_client(session)
+        self.assertEqual(session.opened, [])
+        self.assertEqual(bridge.state.state, BridgeState.STOPPED)
+        self.assertIsNone(bridge.state.gdb_target)
+        self.assertFalse(session.disconnected)
 
     def test_client_requires_authenticated_remote_session(self) -> None:
         bridge = VsCodeDebugBridge(debug_service=FakeDebugService())
@@ -203,6 +222,81 @@ class V018VsCodeBridgeTests(unittest.TestCase):
             self.assertTrue(output.is_file())
             with self.assertRaises(FileExistsError):
                 profile.write_launch_json(root)
+
+    def test_launch_writer_preserves_jsonc_workspace_and_replaces_only_named_profile(self):
+        original = '''\ufeff{
+          // Team launch profiles
+          "version": "0.2.0",
+          "inputs": [{"id": "path", "default": "https://host/a/*b*/,]",}],
+          "compounds": [{"name": "All", "configurations": ["Python", "B300 local"],}],
+          "configurations": [
+            {"name": "Python", "type": "debugpy", "args": ["a", "b",],},
+            /* Managed attach */ {"name": "B300 local", "gdbTarget": "old"},
+            {"name": "Other board", "type": "cortex-debug"},
+          ],
+        }'''
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / ".vscode" / "launch.json"
+            output.parent.mkdir()
+            output.write_text(original, encoding="utf-8")
+            profile = VsCodeExternalProfile("B300 local", "app.elf", "127.0.0.1:3333")
+            profile.write_launch_json(root, force=True)
+            result = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(result["inputs"], [{"id": "path", "default": "https://host/a/*b*/,]"}])
+            self.assertEqual(result["compounds"], [{"name": "All", "configurations": ["Python", "B300 local"]}])
+            self.assertEqual(result["configurations"][0], {"name": "Python", "type": "debugpy", "args": ["a", "b"]})
+            self.assertEqual(result["configurations"][2], {"name": "Other board", "type": "cortex-debug"})
+            self.assertEqual(len(result["configurations"]), 3)
+            self.assertEqual(result["configurations"][1]["gdbTarget"], "127.0.0.1:3333")
+            self.assertEqual(result["configurations"][1]["request"], "attach")
+
+    def test_launch_writer_appends_managed_profile_to_existing_document(self):
+        for original in ({"inputs": []}, {"configurations": [{"name": "Other"}]}):
+            with self.subTest(original=original), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                output = root / ".vscode" / "launch.json"
+                output.parent.mkdir()
+                output.write_text(json.dumps(original), encoding="utf-8")
+                VsCodeExternalProfile("B300 local", "app.elf", "127.0.0.1:3333").write_launch_json(root, force=True)
+                result = json.loads(output.read_text(encoding="utf-8"))
+                self.assertEqual(result["configurations"][:-1], original.get("configurations", []))
+                self.assertEqual(result["configurations"][-1]["name"], "B300 local")
+                if "inputs" in original:
+                    self.assertEqual(result["inputs"], [])
+
+    def test_launch_writer_refuses_malformed_or_ambiguous_document_without_changes(self):
+        documents = [
+            '{"configurations": [', '[]', '{"configurations": {}}',
+            '{"configurations": [null]}', '{"configurations": [,]}',
+            '{"configurations": []} /* unfinished',
+            '{"configurations": [], "inputs": NaN}',
+            '{"configurations": [], "configurations": []}',
+            '{"configurations": [{"name":"B300 local"},{"name":"B300 local"}]}',
+        ]
+        for original in documents:
+            with self.subTest(original=original), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                output = root / ".vscode" / "launch.json"
+                output.parent.mkdir()
+                output.write_text(original, encoding="utf-8")
+                before = output.read_bytes()
+                with self.assertRaises(ValueError):
+                    VsCodeExternalProfile("B300 local", "app.elf", "127.0.0.1:3333").write_launch_json(root, force=True)
+                self.assertEqual(output.read_bytes(), before)
+
+    def test_launch_writer_failed_atomic_replace_preserves_original_and_cleans_stage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / ".vscode" / "launch.json"
+            output.parent.mkdir()
+            original = b'{"configurations": [{"name": "Other"}]}'
+            output.write_bytes(original)
+            with patch("b300_core.vscode_bridge.os.replace", side_effect=OSError("replace failed")):
+                with self.assertRaisesRegex(OSError, "replace failed"):
+                    VsCodeExternalProfile("B300 local", "app.elf", "127.0.0.1:3333").write_launch_json(root, force=True)
+            self.assertEqual(output.read_bytes(), original)
+            self.assertEqual(list(output.parent.iterdir()), [output])
 
 
 if __name__ == "__main__":

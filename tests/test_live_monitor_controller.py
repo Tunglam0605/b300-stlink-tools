@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -44,15 +45,17 @@ class _InlineWorker:
         self.failed = _Signal()
         self.finished = _Signal()
         self.cancelled = False
+        self.cancel_event = threading.Event()
         self.deleted = False
 
     def start(self) -> None:
-        result = self.operation(self.log.emit, self.phase.emit, object())
+        result = self.operation(self.log.emit, self.phase.emit, self.cancel_event)
         self.completed.emit(result)
         self.finished.emit()
 
     def cancel(self) -> None:
         self.cancelled = True
+        self.cancel_event.set()
 
     def isRunning(self) -> bool:
         return False
@@ -132,6 +135,81 @@ class _Session:
 
 
 class LiveMonitorControllerTests(unittest.TestCase):
+    def test_stop_during_startup_survives_session_cancellation_reset(self) -> None:
+        for role in ("LOCAL", "CLIENT"):
+            with self.subTest(role=role):
+                panel = _Panel()
+                panel.mark_stopping = lambda: None
+
+                class StartingSession(_Session):
+                    def start_local(self, config):
+                        info = super().start_local(config)
+                        controller.stop()
+                        # Real LiveMonitorSession clears its event after startup.
+                        self.cancelled = False
+                        return info
+
+                    start_client = start_local
+
+                    def run(self, on_sample):
+                        if not self.cancelled:
+                            on_sample(SimpleNamespace(cycle=0))
+                        return SimpleNamespace(samples=0, overruns=0,
+                                               final_target_state="running", cancelled=self.cancelled)
+
+                session = StartingSession(())
+                with tempfile.TemporaryDirectory() as directory:
+                    symbols = Path(directory) / "application.axf"
+                    symbols.write_bytes(b"ELF")
+                    controller = LiveMonitorController(
+                        panel, selected_probe=lambda: ProbeRef("probe"),
+                        session_factory=lambda **_kwargs: session, worker_factory=_InlineWorker,
+                    )
+                    request = (live_monitor_controller.LiveMonitorRequest.local(symbols)
+                               if role == "LOCAL" else live_monitor_controller.LiveMonitorRequest.client(
+                                   symbols, host="gateway.local", user="operator"))
+                    controller.start(request)
+                self.assertEqual(panel.samples, [])
+                self.assertTrue(panel.completed[0].cancelled)
+                self.assertTrue(session.closed)
+                self.assertFalse(controller.active)
+                self.assertEqual(panel.control_states[-1], (True, False, True))
+
+    def test_client_uses_authenticated_session_from_provider(self) -> None:
+        authenticated = object()
+        received = []
+        class ClientSession(_Session):
+            def start_client(self, config, remote_session=None):
+                received.append(remote_session)
+                return self.start_local(config)
+        session = ClientSession(())
+        with tempfile.TemporaryDirectory() as directory:
+            symbols = Path(directory) / "application.axf"
+            symbols.write_bytes(b"ELF")
+            controller = LiveMonitorController(
+                _Panel(), remote_session_provider=lambda request: authenticated,
+                session_factory=lambda **_kwargs: session, worker_factory=_InlineWorker,
+            )
+            controller.start(live_monitor_controller.LiveMonitorRequest.client(
+                symbols, host="gateway.local", user="operator"))
+        self.assertEqual(received, [authenticated])
+        self.assertTrue(session.closed)
+
+    def test_cancelled_client_login_does_not_create_transport(self) -> None:
+        sessions = []
+        def cancelled(request):
+            raise RuntimeError("Client login cancelled")
+        controller = LiveMonitorController(
+            _Panel(), remote_session_provider=cancelled,
+            session_factory=lambda **_kwargs: sessions.append(_Session(())),
+            worker_factory=_InlineWorker,
+        )
+        with self.assertRaisesRegex(RuntimeError, "cancelled"):
+            controller.start(live_monitor_controller.LiveMonitorRequest.client(
+                None, host="gateway.local", user="operator", symbol_roots=(Path.cwd(),)))
+        self.assertEqual(sessions, [])
+        self.assertFalse(controller.active)
+
     def test_local_start_streams_samples_closes_transport_and_restores_controls(self) -> None:
         self.assertTrue(
             hasattr(live_monitor_controller, "LiveMonitorRequest"),
@@ -269,7 +347,7 @@ class LiveMonitorControllerTests(unittest.TestCase):
         class CatchingWorker(_InlineWorker):
             def start(self) -> None:
                 try:
-                    self.operation(self.log.emit, self.phase.emit, object())
+                    self.operation(self.log.emit, self.phase.emit, self.cancel_event)
                 except Exception as error:
                     self.failed.emit(SimpleNamespace(message=str(error)))
                 finally:

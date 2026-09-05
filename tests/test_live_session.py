@@ -48,6 +48,8 @@ class FakeRemoteSession:
         self.connected = connected
         self.forward_calls = []
         self.disconnect_calls = 0
+        self.forwards = {"tcl": object(), "gdb": object()}
+        self.closed_forwards = []
     def check_health(self):
         return RemoteSessionState(
             state="connected" if self.connected else "disconnected",
@@ -55,7 +57,12 @@ class FakeRemoteSession:
         )
     def open_forward(self, name, *, remote_port, local_port=0, remote_host="127.0.0.1", local_host="127.0.0.1"):
         self.forward_calls.append((name, remote_port, local_port, remote_host, local_host))
-        return RemoteForward(name, "127.0.0.1", 18666, "127.0.0.1", remote_port)
+        forward = RemoteForward(name, "127.0.0.1", 18666, "127.0.0.1", remote_port)
+        self.forwards[name] = forward
+        return forward
+    def close_forward(self, name):
+        self.closed_forwards.append(name)
+        self.forwards.pop(name, None)
     def disconnect(self):
         self.disconnect_calls += 1
         self.connected = False
@@ -218,13 +225,46 @@ class LiveMonitorSessionTests(unittest.TestCase):
             self.assertEqual(info.transport, "embedded-ssh-shared-tcl-forward")
             self.assertEqual(info.tcl_endpoint, "127.0.0.1:18666")
             self.assertEqual(called, [])
-            self.assertEqual(remote.forward_calls, [
-                ("tcl", 6666, 0, "127.0.0.1", "127.0.0.1")
-            ])
+            monitor_forward = remote.forward_calls[0][0]
+            self.assertNotIn(monitor_forward, {"tcl", "gdb"})
+            self.assertEqual(remote.forward_calls[0][1:],
+                             (6666, 0, "127.0.0.1", "127.0.0.1"))
             self.assertEqual(session.run().samples, 1)
             session.close()
             self.assertTrue(remote.connected)
             self.assertEqual(remote.disconnect_calls, 0)
+            self.assertEqual(set(remote.forwards), {"tcl", "gdb"})
+            session.close()
+            self.assertEqual(remote.closed_forwards, [monitor_forward])
+
+    def test_client_startup_failure_closes_only_monitor_forward(self):
+        for failure in ("symbols", "target", "table"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory, \
+                    mock.patch("b300_core.live_session.find_matching_symbol_file") as matcher:
+                symbols = self.make_symbols(directory)
+                matcher.return_value = (self.matched(symbols), ())
+                if failure == "symbols":
+                    matcher.side_effect = RuntimeError("symbol failure")
+                remote = FakeRemoteSession()
+                previous = dict(remote.forwards)
+                class Target(FakeTcl):
+                    def wait_target_state(self):
+                        return "halted" if failure == "target" else "running"
+                def table(path):
+                    if failure == "table":
+                        raise RuntimeError("symbol table failure")
+                    return FakeSymbolTable(path)
+                session = LiveMonitorSession(tcl_factory=Target, symbol_table_factory=table)
+                with self.assertRaises(RuntimeError):
+                    session.start_client(ClientLiveMonitorConfig(
+                        "gateway.local", "automation", symbols, sample_limit=1),
+                        remote_session=remote)
+                self.assertEqual(remote.forwards, previous)
+                self.assertTrue(remote.connected)
+                self.assertEqual(remote.disconnect_calls, 0)
+                self.assertFalse(session.active)
+                session.close()
+                self.assertEqual(remote.closed_forwards, [remote.forward_calls[0][0]])
 
     def test_shared_remote_session_must_match_config_and_be_authenticated(self):
         with tempfile.TemporaryDirectory() as directory:

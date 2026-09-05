@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Tuple
@@ -121,6 +122,7 @@ class LiveMonitorSession:
         self._service = None
         self._tunnel = None
         self._remote_session: Optional[RemoteSession] = None
+        self._remote_forward_name = "monitor-tcl-" + uuid.uuid4().hex
         self._tcl = None
         self._symbols = None
 
@@ -207,7 +209,7 @@ class LiveMonitorSession:
             if not health.authenticated:
                 raise RuntimeError("Client Live Monitor requires an authenticated RemoteSession.")
             forward = remote_session.open_forward(
-                "tcl", remote_port=config.gateway_tcl_port, local_port=0,
+                self._remote_forward_name, remote_port=config.gateway_tcl_port, local_port=0,
             )
             local_tcl = forward.local_port
             shared_remote = remote_session
@@ -234,6 +236,8 @@ class LiveMonitorSession:
         except BaseException:
             if tunnel is not None:
                 tunnel.stop()
+            if shared_remote is not None:
+                shared_remote.close_forward(self._remote_forward_name)
             raise
         with self._lock:
             self._store.clear()
@@ -284,6 +288,7 @@ class LiveMonitorSession:
         self.cancel()
         with self._lock:
             symbols, tunnel, service = self._symbols, self._tunnel, self._service
+            remote = self._remote_session
             self._symbols = None
             self._tcl = None
             self._tunnel = None
@@ -292,12 +297,16 @@ class LiveMonitorSession:
             self._config = None
             self._role = None
             self._active = False
-        if symbols is not None:
-            symbols.close()
-        if tunnel is not None:
-            tunnel.stop()
-        if service is not None:
-            service.stop()
+        try:
+            if symbols is not None:
+                symbols.close()
+            if tunnel is not None:
+                tunnel.stop()
+            if service is not None:
+                service.stop()
+        finally:
+            if remote is not None:
+                remote.close_forward(self._remote_forward_name)
 
     def _require_inactive(self) -> None:
         with self._lock:

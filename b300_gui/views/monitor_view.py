@@ -33,6 +33,8 @@ class MonitorView(QWidget):
                  controller: Optional[LiveMonitorController] = None,
                  selected_probe: Optional[Callable[[], ProbeRef]] = None,
                  openocd_executable: Optional[str] = None,
+                 remote_session_provider=None,
+                 hardware_busy: Optional[Callable[[], bool]] = None,
                  remote_profile_loader: Callable[[], Optional[RemoteGatewayProfile]] = load_remote_profile,
                  ) -> None:
         super().__init__(parent)
@@ -46,6 +48,8 @@ class MonitorView(QWidget):
             self.live_panel,
             self,
             selected_probe=selected_probe,
+            remote_session_provider=remote_session_provider,
+            hardware_busy=hardware_busy,
             openocd_executable=openocd_executable,
         )
         if self.controller.panel is not self.live_panel:
@@ -103,6 +107,11 @@ class MonitorView(QWidget):
         banner_layout.addLayout(source_row)
         layout.addWidget(banner)
         layout.addWidget(self.live_panel, 1)
+
+    def set_hardware_busy(self, busy: bool) -> None:
+        self.live_panel.start_button.setEnabled(not busy)
+        self.role_selector.setEnabled(not busy)
+        self.symbol_button.setEnabled(not busy)
 
     def _choose_symbols(self) -> None:
         selected, _filter = QFileDialog.getOpenFileName(
