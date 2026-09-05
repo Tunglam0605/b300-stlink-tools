@@ -141,7 +141,7 @@ jobs:
               -PassThru
             if (-not $setup.WaitForExit(60000)) {
               $timedOut = $true
-              $setup.Kill()
+              taskkill /PID $setup.Id /T /F | Out-Host
               $setup.WaitForExit()
             }
           } finally {
