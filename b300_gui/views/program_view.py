@@ -1,10 +1,10 @@
 """Operator-oriented PROGRAM page for B300 v0.18.
 
-The page deliberately exposes the proven local Application/Bootloader paths and
-keeps remote programming visibly marked as a foundation until an authenticated
-end-to-end transfer protocol is available.  Application selection uses the same
-strict Intel-HEX parser as the backend so unsupported BIN/ELF files can never
-look ready in the GUI.
+The default page exposes only the proven local Application path. Factory
+Bootloader provisioning lives under Advanced and incomplete remote programming
+stays out of the operator surface. Application selection uses the same strict
+Intel-HEX parser as the backend so unsupported BIN/ELF files can never look
+ready in the GUI.
 """
 from __future__ import annotations
 
@@ -141,6 +141,10 @@ class ProgramView(QWidget):
         self.mode_group.addButton(self.radio_remote, 1)
         modes.addWidget(self.radio_local)
         modes.addWidget(self.radio_remote)
+        # Remote programming is not a complete v0.18 workflow.  Do not spend
+        # the operator's attention on a disabled mode selector.
+        self.radio_local.hide()
+        self.radio_remote.hide()
         self.mode_group.idToggled.connect(self._on_programming_mode_toggled)
         layout.addLayout(modes)
 
@@ -200,7 +204,7 @@ class ProgramView(QWidget):
         self.btn_flash_bootloader = QPushButton("🛡 NẠP BOOTLOADER")
         self.btn_flash_bootloader.clicked.connect(self._on_flash_bootloader_clicked)
         boot_layout.addWidget(self.btn_flash_bootloader)
-        local.addWidget(boot)
+        self.bootloader_card = boot
         layout.addWidget(self.local_panel)
 
         self.remote_panel = QWidget()
@@ -261,6 +265,7 @@ class ProgramView(QWidget):
             parent=self,
         )
         advanced = self.adv_card.content_layout
+        advanced.addWidget(self.bootloader_card)
         self.memory_map = MemoryMapWidget(self)
         advanced.addWidget(self.memory_map)
         info = QHBoxLayout()
@@ -269,20 +274,6 @@ class ProgramView(QWidget):
         info.addWidget(self.lbl_metadata_info, 1)
         info.addWidget(self.lbl_option_bytes, 1)
         advanced.addLayout(info)
-
-        privileged = QFrame()
-        privileged.setObjectName("nestedCard")
-        privileged_layout = QHBoxLayout(privileged)
-        text = QLabel(
-            "Remote Bootloader programming không được mở ở v0.18. Local trusted factory provisioning "
-            "vẫn là đường duy nhất được hỗ trợ."
-        )
-        text.setWordWrap(True)
-        privileged_layout.addWidget(text, 1)
-        self.btn_remote_bootloader = QPushButton("🔒 Remote Bootloader")
-        self.btn_remote_bootloader.setEnabled(False)
-        privileged_layout.addWidget(self.btn_remote_bootloader)
-        advanced.addWidget(privileged)
 
         self.log_terminal = QPlainTextEdit()
         self.log_terminal.setReadOnly(True)

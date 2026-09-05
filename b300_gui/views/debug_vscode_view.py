@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from b300_core.models import ProbeInfo, TargetInfo
 from b300_core.vscode_environment import VsCodeEnvironmentStatus
+from b300_gui.collapsible_card import CollapsibleCard
 
 
 class DebugVsCodeView(QWidget):
@@ -109,31 +110,36 @@ class DebugVsCodeView(QWidget):
         button.setMinimumHeight(34)
         return button
 
-    def _build_environment_card(self) -> QFrame:
-        card = QFrame()
+    def _build_environment_card(self) -> QWidget:
+        card = CollapsibleCard(
+            "MÔI TRƯỜNG DEBUG",
+            "VS Code, Cortex-Debug và runtime do B300 quản lý",
+            expanded=False,
+            parent=self,
+        )
         card.setObjectName("debugEnvironmentCard")
-        layout = QGridLayout(card)
-        layout.setContentsMargins(12, 8, 12, 8)
+        self.environment_details_card = card
+        layout = QGridLayout()
         layout.setHorizontalSpacing(14)
         layout.setVerticalSpacing(4)
-        layout.addWidget(QLabel("DEBUG ENVIRONMENT"), 0, 0, 1, 2)
         self.env_vscode = QLabel("VS Code · chưa kiểm tra")
         self.env_cortex = QLabel("Cortex-Debug · chưa kiểm tra")
         self.env_gdb = QLabel("ARM GDB · chưa kiểm tra")
         self.env_openocd = QLabel("OpenOCD · B300 managed")
-        layout.addWidget(self.env_vscode, 1, 0)
-        layout.addWidget(self.env_cortex, 1, 1)
-        layout.addWidget(self.env_gdb, 2, 0)
-        layout.addWidget(self.env_openocd, 2, 1)
+        layout.addWidget(self.env_vscode, 0, 0)
+        layout.addWidget(self.env_cortex, 0, 1)
+        layout.addWidget(self.env_gdb, 1, 0)
+        layout.addWidget(self.env_openocd, 1, 1)
         self.env_detail = QLabel(
             "B300 không yêu cầu OpenOCD trên PATH. Managed GDB được ưu tiên khi có trong bundle."
         )
         self.env_detail.setWordWrap(True)
         self.env_detail.setObjectName("mutedLabel")
-        layout.addWidget(self.env_detail, 3, 0, 1, 2)
-        self.btn_refresh_environment = QPushButton("↻ KIỂM TRA MÔI TRƯỜNG")
+        layout.addWidget(self.env_detail, 2, 0, 1, 2)
+        card.content_layout.addLayout(layout)
+        self.btn_refresh_environment = QPushButton("Kiểm tra")
         self.btn_refresh_environment.clicked.connect(self.refresh_environment_requested.emit)
-        layout.addWidget(self.btn_refresh_environment, 0, 2, 3, 1)
+        card.add_header_widget(self.btn_refresh_environment)
         return card
 
     def _workspace_rows(self, *, prefix: str):
@@ -198,18 +204,22 @@ class DebugVsCodeView(QWidget):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
+        self.gateway_details_card = CollapsibleCard(
+            "Chi tiết kết nối", "Loopback và run-state guard", expanded=False, parent=page
+        )
         self.gw_openocd_lbl = QLabel(
             "OpenOCD private endpoints · GDB 127.0.0.1:3333 · TCL 127.0.0.1:6666 · Telnet OFF"
         )
         self.gw_openocd_lbl.setWordWrap(True)
         self.gw_openocd_lbl.setObjectName("gatewayLoopbackStatus")
-        layout.addWidget(self.gw_openocd_lbl)
+        self.gateway_details_card.content_layout.addWidget(self.gw_openocd_lbl)
         warning = QLabel(
             "Gateway không expose 3333/6666 ra LAN/Internet. Client chỉ forward GDB qua SSH; "
             "TCL giữ nội bộ cho run-state guard."
         )
         warning.setWordWrap(True)
-        layout.addWidget(warning)
+        self.gateway_details_card.content_layout.addWidget(warning)
+        layout.addWidget(self.gateway_details_card)
         actions = QHBoxLayout()
         self.btn_start_gateway = QPushButton("▶ START GATEWAY")
         self.btn_stop_gateway = QPushButton("■ STOP GATEWAY")
@@ -246,7 +256,7 @@ class DebugVsCodeView(QWidget):
         self.client_ssh_port.setValue(22)
         self.client_local_gdb_spin = QSpinBox()
         self.client_local_gdb_spin.setRange(0, 65535)
-        self.client_local_gdb_spin.setValue(43333)
+        self.client_local_gdb_spin.setValue(0)
         self.client_local_gdb_spin.setToolTip("0 = B300 tự chọn local port trống")
         grid.addWidget(QLabel("Gateway"), 0, 0)
         grid.addWidget(self.client_host, 0, 1)
@@ -254,9 +264,15 @@ class DebugVsCodeView(QWidget):
         grid.addWidget(self.client_user, 0, 3)
         grid.addWidget(QLabel("SSH port"), 1, 0)
         grid.addWidget(self.client_ssh_port, 1, 1)
-        grid.addWidget(QLabel("Local GDB"), 1, 2)
-        grid.addWidget(self.client_local_gdb_spin, 1, 3)
         layout.addLayout(grid)
+        self.client_details_card = CollapsibleCard(
+            "Chi tiết kết nối", "Cổng local được B300 tự chọn", expanded=False, parent=page
+        )
+        detail_grid = QGridLayout()
+        detail_grid.addWidget(QLabel("Local GDB port"), 0, 0)
+        detail_grid.addWidget(self.client_local_gdb_spin, 0, 1)
+        self.client_details_card.content_layout.addLayout(detail_grid)
+        layout.addWidget(self.client_details_card)
         self.client_workspace, ws_btn, self.client_elf, elf_btn = self._workspace_rows(prefix="client")
         files = QGridLayout()
         files.addWidget(QLabel("Workspace"), 0, 0)
@@ -322,22 +338,21 @@ class DebugVsCodeView(QWidget):
     def set_bridge_state(self, role: Optional[str], state: str, detail: str = "",
                          gdb_target: Optional[str] = None) -> None:
         role_text = role or "NONE"
-        suffix = (" · %s" % gdb_target) if gdb_target else ""
-        self.bridge_status.setText("Debug bridge: %s · %s%s" % (role_text, state, suffix))
-        self.bridge_status.setToolTip(detail)
+        self.bridge_status.setText("Debug: %s · %s" % (role_text, state))
+        self.bridge_status.setToolTip(" · ".join(item for item in (detail, gdb_target or "") if item))
         active = str(state).upper() == "READY"
         self.btn_stop_bridge.setEnabled(active)
         gateway_active = active and str(role_text).upper() == "GATEWAY"
         self.btn_start_gateway.setEnabled(not active)
         self.btn_stop_gateway.setEnabled(gateway_active)
         self.gateway_state_label.setText(
-            "Gateway: READY · %s" % (gdb_target or "127.0.0.1:3333")
+            "Gateway: READY"
             if gateway_active else "Gateway: STOPPED"
         )
         client_active = active and str(role_text).upper() == "CLIENT"
         self.client_state_label.setText(
-            "SSH / GDB tunnel: READY · %s" % (gdb_target or "loopback")
-            if client_active else "SSH / GDB tunnel: DISCONNECTED"
+            "Kết nối từ xa: READY"
+            if client_active else "Kết nối từ xa: DISCONNECTED"
         )
 
     def set_client_connection_status(self, connected: bool, detail: str = "") -> None:

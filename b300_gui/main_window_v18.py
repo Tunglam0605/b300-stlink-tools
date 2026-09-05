@@ -124,6 +124,7 @@ class MainWindowV18(MainWindow):
         self.device_view.refresh_requested.connect(self.refresh_probes)
         self.device_view.doctor_requested.connect(self.inspect_target)
         self.device_view.btn_refresh.hide()
+        self.device_view.btn_doctor.hide()
         self.v18_stack.addWidget(self.device_view)
 
         self.settings_view = SettingsView(self)

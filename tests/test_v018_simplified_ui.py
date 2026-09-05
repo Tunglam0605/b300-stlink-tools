@@ -10,7 +10,7 @@ from unittest import mock
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication, QPushButton, QTabWidget
 
 from b300_core.models import ImageInfo, ProbeInfo, TargetInfo
 from b300_gui.main_window_v18 import MainWindowV18
@@ -57,6 +57,12 @@ class V018SimplifiedUiTests(unittest.TestCase):
             self.assertIsInstance(window.settings_view, SettingsView)
             self.assertEqual(window.v18_stack.currentIndex(), 0)
             self.assertTrue(window.nav_program_btn.isChecked())
+            self.assertNotIsInstance(window.tabs, QTabWidget)
+            self.assertEqual(
+                [tabs for tabs in window.findChildren(QTabWidget)
+                 if tabs.objectName() != "debugLiveViewTabs"],
+                [],
+            )
         finally:
             self._close(window)
 
@@ -168,21 +174,15 @@ class V018SimplifiedUiTests(unittest.TestCase):
             view.deleteLater()
             self.app.processEvents()
 
-    def test_program_remote_programming_is_visible_but_fail_closed(self) -> None:
+    def test_program_hides_unavailable_remote_tools_and_keeps_factory_advanced(self) -> None:
         window = self._make_window()
         try:
             view = window.program_view
-            view.radio_remote.setChecked(True)
-            self.app.processEvents()
-            self.assertTrue(view.local_panel.isHidden())
-            self.assertFalse(view.remote_panel.isHidden())
-            self.assertFalse(view.btn_remote_flash.isHidden())
-            self.assertFalse(view.btn_remote_flash.isEnabled())
-            self.assertIn("CHƯA BẬT", view.btn_remote_flash.text())
-            self.assertEqual(len(view.pipeline_labels), 5)
-            self.assertIn("Upload", view.pipeline_labels[0].text())
-            self.assertIn("Verify", view.pipeline_labels[4].text())
-            self.assertFalse(view.btn_remote_bootloader.isEnabled())
+            self.assertTrue(view.radio_local.isHidden())
+            self.assertTrue(view.radio_remote.isHidden())
+            self.assertTrue(view.remote_panel.isHidden())
+            self.assertIs(view.bootloader_card.parent(), view.adv_card.content_widget)
+            self.assertFalse(view.adv_card.is_expanded())
         finally:
             self._close(window)
 
@@ -211,6 +211,7 @@ class V018SimplifiedUiTests(unittest.TestCase):
             self.assertEqual(view.mode_stack.currentIndex(), 1)
             self.assertIn("127.0.0.1", view.gw_openocd_lbl.text())
             self.assertNotIn("0.0.0.0", view.gw_openocd_lbl.text())
+            self.assertFalse(view.gateway_details_card.is_expanded())
             self.assertTrue(view.btn_start_gateway.isEnabled())
             self.assertFalse(view.btn_stop_gateway.isEnabled())
         finally:
@@ -225,7 +226,8 @@ class V018SimplifiedUiTests(unittest.TestCase):
             self.assertEqual(view.mode_stack.currentIndex(), 2)
             self.assertEqual(view.btn_open_remote_vscode.text(), "🚀 OPEN REMOTE DEBUG IN VS CODE")
             self.assertEqual(view.btn_test_client_conn.text(), "⚡ TEST CONNECTION")
-            self.assertEqual(view.client_local_gdb_spin.value(), 43333)
+            self.assertEqual(view.client_local_gdb_spin.value(), 0)
+            self.assertFalse(view.client_details_card.is_expanded())
         finally:
             self._close(window)
 
@@ -306,6 +308,15 @@ class V018SimplifiedUiTests(unittest.TestCase):
             self.assertFalse(window.debug_vscode_view.btn_open_remote_vscode.isEnabled())
         finally:
             window.monitor_view.controller._active = False
+            self._close(window)
+
+    def test_device_page_is_read_only_and_does_not_duplicate_global_actions(self) -> None:
+        window = self._make_window()
+        try:
+            self.assertTrue(window.device_view.btn_refresh.isHidden())
+            self.assertTrue(window.device_view.btn_doctor.isHidden())
+            self.assertFalse(window.debug_vscode_view.environment_details_card.is_expanded())
+        finally:
             self._close(window)
 
 

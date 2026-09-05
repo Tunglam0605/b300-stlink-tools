@@ -361,10 +361,14 @@ class MainWindow(QMainWindow):
         self.stats_row = StatsRow(content_area)
         content_v_layout.addWidget(self.stats_row)
 
-        # Workstation Tab Widget (Native top tab bar hidden in favor of vertical sidebar)
-        self.tabs = QTabWidget()
-        self.tabs.tabBar().setVisible(False)
-        self.tabs.addTab(self._build_flash_tab(), "Nạp firmware")
+        # The compatibility window still uses tabs.  The v0.18 production
+        # profile uses a plain stack so a retired tab bar is never constructed.
+        self.tabs = QTabWidget() if self._legacy_workbenches else QStackedWidget()
+        if self._legacy_workbenches:
+            self.tabs.tabBar().setVisible(False)
+            self.tabs.addTab(self._build_flash_tab(), "Nạp firmware")
+        else:
+            self.tabs.addWidget(self._build_flash_tab())
         if self._legacy_workbenches:
             self.memory_tab = MemoryTab(
                 self.service, self._selected_probe, log_sink=self.append_log
