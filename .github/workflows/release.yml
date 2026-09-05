@@ -135,76 +135,20 @@ jobs:
       - name: Enforce Windows installer size budget
         shell: pwsh
         run: python scripts/release/check_size_budget.py release\B300-STLink-GUI-Windows-x64.exe --max-mib 110
-      - name: Smoke-test fresh Windows install with bundled OpenOCD and GDB
+      - name: Verify Windows installer fresh, upgrade and forced rollback
         shell: pwsh
         run: |
-          $installer = (Resolve-Path release\B300-STLink-GUI-Windows-x64.exe).Path
-          $installRoot = Join-Path $env:RUNNER_TEMP "b300-stlink-fresh-install"
-          if (Test-Path $installRoot) { Remove-Item -Recurse -Force $installRoot }
-          $setup = Start-Process -FilePath $installer `
-            -ArgumentList /VERYSILENT,/SUPPRESSMSGBOXES,/NORESTART,/SP-,/NOICONS,"/DIR=$installRoot" `
-            -Wait -PassThru
-          if ($setup.ExitCode -ne 0) { exit $setup.ExitCode }
-          $installed = Join-Path $installRoot "b300-stlink-gui.exe"
-          $openocd = Join-Path $installRoot "vendor\openocd\bin\openocd.exe"
-          $gdbDir = Join-Path $installRoot "vendor\gdb\bin"
-          $gdb = Join-Path $gdbDir "arm-none-eabi-gdb.exe"
-          if (-not (Test-Path $installed)) { throw "Installed GUI executable missing" }
-          if (-not (Test-Path $openocd)) { throw "Fresh install is missing bundled OpenOCD" }
-          if (-not (Test-Path $gdb)) { throw "Fresh install is missing managed ARM GDB" }
-          & $openocd --version
-          if ($LASTEXITCODE -ne 0) { throw "Bundled OpenOCD cannot execute after fresh install" }
-          & $gdb --version
-          if ($LASTEXITCODE -ne 0) { throw "Managed ARM GDB cannot execute after fresh install" }
-          $process = Start-Process -FilePath $installed `
-            -ArgumentList --smoke-test -Wait -PassThru -WindowStyle Hidden
-          exit $process.ExitCode
-      - name: Smoke-test Windows installer upgrade
-        shell: pwsh
-        run: |
-          $installer = (Resolve-Path release\B300-STLink-GUI-Windows-x64.exe).Path
-          $installRoot = Join-Path $env:RUNNER_TEMP "b300-stlink-fresh-install"
-          $stale = Join-Path $installRoot "_internal\stale-runtime.pyc"
-          Set-Content -LiteralPath $stale -Value "obsolete-runtime"
-          $setup = Start-Process -FilePath $installer `
-            -ArgumentList /VERYSILENT,/SUPPRESSMSGBOXES,/NORESTART,/SP-,/NOICONS,"/DIR=$installRoot" `
-            -Wait -PassThru
-          if ($setup.ExitCode -ne 0) { exit $setup.ExitCode }
-          if (Test-Path -LiteralPath $stale) { throw "Stale runtime survived installer upgrade" }
-          $installed = Join-Path $installRoot "b300-stlink-gui.exe"
-          $process = Start-Process -FilePath $installed `
-            -ArgumentList --smoke-test -Wait -PassThru -WindowStyle Hidden
-          exit $process.ExitCode
-      - name: Smoke-test failed Windows installer upgrade rollback
-        shell: pwsh
-        run: |
-          $installer = (Resolve-Path release\B300-STLink-GUI-Windows-x64.exe).Path
-          $installRoot = Join-Path $env:RUNNER_TEMP "b300-stlink-fresh-install"
-          $runtime = Get-ChildItem (Join-Path $installRoot "_internal") -Filter "python*.dll" | Select-Object -First 1
-          if ($null -eq $runtime) { throw "Installed Python runtime missing before rollback test" }
-          $lock = [System.IO.File]::Open($runtime.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None)
-          $timedOut = $false
-          try {
-            $setup = Start-Process -FilePath $installer `
-              -ArgumentList /VERYSILENT,/SUPPRESSMSGBOXES,/NORESTART,/NOCLOSEAPPLICATIONS,/SP-,/NOICONS,"/DIR=$installRoot" `
-              -PassThru
-            if (-not $setup.WaitForExit(60000)) {
-              $timedOut = $true
-              taskkill /PID $setup.Id /T /F | Out-Host
-              $setup.WaitForExit()
-            }
-          } finally {
-            $lock.Dispose()
-          }
-          if ($timedOut) {
-            Write-Host "Installer did not fail within 60 seconds; terminated bounded rollback probe."
-          } elseif ($setup.ExitCode -eq 0) {
-            throw "Failed upgrade unexpectedly returned success"
-          }
-          $installed = Join-Path $installRoot "b300-stlink-gui.exe"
-          $process = Start-Process -FilePath $installed `
-            -ArgumentList --smoke-test -Wait -PassThru -WindowStyle Hidden
-          exit $process.ExitCode
+          python scripts/release/verify_windows_installer.py `
+            --installer release\B300-STLink-GUI-Windows-x64.exe `
+            --evidence-dir release\windows-installer-evidence
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload Windows installer evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: windows-installer-evidence
+          path: release/windows-installer-evidence/*.json
+          if-no-files-found: warn
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-windows-x64

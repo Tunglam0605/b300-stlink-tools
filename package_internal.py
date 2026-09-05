@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import io
 import re
-import sys
+import shutil
+import tempfile
 import tarfile
 import zipfile
 from pathlib import Path
+
+from b300_core.runtime_integrity import (
+    MANIFEST_NAME, RuntimeIntegrityError, runtime_files,
+    write_runtime_manifest, validate_runtime,
+)
 
 from b300_version import __version__ as TOOL_VERSION
 from b300_core.offline_setup import (
@@ -19,30 +24,36 @@ from b300_core.offline_setup import (
 )
 
 
-def add_tree_zip(archive: zipfile.ZipFile, root: Path) -> None:
-    for source in root.rglob("*"):
-        if source.is_file() and source != root / TREE_MANIFEST_NAME:
-            archive.write(source, "vendor/openocd/" + source.relative_to(root).as_posix())
+def stage_file(stage: Path, source: Path, name: str, *, executable_file=False) -> None:
+    """Copy one regular input into a clean tree without archive path escapes."""
+    from b300_core.runtime_integrity import _relative_name, _safe_path
+
+    _relative_name(name)
+    _safe_path(source.parent, source)
+    if not source.is_file():
+        raise RuntimeIntegrityError("Bundle input is not a regular file: " + str(source))
+    target = stage.joinpath(*name.split("/"))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        # Resources already present in an onedir tree may be supplied again.
+        # Only identical duplicates are safe; a different payload is ambiguous.
+        from b300_core.runtime_integrity import _digest
+        if _digest(target) != _digest(source):
+            raise RuntimeIntegrityError("Conflicting bundle path: " + name)
+        return
+    shutil.copy2(source, target)
+    if executable_file:
+        target.chmod(target.stat().st_mode | 0o755)
 
 
-def add_gdb_tree_zip(archive: zipfile.ZipFile, root: Path) -> None:
-    for source in root.rglob("*"):
-        if source.is_file():
-            archive.write(source, "vendor/gdb/" + source.relative_to(root).as_posix())
+def stage_tree(stage: Path, source: Path, prefix: str = "", *, openocd=False) -> None:
+    for path in runtime_files(source):
+        relative = path.relative_to(source).as_posix()
+        if openocd and relative == TREE_MANIFEST_NAME:
+            continue
+        stage_file(stage, path, prefix + relative,
+                   executable_file=path.name in ("openocd", "arm-none-eabi-gdb"))
 
-
-
-
-def add_application_tree_zip(archive: zipfile.ZipFile, root: Path) -> None:
-    for source in sorted(root.rglob("*")):
-        if source.is_file():
-            archive.write(source, source.relative_to(root).as_posix())
-
-
-def add_application_tree_tar(archive: tarfile.TarFile, root: Path) -> None:
-    for source in sorted(root.rglob("*")):
-        if source.is_file():
-            archive.add(source, source.relative_to(root).as_posix())
 
 def resource_archive_name(resource: Path) -> str:
     """Preserve the runtime lookup path for trusted firmware resources."""
@@ -51,25 +62,6 @@ def resource_archive_name(resource: Path) -> str:
     if resource.parent.name == "stlink-driver" and resource.parent.parent.name == "vendor":
         return "vendor/stlink-driver/" + resource.name
     return resource.name
-
-
-def executable(info: tarfile.TarInfo) -> tarfile.TarInfo:
-    info.mode |= 0o755
-    return info
-
-
-def add_tree_tar(archive: tarfile.TarFile, root: Path) -> None:
-    for source in root.rglob("*"):
-        if source.is_file() and source != root / TREE_MANIFEST_NAME:
-            archive.add(source, "vendor/openocd/" + source.relative_to(root).as_posix(),
-                        filter=executable if source.name == "openocd" else None)
-
-
-def add_gdb_tree_tar(archive: tarfile.TarFile, root: Path) -> None:
-    for source in root.rglob("*"):
-        if source.is_file():
-            archive.add(source, "vendor/gdb/" + source.relative_to(root).as_posix(),
-                        filter=executable if source.name == "arm-none-eabi-gdb" else None)
 
 
 def openocd_manifest(root: Path) -> bytes:
@@ -143,48 +135,35 @@ def main(argv=None) -> int:
         raise ValueError(
             "Expanded OpenOCD runtime does not match the built-in tree trust anchor."
         )
-    if args.output.name.endswith(".tar.gz"):
-        with tarfile.open(args.output, "w:gz") as archive:
-            if args.application_root is not None:
-                add_application_tree_tar(archive, args.application_root)
-            else:
-                archive.add(args.executable, arcname=args.executable.name, filter=executable)
-            for resource in args.resource:
-                archive.add(resource, arcname=resource_archive_name(resource))
-            archive.add(args.bootstrap, arcname=args.bootstrap.name, filter=executable)
-            add_tree_tar(archive, args.openocd_root)
-            if args.gdb_root is not None:
-                add_gdb_tree_tar(archive, args.gdb_root)
-            info = tarfile.TarInfo("BUNDLE-METADATA.txt")
-            info.size = len(metadata)
-            archive.addfile(info, io.BytesIO(metadata))
-            manifest_info = tarfile.TarInfo("vendor/openocd/%s" % TREE_MANIFEST_NAME)
-            manifest_info.size = len(manifest)
-            archive.addfile(manifest_info, io.BytesIO(manifest))
-            archive.add(
-                args.openocd_package,
-                arcname="vendor/packages/%s" % args.openocd_archive,
-            )
-    elif args.output.suffix == ".zip":
-        with zipfile.ZipFile(args.output, "w", zipfile.ZIP_DEFLATED) as archive:
-            if args.application_root is not None:
-                add_application_tree_zip(archive, args.application_root)
-            else:
-                archive.write(args.executable, args.executable.name)
-            for resource in args.resource:
-                archive.write(resource, resource_archive_name(resource))
-            archive.write(args.bootstrap, args.bootstrap.name)
-            add_tree_zip(archive, args.openocd_root)
-            if args.gdb_root is not None:
-                add_gdb_tree_zip(archive, args.gdb_root)
-            archive.writestr("BUNDLE-METADATA.txt", metadata)
-            archive.writestr("vendor/openocd/%s" % TREE_MANIFEST_NAME, manifest)
-            archive.write(
-                args.openocd_package,
-                "vendor/packages/%s" % args.openocd_archive,
-            )
-    else:
+    if not (args.output.name.endswith(".tar.gz") or args.output.suffix == ".zip"):
         parser.error("Output must end with .zip or .tar.gz.")
+    with tempfile.TemporaryDirectory(prefix="b300-runtime-") as directory:
+        stage = Path(directory)
+        if args.application_root is not None:
+            stage_tree(stage, args.application_root)
+        else:
+            stage_file(stage, args.executable, args.executable.name, executable_file=True)
+        for resource in args.resource:
+            stage_file(stage, resource, resource_archive_name(resource))
+        stage_file(stage, args.bootstrap, args.bootstrap.name, executable_file=True)
+        stage_tree(stage, args.openocd_root, "vendor/openocd/", openocd=True)
+        if args.gdb_root is not None:
+            stage_tree(stage, args.gdb_root, "vendor/gdb/")
+        (stage / "BUNDLE-METADATA.txt").write_bytes(metadata)
+        (stage / "vendor/openocd" / TREE_MANIFEST_NAME).write_bytes(manifest)
+        stage_file(stage, args.openocd_package, "vendor/packages/" + args.openocd_archive)
+        write_runtime_manifest(stage, args.version)
+        validate_runtime(stage, args.version)
+        payload = sorted([*runtime_files(stage), stage / MANIFEST_NAME],
+                         key=lambda path: path.relative_to(stage).as_posix())
+        if args.output.name.endswith(".tar.gz"):
+            with tarfile.open(args.output, "w:gz") as archive:
+                for source in payload:
+                    archive.add(source, source.relative_to(stage).as_posix(), recursive=False)
+        else:
+            with zipfile.ZipFile(args.output, "w", zipfile.ZIP_DEFLATED) as archive:
+                for source in payload:
+                    archive.write(source, source.relative_to(stage).as_posix())
     print("Created: %s" % args.output)
     return 0
 

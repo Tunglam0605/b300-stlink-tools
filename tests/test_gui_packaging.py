@@ -29,6 +29,33 @@ def _windows_tool(name: str, fixed_path: str):
     return str(fixed) if fixed.is_file() else None
 
 
+def _inno_compiler():
+    candidates = (
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Inno Setup 6" / "ISCC.exe",
+        Path(os.environ.get("ProgramFiles(x86)", "")) / "Inno Setup 6" / "ISCC.exe",
+        Path(os.environ.get("ProgramFiles", "")) / "Inno Setup 6" / "ISCC.exe",
+    )
+    return next((str(path) for path in candidates if path.is_file()), None)
+
+
+def _tree_hashes(root: Path) -> dict[str, str]:
+    return {
+        path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def _fixture_manifest(root: Path) -> None:
+    entries = _tree_hashes(root)
+    entries.pop("B300-RUNTIME.sha256", None)
+    (root / "B300-RUNTIME.sha256").write_text(
+        "# B300 runtime 0.0.0-test\n" + "".join(
+            digest + " *" + name + "\n" for name, digest in entries.items()
+        ), encoding="utf-8",
+    )
+
+
 def _create_windows_junction(link: Path, target: Path, powershell: str) -> None:
     link.parent.mkdir(parents=True, exist_ok=True)
     target.mkdir(parents=True, exist_ok=True)
@@ -60,6 +87,133 @@ def gui_builder():
 
 
 class GuiPackagingTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Inno Setup integration is Windows-only")
+    def test_windows_installer_failure_injection_rolls_back_owned_tree(self) -> None:
+        """A forced mid-upgrade failure must restore the complete prior runtime."""
+        compiler = _inno_compiler()
+        if compiler is None:
+            self.skipTest("Inno Setup 6 compiler is unavailable")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bundle = root / "bundle"
+            output = root / "output"
+            install_root = root / "installed"
+            (bundle / "_internal").mkdir(parents=True)
+            (bundle / "vendor").mkdir()
+            output.mkdir()
+            shutil.copy2(ROOT / "LICENSE", bundle / "LICENSE")
+            shutil.copy2(
+                ROOT / "branding" / "b300-stlink-icon.ico",
+                bundle / "b300-stlink-icon.ico",
+            )
+            (bundle / "b300-stlink-gui.exe").write_bytes(b"fixture-gui")
+            (bundle / "_internal" / "python39.dll").write_bytes(b"fixture-python")
+            (bundle / "vendor" / "openocd.exe").write_bytes(b"fixture-openocd")
+            _fixture_manifest(bundle)
+
+            compile_result = subprocess.run(
+                [
+                    compiler,
+                    f"/DSourceRoot={bundle}",
+                    f"/DOutputDir={output}",
+                    "/DAppVersion=0.0.0-test",
+                    str(ROOT / "packaging" / "windows" / "b300-stlink-gui.iss"),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            self.assertEqual(
+                compile_result.returncode,
+                0,
+                compile_result.stdout + compile_result.stderr,
+            )
+            installer = output / "B300-STLink-GUI-Windows-x64.exe"
+            common_args = [
+                "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/NOICONS",
+                "/B300TESTISOLATED=1",
+                f"/DIR={install_root}",
+            ]
+            first = subprocess.run(
+                [str(installer), *common_args],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+
+            stale = install_root / "_internal" / "stale-runtime.pyc"
+            stale.write_bytes(b"prior-runtime-state")
+            (install_root / "user-notes.txt").write_bytes(b"user-owned")
+            before = _tree_hashes(install_root)
+            failure_log = root / "failed-upgrade.log"
+            failed = subprocess.run(
+                [
+                    str(installer), *common_args, "/B300TESTFAILUPGRADE=1",
+                    f"/LOG={failure_log}",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+
+            self.assertNotEqual(
+                failed.returncode,
+                0,
+                "The deterministic failure hook was ignored and upgrade completed\n"
+                + (failure_log.read_text(encoding="utf-8-sig", errors="replace")
+                   if failure_log.is_file() else "Installer log missing"),
+            )
+            self.assertEqual(_tree_hashes(install_root), before)
+
+            # A late error must undo overwritten executable bytes as well as
+            # deleted stale files. Recompile a genuinely different candidate.
+            (bundle / "b300-stlink-gui.exe").write_bytes(b"new-fixture-gui")
+            (bundle / "_internal" / "python39.dll").write_bytes(b"new-python")
+            _fixture_manifest(bundle)
+            subprocess.run(compile_result.args, check=True, capture_output=True, timeout=60)
+            late = subprocess.run(
+                [str(installer), *common_args, "/B300TESTFAILUPGRADE=late"],
+                check=False, capture_output=True, timeout=60,
+            )
+            self.assertNotEqual(late.returncode, 0)
+            self.assertEqual(_tree_hashes(install_root), before)
+            upgraded = subprocess.run(
+                [str(installer), *common_args],
+                check=False, capture_output=True, timeout=60,
+            )
+            self.assertEqual(upgraded.returncode, 0)
+            self.assertFalse(stale.exists())
+            self.assertEqual((install_root / "b300-stlink-gui.exe").read_bytes(), b"new-fixture-gui")
+            self.assertEqual((install_root / "_internal" / "python39.dll").read_bytes(), b"new-python")
+            self.assertEqual((install_root / "user-notes.txt").read_bytes(), b"user-owned")
+            # Embedded payload can be intact while its publisher manifest is
+            # inconsistent: reject it before moving a single installed path.
+            preserved = _tree_hashes(install_root)
+            (bundle / "_internal" / "python39.dll").write_bytes(b"manifest-mismatch")
+            subprocess.run(compile_result.args, check=True, capture_output=True, timeout=60)
+            corrupt = subprocess.run(
+                [str(installer), *common_args],
+                check=False, capture_output=True, timeout=60,
+            )
+            self.assertNotEqual(corrupt.returncode, 0)
+            self.assertEqual(_tree_hashes(install_root), preserved)
+            # Never delete a backup from an interrupted earlier invocation.
+            recovery = install_root / ".b300-upgrade-rollback"
+            recovery.mkdir()
+            (recovery / "b300-stlink-gui.exe").write_bytes(b"recover-me")
+            interrupted = _tree_hashes(install_root)
+            refused = subprocess.run(
+                [str(installer), *common_args],
+                check=False, capture_output=True, timeout=60,
+            )
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertEqual(_tree_hashes(install_root), interrupted)
+
     def test_gui_output_names_are_stable_and_platform_specific(self) -> None:
         module = gui_builder()
         self.assertEqual(
@@ -180,37 +334,9 @@ class GuiPackagingTests(unittest.TestCase):
         self.assertIn('ROOT / "b300_gui_windows.spec"', native_builder)
         self.assertIn('"--application-root"', native_builder)
         self.assertIn("Verify packaged Windows onedir runtime", workflow)
-        self.assertIn("Smoke-test fresh Windows install with bundled OpenOCD", workflow)
+        self.assertIn("scripts/release/verify_windows_installer.py", workflow)
         self.assertIn("vendor\\openocd\\bin\\openocd.exe", workflow)
-        self.assertIn("& $openocd --version", workflow)
         self.assertIn("VCRUNTIME140*.dll", workflow)
-
-    def test_windows_installer_replaces_owned_runtime_tree_and_upgrade_ci_catches_stale_files(self) -> None:
-        installer = (
-            ROOT / "packaging" / "windows" / "b300-stlink-gui.iss"
-        ).read_text(encoding="utf-8")
-        release = (ROOT / ".github" / "workflows" / "release.yml").read_text(
-            encoding="utf-8"
-        )
-        dry_run = (
-            ROOT / ".github" / "workflows" / "release-dry-run.yml"
-        ).read_text(encoding="utf-8")
-
-        self.assertIn("[InstallDelete]", installer)
-        self.assertIn('Name: "{app}\\_internal"', installer)
-        self.assertIn('Name: "{app}\\vendor"', installer)
-        self.assertNotIn('Name: "{app}\\*"', installer)
-        for workflow in (release, dry_run):
-            self.assertIn("stale-runtime.pyc", workflow)
-            self.assertIn("Smoke-test Windows installer upgrade", workflow)
-            self.assertIn("Stale runtime survived installer upgrade", workflow)
-            self.assertIn("Smoke-test failed Windows installer upgrade rollback", workflow)
-            self.assertIn("Failed upgrade unexpectedly returned success", workflow)
-            self.assertIn("FileShare]::None", workflow)
-            self.assertIn("WaitForExit(60000)", workflow)
-            self.assertIn("Installer did not fail within 60 seconds", workflow)
-            self.assertIn("taskkill /PID $setup.Id /T /F", workflow)
-            self.assertIn("/NOCLOSEAPPLICATIONS", workflow)
 
     def test_application_root_packaging_preserves_windows_onedir_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
