@@ -161,7 +161,7 @@ class DebugLivePanel(QFrame):
         self.stats_samples = QLabel("Mẫu: 0")
         self.stats_overruns = QLabel("Trễ nhịp: 0")
         self.stats_mean_read = QLabel("Đọc TB: —")
-        self.stats_max_lag = QLabel("Trễ max: —")
+        self.stats_max_lag = QLabel("Trễ tối đa: —")
         self.stats_incoherent = QLabel("Không nhất quán: 0")
         self.stats_variables = QLabel("Biến: 0")
         for label in (self.stats_samples, self.stats_overruns, self.stats_mean_read,
@@ -433,7 +433,7 @@ class DebugLivePanel(QFrame):
             numeric = None
             if value.coherent and isinstance(value.value, (int, float)) and not isinstance(value.value, bool):
                 numeric = float(value.value)
-            self.table.setItem(row, 1, QTableWidgetItem(raw_value))
+            self.table.setItem(row, 1, QTableWidgetItem(raw_value if value.coherent else "<không nhất quán>"))
             self.table.setItem(row, 2, QTableWidgetItem(value.value_type))
             self.table.setItem(row, 3, QTableWidgetItem("0x%08X" % value.address))
             self.table.setItem(row, 4, QTableWidgetItem("%.3f" % sample.captured_elapsed_seconds))
@@ -444,7 +444,7 @@ class DebugLivePanel(QFrame):
             ))
         self.buffer.extend(converted)
         coherence_failures = sum(1 for value in sample.values if not value.coherent)
-        suffix = " · incoherent %d" % coherence_failures if coherence_failures else ""
+        suffix = " · không nhất quán %d" % coherence_failures if coherence_failures else ""
         limit = self.sample_limit()
         progress = "%d/%d mẫu" % (sample.cycle + 1, limit) if limit is not None else "%d mẫu · Liên tục" % (sample.cycle + 1)
         self.status.setText(
@@ -473,7 +473,7 @@ class DebugLivePanel(QFrame):
             "Đọc TB: %.2f ms" % (float(getattr(timing, "mean_read_duration_seconds", 0.0)) * 1000.0)
         )
         self.stats_max_lag.setText(
-            "Trễ max: %.2f ms" % (float(getattr(timing, "max_schedule_lag_seconds", 0.0)) * 1000.0)
+            "Trễ tối đa: %.2f ms" % (float(getattr(timing, "max_schedule_lag_seconds", 0.0)) * 1000.0)
         )
         self.stats_incoherent.setText(
             "Không nhất quán: %d" % int(getattr(timing, "incoherent_values", 0))
@@ -491,15 +491,17 @@ class DebugLivePanel(QFrame):
         self.stats_samples.setText("Mẫu: 0")
         self.stats_overruns.setText("Trễ nhịp: 0")
         self.stats_mean_read.setText("Đọc TB: —")
-        self.stats_max_lag.setText("Trễ max: —")
+        self.stats_max_lag.setText("Trễ tối đa: —")
         self.stats_incoherent.setText("Không nhất quán: 0")
         self.stats_variables.setText("Biến: 0")
 
     def mark_live_completed(self, summary) -> None:
         action = "Đã dừng" if getattr(summary, "cancelled", False) else "Đã hoàn tất"
         self.status.setText(
-            "%s · %d mẫu · overrun %d · target %s" % (
-                action, summary.samples, summary.overruns, str(summary.final_target_state).upper(),
+            "%s · %d mẫu · trễ nhịp %d · thiết bị đích %s" % (
+                action, summary.samples, summary.overruns,
+                {"running": "ĐANG CHẠY", "halted": "ĐÃ DỪNG", "unknown": "CHƯA XÁC ĐỊNH"}.get(
+                    str(summary.final_target_state).lower(), str(summary.final_target_state).upper()),
             )
         )
 
@@ -578,7 +580,7 @@ class DebugLivePanel(QFrame):
         limit = self.sample_limit()
         progress = "%d/%d mẫu" % (last_cycle, limit) if limit is not None else "%d mẫu · Liên tục" % last_cycle
         self.status.setText(
-            "%s · %d biến · buffer %d/%d" % (
+            "%s · %d biến · bộ đệm %d/%d" % (
                 progress, len(selected), len(self.buffer), self.VARIABLES_CAPACITY,
             )
         )
@@ -628,12 +630,12 @@ class DebugLivePanel(QFrame):
         selected = tuple(samples)
         cycles = 0 if not selected else max(sample.cycle for sample in selected) + 1
         self.status.setText(
-            "Completed %d cycles · %d points in buffer" % (cycles, len(self.buffer))
+            "Đã hoàn tất %d chu kỳ · %d điểm trong bộ đệm" % (cycles, len(self.buffer))
         )
         return cycles
 
     def mark_failed(self, message: str) -> None:
-        self.status.setText("Live error: %s" % message)
+        self.status.setText("Lỗi theo dõi: %s" % message)
 
     def clear_history(self) -> None:
         self.buffer.clear()
@@ -647,7 +649,7 @@ class DebugLivePanel(QFrame):
     def export_samples(self, parent: Optional[QWidget] = None) -> Optional[Path]:
         samples = self.buffer.snapshot()
         if not samples and not self._timeline_samples:
-            raise ValueError("Chưa có sample để export.")
+            raise ValueError("Chưa có mẫu để xuất.")
         path, _selected = QFileDialog.getSaveFileName(
             parent or self, "Xuất dữ liệu theo dõi", "b300-debug-samples.csv",
             "CSV (*.csv);;JSON Lines (*.jsonl)",
@@ -707,15 +709,15 @@ class DebugLivePanel(QFrame):
                     specs.append(item if ":" in item else "%s:%s" % (item, self.type_combo.currentText()))
                     plot_flags[v_name] = True
         if not specs:
-            raise ValueError("Không có biến nào trong danh sách để lưu preset.")
+            raise ValueError("Danh sách chưa có biến để lưu.")
 
         interval_val = float(self.interval.value())
         sample_lim = int(self.cycles.value()) if self.limit_samples.isChecked() else None
 
         if path is None:
             file_path, _ = QFileDialog.getSaveFileName(
-                self, "Lưu danh sách biến (Preset)", "b300-watch-preset.json",
-                "JSON Preset (*.json);;All Files (*)",
+                self, "Lưu danh sách biến", "b300-watch-preset.json",
+                "Danh sách JSON (*.json);;Tất cả tệp (*)",
             )
             if not file_path:
                 return None
@@ -731,15 +733,15 @@ class DebugLivePanel(QFrame):
             interval_seconds=interval_val, sample_limit=sample_lim,
             plot_flags=plot_flags,
         )
-        self.status.setText("Đã lưu preset %d biến → %s" % (len(specs), saved.name))
+        self.status.setText("Đã lưu danh sách %d biến → %s" % (len(specs), saved.name))
         return saved
 
     def import_preset(self, path: Optional[Union[str, Path]] = None, mode: str = "replace") -> Optional[dict]:
         """Import watch variables from a JSON preset file."""
         if path is None:
             file_path, _ = QFileDialog.getOpenFileName(
-                self, "Nạp danh sách biến (Preset)", "",
-                "JSON Preset (*.json);;All Files (*)",
+                self, "Nạp danh sách biến", "",
+                "Danh sách JSON (*.json);;Tất cả tệp (*)",
             )
             if not file_path:
                 return None
@@ -783,7 +785,7 @@ class DebugLivePanel(QFrame):
             check_item.setCheckState(Qt.CheckState.Checked if plot_state else Qt.CheckState.Unchecked)
             self.table.setItem(row, 5, check_item)
 
-        self.status.setText("Đã nạp preset %d biến từ %s" % (len(data.get("watches", [])), target_path.name))
+        self.status.setText("Đã nạp danh sách %d biến từ %s" % (len(data.get("watches", [])), target_path.name))
         return data
 
     def _set_interval_value(self, val: float) -> None:
@@ -794,10 +796,10 @@ class DebugLivePanel(QFrame):
         try:
             self.export_preset()
         except Exception as exc:
-            self.status.setText("Lỗi lưu preset: %s" % exc)
+            self.status.setText("Lỗi lưu danh sách: %s" % exc)
 
     def _on_load_preset_clicked(self) -> None:
         try:
             self.import_preset()
         except Exception as exc:
-            self.status.setText("Lỗi nạp preset: %s" % exc)
+            self.status.setText("Lỗi nạp danh sách: %s" % exc)

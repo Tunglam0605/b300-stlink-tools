@@ -67,7 +67,7 @@ class DebugWorkstationGuiTests(unittest.TestCase):
 
         # Remembered password indicator test
         dialog.set_has_remembered_credential(True)
-        self.assertIn("Saved on this PC", dialog.password_input.placeholderText())
+        self.assertIn("Đã lưu trên máy này", dialog.password_input.placeholderText())
 
         # Verify async lifecycle on connect click
         dialog.password_input.setText("SecretPass123!")
@@ -85,7 +85,7 @@ class DebugWorkstationGuiTests(unittest.TestCase):
 
         # Dialog remains open and is in connecting state
         self.assertFalse(dialog.btn_connect.isEnabled())
-        self.assertIn("CONNECTING", dialog.btn_connect.text())
+        self.assertIn("ĐANG KẾT NỐI", dialog.btn_connect.text())
 
         # Simulate authentication failure
         dialog.set_login_error("Permission denied (publickey,password)")

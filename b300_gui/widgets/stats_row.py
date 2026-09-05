@@ -91,9 +91,9 @@ class StatsRow(QWidget):
         # Card 1: Probe
         self.probe_card = StatCard(
             icon="🔌",
-            title="ST-Link Probe",
+            title="Mạch nạp ST-Link",
             value="Chưa kết nối",
-            subtitle="USB scan ready",
+            subtitle="Chờ quét USB",
             variant="probe",
             parent=self,
         )
@@ -101,9 +101,9 @@ class StatsRow(QWidget):
         # Card 2: Target MCU
         self.target_card = StatCard(
             icon="🎯",
-            title="Target MCU",
+            title="Chip đích (MCU)",
             value="Chưa đọc target",
-            subtitle="Dùng Kiểm tra target",
+            subtitle="Tự kiểm tra khi nạp",
             variant="target",
             parent=self,
         )
@@ -111,9 +111,9 @@ class StatsRow(QWidget):
         # Card 3: Flash Map
         self.flash_card = StatCard(
             icon="💾",
-            title="Flash Memory",
+            title="Bộ nhớ Flash",
             value="Chưa đọc flash",
-            subtitle="Dùng Kiểm tra target",
+            subtitle="Tự kiểm tra khi nạp",
             variant="flash",
             parent=self,
         )
@@ -121,9 +121,9 @@ class StatsRow(QWidget):
         # Card 4: System State
         self.status_card = StatCard(
             icon="⚡",
-            title="Trạng thái",
+            title="Trạng thái hệ thống",
             value="Sẵn sàng",
-            subtitle="OpenOCD Loopback",
+            subtitle="OpenOCD sẵn sàng",
             variant="status",
             parent=self,
         )

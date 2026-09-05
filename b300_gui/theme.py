@@ -56,33 +56,33 @@ class ThemePalette:
 DARK_PALETTE = ThemePalette(
     name="dark",
     is_dark=True,
-    canvas="#0A0E17",           # Deep dark canvas (harmonious with TungLam ESP32 root #0A0E17)
-    surface="#131A2A",          # Elevated dark card (TungLam ESP32 panel #131A2A)
-    surface_raised="#192237",   # Active panel / sub-card / hover (TungLam ESP32 panel_alt #192237)
-    surface_sunken="#0D1420",   # Depressed container / input bg (TungLam ESP32 input #0D1420)
-    input_bg="#0D1420",         # Input fields
-    terminal_bg="#080C14",      # Terminal console
+    canvas="#101920",           # Deep dark canvas from mockups
+    surface="#18242D",          # Elevated dark card surface
+    surface_raised="#20313F",   # Raised interactive surface / subcards
+    surface_sunken="#111C25",   # Sunken inputs / console
+    input_bg="#111C25",         # Clean dark input background
+    terminal_bg="#0B141B",      # Deep dark terminal console
 
-    border="#2A3A52",           # Harmonious structural slate border (TungLam ESP32 border #2A3A52)
-    border_strong="#3B4F6E",    # Control border
-    border_active="#10B981",    # Active focus border (TungLam ESP32 Emerald #10B981)
-    border_muted="#1C2738",     # Subtle separator
+    border="#2B4353",           # Crisp subtle structural border
+    border_strong="#365166",    # Control border
+    border_active="#0EA5F5",    # Active focus border (Electric Sky)
+    border_muted="#233441",     # Subtle separator
 
-    text="#F1F5F9",             # Slate 100 crisp white high contrast
-    text_secondary="#94A3B8",   # Slate 400 calm secondary / labels
-    text_muted="#64748B",       # Slate 500 captions
+    text="#F8FAFC",             # Crisp white high contrast
+    text_secondary="#AEC2D7",   # Clean slate secondary text / labels
+    text_muted="#829AAF",       # Subtle caption text
     text_on_accent="#FFFFFF",   # High-contrast text on bright backgrounds
 
-    primary="#10B981",          # Emerald 500 - Tung Lam Signature Brand Accent
-    primary_hover="#34D399",    # Emerald 400
-    primary_light="#064E3B",    # Dark emerald tint for chips/badges
-    accent_cyan="#38BDF8",      # Electric Sky strictly for memory hex offsets
-    accent_purple="#C084FC",    # Electric Purple for memory sizes
-    accent_amber="#FBBF24",     # Electric Amber for registers
+    primary="#0EA5F5",          # Electric Sky / Cyan from mockups
+    primary_hover="#24C6F5",    # Sky 400
+    primary_light="#0C3456",    # Dark blue tint
+    accent_cyan="#24C6F5",      # Electric Cyan
+    accent_purple="#C084FC",    # Electric Purple
+    accent_amber="#FBBF24",     # Electric Amber
 
-    success="#10B981",          # Emerald 500 (TungLam ESP32 accent #10B981)
+    success="#10B981",          # Emerald 500
     success_hover="#34D399",    # Emerald 400
-    success_light="#064E3B",    # Dark emerald tint (TungLam ESP32 accent_soft #064E3B)
+    success_light="#064E3B",    # Dark emerald tint
     danger="#EF4444",           # Red 500
     danger_hover="#F87171",     # Red 400
     danger_light="#450A0A",     # Dark red tint
@@ -111,9 +111,9 @@ LIGHT_PALETTE = ThemePalette(
     text_muted="#64748B",       # Slate 500 captions
     text_on_accent="#FFFFFF",   # White text on colored pills
 
-    primary="#059669",          # Emerald 600 - Tung Lam Signature Brand Accent
-    primary_hover="#047857",    # Emerald 700
-    primary_light="#D1FAE5",    # Soft emerald tint
+    primary="#0284C7",          # Cyan emphasis shared with the dark reference
+    primary_hover="#0369A1",
+    primary_light="#E0F2FE",
     accent_cyan="#0284C7",      # Sky 600 for hex addresses
     accent_purple="#7C3AED",    # Purple 600 for sizes
     accent_amber="#D97706",     # Amber 600 for registers
@@ -139,8 +139,8 @@ def generate_stylesheet(p: ThemePalette) -> str:
 
     QWidget {{
         color: {p.text};
-        font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, "Roboto", "Helvetica Neue", Arial, sans-serif;
-        font-size: 13px;
+        font-family: "Segoe UI";
+        font-size: 12px;
     }}
 
     QDialog {{
@@ -262,7 +262,23 @@ def generate_stylesheet(p: ThemePalette) -> str:
         border-radius: 8px;
     }}
 
-    QFrame#Card:hover, QFrame#cardSurface:hover, QFrame#headerRibbon:hover, QFrame#operatorCard:hover {{
+    QFrame#nestedCard {{
+        background-color: {p.surface_raised};
+        border: 1px solid {p.border};
+        border-radius: 8px;
+    }}
+
+    QFrame#infoMetricCard {{
+        background-color: {p.surface};
+        border: 1px solid {p.border};
+        border-radius: 8px;
+    }}
+    QFrame#infoMetricCard QLabel {{
+        background: transparent;
+        border: none;
+    }}
+
+    QFrame#Card:hover, QFrame#cardSurface:hover, QFrame#headerRibbon:hover, QFrame#operatorCard:hover, QFrame#nestedCard:hover {{
         border: 1px solid {p.border_strong};
     }}
 
@@ -272,6 +288,11 @@ def generate_stylesheet(p: ThemePalette) -> str:
         border-top-left-radius: 7px;
         border-top-right-radius: 7px;
         padding: 5px 8px;
+    }}
+
+    QFrame#collapsibleHeader[expanded="false"] {{
+        border-bottom: none;
+        border-radius: 7px;
     }}
 
     QPushButton#collapseToggleBtn {{
@@ -305,6 +326,7 @@ def generate_stylesheet(p: ThemePalette) -> str:
     QFrame#operatorCard QLabel,
     QFrame#rndCard QLabel,
     QFrame#stepCard QLabel,
+    QFrame#nestedCard QLabel,
     QFrame#pageContextHeader QLabel,
     QFrame#headerRibbon QLabel,
     QFrame#collapsibleCard QLabel,
@@ -313,6 +335,55 @@ def generate_stylesheet(p: ThemePalette) -> str:
     QGroupBox QLabel {{
         background: transparent;
         background-color: transparent;
+    }}
+
+    QLabel#mutedLabel {{
+        color: {p.text_muted};
+        font-size: 11px;
+        background: transparent;
+    }}
+
+    QLabel#dividerLabel {{
+        color: {p.border_strong};
+        font-size: 13px;
+        background: transparent;
+    }}
+
+    QLabel#statusText {{
+        color: {p.accent_cyan};
+        font-weight: 700;
+        font-size: 12px;
+        background: transparent;
+    }}
+
+    QLabel#statusPillSuccess {{
+        background-color: {p.success_light};
+        color: {p.success_hover};
+        border: 1px solid {p.success};
+        border-radius: 6px;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.5px;
+    }}
+
+    QLabel#statusPillDanger {{
+        background-color: {p.danger_light};
+        color: {p.danger_hover};
+        border: 1px solid {p.danger};
+        border-radius: 6px;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.5px;
+    }}
+
+    QLabel#statusPillNeutral {{
+        background-color: {p.surface_sunken};
+        color: {p.accent_cyan};
+        border: 1px solid {p.border_strong};
+        border-radius: 6px;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.5px;
     }}
 
     /* Cockpit Tools KPI Stat Cards */
@@ -543,38 +614,48 @@ def generate_stylesheet(p: ThemePalette) -> str:
         padding: 5px 13px;
     }}
 
-    QPushButton:disabled {{
-        background-color: {p.canvas};
-        color: {p.text_muted};
-        border-color: {p.border_muted};
-    }}
-
     QPushButton#primaryButton,
-    QPushButton#flashButton,
-    QPushButton#operatorFlashBtn,
     QPushButton[variant="primary"] {{
         background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #059669, stop:1 #10B981);
         color: #FFFFFF;
         border: 1px solid #10B981;
         border-radius: 7px;
-        font-weight: 800;
+        font-weight: 700;
         font-size: 12px;
-        padding: 7px 18px;
+        padding: 4px 12px;
+    }}
+
+    QPushButton#primaryActionButton,
+    QPushButton#flashButton,
+    QPushButton#operatorFlashBtn {{
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0284C7, stop:1 #0EA5E9);
+        color: #FFFFFF;
+        border: 1px solid #38BDF8;
+        border-radius: 8px;
+        font-weight: 800;
+        font-size: 13px;
+        padding: 8px 22px;
+    }}
+
+    QPushButton#primaryActionButton:hover,
+    QPushButton#flashButton:hover,
+    QPushButton#operatorFlashBtn:hover {{
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0369A1, stop:1 #0284C7);
+        border-color: #7DD3FC;
     }}
 
     QPushButton#primaryButton:hover,
-    QPushButton#flashButton:hover,
-    QPushButton#operatorFlashBtn:hover,
     QPushButton[variant="primary"]:hover {{
         background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #047857, stop:1 #059669);
         border-color: #34D399;
     }}
 
+    QPushButton#primaryActionButton:disabled,
     QPushButton#primaryButton:disabled,
     QPushButton#flashButton:disabled,
     QPushButton#operatorFlashBtn:disabled,
     QPushButton[variant="primary"]:disabled {{
-        background-color: {p.surface_raised};
+        background-color: {p.surface_sunken};
         color: {p.text_muted};
         border-color: {p.border};
     }}
@@ -726,9 +807,9 @@ def generate_stylesheet(p: ThemePalette) -> str:
         background-color: {p.input_bg};
         color: {p.text};
         border: 1px solid {p.border};
-        border-radius: 7px;
-        padding: 6px 10px;
-        min-height: 22px;
+        border-radius: 6px;
+        padding: 4px 8px;
+        min-height: 20px;
     }}
 
     QComboBox:hover {{
@@ -742,7 +823,7 @@ def generate_stylesheet(p: ThemePalette) -> str:
     QComboBox::drop-down {{
         subcontrol-origin: padding;
         subcontrol-position: top right;
-        width: 22px;
+        width: 18px;
         border-left: 1px solid {p.border};
     }}
 

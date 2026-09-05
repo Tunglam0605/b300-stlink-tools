@@ -6,7 +6,7 @@ from typing import Optional
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 
@@ -26,6 +26,7 @@ class CollapsibleCard(QFrame):
         super().__init__(parent)
         self.setObjectName("collapsibleCard")
         self._expanded = expanded
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred if expanded else QSizePolicy.Policy.Maximum)
 
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
@@ -103,6 +104,7 @@ class CollapsibleCard(QFrame):
         self._expanded = expanded
         self.toggle_btn.setText("▼" if expanded else "▶")
         self.content_widget.setVisible(expanded)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred if expanded else QSizePolicy.Policy.Maximum)
         self.header_frame.setProperty("expanded", "true" if expanded else "false")
         if self.header_frame.style() is not None:
             self.header_frame.style().unpolish(self.header_frame)

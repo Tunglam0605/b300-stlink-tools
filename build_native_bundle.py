@@ -101,6 +101,7 @@ def gui_resources(platform_name: str):
     resources = [
         ROOT / "LICENSE",
         ROOT / "branding" / "b300-stlink-icon.png",
+        ROOT / "branding" / "b300-industrial-mark.svg",
         ROOT / "branding" / "b300-stlink-icon.ico",
         ROOT / "branding" / "b300-stlink-wordmark.png",
     ]

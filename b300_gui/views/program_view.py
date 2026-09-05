@@ -1,48 +1,22 @@
-"""Operator-oriented PROGRAM page for B300 v0.18.
-
-The default page exposes only the proven local Application path. Factory
-Bootloader provisioning lives under Advanced and incomplete remote programming
-stays out of the operator surface. Application selection uses the same strict
-Intel-HEX parser as the backend so unsupported BIN/ELF files can never look
-ready in the GUI.
-"""
+"""Project-driven Application programming with existing guarded action signals."""
 from __future__ import annotations
-
 from pathlib import Path
 from typing import List, Optional, Sequence
-
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (
-    QButtonGroup,
-    QCheckBox,
-    QFileDialog,
-    QFrame,
-    QGridLayout,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QMessageBox,
-    QPlainTextEdit,
-    QProgressBar,
-    QPushButton,
-    QRadioButton,
-    QScrollArea,
-    QVBoxLayout,
-    QWidget,
-)
-
+from PySide6.QtWidgets import QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QProgressBar, QPushButton, QScrollArea, QVBoxLayout, QWidget, QBoxLayout
 from b300_core.hex_image import inspect_image
 from b300_core.models import ImageInfo, ProbeInfo, TargetInfo
-from b300_gui.collapsible_card import CollapsibleCard
-from b300_gui.widgets.memory_map_widget import MemoryMapWidget
-from b300_gui.widgets.pass_fail_banner import PassFailBanner
-from b300_gui.widgets.pipeline_stepper import PipelineStepper
+from b300_core.policy import validate_target_for_provisioning, validate_bootloader_write_protection, SUPPORTED_FLASH_KIB
+from ..collapsible_card import CollapsibleCard
+from ..widgets.pass_fail_banner import PassFailBanner
+from ..widgets.pipeline_stepper import PipelineStepper
+from ..widgets.flash_plan_bar import FlashPlanBar
+from ..widgets.engineering import SectionCard, ActivityLogPanel
 
 
 class ProgramView(QWidget):
     flash_application_requested = Signal(Path, bool)
     flash_bootloader_requested = Signal(bool)
-    remote_flash_requested = Signal(str, Path)  # reserved for future transport
     file_selected = Signal(Path)
     file_invalidated = Signal()
     probe_refresh_requested = Signal()
@@ -56,252 +30,227 @@ class ProgramView(QWidget):
         self._probes: List[ProbeInfo] = []
         self._target_info: Optional[TargetInfo] = None
         self._busy = False
-
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        content = QWidget()
-        self.container_layout = QVBoxLayout(content)
-        self.container_layout.setContentsMargins(16, 12, 16, 14)
-        self.container_layout.setSpacing(10)
-        self._build_ui()
-        scroll.setWidget(content)
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.addWidget(scroll)
-
-    def _build_ui(self) -> None:
+        outer = QWidget()
+        self.container_layout = QVBoxLayout(outer)
+        self.container_layout.setContentsMargins(16, 16, 16, 16)
+        self.container_layout.setSpacing(12)
         self.banner = PassFailBanner(self)
-        self.banner.hide()
+        self.banner.layout().setContentsMargins(12, 5, 12, 5)
+        self.banner.title_label.setObjectName("fieldLabel")
+        self.banner.setMaximumHeight(58)
         self.container_layout.addWidget(self.banner)
-        self._build_device_card()
-        self._build_firmware_card()
+        self.top_card_layout = QBoxLayout(QBoxLayout.Direction.LeftToRight)
+        self.top_card_layout.setSpacing(12)
+        self.top_card_layout.addWidget(self._build_firmware_card(), 1)
+        self.top_card_layout.addWidget(self._build_preflight_card(), 1)
+        self.container_layout.addLayout(self.top_card_layout)
+        self.flash_plan_bar = FlashPlanBar(self)
+        self.flash_plan_bar.view_details_requested.connect(self._toggle_advanced_card)
+        self.memory_map = self.flash_plan_bar
+        self.container_layout.addWidget(self.flash_plan_bar)
+        execution = SectionCard("4. Thực hiện nạp", "Tự kiểm tra trước khi xác nhận", self, icon="program")
+        execution.body.setContentsMargins(14, 8, 14, 8)
+        execution.body.setSpacing(6)
+        buttons = QHBoxLayout()
+        self.btn_flash_app = self._button("NẠP ỨNG DỤNG", self._on_flash_app_clicked)
+        self.btn_flash_app.setObjectName("primaryActionButton")
+        self.btn_flash_app.setEnabled(False)
+        self.btn_dry_run_action = self._button("CHẠY THỬ", self._on_dry_run_clicked)
+        self.btn_dry_run_action.setEnabled(False)
+        self.btn_toggle_adv = self._button("Chi tiết / Chế độ nhà máy", self._toggle_advanced_card)
+        for button in (self.btn_flash_app, self.btn_dry_run_action, self.btn_toggle_adv):
+            buttons.addWidget(button)
+        self.btn_flash_app.setMinimumWidth(190)
+        for button in (self.btn_flash_app, self.btn_dry_run_action, self.btn_toggle_adv):
+            button.setMinimumHeight(40)
+        execution.header_layout.addLayout(buttons, 2)
         self.stepper = PipelineStepper(self)
-        self.container_layout.addWidget(self.stepper)
+        step_copy = (
+            ("ST-Link", "Kết nối đầu dò"),
+            ("HEX", "Vùng nhớ hợp lệ"),
+            ("Xóa", "Giữ Bootloader"),
+            ("Ghi ứng dụng", "Nạp và xác minh"),
+            ("Siêu dữ liệu", "STLM đã xác minh"),
+            ("Khởi động", "Xác nhận khởi động"),
+        )
+        for step, (caption, description) in zip(self.stepper._step_widgets, step_copy):
+            step.title_text = caption
+            step.subtitle_text = description
+            step.title_label.setText(caption)
+            step.sub_label.setText(description)
+            step.sub_label.hide()
+            step.setToolTip("%s · %s" % (caption, description))
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
-        self.progress_bar.setFixedHeight(18)
         self.progress_bar.hide()
-        self.container_layout.addWidget(self.progress_bar)
+        execution.body.addWidget(self.progress_bar)
         self._build_advanced_section()
+        self.adv_card.content_layout.insertWidget(0, self.stepper)
+        self.activity_log = ActivityLogPanel(parent=self)
+        self.activity_log.setMaximumHeight(132)
+        self.log_terminal = self.activity_log.terminal
+        self.btn_clear_log = self.activity_log.clear_button
+        self.btn_save_log = self.activity_log.save_button
+        self.combo_filter = self.activity_log.filter_combo
+        self.container_layout.addWidget(self.activity_log)
+        self.container_layout.addStretch(1)
+        scroll.setWidget(outer)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(scroll, 1)
+        footer = QHBoxLayout()
+        footer.setContentsMargins(16, 0, 16, 12)
+        footer.addWidget(execution)
+        root.addLayout(footer)
 
-    def _build_device_card(self) -> None:
-        card = QFrame()
-        card.setObjectName("cardSurface")
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(14, 10, 14, 10)
-        layout.setSpacing(6)
-        header = QHBoxLayout()
-        title = QLabel("DEVICE · ST-LINK & TARGET MCU")
-        title.setObjectName("eyebrowLabel")
-        header.addWidget(title)
-        header.addStretch(1)
-        self.btn_refresh_probe = QPushButton("↻ Quét ST-Link")
-        self.btn_refresh_probe.clicked.connect(self.probe_refresh_requested.emit)
-        self.btn_inspect_target = QPushButton("🔍 Kiểm tra Target")
-        self.btn_inspect_target.clicked.connect(self.target_inspect_requested.emit)
-        header.addWidget(self.btn_refresh_probe)
-        header.addWidget(self.btn_inspect_target)
-        layout.addLayout(header)
+    @staticmethod
+    def _button(text, callback):
+        button = QPushButton(text)
+        button.setMinimumHeight(32)
+        button.clicked.connect(callback)
+        return button
 
+    @staticmethod
+    def _label(text="", name="monoText"):
+        label = QLabel(text)
+        label.setObjectName(name)
+        label.setWordWrap(True)
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        return label
+
+    @staticmethod
+    def _badge_state(label, state):
+        label.setObjectName({"failed": "statusPillDanger", "passed": "statusPillSuccess"}.get(state, "statusPillNeutral"))
+        label.style().unpolish(label)
+        label.style().polish(label)
+
+    def _build_firmware_card(self):
+        card = SectionCard("1. Tệp nạp / Ứng dụng", "HEX ứng dụng từ dự án đang chọn.", self, icon="file")
+        card.body.setSpacing(7)
+        row = QHBoxLayout()
+        self.app_file_edit = self._label("Dự án chưa có HEX ứng dụng")
+        self.app_file_edit.setMinimumHeight(34)
+        self.app_file_edit.setObjectName("engineeringPathField")
+        row.addWidget(self.app_file_edit, 1)
+        self.btn_browse_app = self._button("Chọn HEX khác…", self._browse_app_file)
+        self.btn_browse_app.setObjectName("ghostButton")
+        row.addWidget(self.btn_browse_app)
+        card.body.addLayout(row)
+        self.badge_file_valid = self._label("Chưa chọn HEX", "mutedLabel")
+        self._badge_state(self.badge_file_valid, "unknown")
+        card.header_layout.addWidget(self.badge_file_valid)
         grid = QGridLayout()
-        grid.setHorizontalSpacing(12)
-        grid.addWidget(QLabel("Probe"), 0, 0)
-        self.lbl_probe = QLabel("ST-Link · đang quét…")
-        grid.addWidget(self.lbl_probe, 0, 1)
-        grid.addWidget(QLabel("Target"), 0, 2)
-        self.lbl_target = QLabel("Chưa đọc target")
-        grid.addWidget(self.lbl_target, 0, 3)
-        grid.addWidget(QLabel("Status"), 0, 4)
-        self.lbl_status = QLabel("● Chờ kết nối")
-        grid.addWidget(self.lbl_status, 0, 5)
-        grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(3, 1)
-        layout.addLayout(grid)
-        self.container_layout.addWidget(card)
+        grid.setSpacing(8)
+        for index, (title, attr) in enumerate((("Kích thước", "meta_size"), ("Dải địa chỉ", "meta_span"), ("CRC32", "meta_crc"), ("SHA256", "meta_sha"))):
+            label = self._label("—")
+            setattr(self, attr, label)
+            grid.addWidget(self._label(title, "mutedLabel"), 0, index)
+            grid.addWidget(label, 1, index)
+        card.body.addLayout(grid)
+        self.app_meta_label = self._label("Chưa chọn HEX ứng dụng", "mutedLabel")
+        self.app_meta_label.setParent(self)
+        self.app_meta_label.hide()
+        card.body.addStretch(1)
+        return card
 
-    def _build_firmware_card(self) -> None:
-        card = QFrame()
-        card.setObjectName("cardSurface")
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(10)
+    def _build_preflight_card(self):
+        card = SectionCard("2. MCU & Kiểm tra an toàn", "B300 STM32F407 · %d KiB" % SUPPORTED_FLASH_KIB, self, icon="shield")
+        card.body.setSpacing(5)
+        self.badge_preflight = self._label("Chưa kiểm tra", "mutedLabel")
+        self._badge_state(self.badge_preflight, "unknown")
+        self.lbl_probe = self._label("Chưa quét ST-Link", "mutedLabel")
+        self.lbl_status = self._label("Chờ kết nối", "mutedLabel")
+        self.lbl_target = self._label("Chưa đọc MCU")
+        self.lbl_target_actual = self.lbl_target
+        card.header_layout.addWidget(self.badge_preflight)
+        self.lbl_probe.setParent(self)
+        self.lbl_status.setParent(self)
+        self.lbl_probe.hide()
+        self.lbl_status.hide()
+        card.body.addWidget(self.lbl_target)
+        grid = QGridLayout()
+        for index, (title, attr) in enumerate((("Dung lượng bộ nhớ", "lbl_target_flash"), ("WRP S0–S2", "lbl_target_wrp"), ("RDP", "lbl_target_rdp"), ("Siêu dữ liệu OTA", "lbl_target_meta"))):
+            label = self._label("Chưa kiểm tra")
+            setattr(self, attr, label)
+            grid.addWidget(self._label(title, "mutedLabel"), index, 0)
+            grid.addWidget(label, index, 1)
+        card.body.addLayout(grid)
+        card.body.addStretch(1)
+        # Explicit diagnostics remain secondary; the primary flash path auto-inspects.
+        self.btn_refresh_probe = self._button("Quét ST-Link", self.probe_refresh_requested.emit)
+        self.btn_inspect_target = self._button("Kiểm tra MCU", self.target_inspect_requested.emit)
+        self.btn_refresh_probe.setParent(self)
+        self.btn_inspect_target.setParent(self)
+        self.btn_refresh_probe.hide()
+        self.btn_inspect_target.hide()
+        return card
 
-        modes = QHBoxLayout()
-        title = QLabel("FIRMWARE PROGRAMMING")
-        title.setObjectName("eyebrowLabel")
-        modes.addWidget(title)
-        modes.addStretch(1)
-        self.mode_group = QButtonGroup(self)
-        self.radio_local = QRadioButton("Local ST-Link (USB)")
-        self.radio_remote = QRadioButton("Remote Gateway · Foundation")
-        self.radio_local.setChecked(True)
-        self.mode_group.addButton(self.radio_local, 0)
-        self.mode_group.addButton(self.radio_remote, 1)
-        modes.addWidget(self.radio_local)
-        modes.addWidget(self.radio_remote)
-        # Remote programming is not a complete v0.18 workflow.  Do not spend
-        # the operator's attention on a disabled mode selector.
-        self.radio_local.hide()
-        self.radio_remote.hide()
-        self.mode_group.idToggled.connect(self._on_programming_mode_toggled)
-        layout.addLayout(modes)
-
-        self.local_panel = QWidget()
-        local = QVBoxLayout(self.local_panel)
-        local.setContentsMargins(0, 0, 0, 0)
-        local.setSpacing(8)
-
-        app = QFrame()
-        app.setObjectName("nestedCard")
-        app_layout = QVBoxLayout(app)
-        app_layout.setContentsMargins(12, 10, 12, 10)
-        app_header = QHBoxLayout()
-        app_header.addWidget(QLabel("Application Firmware"))
-        hint = QLabel("Sector 4–7 · start 0x08010000 · Intel HEX an toàn")
-        hint.setObjectName("mutedLabel")
-        app_header.addWidget(hint)
-        app_header.addStretch(1)
-        app_layout.addLayout(app_header)
-        file_row = QHBoxLayout()
-        self.app_file_edit = QLineEdit()
-        self.app_file_edit.setReadOnly(True)
-        self.app_file_edit.setPlaceholderText("Chọn Application Intel HEX (.hex)")
-        self.btn_browse_app = QPushButton("📁 Chọn HEX…")
-        self.btn_browse_app.clicked.connect(self._browse_app_file)
-        file_row.addWidget(self.app_file_edit, 1)
-        file_row.addWidget(self.btn_browse_app)
-        app_layout.addLayout(file_row)
-        self.app_meta_label = QLabel("Chưa chọn Application HEX")
-        self.app_meta_label.setWordWrap(True)
-        self.app_meta_label.setObjectName("mutedLabel")
-        app_layout.addWidget(self.app_meta_label)
-        action = QHBoxLayout()
-        self.cb_dry_run = QCheckBox("Dry-run · kiểm tra, không ghi Flash")
-        action.addWidget(self.cb_dry_run)
-        action.addStretch(1)
-        self.btn_flash_app = QPushButton("⚡ NẠP APPLICATION")
-        self.btn_flash_app.setObjectName("primaryActionButton")
-        self.btn_flash_app.setEnabled(False)
-        self.btn_flash_app.clicked.connect(self._on_flash_app_clicked)
-        action.addWidget(self.btn_flash_app)
-        app_layout.addLayout(action)
-        local.addWidget(app)
-
-        boot = QFrame()
-        boot.setObjectName("nestedCard")
-        boot_layout = QHBoxLayout(boot)
-        boot_text = QVBoxLayout()
-        boot_text.addWidget(QLabel("Bootloader B300 · Factory / Maintenance"))
-        self.boot_info_label = QLabel(
-            "Dùng trusted bundled Bootloader; đường dẫn này có xác nhận đặc quyền và không mass erase."
-        )
-        self.boot_info_label.setWordWrap(True)
-        self.boot_info_label.setObjectName("mutedLabel")
-        boot_text.addWidget(self.boot_info_label)
-        boot_layout.addLayout(boot_text, 1)
-        self.btn_flash_bootloader = QPushButton("🛡 NẠP BOOTLOADER")
-        self.btn_flash_bootloader.clicked.connect(self._on_flash_bootloader_clicked)
-        boot_layout.addWidget(self.btn_flash_bootloader)
-        self.bootloader_card = boot
-        layout.addWidget(self.local_panel)
-
-        self.remote_panel = QWidget()
-        remote = QVBoxLayout(self.remote_panel)
-        remote.setContentsMargins(0, 0, 0, 0)
-        remote_box = QFrame()
-        remote_box.setObjectName("nestedCard")
-        remote_layout = QVBoxLayout(remote_box)
-        remote_title = QLabel("Remote Application Programming · SAFETY FOUNDATION")
-        remote_layout.addWidget(remote_title)
-        remote_note = QLabel(
-            "Backend đã có manifest/SHA-256/safety validation, nhưng Client→Gateway file transfer và "
-            "network execution chưa được bật trong v0.18 integration. Nút nạp được khóa để tránh "
-            "tạo cảm giác thao tác đã thực thi khi transport chưa hoàn chỉnh."
-        )
-        remote_note.setWordWrap(True)
-        remote_layout.addWidget(remote_note)
-        form = QGridLayout()
-        self.remote_gw_edit = QLineEdit()
-        self.remote_gw_edit.setPlaceholderText("Gateway host (dùng ở bản transport sau)")
-        self.remote_fw_edit = QLineEdit()
-        self.remote_fw_edit.setReadOnly(True)
-        browse = QPushButton("📁 Chọn HEX…")
-        browse.clicked.connect(self._browse_remote_file)
-        form.addWidget(QLabel("Gateway"), 0, 0)
-        form.addWidget(self.remote_gw_edit, 0, 1, 1, 2)
-        form.addWidget(QLabel("Firmware"), 1, 0)
-        form.addWidget(self.remote_fw_edit, 1, 1)
-        form.addWidget(browse, 1, 2)
-        remote_layout.addLayout(form)
-        pipeline = QHBoxLayout()
-        self.pipeline_labels = []
-        for index, step in enumerate(("Upload", "Validate", "Gateway", "ST-Link", "Verify")):
-            label = QLabel("[%d] %s" % (index + 1, step))
-            self.pipeline_labels.append(label)
-            pipeline.addWidget(label)
-            if index < 4:
-                pipeline.addWidget(QLabel("→"))
-        pipeline.addStretch(1)
-        remote_layout.addLayout(pipeline)
-        remote_actions = QHBoxLayout()
-        remote_actions.addStretch(1)
-        self.btn_remote_flash = QPushButton("🔒 REMOTE FLASH · CHƯA BẬT")
-        self.btn_remote_flash.setEnabled(False)
-        self.btn_remote_flash.setToolTip("Chờ authenticated Client→Gateway transfer protocol hoàn thiện.")
-        remote_actions.addWidget(self.btn_remote_flash)
-        remote_layout.addLayout(remote_actions)
-        remote.addWidget(remote_box)
-        self.remote_panel.hide()
-        layout.addWidget(self.remote_panel)
-        self.container_layout.addWidget(card)
-
-    def _build_advanced_section(self) -> None:
-        self.adv_card = CollapsibleCard(
-            "Nâng cao / Diagnostics",
-            "Memory map, metadata, Option Bytes và log chi tiết",
-            expanded=False,
-            parent=self,
-        )
-        advanced = self.adv_card.content_layout
-        advanced.addWidget(self.bootloader_card)
-        self.memory_map = MemoryMapWidget(self)
-        advanced.addWidget(self.memory_map)
-        info = QHBoxLayout()
-        self.lbl_metadata_info = QLabel("Metadata · 0x0800C000 · chưa đọc")
-        self.lbl_option_bytes = QLabel("WRP S0–S2 / RDP · chưa kiểm tra Target")
-        info.addWidget(self.lbl_metadata_info, 1)
-        info.addWidget(self.lbl_option_bytes, 1)
-        advanced.addLayout(info)
-
-        self.log_terminal = QPlainTextEdit()
-        self.log_terminal.setReadOnly(True)
-        self.log_terminal.setMaximumHeight(140)
-        advanced.addWidget(self.log_terminal)
+    def _build_advanced_section(self):
+        self.adv_card = CollapsibleCard("Chi tiết & Chế độ nhà máy", "Nạp Bootloader có kiểm soát", self, expanded=False)
+        self.adv_card.hide()
+        self.adv_card.expanded_changed.connect(self.adv_card.setVisible)
+        self.lbl_option_bytes = self._label("WRP S0–S2 / RDP · chưa kiểm tra MCU", "mutedLabel")
+        self.adv_card.content_layout.addWidget(self.lbl_option_bytes)
+        self.bootloader_card = SectionCard("Bootloader B300", parent=self)
+        self.boot_info_label = self._label("Dùng Bootloader chuẩn nhúng sẵn; quy trình yêu cầu xác nhận chế độ nhà máy riêng.", "mutedLabel")
+        self.bootloader_card.body.addWidget(self.boot_info_label)
+        self.btn_flash_bootloader = self._button("NẠP BOOTLOADER", self._on_flash_bootloader_clicked)
+        self.bootloader_card.body.addWidget(self.btn_flash_bootloader)
+        self.adv_card.content_layout.addWidget(self.bootloader_card)
         self.container_layout.addWidget(self.adv_card)
 
-    def _on_programming_mode_toggled(self, button_id: int, checked: bool) -> None:
-        if checked:
-            local = button_id == 0
-            self.local_panel.setVisible(local)
-            self.remote_panel.setVisible(not local)
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.top_card_layout.setDirection(QBoxLayout.Direction.TopToBottom if self.width() < 1000 else QBoxLayout.Direction.LeftToRight)
+
+    def _toggle_advanced_card(self) -> None:
+        self.adv_card.set_expanded(not self.adv_card.is_expanded())
+        self.adv_card.setVisible(self.adv_card.is_expanded())
+
+    def _clear_log(self) -> None:
+        self.activity_log.clear()
+
+    def _save_log(self) -> None:
+        self.activity_log.save()
+
+    def _on_dry_run_clicked(self) -> None:
+        if self._selected_file is None:
+            return
+        self.flash_application_requested.emit(self._selected_file, True)
+
+    def _on_flash_app_clicked(self) -> None:
+        if self._selected_file is None:
+            return
+        self.flash_application_requested.emit(self._selected_file, False)
+
+    def _on_flash_bootloader_clicked(self) -> None:
+        self.flash_bootloader_requested.emit(True)
 
     def _browse_app_file(self) -> None:
         selected, _ = QFileDialog.getOpenFileName(
-            self, "Chọn Application Intel HEX", str(Path.home()),
-            "Intel HEX (*.hex);;All files (*)",
+            self, "Chọn Intel HEX ứng dụng", str(Path.home()),
+            "Intel HEX (*.hex);;Tất cả tệp (*)",
         )
         if selected:
             self.set_file_path(Path(selected))
 
-    def _browse_remote_file(self) -> None:
-        selected, _ = QFileDialog.getOpenFileName(
-            self, "Chọn Application Intel HEX", str(Path.home()), "Intel HEX (*.hex)"
-        )
-        if selected:
-            self.remote_fw_edit.setText(selected)
+    def clear_project_file(self):
+        self.btn_flash_app.setEnabled(False)
+        self.btn_dry_run_action.setEnabled(False)
+        self._selected_file = None
+        self._current_image = None
+        self.app_file_edit.setText("Dự án chưa có HEX ứng dụng")
+        self.app_meta_label.setText("Dự án chưa có HEX ứng dụng; chọn trong CÀI ĐẶT hoặc dùng Chọn HEX khác.")
+        self.badge_file_valid.setText("Chưa chọn HEX")
+        self._badge_state(self.badge_file_valid, "unknown")
+        for label in (self.meta_size, self.meta_span, self.meta_crc, self.meta_sha):
+            label.setText("—")
+        self.flash_plan_bar.reset_app_span()
+        self.file_invalidated.emit()
 
     def set_file_path(self, path: Path) -> None:
         selected = Path(path).expanduser()
@@ -309,87 +258,123 @@ class ProgramView(QWidget):
         self._current_image = None
         self.btn_flash_app.setEnabled(False)
         self.app_file_edit.setText(str(selected))
-        self.remote_fw_edit.setText(str(selected))
         self.file_invalidated.emit()
+        self.btn_dry_run_action.setEnabled(False)
+        for label in (self.meta_size, self.meta_span, self.meta_crc, self.meta_sha):
+            label.setText("—")
+        self.flash_plan_bar.reset_app_span()
         if selected.suffix.lower() != ".hex":
             self.app_meta_label.setText(
                 "Không hỗ trợ định dạng này trong đường nạp an toàn hiện tại. Hãy chọn Intel HEX (.hex)."
             )
+            self.badge_file_valid.setText("✕ Định dạng không hỗ trợ")
+            self._badge_state(self.badge_file_valid, "failed")
+            self.meta_size.setText("—")
+            self.meta_span.setText("—")
+            self.meta_crc.setText("—")
+            self.meta_sha.setText("—")
             return
         try:
             image = inspect_image(selected)
         except Exception as error:
             self.app_meta_label.setText("HEX không hợp lệ / không an toàn: %s" % error)
+            self.badge_file_valid.setText("✕ HEX không hợp lệ")
+            self._badge_state(self.badge_file_valid, "failed")
             return
         self._selected_file = selected
         self._current_image = image
-        crc = "0x%08X" % image.flash_crc32 if image.flash_crc32 is not None else "n/a"
-        reset = "0x%08X" % image.reset_vector if image.reset_vector is not None else "n/a"
+        crc = "0x%08X" % image.flash_crc32 if image.flash_crc32 is not None else "không có"
+        reset = "0x%08X" % image.reset_vector if image.reset_vector is not None else "không có"
         self.app_meta_label.setText(
-            "%s · %d B · 0x%08X..0x%08X · CRC %s · Reset %s · SHA256 %s…"
+            "%s · %d B · 0x%08X..0x%08X · CRC %s · Điểm khởi động lại %s · SHA256 %s…"
             % (
                 selected.name, image.size, image.start_address, image.end_address,
                 crc, reset, image.sha256[:12],
             )
         )
+        self.badge_file_valid.setText("✓ Tệp hợp lệ")
+        self._badge_state(self.badge_file_valid, "passed")
+
+        self.meta_size.setText("%.1f KB (%d B)" % (image.size / 1024.0, image.size))
+        self.meta_span.setText("0x%08X - 0x%08X" % (image.start_address, image.end_address))
+        self.meta_crc.setText(crc)
+        self.meta_sha.setText("%s…" % image.sha256[:16])
+
+        self.flash_plan_bar.update_app_span(image.start_address, image.end_address, image.size)
         if hasattr(self.memory_map, "set_image"):
             self.memory_map.set_image(image)
         self.btn_flash_app.setEnabled(not self._busy)
+        self.btn_dry_run_action.setEnabled(not self._busy)
         self.file_selected.emit(selected)
 
     def set_probes(self, probes: Sequence[ProbeInfo], selected_serial: Optional[str] = None) -> None:
         self._probes = list(probes)
         if not self._probes:
             self.lbl_probe.setText("Không tìm thấy ST-Link")
-            self.lbl_status.setText("○ DISCONNECTED")
+            self.lbl_status.setText("○ MẤT KẾT NỐI")
             return
         if len(self._probes) > 1 and selected_serial is None:
-            self.lbl_probe.setText("Chọn ST-Link theo serial ở thanh trên")
-            self.lbl_status.setText("Chưa chọn probe")
+            self.lbl_probe.setText("Chọn ST-Link theo số sê-ri ở thanh trên")
+            self.lbl_status.setText("Chưa chọn đầu dò")
             return
         probe = next((item for item in self._probes if item.serial == selected_serial), self._probes[0])
-        serial = probe.serial or "auto-select"
+        serial = probe.serial or "tự chọn"
         self.lbl_probe.setText("%s · %s%s" % (
             probe.name, serial, " · +%d" % (len(self._probes) - 1) if len(self._probes) > 1 else ""
         ))
-        self.lbl_status.setText("● PROBE READY")
+        self.lbl_status.setText("● ĐẦU DÒ SẴN SÀNG")
 
     def set_target_info(self, info: Optional[TargetInfo]) -> None:
         self._target_info = info
         if info is None:
-            self.lbl_target.setText("Chưa đọc target")
-            self.lbl_option_bytes.setText("WRP S0–S2 / RDP · chưa kiểm tra Target")
+            self.lbl_target.setText("Chưa đọc MCU")
+            self.lbl_option_bytes.setText("WRP S0–S2 / RDP · chưa kiểm tra MCU")
+            self.badge_preflight.setText("● Chưa kiểm tra")
+            self._badge_state(self.badge_preflight, "unknown")
+            self.badge_preflight.setToolTip("")
+            self.lbl_target_actual.setText("Chưa đọc MCU")
+            self.lbl_target_flash.setText("Chưa kiểm tra")
+            self.lbl_target_wrp.setText("Chưa kiểm tra")
+            self.lbl_target_rdp.setText("Chưa kiểm tra")
             return
         self.lbl_target.setText(
-            "%s · %d KB Flash · %.2fV" % (
+            "%s · %d KiB bộ nhớ · %.2f V" % (
                 "STM32F407" if info.device_id & 0xFFF == 0x413 else "STM32 ID 0x%03X" % (info.device_id & 0xFFF),
                 info.flash_kib, info.target_voltage,
             )
         )
-        self.lbl_option_bytes.setText(
-            "WRP %s · RDP %s" %
-            (info.protection_summary, "protected" if info.readout_protected else "Level 0")
-        )
+        protected = {0, 1, 2}.issubset(set(info.protected_sectors)) if info.protection_reported else False
+        wrp_summary = "đã bảo vệ S0–S2" if protected else "chưa bảo vệ đủ S0–S2" if info.protection_reported else "chưa kiểm tra"
+        rdp_summary = "đã khóa đọc" if info.readout_protected else "Mức 0"
+        self.lbl_option_bytes.setText("WRP: %s · RDP: %s" % (wrp_summary, rdp_summary))
+        try:
+            validate_target_for_provisioning(info)
+            validate_bootloader_write_protection(info)
+        except ValueError as error:
+            self.badge_preflight.setText("⚠ Không đạt")
+            self._badge_state(self.badge_preflight, "failed")
+            self.badge_preflight.setToolTip(str(error))
+        else:
+            self.badge_preflight.setText("✓ MCU đã kiểm tra")
+            self._badge_state(self.badge_preflight, "passed")
+            self.badge_preflight.setToolTip("Mỗi lần nạp vẫn kiểm tra lại MCU và tệp HEX.")
+        self.lbl_target_flash.setText("%d KiB" % info.flash_kib)
+        wrp_ok = protected
+        self.lbl_target_wrp.setText("Chưa kiểm tra" if not info.protection_reported else
+                                    "Đã bảo vệ S0–S2" if wrp_ok else "Chưa bảo vệ đủ S0–S2")
+        self.lbl_target_rdp.setText("Mức 0 (không bảo vệ)" if not info.readout_protected else "Đã khóa RDP")
 
     def append_log(self, text: str) -> None:
-        self.log_terminal.appendPlainText(str(text))
+        self.activity_log.append(str(text))
 
     def set_busy(self, busy: bool) -> None:
         self._busy = bool(busy)
         self.btn_browse_app.setEnabled(not busy)
         self.btn_flash_app.setEnabled(not busy and self._selected_file is not None)
+        self.btn_dry_run_action.setEnabled(not busy and self._selected_file is not None)
         self.btn_flash_bootloader.setEnabled(not busy)
         self.btn_refresh_probe.setEnabled(not busy)
         self.btn_inspect_target.setEnabled(not busy)
-
-    def _on_flash_app_clicked(self) -> None:
-        if self._selected_file is None:
-            QMessageBox.warning(self, "Firmware chưa hợp lệ", "Hãy chọn Application Intel HEX hợp lệ trước.")
-            return
-        self.flash_application_requested.emit(self._selected_file, self.cb_dry_run.isChecked())
-
-    def _on_flash_bootloader_clicked(self) -> None:
-        self.flash_bootloader_requested.emit(True)
 
 
 __all__ = ["ProgramView"]

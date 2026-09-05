@@ -523,7 +523,12 @@ class LiveMonitorViewTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def test_start_button_runs_selected_elf_through_production_controller(self) -> None:
-        panel = DebugLivePanel()
+        from b300_gui.app_context import AppContext
+        from b300_core.project_profiles import ProjectProfile
+        from b300_core.gateway_profiles import GatewayProfile
+        from b300_gui.production_live_panel import ProductionLivePanel
+        context = AppContext()
+        panel = ProductionLivePanel()
         panel.expressions.setText("speed:f32")
         sample = LiveSample(
             cycle=0,
@@ -542,16 +547,14 @@ class LiveMonitorViewTests(unittest.TestCase):
             session_factory=lambda **_kwargs: session,
             worker_factory=_InlineWorker,
         )
-        view = MonitorView(live_panel=panel, controller=controller)
+        view = MonitorView(live_panel=panel, controller=controller, context=context)
         try:
             with tempfile.TemporaryDirectory() as directory:
                 symbols = Path(directory) / "robot.axf"
                 symbols.write_bytes(b"ELF")
-                self.assertTrue(
-                    hasattr(view, "set_symbols"),
-                    "MONITOR needs one visible ELF selection before Start",
-                )
-                view.set_symbols(symbols)
+                project = ProjectProfile("robot", "Robot", Path(directory), symbols)
+                context.set_profiles((project,), (), default_project_id="robot")
+                self.assertIs(view.context, context)
                 panel.start_button.click()
             self.assertEqual(session.started_config.symbols, symbols.resolve())
             self.assertEqual(session.started_config.probe.serial, "ABC123")
@@ -572,7 +575,12 @@ class LiveMonitorViewTests(unittest.TestCase):
                     tcl_endpoint="127.0.0.1:16666", initial_target_state="running",
                 )
 
-        panel = DebugLivePanel()
+        from b300_gui.app_context import AppContext
+        from b300_core.project_profiles import ProjectProfile
+        from b300_core.gateway_profiles import GatewayProfile
+        from b300_gui.production_live_panel import ProductionLivePanel
+        context = AppContext()
+        panel = ProductionLivePanel()
         panel.expressions.setText("speed:f32")
         session = ClientSession(())
         controller = LiveMonitorController(
@@ -584,16 +592,16 @@ class LiveMonitorViewTests(unittest.TestCase):
         view = MonitorView(
             live_panel=panel,
             controller=controller,
-            remote_profile_loader=lambda: profile,
+            context=context,
         )
         try:
             with tempfile.TemporaryDirectory() as directory:
                 symbols = Path(directory) / "robot.elf"
                 symbols.write_bytes(b"ELF")
-                view.set_symbols(symbols)
-                view.role_selector.setCurrentIndex(
-                    view.role_selector.findData("CLIENT")
-                )
+                project = ProjectProfile("robot", "Robot", Path(directory), symbols)
+                gateway = GatewayProfile("gateway", "Robot Gateway", profile)
+                context.set_profiles((project,), (gateway,), default_project_id="robot",
+                                     default_gateway_id="gateway")
                 panel.start_button.click()
 
             self.assertEqual(session.started_config.host, "gateway.local")

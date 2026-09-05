@@ -28,6 +28,7 @@ a = Analysis(
     binaries=native_binaries,
     datas=[
         (str(project_root / "branding" / "b300-stlink-icon.png"), "branding"),
+        (str(project_root / "branding" / "b300-industrial-mark.svg"), "branding"),
         (str(project_root / "branding" / "b300-stlink-wordmark.png"), "branding"),
         (str(project_root / "branding" / "b300-stlink-wordmark-dark.png"), "branding"),
         (str(project_root / "CHANGELOG.md"), "."),

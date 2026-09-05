@@ -33,7 +33,7 @@ class RemoteLoginDialog(QDialog):
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("B300 Client Login")
+        self.setWindowTitle("Đăng nhập máy khách B300")
         self.setObjectName("remoteLoginDialog")
         self.resize(380, 238)
         self._is_connecting = False
@@ -45,7 +45,7 @@ class RemoteLoginDialog(QDialog):
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(10)
 
-        title = QLabel("SSH CLIENT")
+        title = QLabel("MÁY KHÁCH SSH")
         title.setObjectName("remoteLoginTitle")
         title.setStyleSheet(
             "font-size: 13px; font-weight: 900; color: #F1F5F9; letter-spacing: 0.8px;"
@@ -59,27 +59,27 @@ class RemoteLoginDialog(QDialog):
         self.host_input = QLineEdit(default_host)
         self.host_input.setObjectName("loginGatewayHost")
         self.host_input.setPlaceholderText("192.168.1.145")
-        form.addRow("GATEWAY", self.host_input)
+        form.addRow("MÁY GATEWAY", self.host_input)
 
         self.user_input = QLineEdit(default_user)
         self.user_input.setObjectName("loginGatewayUser")
         self.user_input.setPlaceholderText("Admin")
-        form.addRow("USER", self.user_input)
+        form.addRow("TÀI KHOẢN", self.user_input)
 
         self.password_input = QLineEdit()
         self.password_input.setObjectName("loginGatewayPassword")
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.password_input.setPlaceholderText("••••••••••••")
-        form.addRow("PASSWORD", self.password_input)
+        form.addRow("MẬT KHẨU", self.password_input)
 
         self.port_input = QSpinBox()
         self.port_input.setObjectName("loginGatewayPort")
         self.port_input.setRange(1, 65535)
         self.port_input.setValue(default_port or 22)
-        form.addRow("PORT", self.port_input)
+        form.addRow("CỔNG", self.port_input)
         layout.addLayout(form)
 
-        self.remember_checkbox = QCheckBox("SAVE LOCAL")
+        self.remember_checkbox = QCheckBox("LƯU TRÊN MÁY NÀY")
         self.remember_checkbox.setObjectName("loginRememberCheckbox")
         self.remember_checkbox.setChecked(True)
         self.remember_checkbox.setToolTip("Lưu credential trên máy này; password không vào profile/log.")
@@ -95,12 +95,12 @@ class RemoteLoginDialog(QDialog):
         btn_box.setSpacing(8)
         btn_box.addStretch(1)
 
-        self.btn_cancel = QPushButton("CANCEL")
+        self.btn_cancel = QPushButton("HỦY")
         self.btn_cancel.setObjectName("loginCancelBtn")
         self.btn_cancel.clicked.connect(self.reject)
         btn_box.addWidget(self.btn_cancel)
 
-        self.btn_connect = QPushButton("CONNECT")
+        self.btn_connect = QPushButton("KẾT NỐI")
         self.btn_connect.setObjectName("loginConnectBtn")
         self.btn_connect.setStyleSheet("font-weight: 800; padding: 6px 18px;")
         self.btn_connect.clicked.connect(self._on_connect_clicked)
@@ -110,7 +110,7 @@ class RemoteLoginDialog(QDialog):
     def set_has_remembered_credential(self, has_remembered: bool) -> None:
         self._has_remembered = has_remembered
         if has_remembered:
-            self.password_input.setPlaceholderText("Saved on this PC")
+            self.password_input.setPlaceholderText("Đã lưu trên máy này")
             self.remember_checkbox.setChecked(True)
 
     def set_connecting(self, connecting: bool = True) -> None:
@@ -122,17 +122,17 @@ class RemoteLoginDialog(QDialog):
         self.port_input.setEnabled(not connecting)
         self.remember_checkbox.setEnabled(not connecting)
         if connecting:
-            self.btn_connect.setText("CONNECTING…")
-            self.status_banner.setText("SSH · CONNECTING")
+            self.btn_connect.setText("ĐANG KẾT NỐI…")
+            self.status_banner.setText("SSH · ĐANG KẾT NỐI")
             self.status_banner.setStyleSheet(
                 "color: #38BDF8; font-size: 10px; font-family: monospace; font-weight: 700;"
             )
             self.status_banner.setVisible(True)
         else:
-            self.btn_connect.setText("CONNECT")
+            self.btn_connect.setText("KẾT NỐI")
 
     def set_login_success(self) -> None:
-        self.status_banner.setText("SSH ● CONNECTED")
+        self.status_banner.setText("SSH · ĐÃ KẾT NỐI")
         self.status_banner.setStyleSheet(
             "color: #10B981; font-size: 10px; font-family: monospace; font-weight: 800;"
         )
@@ -142,8 +142,8 @@ class RemoteLoginDialog(QDialog):
 
     def set_login_error(self, error_message: str) -> None:
         self.set_connecting(False)
-        clean_msg = error_message.strip().split("\n")[0] if error_message else "SSH authentication failed."
-        self.status_banner.setText("SSH ✕ %s" % clean_msg)
+        clean_msg = error_message.strip().split("\n")[0] if error_message else "Xác thực SSH thất bại."
+        self.status_banner.setText("SSH · LỖI: %s" % clean_msg)
         self.status_banner.setStyleSheet(
             "color: #EF4444; font-size: 10px; font-family: monospace; font-weight: 700;"
         )

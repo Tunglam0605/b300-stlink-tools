@@ -399,8 +399,8 @@ class GuiSmokeTests(unittest.TestCase):
         window = MainWindow(service=FakeService(), probe_loader=broken_probe_discovery)
         self.assertTrue(window.openocd_ready)
         self.assertTrue(window.setup_button.isHidden())
-        self.assertIn("OpenOCD ready", window.status_banner.text())
-        self.assertIn("ST-Link scan unavailable", window.status_banner.text())
+        self.assertIn("OpenOCD sẵn sàng", window.status_banner.text())
+        self.assertIn("Không thể quét ST-Link", window.status_banner.text())
         self.assertIn("ST-Link discovery failed", window.log_view.toPlainText())
         window.close()
 

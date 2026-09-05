@@ -81,7 +81,8 @@ class PassFailBanner(QFrame):
         self.icon_label.style().polish(self.icon_label)
         self.show()
 
-    def show_info(self, title: str, detail: str = "") -> None:
+    def show_info(self, title: str, detail: str = "", auto_dismiss_ms: int = 3000) -> None:
+        from PySide6.QtCore import QTimer
         self.icon_label.setText("INFO")
         self.icon_label.setObjectName("statusPillNeutral")
         self.title_label.setText(title)
@@ -92,3 +93,5 @@ class PassFailBanner(QFrame):
         self.icon_label.style().unpolish(self.icon_label)
         self.icon_label.style().polish(self.icon_label)
         self.show()
+        if auto_dismiss_ms > 0:
+            QTimer.singleShot(auto_dismiss_ms, self.hide)

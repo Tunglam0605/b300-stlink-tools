@@ -120,10 +120,10 @@ class V015ReleaseUxTests(unittest.TestCase):
     def test_login_dialog_masks_password_and_stays_compact(self) -> None:
         dialog = RemoteLoginDialog("192.168.1.10", "Admin", 22)
         self.assertEqual(dialog.password_input.echoMode(), QLineEdit.EchoMode.Password)
-        self.assertEqual(dialog.btn_connect.text(), "CONNECT")
-        self.assertEqual(dialog.remember_checkbox.text(), "SAVE LOCAL")
+        self.assertEqual(dialog.btn_connect.text(), "KẾT NỐI")
+        self.assertEqual(dialog.remember_checkbox.text(), "LƯU TRÊN MÁY NÀY")
         dialog.set_connecting(True)
-        self.assertIn("CONNECTING", dialog.status_banner.text())
+        self.assertIn("ĐANG KẾT NỐI", dialog.status_banner.text())
         dialog.set_login_error("Permission denied")
         self.assertIn("Permission denied", dialog.status_banner.text())
         dialog.close()

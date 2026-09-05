@@ -1,147 +1,213 @@
-"""Shared-profile Zero-Halt Live Monitor view."""
-from __future__ import annotations
-
+"""Production Monitor observes the application's shared project and connection."""
 from pathlib import Path
-from typing import Callable, Iterable, Optional
-
-from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
-
-from b300_core.gateway_profiles import GatewayProfile
+from typing import Callable, Optional
+from PySide6.QtCore import Signal, Qt
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPlainTextEdit, QVBoxLayout, QWidget, QScrollArea
 from b300_core.models import ProbeRef
-from b300_core.project_profiles import ProjectProfile
-from b300_core.remote_profile import RemoteGatewayProfile, load_remote_profile
-from b300_gui.debug_live_panel import DebugLivePanel
+from b300_core.remote_profile import load_remote_profile
+from b300_gui.production_live_panel import ProductionLivePanel
 from b300_gui.live_monitor_controller import LiveMonitorController, LiveMonitorRequest
-
 
 class MonitorView(QWidget):
     operation_state_changed = Signal(bool)
     log = Signal(str)
     manage_gateways_requested = Signal()
     manage_projects_requested = Signal()
+    open_vscode_requested = Signal()
 
-    def __init__(self, parent: Optional[QWidget] = None, *, live_panel: Optional[DebugLivePanel] = None,
-                 controller: Optional[LiveMonitorController] = None,
+    def __init__(self, parent=None, *, context=None, live_panel=None, controller=None,
                  selected_probe: Optional[Callable[[], ProbeRef]] = None,
-                 openocd_executable: Optional[str] = None,
-                 remote_session_provider=None,
-                 hardware_busy: Optional[Callable[[], bool]] = None,
-                 remote_profile_loader: Callable[[], Optional[RemoteGatewayProfile]] = load_remote_profile) -> None:
+                 openocd_executable=None, remote_session_provider=None, hardware_busy=None,
+                 remote_profile_loader=load_remote_profile):
         super().__init__(parent)
         self.setObjectName("monitorViewContainer")
-        self._symbols: Optional[Path] = None
-        self._remote_profile_loader = remote_profile_loader
-        self._gateway_profiles = {}
-        self._project_profiles = {}
-        self.live_panel = live_panel or DebugLivePanel(self)
-        if self.live_panel.parent() is not self: self.live_panel.setParent(self)
+        self._context = None
+        self._symbols = None
+        self._fallback_project = None
+        self._fallback_gateway = None
+        self.live_panel = live_panel or ProductionLivePanel(self)
+        if self.live_panel.parent() is not self:
+            self.live_panel.setParent(self)
         self.controller = controller or LiveMonitorController(
-            self.live_panel, self, selected_probe=selected_probe, remote_session_provider=remote_session_provider,
-            hardware_busy=hardware_busy, openocd_executable=openocd_executable)
+            self.live_panel, self, selected_probe=selected_probe,
+            remote_session_provider=remote_session_provider, hardware_busy=hardware_busy,
+            openocd_executable=openocd_executable)
         if self.controller.panel is not self.live_panel:
             raise ValueError("Live Monitor controller must own the displayed panel.")
-        self.controller.operation_state_changed.connect(self.operation_state_changed.emit)
-        self.controller.log.connect(self.log.emit)
         self._build_ui()
-        if hasattr(self.live_panel,"browse_symbols_btn"):
-            self.live_panel.browse_symbols_btn.hide()
+        self.controller.operation_state_changed.connect(self.operation_state_changed.emit)
+        self.controller.operation_state_changed.connect(self._render_context)
+        self.controller.log.connect(self.log.emit)
+        self.controller.log.connect(self.append_log)
         self.live_panel.start_button.clicked.connect(self._start_requested)
         self.live_panel.stop_button.clicked.connect(self.controller.stop)
         self.live_panel.clear_button.clicked.connect(self.controller.clear)
         self.live_panel.export_button.clicked.connect(self._export_requested)
+        if isinstance(self.live_panel, ProductionLivePanel):
+            self.live_panel.sample_received.connect(self._render_sample_summary)
+            self.live_panel.history_cleared.connect(self._clear_sample_summary)
+        self.bind_context(context)
 
-    def _build_ui(self) -> None:
-        layout=QVBoxLayout(self); layout.setContentsMargins(14,10,14,10); layout.setSpacing(8)
-        banner=QFrame(); banner.setObjectName("headerRibbon"); bl=QVBoxLayout(banner); bl.setContentsMargins(12,8,12,8)
-        title_row=QHBoxLayout(); title=QLabel("Live Monitor"); title.setObjectName("sectionTitle"); title_row.addWidget(title); badge=QLabel("ZERO-HALT"); badge.setObjectName("safeBadge"); title_row.addWidget(badge); title_row.addStretch(1); bl.addLayout(title_row)
-        desc=QLabel("Đọc RAM/DWT qua SWD mà không chủ động halt/reset MCU. Project và Gateway dùng chung với DEBUG."); desc.setWordWrap(True); desc.setObjectName("pageSubtitle"); bl.addWidget(desc)
-        source=QHBoxLayout(); source.addWidget(QLabel("Mode")); self.role_selector=QComboBox(); self.role_selector.addItem("Local","LOCAL"); self.role_selector.addItem("Client","CLIENT"); source.addWidget(self.role_selector)
-        source.addWidget(QLabel("Project")); self.project_selector=QComboBox(); self.project_selector.setObjectName("monitorProjectSelector"); source.addWidget(self.project_selector,1); self.btn_manage_projects=QPushButton("Manage…"); self.btn_manage_projects.clicked.connect(self.manage_projects_requested.emit); source.addWidget(self.btn_manage_projects); bl.addLayout(source)
-        self.gateway_row=QWidget(); gr=QHBoxLayout(self.gateway_row); gr.setContentsMargins(0,0,0,0); gr.addWidget(QLabel("Gateway")); self.gateway_selector=QComboBox(); self.gateway_selector.setObjectName("monitorGatewaySelector"); gr.addWidget(self.gateway_selector,1); self.btn_manage_gateways=QPushButton("Manage…"); self.btn_manage_gateways.clicked.connect(self.manage_gateways_requested.emit); gr.addWidget(self.btn_manage_gateways); bl.addWidget(self.gateway_row)
-        self.symbol_path=QLineEdit(); self.symbol_path.setReadOnly(True); self.symbol_path.hide(); self.symbol_button=QPushButton("ELF/AXF…"); self.symbol_button.hide()
-        layout.addWidget(banner); layout.addWidget(self.live_panel,1)
-        self.role_selector.currentIndexChanged.connect(self._role_changed); self.project_selector.currentIndexChanged.connect(self._project_changed); self._role_changed()
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(8)
+        body_widget = QWidget()
+        body = QHBoxLayout(body_widget)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(12)
+        self.live_panel.setMinimumHeight(620)
+        body.addWidget(self.live_panel, 4)
+        self.session_card = QFrame()
+        self.session_card.setObjectName("engineeringCard")
+        self.session_card.setMinimumWidth(170)
+        self.session_card.setMaximumWidth(400)
+        summary = QVBoxLayout(self.session_card)
+        summary.setContentsMargins(16, 16, 16, 16)
+        title = QLabel("PHIÊN THEO DÕI")
+        title.setObjectName("sectionTitle")
+        summary.addWidget(title)
+        self.context_summary = QLabel()
+        self.context_summary.setWordWrap(True)
+        summary.addWidget(self.context_summary)
+        self.session_state = QLabel("Chưa bắt đầu")
+        summary.addWidget(self.session_state)
+        self.last_sample = QLabel("Mẫu gần nhất: —")
+        self.sample_health = QLabel("Chất lượng mẫu: chưa kiểm tra")
+        self.sample_health.setWordWrap(True)
+        summary.addWidget(self.last_sample)
+        summary.addWidget(self.sample_health)
+        notice = QLabel("Theo dõi zero-halt\nGiá trị chỉ xuất hiện sau khi nhận được mẫu.")
+        notice.setWordWrap(True)
+        summary.addWidget(notice)
+        summary.addStretch()
+        self.session_card.hide()
+        body.addWidget(self.session_card, 1)
+        self.content_scroll = QScrollArea()
+        self.content_scroll.setWidgetResizable(True)
+        self.content_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.content_scroll.setWidget(body_widget)
+        root.addWidget(self.content_scroll, 1)
+        self.monitor_log = QPlainTextEdit()
+        self.monitor_log.setReadOnly(True)
+        self.monitor_log.setPlaceholderText("Nhật ký theo dõi · chưa có hoạt động")
+        self.monitor_log.setMaximumBlockCount(200)
+        self.monitor_log.setMaximumHeight(76)
+        root.addWidget(self.monitor_log)
 
-    def set_gateway_profiles(self, profiles: Iterable[GatewayProfile], default_id: Optional[str] = None) -> None:
-        items=tuple(p.validate() for p in profiles); self._gateway_profiles={p.profile_id:p for p in items}; current=self.gateway_selector.currentData(); self.gateway_selector.blockSignals(True); self.gateway_selector.clear()
-        for p in items: self.gateway_selector.addItem("%s · %s"%(p.name,p.display_endpoint),p.profile_id)
-        wanted=current if current in self._gateway_profiles else default_id
-        if wanted in self._gateway_profiles: self.gateway_selector.setCurrentIndex(self.gateway_selector.findData(wanted))
-        self.gateway_selector.blockSignals(False)
+    def resizeEvent(self, event):
+        self.session_card.setVisible(self.width() >= 1100)
+        super().resizeEvent(event)
 
-    def set_project_profiles(self, profiles: Iterable[ProjectProfile], default_id: Optional[str] = None) -> None:
-        items=tuple(p.validate() for p in profiles); self._project_profiles={p.project_id:p for p in items}; current=self.project_selector.currentData(); self.project_selector.blockSignals(True); self.project_selector.clear()
-        for p in items: self.project_selector.addItem(p.name,p.project_id)
-        wanted=current if current in self._project_profiles else default_id
-        if wanted in self._project_profiles: self.project_selector.setCurrentIndex(self.project_selector.findData(wanted))
-        self.project_selector.blockSignals(False); self._project_changed()
+    def append_log(self, message):
+        self.monitor_log.appendPlainText(str(message))
+        self._render_context()
 
-    def _role_changed(self) -> None:
-        self.gateway_row.setVisible(self.role_selector.currentData()=="CLIENT")
+    @property
+    def context(self):
+        return self._context
 
-    def _project_changed(self) -> None:
-        profile=self._project_profiles.get(self.project_selector.currentData())
-        if profile is not None:
-            self._symbols=Path(profile.symbols); self.symbol_path.setText(str(profile.symbols))
+    def bind_context(self, context):
+        if self._context is not None:
+            try:
+                self._context.changed.disconnect(self._render_context)
+            except (RuntimeError, TypeError):
+                pass
+        self._context = context
+        if context is not None:
+            context.changed.connect(self._render_context)
+        self._render_context()
 
-    def set_hardware_busy(self,busy:bool)->None:
-        enabled=not busy
-        for w in (self.live_panel.start_button, self.role_selector, self.project_selector,
-                  self.gateway_selector, self.btn_manage_projects, self.btn_manage_gateways,
-                  self.symbol_button):
-            w.setEnabled(enabled)
-        if hasattr(self.live_panel, "browse_symbols_btn"):
-            self.live_panel.browse_symbols_btn.setEnabled(enabled)
+    def _render_context(self, *_args):
+        project = self._selected_project()
+        connection = getattr(self._context, "selected_connection", None)
+        project_name = getattr(project, "name", "Chưa chọn dự án")
+        connection_name = getattr(connection, "name", "Chưa chọn kết nối")
+        self.context_summary.setText("Dự án\n%s\n\nKết nối\n%s" % (project_name, connection_name))
+        self.session_state.setText("Đang theo dõi" if self.controller.active else "Đang chờ")
 
-    def set_symbols(self,path:Path)->None:
-        selected=Path(path).expanduser().resolve()
-        if selected.suffix.lower() not in {".elf",".axf"} or not selected.is_file(): raise ValueError("Live Monitor cần file ELF/AXF hợp lệ.")
-        self._symbols=selected; self.symbol_path.setText(str(selected))
+    def _render_sample_summary(self, sample):
+        self.last_sample.setText("Mẫu gần nhất: %.3f s" % sample.captured_elapsed_seconds)
+        quality = "giá trị không nhất quán" if any(not value.coherent for value in sample.values) else "giá trị nhất quán"
+        self.sample_health.setText("Chất lượng mẫu: " + quality)
 
-    def _selected_symbols(self)->Optional[Path]:
-        project=self._project_profiles.get(self.project_selector.currentData())
-        if project is not None: return Path(project.symbols)
-        return self._symbols
+    def _clear_sample_summary(self):
+        self.last_sample.setText("Mẫu gần nhất: —")
+        self.sample_health.setText("Chất lượng mẫu: chưa kiểm tra")
 
-    def _selected_gateway(self)->Optional[GatewayProfile]:
-        return self._gateway_profiles.get(self.gateway_selector.currentData())
+    def _selected_project(self):
+        return self._context.selected_project if self._context is not None else self._fallback_project
 
-    def _start_requested(self)->None:
-        symbols=self._selected_symbols()
+    def _selected_gateway(self):
+        connection = getattr(self._context, "selected_connection", None)
+        return getattr(connection, "gateway", None) if self._context is not None else self._fallback_gateway
+
+    def _selected_symbols(self):
+        project = self._selected_project()
+        return Path(project.symbols) if project is not None and project.symbols else self._symbols
+
+    def set_symbols(self, path):
+        selected = Path(path).expanduser().resolve()
+        if selected.suffix.lower() not in {".elf", ".axf"} or not selected.is_file():
+            raise ValueError("Theo dõi trực tiếp yêu cầu tệp ELF/AXF hiện có.")
+        self._symbols = selected
+
+    def set_project_profiles(self, profiles, default_id=None):
+        items = tuple(profiles)
+        self._fallback_project = next((p for p in items if p.project_id == default_id), items[0] if items else None)
+        self._render_context()
+
+    def set_gateway_profiles(self, profiles, default_id=None):
+        items = tuple(profiles)
+        self._fallback_gateway = next((p for p in items if p.profile_id == default_id), items[0] if items else None)
+        self._render_context()
+
+    def set_hardware_busy(self, busy):
+        self.live_panel.start_button.setEnabled(not busy)
+
+    def _start_requested(self):
+        symbols = self._selected_symbols()
+        connection = getattr(self._context, "selected_connection", None)
         if symbols is None:
-            self.live_panel.mark_failed("Chọn Debug Project trước khi bắt đầu."); return
+            self.live_panel.status.setText("Chọn dự án có tệp ELF/AXF trên thanh dùng chung.")
+            return
+        if self._context is not None and connection is None:
+            self.live_panel.status.setText("Chọn kết nối trên thanh dùng chung.")
+            return
         try:
-            symbols=Path(symbols).expanduser().resolve()
-            if not symbols.is_file(): raise RuntimeError("ELF/AXF của Debug Project không còn tồn tại.")
-            if self.role_selector.currentData()=="CLIENT":
-                gateway=self._selected_gateway()
+            symbols = Path(symbols).expanduser().resolve()
+            if not symbols.is_file():
+                raise RuntimeError("Tệp ELF/AXF của dự án không còn tồn tại.")
+            if connection is not None and not connection.is_local:
+                gateway = self._selected_gateway()
                 if gateway is None:
-                    legacy=self._remote_profile_loader()
-                    if legacy is None: raise RuntimeError("CLIENT cần một Gateway đã lưu trong Gateway Manager.")
-                    endpoint=legacy.validate()
-                else: endpoint=gateway.endpoint.validate()
-                request=LiveMonitorRequest.client(symbols,host=endpoint.host,user=endpoint.user,ssh_port=endpoint.port)
+                    raise RuntimeError("Kết nối đã chọn chưa có cấu hình máy trung gian.")
+                endpoint = gateway.endpoint.validate()
+                request = LiveMonitorRequest.client(symbols, host=endpoint.host,
+                                                    user=endpoint.user, ssh_port=endpoint.port)
             else:
-                request=LiveMonitorRequest.local(symbols)
+                request = LiveMonitorRequest.local(symbols)
             self.controller.start(request)
-        except (OSError,RuntimeError,ValueError) as error: self.live_panel.mark_failed(str(error))
+        except (OSError, RuntimeError, ValueError) as error:
+            self.live_panel.mark_failed(str(error))
 
-    def _export_requested(self)->None:
-        try: self.controller.export(self)
-        except (OSError,RuntimeError,ValueError) as error: self.live_panel.mark_failed(str(error))
+    def _export_requested(self):
+        try:
+            self.controller.export(self)
+        except (OSError, RuntimeError, ValueError) as error:
+            self.live_panel.mark_failed(str(error))
 
     @property
     def buffer(self): return self.live_panel.buffer
     @property
     def table(self): return self.live_panel.table
-    def set_control_state(self,*args,**kwargs): return self.live_panel.set_control_state(*args,**kwargs)
-    def append_live_sample(self,sample): return self.live_panel.append_live_sample(sample)
-    def apply_analytics(self,snapshot): return self.live_panel.apply_analytics(snapshot)
+    def set_control_state(self, *args, **kwargs): return self.live_panel.set_control_state(*args, **kwargs)
+    def append_live_sample(self, sample): return self.live_panel.append_live_sample(sample)
+    def apply_analytics(self, snapshot): return self.live_panel.apply_analytics(snapshot)
     def reset_for_sampling(self): return self.live_panel.reset_for_sampling()
     def mark_stopping(self): return self.live_panel.mark_stopping()
-    def mark_live_completed(self,summary): return self.live_panel.mark_live_completed(summary)
-    def mark_failed(self,message): return self.live_panel.mark_failed(message)
+    def mark_live_completed(self, summary): return self.live_panel.mark_live_completed(summary)
+    def mark_failed(self, message): return self.live_panel.mark_failed(message)
 
-
-__all__=["MonitorView"]
+__all__ = ["MonitorView"]

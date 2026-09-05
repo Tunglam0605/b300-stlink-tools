@@ -18,7 +18,7 @@ class GatewayEditDialog(QDialog):
     def __init__(self, profile: Optional[GatewayProfile] = None, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._profile = profile
-        self.setWindowTitle("Gateway Profile")
+        self.setWindowTitle("Thông tin cổng Gateway")
         layout = QVBoxLayout(self)
         form = QFormLayout()
         self.name_input = QLineEdit(profile.name if profile else "")
@@ -27,15 +27,17 @@ class GatewayEditDialog(QDialog):
         self.port_input = QSpinBox()
         self.port_input.setRange(1, 65535)
         self.port_input.setValue(profile.endpoint.port if profile else 22)
-        form.addRow("Name", self.name_input)
-        form.addRow("Host / IP", self.host_input)
-        form.addRow("SSH user", self.user_input)
-        form.addRow("SSH port", self.port_input)
+        form.addRow("Tên cổng", self.name_input)
+        form.addRow("Địa chỉ IP / Host", self.host_input)
+        form.addRow("Tài khoản SSH", self.user_input)
+        form.addRow("Cổng SSH", self.port_input)
         layout.addLayout(form)
-        note = QLabel("Chỉ lưu Name/Host/User/Port. Password không được lưu trong profile.")
+        note = QLabel("Chỉ lưu Tên/Host/User/Port. Mật khẩu không được lưu trong profile.")
         note.setWordWrap(True)
         layout.addWidget(note)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Save).setText("Lưu")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Hủy")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -55,15 +57,15 @@ class GatewayManagerDialog(QDialog):
         super().__init__(parent)
         self.store = store
         self.sessions = sessions
-        self.setWindowTitle("Gateway Manager")
+        self.setWindowTitle("Quản lý cổng Gateway")
         self.setObjectName("gatewayManagerDialog")
         self.resize(760, 430)
         root = QVBoxLayout(self)
-        intro = QLabel("Saved Gateways · endpoint dùng chung cho DEBUG, MONITOR và các remote workflow.")
+        intro = QLabel("Danh sách cổng Gateway (SSH/OpenOCD) dùng chung cho các kết nối từ xa.")
         intro.setObjectName("pageSubtitle")
         root.addWidget(intro)
         self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(("Name", "Endpoint", "Session", "Default"))
+        self.table.setHorizontalHeaderLabels(("Tên cổng", "Địa chỉ kết nối", "Phiên kết nối", "Mặc định"))
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -76,12 +78,12 @@ class GatewayManagerDialog(QDialog):
         self.table.doubleClicked.connect(self._connect_selected)
         root.addWidget(self.table, 1)
         actions = QHBoxLayout()
-        self.btn_add = QPushButton("Add")
-        self.btn_edit = QPushButton("Edit")
-        self.btn_delete = QPushButton("Delete")
-        self.btn_default = QPushButton("Set default")
-        self.btn_connect = QPushButton("Connect")
-        self.btn_disconnect = QPushButton("Disconnect")
+        self.btn_add = QPushButton("Thêm")
+        self.btn_edit = QPushButton("Sửa")
+        self.btn_delete = QPushButton("Xóa")
+        self.btn_default = QPushButton("Đặt làm mặc định")
+        self.btn_connect = QPushButton("Kết nối")
+        self.btn_disconnect = QPushButton("Ngắt kết nối")
         self.btn_connect.setObjectName("primaryActionButton")
         for button in (self.btn_add, self.btn_edit, self.btn_delete, self.btn_default): actions.addWidget(button)
         actions.addStretch(1)
@@ -89,7 +91,7 @@ class GatewayManagerDialog(QDialog):
         actions.addWidget(self.btn_connect)
         root.addLayout(actions)
         close_row = QHBoxLayout(); close_row.addStretch(1)
-        close = QPushButton("Close"); close.clicked.connect(self.accept); close_row.addWidget(close)
+        close = QPushButton("Đóng"); close.clicked.connect(self.accept); close_row.addWidget(close)
         root.addLayout(close_row)
         self.btn_add.clicked.connect(self._add)
         self.btn_edit.clicked.connect(self._edit)
@@ -116,8 +118,8 @@ class GatewayManagerDialog(QDialog):
             name = QTableWidgetItem(profile.name); name.setData(256, profile.profile_id)
             self.table.setItem(row, 0, name)
             self.table.setItem(row, 1, QTableWidgetItem(profile.display_endpoint))
-            self.table.setItem(row, 2, QTableWidgetItem("CONNECTED" if self.sessions.connected(profile.endpoint) else "Disconnected"))
-            self.table.setItem(row, 3, QTableWidgetItem("Default" if profile.profile_id == default_id else ""))
+            self.table.setItem(row, 2, QTableWidgetItem("Đã kết nối" if self.sessions.connected(profile.endpoint) else "Chưa kết nối"))
+            self.table.setItem(row, 3, QTableWidgetItem("Mặc định" if profile.profile_id == default_id else ""))
             if selected_id == profile.profile_id: select_row = row
         if select_row >= 0: self.table.selectRow(select_row)
         elif profiles: self.table.selectRow(0)
@@ -138,29 +140,29 @@ class GatewayManagerDialog(QDialog):
         if dialog.exec() != QDialog.DialogCode.Accepted: return
         try: self.store.upsert(dialog.profile())
         except Exception as error:
-            QMessageBox.warning(self, "Gateway profile", str(error)); return
+            QMessageBox.warning(self, "Hồ sơ Gateway", str(error)); return
         self.profiles_changed.emit(); self.refresh()
 
     def _edit(self) -> None:
         profile = self._selected()
         if profile is None: return
         if self.sessions.connected(profile.endpoint):
-            QMessageBox.warning(self, "Gateway profile", "Disconnect Gateway trước khi sửa endpoint.")
+            QMessageBox.warning(self, "Hồ sơ Gateway", "Ngắt kết nối Gateway trước khi sửa địa chỉ.")
             return
         dialog = GatewayEditDialog(profile, self)
         if dialog.exec() != QDialog.DialogCode.Accepted: return
         try: self.store.upsert(dialog.profile())
         except Exception as error:
-            QMessageBox.warning(self, "Gateway profile", str(error)); return
+            QMessageBox.warning(self, "Hồ sơ Gateway", str(error)); return
         self.profiles_changed.emit(); self.refresh()
 
     def _delete(self) -> None:
         profile = self._selected()
         if profile is None: return
         if self.sessions.connected(profile.endpoint):
-            QMessageBox.warning(self, "Gateway profile", "Disconnect Gateway trước khi xóa profile.")
+            QMessageBox.warning(self, "Hồ sơ Gateway", "Ngắt kết nối Gateway trước khi xóa hồ sơ.")
             return
-        if QMessageBox.question(self, "Delete Gateway", "Xóa profile '%s'?" % profile.name) != QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self, "Xóa Gateway", "Xóa hồ sơ '%s'?" % profile.name) != QMessageBox.StandardButton.Yes:
             return
         self.store.delete(profile.profile_id); self.profiles_changed.emit(); self.refresh()
 
@@ -186,7 +188,7 @@ class GatewayManagerDialog(QDialog):
                         login.password_input.clear()
             self.store.set_default(profile.profile_id)
         except Exception as error:
-            QMessageBox.warning(self, "SSH connection", str(error)); return
+            QMessageBox.warning(self, "Kết nối SSH", str(error)); return
         self.profiles_changed.emit(); self.refresh()
 
     def _disconnect_selected(self) -> None:

@@ -31,6 +31,8 @@ class ProjectProfile:
     name: str
     workspace: Path
     symbols: Path
+    application_hex: Optional[Path] = None
+    target_family: str = ""
 
     def validate(self, *, require_exists: bool = False) -> "ProjectProfile":
         project_id = str(self.project_id).strip()
@@ -43,21 +45,36 @@ class ProjectProfile:
         symbols = Path(self.symbols).expanduser()
         if symbols.suffix.lower() not in {".elf", ".axf"}:
             raise ValueError("Project symbols must be an ELF/AXF file.")
+        application_hex = Path(self.application_hex).expanduser() if self.application_hex is not None else None
+        if application_hex is not None and application_hex.suffix.lower() != ".hex":
+            raise ValueError("Project application firmware must be a HEX file.")
+        if not isinstance(self.target_family, str):
+            raise ValueError("Target family must be text.")
+        target_family = self.target_family.strip()
+        if len(target_family) > 100 or any(ord(char) < 32 for char in target_family):
+            raise ValueError("Target family must be a single line of at most 100 characters.")
         if require_exists:
             workspace = workspace.resolve(); symbols = symbols.resolve()
             if not workspace.is_dir(): raise ValueError("Project workspace directory does not exist: %s" % workspace)
             if not symbols.is_file(): raise ValueError("Project ELF/AXF file does not exist: %s" % symbols)
-        return ProjectProfile(project_id, name, workspace, symbols)
+            if application_hex is not None:
+                application_hex = application_hex.resolve()
+                if not application_hex.is_file():
+                    raise ValueError("Project application HEX file does not exist: %s" % application_hex)
+        return ProjectProfile(project_id, name, workspace, symbols, application_hex, target_family)
 
     def record(self) -> dict:
         item = self.validate()
-        return {"id": item.project_id, "name": item.name, "workspace": str(item.workspace), "symbols": str(item.symbols)}
+        return {"id": item.project_id, "name": item.name, "workspace": str(item.workspace), "symbols": str(item.symbols),
+                "application_hex": str(item.application_hex) if item.application_hex is not None else None,
+                "target_family": item.target_family}
 
     @classmethod
     def create(cls, name: str, workspace: Path, symbols: Path, *, project_id: Optional[str] = None,
+               application_hex: Optional[Path] = None, target_family: str = "",
                require_exists: bool = True) -> "ProjectProfile":
         work=Path(workspace).expanduser()
-        return cls(project_id or _project_id(name, work), name, work, Path(symbols).expanduser()).validate(require_exists=require_exists)
+        return cls(project_id or _project_id(name, work), name, work, Path(symbols).expanduser(), application_hex, target_family).validate(require_exists=require_exists)
 
 
 class ProjectProfileStore:
@@ -71,15 +88,19 @@ class ProjectProfileStore:
             raise RuntimeError("B300 project profile store is unreadable/corrupt: %s" % self.path) from error
         if not isinstance(raw,dict) or set(raw)!={"schema_version","default_id","projects"}:
             raise RuntimeError("B300 project profile store schema is invalid.")
-        if raw.get("schema_version")!=1 or not isinstance(raw.get("projects"),list):
+        if raw.get("schema_version") not in (1, 2) or not isinstance(raw.get("projects"),list):
             raise RuntimeError("Unsupported B300 project profile store schema.")
         items=[]; seen=set()
         for record in raw["projects"]:
-            if not isinstance(record,dict) or set(record)!={"id","name","workspace","symbols"}:
+            required = {"id", "name", "workspace", "symbols"}
+            allowed = required if raw["schema_version"] == 1 else required | {"application_hex", "target_family"}
+            if not isinstance(record,dict) or not required <= set(record) or not set(record) <= allowed:
                 raise RuntimeError("B300 project profile entry schema is invalid.")
             try:
-                item=ProjectProfile(str(record["id"]),str(record["name"]),Path(str(record["workspace"])),Path(str(record["symbols"]))).validate()
-            except ValueError as error:
+                item=ProjectProfile(str(record["id"]),str(record["name"]),Path(str(record["workspace"])),Path(str(record["symbols"])),
+                    Path(record["application_hex"]) if record.get("application_hex") is not None else None,
+                    record.get("target_family", "")).validate()
+            except (TypeError, ValueError) as error:
                 raise RuntimeError("B300 project profile entry contains invalid values.") from error
             if item.project_id in seen: raise RuntimeError("B300 project profile ids must be unique.")
             seen.add(item.project_id); items.append(item)
@@ -92,7 +113,7 @@ class ProjectProfileStore:
     def _write(self,projects:Iterable[ProjectProfile],default_id:Optional[str])->None:
         items=tuple(item.validate() for item in projects); ids={item.project_id for item in items}
         if default_id is not None and default_id not in ids: raise ValueError("Default project profile must exist before it can be selected.")
-        payload={"schema_version":1,"default_id":default_id,"projects":[item.record() for item in items]}
+        payload={"schema_version":2,"default_id":default_id,"projects":[item.record() for item in items]}
         self.path.parent.mkdir(parents=True,exist_ok=True)
         fd,temp_name=tempfile.mkstemp(prefix=self.path.name+".",suffix=".tmp",dir=str(self.path.parent)); temp=Path(temp_name)
         try:

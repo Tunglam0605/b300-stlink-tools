@@ -282,6 +282,7 @@ class GuiPackagingTests(unittest.TestCase):
     def test_brand_assets_are_wired_into_native_executables(self) -> None:
         self.assertTrue((ROOT / "branding" / "logo.png").is_file())
         self.assertTrue((ROOT / "branding" / "b300-stlink-icon.png").is_file())
+        self.assertTrue((ROOT / "branding" / "b300-industrial-mark.svg").is_file())
         self.assertTrue((ROOT / "branding" / "b300-stlink-icon.ico").is_file())
         self.assertTrue((ROOT / "branding" / "b300-stlink-wordmark.png").is_file())
         self.assertTrue((ROOT / "branding" / "b300-stlink-wordmark-dark.png").is_file())

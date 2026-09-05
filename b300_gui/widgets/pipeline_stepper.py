@@ -26,32 +26,32 @@ class StepCard(QFrame):
 
         self.setObjectName("stepCard")
         self.setProperty("state", "idle")
+        self.setFixedHeight(48)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(2)
-
-        # Header with circle badge + title
-        top_h = QHBoxLayout()
-        top_h.setContentsMargins(0, 0, 0, 0)
-        top_h.setSpacing(6)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(8)
 
         self.badge = QLabel(str(step_num))
         self.badge.setFixedSize(22, 22)
         self.badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.badge.setObjectName("stepBadge")
-        top_h.addWidget(self.badge)
+        layout.addWidget(self.badge)
+
+        text_layout = QVBoxLayout()
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setSpacing(1)
 
         self.title_label = QLabel(title)
         self.title_label.setObjectName("stepTitle")
-        top_h.addWidget(self.title_label, 1)
-
-        layout.addLayout(top_h)
+        text_layout.addWidget(self.title_label)
 
         self.sub_label = QLabel(subtitle)
         self.sub_label.setObjectName("stepSubtitle")
-        self.sub_label.setWordWrap(True)
-        layout.addWidget(self.sub_label)
+        self.sub_label.setWordWrap(False)
+        text_layout.addWidget(self.sub_label)
+
+        layout.addLayout(text_layout, 1)
 
         self.set_state("idle")
 
@@ -80,12 +80,12 @@ class PipelineStepper(QFrame):
     """Container for the 6-step provisioning pipeline."""
 
     STEPS = [
-        (1, "1. ST-Link", "Nhận diện phần cứng"),
-        (2, "2. Vector HEX", "Vector & Flash Span"),
-        (3, "3. Xóa S3–S7", "Giữ Bootloader S0-S2"),
-        (4, "4. Nạp App", "Xác thực byte image"),
-        (5, "5. 44B STLM", "Ghi AppMeta Verified"),
-        (6, "6. Boot Confirm", "Xác thực PC & BKP1R"),
+        (1, "ST-Link", "Kết nối probe"),
+        (2, "Kiểm tra HEX", "Vùng nhớ hợp lệ"),
+        (3, "Xóa S3–S7", "Giữ Bootloader"),
+        (4, "Nạp ứng dụng", "Flash & Verify"),
+        (5, "Ghi Metadata", "STLM Verified"),
+        (6, "Khởi động", "Xác nhận Boot"),
     ]
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:

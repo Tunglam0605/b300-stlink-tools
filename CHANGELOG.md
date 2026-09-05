@@ -5,6 +5,15 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-09-05
+
+- Refactored the five production workspaces to follow one consistent engineering-console layout, with shared project, probe, Target and busy state across PROGRAM, MONITOR, DEBUG, DEVICE and SETTINGS.
+- Reworked the production surface in Vietnamese with restrained industrial branding, compact technical icons, clearer hierarchy, responsive cards and layouts verified at the supported window sizes.
+- Added saved project profiles that carry workspace, ELF/AXF, Application HEX and expected Target family, including migration from the previous profile schema. PROGRAM resolves the selected project's HEX while keeping an explicit session override available.
+- Expanded MONITOR with a production live-variable table, recent samples and trend view while preserving the existing zero-halt sampling contract. DEBUG remains an attach-only VS Code/Cortex-Debug workflow and DEVICE remains read-only.
+- Added package resources and regression coverage for the shared context, redesigned pages, Vietnamese production labels and frontend truth/state behavior.
+- The canonical Application/Factory safety paths are unchanged: Bootloader sectors S0-S2 remain protected, normal programming cannot mass erase, and no Option Bytes or RDP behavior is relaxed. `HW-P1-001` remains OPEN / DEFERRED.
+
 ## [0.19.1] - 2026-09-05
 
 - Fixed the PROGRAM workflow so clicking **NẠP APPLICATION** runs a fresh read-only preflight automatically instead of requiring the operator to visit DEVICE first. The preflight validates the selected probe/target, flash size, WRP S0-S2, RDP and the current HEX/FlashPlan before the existing flash confirmation.

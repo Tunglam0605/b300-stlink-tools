@@ -12,12 +12,13 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import QApplication, QPushButton, QTabWidget
+from PySide6.QtWidgets import QApplication, QPushButton, QTabWidget, QComboBox, QLineEdit
 
-from b300_core.gateway_profiles import GatewayProfileStore
+from b300_core.gateway_profiles import GatewayProfile, GatewayProfileStore
 from b300_core.gateway_sessions import GatewaySessionManager
 from b300_core.models import ImageInfo, ProbeInfo, TargetInfo
-from b300_core.project_profiles import ProjectProfileStore
+from b300_core.project_profiles import ProjectProfile, ProjectProfileStore
+from b300_gui.widgets.shared_context_bar import SharedContextBar
 from b300_gui.main_window_v18 import MainWindowV18
 from b300_gui.update_dialog import UpdateDialog
 from b300_core.vscode_bridge import BridgeState, DebugRole, VsCodeBridgeState
@@ -76,8 +77,11 @@ class V018SimplifiedUiTests(unittest.TestCase):
             window._update_controls()
             locked_controls = (
                 window.monitor_view.live_panel.start_button,
-                window.monitor_view.role_selector,
-                window.monitor_view.symbol_button,
+                window.shared_context_bar.project_combo,
+                window.shared_context_bar.connection_combo,
+                window.shared_context_bar.probe_combo,
+                window.shared_context_bar.manage_projects_button,
+                window.shared_context_bar.manage_connections_button,
                 window.program_view.btn_flash_app,
                 window.program_view.btn_flash_bootloader,
                 window.program_view.btn_inspect_target,
@@ -86,9 +90,8 @@ class V018SimplifiedUiTests(unittest.TestCase):
                 window.header_bar.probe_refresh_btn,
                 window.machine_setup_button,
                 window.update_dialog.action_button,
-                window.debug_vscode_view.btn_open_local_vscode,
-                window.debug_vscode_view.btn_start_gateway,
-                window.debug_vscode_view.btn_open_remote_vscode,
+                window.debug_vscode_view.btn_open_vscode,
+                window.settings_view.btn_start_gateway,
             )
             baseline_enabled = {id(control): control.isEnabled() for control in locked_controls}
             for role in DebugRole:
@@ -101,7 +104,7 @@ class V018SimplifiedUiTests(unittest.TestCase):
                         for control in locked_controls:
                             self.assertFalse(control.isEnabled(), str(control))
                         self.assertTrue(window.debug_vscode_view.btn_stop_bridge.isEnabled())
-                        self.assertEqual(window.debug_vscode_view.btn_stop_gateway.isEnabled(),
+                        self.assertEqual(window.settings_view.btn_stop_gateway.isEnabled(),
                                          role == DebugRole.GATEWAY)
                         state.return_value = VsCodeBridgeState(None, BridgeState.STOPPED, None)
                         window._render_bridge_state()
@@ -165,7 +168,7 @@ class V018SimplifiedUiTests(unittest.TestCase):
             window.monitor_view.controller._session_factory = lambda **kwargs: created.append(kwargs)
             with mock.patch("b300_gui.main_window_v18.GatewayLoginDialog") as dialog:
                 dialog.return_value.exec.return_value = 0
-                with self.assertRaisesRegex(RuntimeError, "cancelled"):
+                with self.assertRaisesRegex(RuntimeError, "Đã hủy đăng nhập giám sát từ xa"):
                     window.monitor_view.controller.start(LiveMonitorRequest.client(
                         None, host="gateway.local", user="operator", symbol_roots=(Path.cwd(),)))
             self.assertEqual(created, [])
@@ -185,6 +188,11 @@ class V018SimplifiedUiTests(unittest.TestCase):
             self.assertIsInstance(window.settings_view, SettingsView)
             self.assertEqual(window.v18_stack.currentIndex(), 0)
             self.assertTrue(window.nav_program_btn.isChecked())
+            self.assertEqual(
+                [button.text().strip() for button in window.v18_nav_buttons],
+                ["NẠP PHẦN MỀM", "GIÁM SÁT", "GỠ LỖI VS CODE", "THIẾT BỊ", "CÀI ĐẶT"],
+            )
+            self.assertEqual(window.page_title.text(), "NẠP PHẦN MỀM")
             self.assertNotIsInstance(window.tabs, QTabWidget)
             self.assertEqual(
                 [tabs for tabs in window.findChildren(QTabWidget)
@@ -201,7 +209,7 @@ class V018SimplifiedUiTests(unittest.TestCase):
             self.assertFalse(hasattr(window, "gateway_tab"))
             self.assertFalse(hasattr(window, "memory_tab"))
             self.assertFalse(hasattr(window, "operator_view"))
-            self.assertIs(window.monitor_view.live_panel.parent(), window.monitor_view)
+            self.assertTrue(window.monitor_view.isAncestorOf(window.monitor_view.live_panel))
             self.assertIs(window.monitor_view.controller.panel, window.monitor_view.live_panel)
         finally:
             self._close(window)
@@ -263,9 +271,9 @@ class V018SimplifiedUiTests(unittest.TestCase):
         try:
             view = window.program_view
             self.assertIn("ST-LINK", view.lbl_probe.text().upper())
-            self.assertEqual(view.lbl_target.text(), "Chưa đọc target")
-            self.assertTrue(view.radio_local.isChecked())
-            self.assertEqual(view.btn_flash_app.text(), "⚡ NẠP APPLICATION")
+            self.assertEqual(view.lbl_target.text(), "Chưa đọc MCU")
+            self.assertTrue(window.app_context.selected_connection.is_local)
+            self.assertEqual(view.btn_flash_app.text(), "NẠP ỨNG DỤNG")
             self.assertFalse(view.btn_flash_app.isEnabled())
             self.assertFalse(view.adv_card.is_expanded())
         finally:
@@ -311,56 +319,57 @@ class V018SimplifiedUiTests(unittest.TestCase):
         window = self._make_window()
         try:
             view = window.program_view
-            self.assertTrue(view.radio_local.isHidden())
-            self.assertTrue(view.radio_remote.isHidden())
-            self.assertTrue(view.remote_panel.isHidden())
+            gateway = GatewayProfile.create("Remote", "gateway.example", "operator", profile_id="remote")
+            window.app_context.set_profiles((), (gateway,))
+            window.app_context.select_connection("remote")
+            self.assertFalse(view.btn_flash_app.isEnabled())
+            self.assertFalse(view.btn_flash_bootloader.isEnabled())
             self.assertIs(view.bootloader_card.parent(), view.adv_card.content_widget)
             self.assertFalse(view.adv_card.is_expanded())
         finally:
             self._close(window)
 
-    def test_debug_page_defaults_to_vscode_workflow(self) -> None:
+    def test_debug_page_uses_one_shared_project_workflow(self) -> None:
         window = self._make_window()
         try:
             window.show_page("debug")
             view = window.debug_vscode_view
             self.assertFalse(hasattr(view, "workbench"))
-            self.assertEqual(view._current_mode, "local")
-            self.assertEqual(view.mode_stack.currentIndex(), 0)
-            self.assertTrue(view.btn_mode_local.isChecked())
-            self.assertEqual(view.btn_open_local_vscode.text(), "Open Debug in VS Code")
-            self.assertTrue(view.btn_open_local_vscode.isEnabled())
+            self.assertIs(view.context, window.app_context)
+            self.assertEqual(view.findChildren(QComboBox), [view.activity_log.filter_combo])
+            self.assertEqual(view.findChildren(QLineEdit), [])
+            self.assertIn("VS CODE", view.btn_open_vscode.text().upper())
+            self.assertFalse(view.btn_open_vscode.isEnabled())
             self.assertFalse(hasattr(view, "debug_service"))
             self.assertFalse(hasattr(view, "remote_session"))
         finally:
             self._close(window)
 
-    def test_debug_page_gateway_mode_strictly_loopback(self) -> None:
+    def test_gateway_host_actions_belong_to_settings(self) -> None:
         window = self._make_window()
         try:
-            view = window.debug_vscode_view
-            view.select_mode("gateway")
-            self.app.processEvents()
-            self.assertEqual(view.mode_stack.currentIndex(), 1)
-            self.assertIn("127.0.0.1", view.gw_openocd_lbl.text())
-            self.assertNotIn("0.0.0.0", view.gw_openocd_lbl.text())
-            self.assertFalse(view.gateway_details_card.is_expanded())
-            self.assertTrue(view.btn_start_gateway.isEnabled())
-            self.assertFalse(view.btn_stop_gateway.isEnabled())
+            window.show_page("settings")
+            self.assertFalse(hasattr(window.debug_vscode_view, "btn_start_gateway"))
+            self.assertFalse(window.settings_view.btn_start_gateway.isHidden())
+            self.assertFalse(window.settings_view.btn_stop_gateway.isEnabled())
+            self.assertIs(window.app_context.gateway_sessions, window._gateway_sessions)
         finally:
             self._close(window)
 
-    def test_debug_page_client_mode_cta_and_tunnel(self) -> None:
+    def test_debug_remote_request_resolves_shared_connection_and_automatic_tunnel_port(self) -> None:
         window = self._make_window()
         try:
-            view = window.debug_vscode_view
-            view.select_mode("client")
-            self.app.processEvents()
-            self.assertEqual(view.mode_stack.currentIndex(), 2)
-            self.assertEqual(view.btn_open_remote_vscode.text(), "Open Remote Debug in VS Code")
-            self.assertEqual(view.btn_test_client_conn.text(), "Test connection")
-            self.assertEqual(view.client_local_gdb_spin.value(), 0)
-            self.assertFalse(view.client_details_card.is_expanded())
+            gateway = GatewayProfile.create("Test gateway", "gateway.example", "operator", 2222, profile_id="test-gateway")
+            project = ProjectProfile("test-project", "Test project", Path("workspace"), Path("main.axf"))
+            window.app_context.set_profiles((project,), (gateway,))
+            self.assertTrue(window.app_context.select_connection("test-gateway"))
+            request = window.debug_vscode_view._client_request()
+            self.assertEqual(request["host"], "gateway.example")
+            self.assertEqual(request["ssh_port"], 2222)
+            self.assertEqual(request["local_gdb_port"], 0)
+            self.assertEqual(request["workspace"], Path("workspace"))
+            self.assertEqual(request["elf"], Path("main.axf"))
+            self.assertFalse(window.program_view.btn_flash_app.isEnabled())
         finally:
             self._close(window)
 
@@ -370,7 +379,7 @@ class V018SimplifiedUiTests(unittest.TestCase):
             controller = window.monitor_view.controller
             self.assertIs(controller.panel, window.monitor_view.live_panel)
             self.assertFalse(hasattr(window, "debug_tab"))
-            self.assertIs(window.monitor_view.live_panel.parent(), window.monitor_view)
+            self.assertTrue(window.monitor_view.isAncestorOf(window.monitor_view.live_panel))
             self.assertIsNotNone(controller._selected_probe)
             window.show_page("monitor")
             self.assertFalse(window.busy)
@@ -405,11 +414,12 @@ class V018SimplifiedUiTests(unittest.TestCase):
             )
             window.apply_target_info(info)
             self.app.processEvents()
-            self.assertIn("512 KB", window.program_view.lbl_target.text())
-            self.assertIn("512KB", window.debug_vscode_view.local_target_status.text())
+            self.assertIn("512 KiB", window.program_view.lbl_target.text())
+            self.assertIs(window.app_context.target_info, info)
+            self.assertIn("512 KiB", window.shared_context_bar.target_label.text())
             self.assertEqual(window.device_view.val_flash_size.text(), "512 KB")
             self.assertEqual(window.device_view.val_dev_id.text(), "0x101F6413")
-            self.assertIn("PROTECTED", window.device_view.val_wrp.text())
+            self.assertIn("ĐÃ BẢO VỆ", window.device_view.val_wrp.text())
         finally:
             self._close(window)
 
@@ -435,26 +445,30 @@ class V018SimplifiedUiTests(unittest.TestCase):
             self.assertFalse(window.program_view.btn_inspect_target.isEnabled())
             self.assertFalse(window.device_view.btn_refresh.isEnabled())
             self.assertFalse(window.device_view.btn_doctor.isEnabled())
-            self.assertFalse(window.debug_vscode_view.btn_open_local_vscode.isEnabled())
-            self.assertFalse(window.debug_vscode_view.btn_start_gateway.isEnabled())
+            self.assertFalse(window.debug_vscode_view.btn_open_vscode.isEnabled())
+            self.assertFalse(window.settings_view.btn_start_gateway.isEnabled())
             self.assertFalse(window.debug_vscode_view.btn_test_client_conn.isEnabled())
-            self.assertFalse(window.debug_vscode_view.btn_open_remote_vscode.isEnabled())
+            self.assertFalse(window.shared_context_bar.connection_combo.isEnabled())
         finally:
             window.monitor_view.controller._active = False
             self._close(window)
 
-    def test_shared_gateway_and_project_selectors_replace_repeated_connection_fields(self) -> None:
+    def test_one_shared_context_bar_owns_project_connection_and_probe_selection(self) -> None:
         window = self._make_window()
         try:
             self.assertFalse(window.settings_view.btn_manage_gateways.isHidden())
             self.assertFalse(window.settings_view.btn_manage_projects.isHidden())
-            self.assertTrue(window.debug_vscode_view.client_host.isHidden())
-            self.assertTrue(window.debug_vscode_view.client_user.isHidden())
-            self.assertTrue(window.debug_vscode_view.client_ssh_port.isHidden())
-            self.assertTrue(window.debug_vscode_view.local_workspace.isHidden())
-            self.assertTrue(window.debug_vscode_view.local_elf.isHidden())
-            self.assertTrue(window.monitor_view.symbol_button.isHidden())
-            self.assertTrue(window.monitor_view.live_panel.browse_symbols_btn.isHidden())
+            self.assertEqual(window.findChildren(SharedContextBar), [window.shared_context_bar])
+            self.assertIs(window.shared_context_bar.context, window.app_context)
+            self.assertEqual(window.debug_vscode_view.findChildren(QLineEdit), [])
+            self.assertFalse(hasattr(window.monitor_view, "role_selector"))
+            self.assertFalse(hasattr(window.monitor_view, "project_selector"))
+            self.assertFalse(hasattr(window.monitor_view, "symbol_button"))
+            for page in ("program", "monitor", "debug", "device"):
+                window.show_page(page)
+                self.assertFalse(window.shared_context_bar.isHidden())
+            window.show_page("settings")
+            self.assertTrue(window.shared_context_bar.isHidden())
         finally:
             self._close(window)
 
@@ -463,7 +477,7 @@ class V018SimplifiedUiTests(unittest.TestCase):
         try:
             self.assertTrue(window.device_view.btn_refresh.isHidden())
             self.assertFalse(window.device_view.btn_doctor.isHidden())
-            self.assertFalse(window.debug_vscode_view.environment_details_card.is_expanded())
+            self.assertFalse(hasattr(window.device_view, "btn_flash_app"))
         finally:
             self._close(window)
 

@@ -336,10 +336,10 @@ class MainWindow(QMainWindow):
         self.page_title.setObjectName("pageContextTitle")
         page_header_layout.addWidget(self.page_title)
 
-        sep_header = QFrame()
-        sep_header.setFrameShape(QFrame.Shape.VLine)
-        sep_header.setObjectName("borderMuted")
-        page_header_layout.addWidget(sep_header)
+        self.sep_header = QFrame()
+        self.sep_header.setFrameShape(QFrame.Shape.VLine)
+        self.sep_header.setObjectName("borderMuted")
+        page_header_layout.addWidget(self.sep_header)
 
         self.page_subtitle = QLabel("Provision Application an toàn, giữ Bootloader và metadata contract.")
         self.page_subtitle.setObjectName("pageContextSubtitle")
@@ -468,7 +468,7 @@ class MainWindow(QMainWindow):
     def _on_probe_index_selected(self, index: int) -> None:
         if 0 <= index < len(self._probes):
             probe = self._probes[index]
-            self.append_log("Đã chọn ST-Link: %s [%s]" % (probe.name, probe.serial or "No Serial"))
+            self.append_log("Đã chọn ST-Link: %s [%s]" % (probe.name, probe.serial or "Không có số sê-ri"))
             self.inspect_target()
 
     def _brand_logo_clicked(self, event) -> None:
@@ -1481,13 +1481,13 @@ class MainWindow(QMainWindow):
         if result.succeeded:
             self.factory_progress.setFormat("Factory OK")
             self._set_status(
-                "Bootloader verified; WRP Sector 0-2 đã được khôi phục và xác minh",
+                "Đã xác minh Bootloader; WRP Sector 0-2 đã được khôi phục và kiểm tra",
                 "success",
             )
             if result.final_target is not None:
                 self.apply_target_info(result.final_target)
         else:
-            self.factory_progress.setFormat("Factory FAILED")
+            self.factory_progress.setFormat("THAO TÁC NHÀ MÁY THẤT BẠI")
             self._set_status(
                 "Factory phase %s · %s · Tiếp theo: %s" % (
                     result.failure_phase or "unknown", result.reason, result.next_action
@@ -1587,14 +1587,14 @@ class MainWindow(QMainWindow):
             )
         if available:
             if probe_error is not None:
-                detail = "OpenOCD ready · ST-Link scan unavailable"
+                detail = "OpenOCD sẵn sàng · Không thể quét ST-Link"
             else:
-                detail = "%d probe(s) found" % len(probes) if probes else "OpenOCD ready"
-            self._set_status("%s | %s" % (detail, executable), "normal")
+                detail = "%d mạch nạp ST-Link" % len(probes) if probes else "OpenOCD sẵn sàng"
+            self._set_status(detail, "normal")
         else:
-            detail = "OpenOCD not found; use offline environment setup"
+            detail = "Chưa tìm thấy OpenOCD; hãy chạy Thiết lập môi trường"
             if openocd_error is not None:
-                detail = "OpenOCD check failed; use offline environment setup"
+                detail = "Kiểm tra OpenOCD thất bại; hãy chạy Thiết lập môi trường"
             self._set_status(detail, "error")
         self._rebuild_plan()
 
@@ -1814,16 +1814,16 @@ class MainWindow(QMainWindow):
             self.factory_target_summary.setText(summary)
 
         if not is_f407:
-            self._set_status("Target is not the B300 STM32F407ZE 512 KiB configuration", "error")
+            self._set_status("Vi điều khiển đích không đúng cấu hình B300 STM32F407ZE 512 KiB", "error")
         elif info.readout_protected:
             self._set_status("RDP/security is enabled; B300 Tools will not modify RDP", "error")
         elif not info.protection_reported:
             self._set_status("OpenOCD did not report WRP; destructive provisioning is blocked", "error")
         elif wrp_bootloader_ok:
-            self._set_status("B300 target valid; Bootloader S0-S2 WRP protected", "success")
+            self._set_status("Vi điều khiển B300 hợp lệ; Bootloader S0-S2 đã được bảo vệ WRP", "success")
         else:
             self._set_status(
-                "B300 target valid but Bootloader WRP is incomplete; normal Application flash blocked",
+                "Vi điều khiển B300 hợp lệ nhưng WRP Bootloader chưa đủ; đã khóa thao tác nạp Application thông thường",
                 "error",
             )
         self._rebuild_plan()
@@ -1876,7 +1876,7 @@ class MainWindow(QMainWindow):
                 )
             except Exception as error:
                 self.flash_plan = None
-                self.append_log("Flash plan failed: %s" % error)
+                self.append_log("Kế hoạch nạp thất bại: %s" % error)
         self._update_controls()
 
     def _update_controls(self) -> None:
@@ -2076,9 +2076,10 @@ class MainWindow(QMainWindow):
                 self.operator_view.status_text.setText("✔ Hoàn tất nạp firmware thành công! STLM CONFIRMED.")
             if hasattr(self, "stepper"):
                 self.stepper.set_step_state(5, "success", "STLM CONFIRMED OK")
-            self.memory_tab.invalidate_metadata_view(
-                "Application provisioning vừa erase/program S3–S7."
-            )
+            if hasattr(self, 'memory_tab'):
+                self.memory_tab.invalidate_metadata_view(
+                    "Application provisioning vừa erase/program S3–S7."
+                )
         elif result.status == "programmed_boot_failed":
             self.progress.setFormat("Boot verify lỗi")
             self._set_status(

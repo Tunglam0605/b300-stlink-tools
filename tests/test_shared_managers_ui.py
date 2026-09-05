@@ -12,6 +12,8 @@ from PySide6.QtWidgets import QApplication, QLineEdit
 from b300_core.gateway_profiles import GatewayProfile, GatewayProfileStore
 from b300_core.gateway_sessions import GatewaySessionManager
 from b300_core.project_profiles import ProjectProfile, ProjectProfileStore
+from b300_gui.app_context import AppContext
+from b300_gui.widgets.shared_context_bar import SharedContextBar
 from b300_gui.gateway_login_dialog import GatewayLoginDialog
 from b300_gui.gateway_manager_dialog import GatewayManagerDialog
 from b300_gui.project_manager_dialog import ProjectManagerDialog
@@ -37,6 +39,8 @@ class SharedManagersUiTests(unittest.TestCase):
                 headers = [dialog.table.horizontalHeaderItem(i).text().lower() for i in range(dialog.table.columnCount())]
                 self.assertNotIn("password", " ".join(headers))
                 self.assertIn("Robot Lab", [dialog.table.item(i, 0).text() for i in range(2)])
+                self.assertEqual(dialog.table.item(0, 2).text(), "Chưa kết nối")
+                self.assertEqual(dialog.btn_connect.text(), "Kết nối")
             finally:
                 dialog.deleteLater(); self.app.processEvents()
 
@@ -48,6 +52,9 @@ class SharedManagersUiTests(unittest.TestCase):
             self.assertEqual(edits, [dialog.password_input])
             self.assertEqual(dialog.profile.endpoint.host, "192.168.1.158")
             self.assertNotIn("remember", " ".join(child.objectName().lower() for child in dialog.children()))
+            self.assertEqual(dialog.windowTitle(), "Kết nối Gateway")
+            self.assertEqual(dialog.password_input.placeholderText(), "Mật khẩu SSH")
+            self.assertEqual(dialog.connect_button.text(), "Kết nối")
         finally:
             dialog.deleteLater(); self.app.processEvents()
 
@@ -60,17 +67,23 @@ class SharedManagersUiTests(unittest.TestCase):
             project = ProjectProfile.create("B300 Main", workspace, symbols)
             store.upsert(project)
             dialog = ProjectManagerDialog(store)
-            debug = DebugVsCodeView(); monitor = MonitorView()
+            context = AppContext()
+            context.set_profiles(store.list(), (), default_project_id=store.default_id())
+            debug = DebugVsCodeView(context=context); monitor = MonitorView(context=context)
+            bar = SharedContextBar(context)
             try:
                 self.assertEqual(dialog.table.rowCount(), 1)
-                debug.set_project_profiles(store.list(), store.default_id())
-                monitor.set_project_profiles(store.list(), store.default_id())
-                self.assertEqual(debug.local_project_combo.currentData(), project.project_id)
-                self.assertEqual(debug.local_elf.text(), str(project.symbols))
-                self.assertEqual(monitor.project_selector.currentData(), project.project_id)
-                self.assertEqual(monitor.symbol_path.text(), str(project.symbols))
+                self.assertEqual(bar.project_combo.currentData(), project.project_id)
+                self.assertEqual(debug.symbols_status.toolTip(), str(project.symbols))
+                self.assertEqual(monitor._selected_symbols(), project.symbols)
+                self.assertIs(debug.context, context)
+                renamed = ProjectProfile(project.project_id, "Renamed project", workspace, symbols)
+                context.set_profiles((renamed,), ())
+                self.assertEqual(bar.project_combo.currentText(), "Renamed project")
+                self.assertEqual(monitor._selected_project(), renamed)
+
             finally:
-                dialog.deleteLater(); debug.deleteLater(); monitor.deleteLater(); self.app.processEvents()
+                dialog.deleteLater(); debug.deleteLater(); monitor.deleteLater(); bar.deleteLater(); self.app.processEvents()
 
 
 if __name__ == "__main__":
