@@ -207,6 +207,8 @@ class GuiPackagingTests(unittest.TestCase):
             self.assertIn("Smoke-test failed Windows installer upgrade rollback", workflow)
             self.assertIn("Failed upgrade unexpectedly returned success", workflow)
             self.assertIn("FileShare]::None", workflow)
+            self.assertIn("WaitForExit(60000)", workflow)
+            self.assertIn("Installer did not fail within 60 seconds", workflow)
 
     def test_application_root_packaging_preserves_windows_onedir_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

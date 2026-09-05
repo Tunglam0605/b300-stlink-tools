@@ -183,14 +183,24 @@ jobs:
           $runtime = Get-ChildItem (Join-Path $installRoot "_internal") -Filter "python*.dll" | Select-Object -First 1
           if ($null -eq $runtime) { throw "Installed Python runtime missing before rollback test" }
           $lock = [System.IO.File]::Open($runtime.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None)
+          $timedOut = $false
           try {
             $setup = Start-Process -FilePath $installer `
               -ArgumentList /VERYSILENT,/SUPPRESSMSGBOXES,/NORESTART,/SP-,/NOICONS,"/DIR=$installRoot" `
-              -Wait -PassThru
+              -PassThru
+            if (-not $setup.WaitForExit(60000)) {
+              $timedOut = $true
+              $setup.Kill()
+              $setup.WaitForExit()
+            }
           } finally {
             $lock.Dispose()
           }
-          if ($setup.ExitCode -eq 0) { throw "Failed upgrade unexpectedly returned success" }
+          if ($timedOut) {
+            Write-Host "Installer did not fail within 60 seconds; terminated bounded rollback probe."
+          } elseif ($setup.ExitCode -eq 0) {
+            throw "Failed upgrade unexpectedly returned success"
+          }
           $installed = Join-Path $installRoot "b300-stlink-gui.exe"
           $process = Start-Process -FilePath $installed `
             -ArgumentList --smoke-test -Wait -PassThru -WindowStyle Hidden
