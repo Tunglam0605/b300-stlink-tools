@@ -71,6 +71,9 @@ class V018SimplifiedUiTests(unittest.TestCase):
                 SimpleNamespace(), window,
             )
             window.update_dialog.set_ready(Path("update.zip"))
+            # Establish the environment-dependent ready state before applying the debug interlock.
+            # For example, PROGRAM flash remains disabled on runners without a ready OpenOCD runtime.
+            window._update_controls()
             locked_controls = (
                 window.monitor_view.live_panel.start_button,
                 window.monitor_view.role_selector,
@@ -87,6 +90,7 @@ class V018SimplifiedUiTests(unittest.TestCase):
                 window.debug_vscode_view.btn_start_gateway,
                 window.debug_vscode_view.btn_open_remote_vscode,
             )
+            baseline_enabled = {id(control): control.isEnabled() for control in locked_controls}
             for role in DebugRole:
                 with self.subTest(role=role):
                     with mock.patch.object(type(window._vscode_controller), "state",
@@ -103,7 +107,9 @@ class V018SimplifiedUiTests(unittest.TestCase):
                         window._render_bridge_state()
                         self.assertFalse(window._operation_state().is_hardware_busy)
                         for control in locked_controls:
-                            self.assertTrue(control.isEnabled(), str(control))
+                            self.assertEqual(
+                                control.isEnabled(), baseline_enabled[id(control)], str(control)
+                            )
                         self.assertFalse(window.debug_vscode_view.btn_stop_bridge.isEnabled())
         finally:
             self._close(window)
