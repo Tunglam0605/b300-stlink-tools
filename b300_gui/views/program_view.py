@@ -44,6 +44,7 @@ class ProgramView(QWidget):
     flash_bootloader_requested = Signal(bool)
     remote_flash_requested = Signal(str, Path)  # reserved for future transport
     file_selected = Signal(Path)
+    file_invalidated = Signal()
     probe_refresh_requested = Signal()
     target_inspect_requested = Signal()
 
@@ -111,7 +112,7 @@ class ProgramView(QWidget):
         self.lbl_probe = QLabel("ST-Link · đang quét…")
         grid.addWidget(self.lbl_probe, 0, 1)
         grid.addWidget(QLabel("Target"), 0, 2)
-        self.lbl_target = QLabel("STM32F407ZET6")
+        self.lbl_target = QLabel("Chưa đọc target")
         grid.addWidget(self.lbl_target, 0, 3)
         grid.addWidget(QLabel("Status"), 0, 4)
         self.lbl_status = QLabel("● Chờ kết nối")
@@ -309,6 +310,7 @@ class ProgramView(QWidget):
         self.btn_flash_app.setEnabled(False)
         self.app_file_edit.setText(str(selected))
         self.remote_fw_edit.setText(str(selected))
+        self.file_invalidated.emit()
         if selected.suffix.lower() != ".hex":
             self.app_meta_label.setText(
                 "Không hỗ trợ định dạng này trong đường nạp an toàn hiện tại. Hãy chọn Intel HEX (.hex)."
@@ -332,16 +334,20 @@ class ProgramView(QWidget):
         )
         if hasattr(self.memory_map, "set_image"):
             self.memory_map.set_image(image)
-        self.btn_flash_app.setEnabled(True)
+        self.btn_flash_app.setEnabled(not self._busy)
         self.file_selected.emit(selected)
 
-    def set_probes(self, probes: Sequence[ProbeInfo]) -> None:
+    def set_probes(self, probes: Sequence[ProbeInfo], selected_serial: Optional[str] = None) -> None:
         self._probes = list(probes)
         if not self._probes:
             self.lbl_probe.setText("Không tìm thấy ST-Link")
             self.lbl_status.setText("○ DISCONNECTED")
             return
-        probe = self._probes[0]
+        if len(self._probes) > 1 and selected_serial is None:
+            self.lbl_probe.setText("Chọn ST-Link theo serial ở thanh trên")
+            self.lbl_status.setText("Chưa chọn probe")
+            return
+        probe = next((item for item in self._probes if item.serial == selected_serial), self._probes[0])
         serial = probe.serial or "auto-select"
         self.lbl_probe.setText("%s · %s%s" % (
             probe.name, serial, " · +%d" % (len(self._probes) - 1) if len(self._probes) > 1 else ""
@@ -351,11 +357,14 @@ class ProgramView(QWidget):
     def set_target_info(self, info: Optional[TargetInfo]) -> None:
         self._target_info = info
         if info is None:
-            self.lbl_target.setText("STM32F407ZET6")
+            self.lbl_target.setText("Chưa đọc target")
             self.lbl_option_bytes.setText("WRP S0–S2 / RDP · chưa kiểm tra Target")
             return
         self.lbl_target.setText(
-            "STM32F407 · %d KB Flash · %.2fV" % (info.flash_kib, info.target_voltage)
+            "%s · %d KB Flash · %.2fV" % (
+                "STM32F407" if info.device_id & 0xFFF == 0x413 else "STM32 ID 0x%03X" % (info.device_id & 0xFFF),
+                info.flash_kib, info.target_voltage,
+            )
         )
         self.lbl_option_bytes.setText(
             "WRP %s · RDP %s" %

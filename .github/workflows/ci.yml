@@ -56,7 +56,7 @@ jobs:
             module="tests.${test%.py}"
             echo "=== $module ==="
             case "$module" in
-              tests.test_gui_interlocks|tests.test_gui_smoke|tests.test_gui_updater|tests.test_v018_simplified_ui)
+              tests.test_gui_interlocks|tests.test_gui_smoke|tests.test_gui_updater|tests.test_v018_simplified_ui|tests.test_program_preflight)
                 timeout --signal=TERM --kill-after=10s 300 python scripts/run_unittest_module.py --split-cases --case-timeout 60 "$module"
                 ;;
               *)
@@ -83,7 +83,7 @@ jobs:
             Remove-Item $resultFile -Force -ErrorAction SilentlyContinue
             $env:B300_UNITTEST_RESULT_FILE = $resultFile
             Write-Host "=== $module ==="
-            if ($module -in @('tests.test_gui_interlocks','tests.test_gui_smoke','tests.test_gui_updater','tests.test_v018_simplified_ui')) {
+            if ($module -in @('tests.test_gui_interlocks','tests.test_gui_smoke','tests.test_gui_updater','tests.test_v018_simplified_ui','tests.test_program_preflight')) {
               python scripts/run_unittest_module.py --split-cases --case-timeout 60 $module
             } else {
               python scripts/run_unittest_module.py $module

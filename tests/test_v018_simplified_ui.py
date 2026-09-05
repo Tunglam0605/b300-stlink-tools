@@ -257,7 +257,7 @@ class V018SimplifiedUiTests(unittest.TestCase):
         try:
             view = window.program_view
             self.assertIn("ST-LINK", view.lbl_probe.text().upper())
-            self.assertIn("STM32F407", view.lbl_target.text())
+            self.assertEqual(view.lbl_target.text(), "Chưa đọc target")
             self.assertTrue(view.radio_local.isChecked())
             self.assertEqual(view.btn_flash_app.text(), "⚡ NẠP APPLICATION")
             self.assertFalse(view.btn_flash_app.isEnabled())

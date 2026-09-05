@@ -14,12 +14,14 @@ from PySide6.QtWidgets import QDialog, QMessageBox, QPushButton, QStackedWidget
 
 from b300_core.gateway_profiles import GatewayProfile, GatewayProfileStore
 from b300_core.gateway_sessions import GatewaySessionManager
-from b300_core.models import ProbeInfo, TargetInfo
+from b300_core.models import ProbeInfo, ProbeRef, TargetInfo
+from b300_core.policy import validate_target_for_provisioning, validate_bootloader_write_protection
 from b300_core.project_profiles import ProjectProfileStore
 from b300_core.vscode_bridge import BridgeState
 from b300_core.remote_profile import RemoteGatewayProfile
 from b300_core.remote_session import RemoteSession
 from .main_window import MainWindow
+from .confirm_dialog import ConfirmFlashDialog
 from .operation_state import OperationState
 from .gateway_login_dialog import GatewayLoginDialog
 from .gateway_manager_dialog import GatewayManagerDialog
@@ -111,6 +113,7 @@ class MainWindowV18(MainWindow):
         self.program_view.flash_application_requested.connect(self._on_v18_flash_application)
         self.program_view.flash_bootloader_requested.connect(self._on_v18_flash_bootloader)
         self.program_view.file_selected.connect(self._on_v18_file_selected)
+        self.program_view.file_invalidated.connect(self._on_v18_image_invalidated)
         self.program_view.probe_refresh_requested.connect(self.refresh_probes)
         self.program_view.target_inspect_requested.connect(self.inspect_target)
         self.program_view.btn_refresh_probe.hide()
@@ -174,6 +177,7 @@ class MainWindowV18(MainWindow):
             self.debug_vscode_view.set_target_info(self.target_info)
             self.device_view.set_target_info(self.target_info)
         self._render_bridge_state()
+        self._render_program_readiness()
 
     def show_page(self, page_name: str) -> None:
         page_map = {
@@ -209,8 +213,10 @@ class MainWindowV18(MainWindow):
         )
         controller = getattr(self, "_vscode_controller", None)
         bridge_busy = bool(controller is not None and controller.state.state == BridgeState.READY)
+        manager = getattr(self.service, "session_manager", None)
+        lease_busy = bool(manager is not None and manager.snapshot().busy)
         return OperationState(
-            main_hardware_busy=base.main_hardware_busy,
+            main_hardware_busy=base.main_hardware_busy or lease_busy,
             memory_hardware_busy=base.memory_hardware_busy,
             debug_hardware_busy=base.debug_hardware_busy or monitor_busy or bridge_busy,
         )
@@ -224,6 +230,12 @@ class MainWindowV18(MainWindow):
             self.monitor_view.set_hardware_busy(hardware_busy)
         if hasattr(self, "program_view"):
             self.program_view.set_busy(hardware_busy)
+            self.program_view.set_probes(self._probes, self.probe_combo.currentData())
+            self.program_view.btn_flash_app.setEnabled(
+                not hardware_busy and self.openocd_ready and bool(self._probes)
+                and not (self._probe_selection_required and self.probe_combo.currentData() is None)
+                and self.program_view._selected_file is not None
+            )
         if hasattr(self, "device_view"):
             self.device_view.set_busy(hardware_busy)
         if hasattr(self, "debug_vscode_view"):
@@ -236,7 +248,7 @@ class MainWindowV18(MainWindow):
     def refresh_probes(self) -> None:
         super().refresh_probes()
         if hasattr(self, "program_view"):
-            self.program_view.set_probes(self._probes)
+            self.program_view.set_probes(self._probes, self.probe_combo.currentData())
         if hasattr(self, "debug_vscode_view"):
             self.debug_vscode_view.set_probes(self._probes)
         if hasattr(self, "device_view"):
@@ -251,6 +263,144 @@ class MainWindowV18(MainWindow):
         if hasattr(self, "device_view"):
             self.device_view.set_target_info(info)
 
+    def _clear_target_display(self) -> None:
+        self._target_revision = getattr(self, "_target_revision", 0) + 1
+        super()._clear_target_display()
+        if hasattr(self, "stats_row"):
+            self.stats_row.target_card.set_value("Chưa đọc target", "Tự kiểm tra khi nạp · hoặc DEVICE")
+            self.stats_row.flash_card.set_value("Chưa đọc flash", "Tự kiểm tra khi nạp · hoặc DEVICE")
+        for name in ("program_view", "device_view", "debug_vscode_view"):
+            view = getattr(self, name, None)
+            if view is not None:
+                view.set_target_info(None)
+        if hasattr(self, "program_view"):
+            self.program_view.banner.show_info(
+                "Chưa kiểm tra target", "Bấm NẠP APPLICATION để tự kiểm tra trước khi xác nhận."
+            )
+
+    def _invalidate_target(self) -> None:
+        self.target_info = None
+        self.target_ready = False
+        self.flash_plan = None
+        self._clear_target_display()
+
+    def _selected_probe(self) -> ProbeRef:
+        probe = super()._selected_probe()
+        if probe.serial is None and len(self._probes) == 1:
+            return ProbeRef(self._probes[0].serial)
+        return probe
+
+    def _rebuild_plan(self) -> None:
+        self.flash_plan = None
+        error = None
+        if self.image_info is not None and self.target_info is not None:
+            try:
+                self.flash_plan = self.service.plan(self.image_info, self._selected_probe(), self.target_info)
+            except Exception as failure:
+                error = failure
+                self.append_log(str(failure))
+        self._update_controls()
+        self._render_program_readiness()
+        if error is not None and hasattr(self, "program_view"):
+            self.program_view.banner.show_fail("Kiểm tra an toàn không đạt", str(error), self._preflight_next_action())
+
+    def _render_program_readiness(self) -> None:
+        if not hasattr(self, "program_view"):
+            return
+        banner = self.program_view.banner
+        if self.target_info is None:
+            detail = "Bấm NẠP APPLICATION để tự kiểm tra trước khi xác nhận."
+            if not self.openocd_ready:
+                detail = "Mở SETTINGS để cài môi trường OpenOCD."
+            elif not self._probes:
+                detail = "Cắm ST-Link và bấm Quét lại ở thanh trên."
+            elif self._probe_selection_required and self.probe_combo.currentData() is None:
+                detail = "Chọn ST-Link theo serial ở thanh trên."
+            banner.show_info("Chưa kiểm tra target", detail)
+            return
+        try:
+            validate_target_for_provisioning(self.target_info)
+            validate_bootloader_write_protection(self.target_info)
+        except ValueError as error:
+            banner.show_fail("Kiểm tra target không đạt", str(error), self._preflight_next_action())
+            return
+        banner.show_info(
+            "Target đã kiểm tra" if self.flash_plan is not None else "Chọn Application HEX hợp lệ",
+            "Mỗi lần nạp sẽ kiểm tra lại target và firmware trước khi xác nhận."
+        )
+
+    def _preflight_next_action(self) -> str:
+        info = self.target_info
+        if info is not None:
+            if info.device_id & 0xFFF != 0x413 or info.flash_kib != 512:
+                return "Chọn đúng ST-Link và board B300 STM32F407 512 KiB."
+            if info.readout_protected:
+                return "Dùng quy trình recovery đã được phê duyệt; không đổi RDP."
+            if not info.protection_reported:
+                return "Kiểm tra nguồn, SWD và log OpenOCD để đọc được bằng chứng WRP."
+            if not {0, 1, 2}.issubset(info.protected_sectors):
+                return "Dùng quy trình Factory được ủy quyền để bảo vệ Bootloader S0–S2."
+        return "Kiểm tra HEX, probe, nguồn và kết nối; xem log rồi bắt đầu lại thủ công."
+
+    def inspect_target(self) -> None:
+        self._begin_target_inspection()
+
+    def _begin_target_inspection(self, continuation=None) -> None:
+        if self._operation_state().is_hardware_busy or not self.openocd_ready or not self._probes:
+            return
+        try:
+            probe = self._selected_probe()
+        except ValueError as error:
+            self.program_view.banner.show_info("Chọn ST-Link", str(error))
+            return
+        self._invalidate_target()
+        revision = self._target_revision
+        self.busy = True
+        self._set_status("Đang kiểm tra target, WRP và RDP…", "busy", notify=False)
+        self.program_view.banner.show_info("Đang kiểm tra an toàn", "Đọc target, flash, WRP và RDP trước khi xác nhận.")
+        self._update_controls()
+
+        def completed(info):
+            self.busy = False
+            if revision != self._target_revision:
+                return
+            self.apply_target_info(info)
+            if continuation is not None:
+                # Continue only after QThread.finished releases GUI ownership.
+                self.busy = True
+                self._program_continuation = (revision, continuation)
+
+        def failed(failure):
+            self.busy = False
+            if revision != self._target_revision:
+                return
+            self._operation_failed(failure)
+            self.program_view.banner.show_fail(
+                "Kiểm tra an toàn không đạt", failure.message, failure.next_action
+            )
+
+        self._start_worker(
+            lambda log, phase, cancel: self.service.inspect_target(probe, event_sink=log, cancel_event=cancel),
+            completed, cancellable=True, on_failed=failed,
+        )
+
+    def _worker_finished(self) -> None:
+        super()._worker_finished()
+        pending = getattr(self, "_program_continuation", None)
+        if pending is not None and not self._threads:
+            self._program_continuation = None
+            self.busy = False
+            self._update_controls()
+            revision, continuation = pending
+            if revision == self._target_revision and not self._operation_state().is_hardware_busy:
+                continuation()
+            self._finish_pending_close()
+
+    def cancel_operation(self) -> None:
+        super().cancel_operation()
+        if self._cancellable_worker is not None:
+            self._invalidate_target()
+
     def append_log(self, text: str) -> None:
         super().append_log(text)
         if hasattr(self, "program_view") and hasattr(self.program_view, "append_log"):
@@ -262,25 +412,100 @@ class MainWindowV18(MainWindow):
     def _on_v18_file_selected(self, path: Path) -> None:
         self.load_image_path(path, quiet=True)
 
+    def _on_v18_image_invalidated(self) -> None:
+        self.image_info = None
+        self.flash_plan = None
+        self._update_controls()
+        self._render_program_readiness()
+
     def _on_v18_flash_application(self, path: Path, is_dry_run: bool) -> None:
-        if self.image_info is None or Path(self.image_info.path) != path:
-            if not self.load_image_path(path):
-                return
-        if not self.target_ready or self.flash_plan is None:
-            self._set_status(
-                "Chưa thể nạp: kiểm tra Target B300, WRP Bootloader và flash plan.", "error"
-            )
+        if self._operation_state().is_hardware_busy:
+            return
+        self.program_view.set_file_path(path)
+        if self.image_info is None:
             self.program_view.banner.show_fail(
-                "CHƯA SẴN SÀNG NẠP FIRMWARE",
-                "Target hoặc flash plan chưa đạt điều kiện an toàn.",
-                next_action="Mở DEVICE và bấm 'Kiểm tra Target' để xác minh WRP Bootloader trước khi nạp.",
+                "Application HEX không hợp lệ", self.program_view.app_meta_label.text(), "Chọn lại Application HEX hợp lệ."
             )
             return
-        self.show_dry_run() if is_dry_run else self.confirm_flash()
+        image = self.image_info
+
+        def continue_program():
+            if self.image_info != image:
+                self.program_view.banner.show_info("Firmware đã thay đổi", "Bấm nạp lại để kiểm tra firmware mới.")
+                return
+            if not self.target_ready or self.flash_plan is None:
+                return
+            self.show_dry_run() if is_dry_run else self.confirm_flash()
+
+        self._begin_target_inspection(continue_program)
+
+    def confirm_flash(self) -> None:
+        plan = self.flash_plan
+        revision = self._target_revision
+        if plan is None or self._operation_state().is_hardware_busy:
+            return
+        if ConfirmFlashDialog(plan, self).exec() != QDialog.DialogCode.Accepted:
+            return
+        if (self._operation_state().is_hardware_busy or self.flash_plan is not plan
+                or revision != self._target_revision):
+            self.program_view.banner.show_info("Điều kiện nạp đã thay đổi", "Bấm nạp lại để kiểm tra trước khi xác nhận.")
+            return
+        self._start_flash()
+
+    def _start_flash(self) -> None:
+        self.program_view.banner.show_info("Đang nạp Application", "Không rút ST-Link hoặc ngắt nguồn.")
+        super()._start_flash()
+
+    def _flash_finished(self, result) -> None:
+        super()._flash_finished(result)
+        # Programming/reset makes inspection a historical snapshot, not current evidence.
+        self._invalidate_target()
+        if result.succeeded:
+            self.program_view.banner.show_pass("Nạp Application thành công", "Application và STLM CONFIRMED đã được xác minh.")
+        else:
+            self.program_view.banner.show_fail("Nạp Application thất bại", result.reason, result.next_action)
+        self._update_controls()
+
+    def _operation_failed(self, failure) -> None:
+        super()._operation_failed(failure)
+        if hasattr(self, "program_view"):
+            self._invalidate_target()
+            self.program_view.banner.show_fail(
+                "Thao tác không đạt", getattr(failure, "message", str(failure)),
+                getattr(failure, "next_action", "Xem log và khắc phục trước khi thử lại thủ công."),
+            )
+
+    def _hardware_activity_changed(self, _busy: bool = False) -> None:
+        if _busy:
+            self._invalidate_target()
+        super()._hardware_activity_changed(_busy)
 
     def _on_v18_flash_bootloader(self, confirmed: bool) -> None:
         if confirmed:
             self.start_factory_provision()
+
+    def _factory_preflight_finished(self, probe, info) -> None:
+        super()._factory_preflight_finished(probe, info)
+        if self.busy:
+            self._invalidate_target()
+            self.program_view.banner.show_info("Đang nạp Bootloader", "Không rút ST-Link hoặc ngắt nguồn.")
+
+    def _factory_finished(self, result) -> None:
+        super()._factory_finished(result)
+        self._invalidate_target()
+        if result.succeeded:
+            self.program_view.banner.show_pass("Factory hoàn tất", "Bootloader và WRP S0–S2 đã được xác minh.")
+        else:
+            self.program_view.banner.show_fail("Factory thất bại", result.reason, result.next_action)
+        self._update_controls()
+
+    def _factory_operation_failed(self, failure) -> None:
+        super()._factory_operation_failed(failure)
+        self._invalidate_target()
+        self.program_view.banner.show_fail(
+            "Factory thất bại", getattr(failure, "message", str(failure)),
+            getattr(failure, "next_action", "Xác minh WRP trước thao tác tiếp theo."),
+        )
 
     # ------------------------------------------------------------------
     # VS Code environment / bridge
@@ -301,6 +526,8 @@ class MainWindowV18(MainWindow):
         if not hasattr(self, "debug_vscode_view"):
             return
         state = self._vscode_controller.state
+        if state.state == BridgeState.READY:
+            self._invalidate_target()
         role = state.role.value if state.role is not None else None
         self.debug_vscode_view.set_bridge_state(
             role, state.state.value, state.detail, state.gdb_target

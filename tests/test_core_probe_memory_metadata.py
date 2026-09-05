@@ -181,6 +181,9 @@ class ProbeMemoryMetadataTests(unittest.TestCase):
         self.assertLess(command.index(read_step), command.index("resume"))
         self.assertIn("shutdown error", rendered)
         self.assertIn("adapter serial SAFE123", rendered)
+        # Inspect commands, not the output pathname: a checkout directory may
+        # legitimately contain words such as "program" or "erase".
+        rendered = rendered.replace(str(Path("memory.bin").resolve()), "<output-path>")
         self.assertNotIn("erase", rendered)
         self.assertNotIn("program", rendered)
         self.assertNotIn("mww", rendered)

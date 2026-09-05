@@ -1103,8 +1103,8 @@ def generate_stylesheet(p: ThemePalette) -> str:
     }}
 
     QFrame#passFailBanner[variant="info"] {{
-        background-color: {p.primary_light};
-        border: 2px solid {p.primary};
+        background-color: {p.surface};
+        border: 1px solid {p.border};
     }}
 
     /* Debug Workstation Mode-First Entry */

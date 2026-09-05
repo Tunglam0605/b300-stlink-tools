@@ -138,8 +138,15 @@ class DebugVsCodeView(QWidget):
         if self._probes:
             probe=self._probes[0]; self.local_target_status.setToolTip("ST-Link: %s · %s"%(probe.name,probe.serial or "auto-select"))
         else: self.local_target_status.setToolTip("Không phát hiện ST-Link")
-    def set_target_info(self,info:TargetInfo)->None:
-        self._target_info=info; self.local_target_status.setText("STM32F407ZE · %dKB Flash · %.2fV · %s"%(info.flash_kib,info.target_voltage,info.protection_summary))
+    def set_target_info(self,info:Optional[TargetInfo])->None:
+        self._target_info = info
+        if info is None:
+            self.local_target_status.setText("Chưa đọc target")
+            return
+        target = "STM32F407" if info.device_id & 0xFFF == 0x413 else "STM32 ID 0x%03X" % (info.device_id & 0xFFF)
+        self.local_target_status.setText("%s · %dKB Flash · %.2fV · %s" % (
+            target, info.flash_kib, info.target_voltage, info.protection_summary,
+        ))
     def set_environment_status(self,status:VsCodeEnvironmentStatus)->None:
         self._environment=status; self.env_vscode.setText("VS Code · %s"%("✓ READY" if status.vscode_ready else "✕ MISSING")); self.env_cortex.setText("Cortex-Debug · %s"%("✓ READY" if status.cortex_debug_ready else "✕ MISSING")); self.env_gdb.setText("ARM GDB · %s"%("✓ READY" if status.gdb_ready else "✕ MISSING")); detail=status.reason or "Môi trường debug đã sẵn sàng."; self.env_detail.setText(detail)
     def set_bridge_state(self,role:Optional[str],state:str,detail:str="",gdb_target:Optional[str]=None)->None:

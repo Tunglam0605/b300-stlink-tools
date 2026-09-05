@@ -74,7 +74,7 @@ class DeviceView(QWidget):
         target_layout.addWidget(self._eyebrow("1. TARGET MCU · READ-ONLY EVIDENCE"))
         grid = QGridLayout()
         grid.addWidget(QLabel("MCU"), 0, 0)
-        self.val_mcu_family = QLabel("STM32F407 family · chưa xác minh target")
+        self.val_mcu_family = QLabel("Chưa đọc target")
         grid.addWidget(self.val_mcu_family, 0, 1)
         grid.addWidget(QLabel("Device ID"), 0, 2)
         self.val_dev_id = QLabel("Chưa kiểm tra")
@@ -155,14 +155,17 @@ class DeviceView(QWidget):
     def set_target_info(self, info: Optional[TargetInfo]) -> None:
         self._target_info = info
         if info is None:
-            self.val_mcu_family.setText("STM32F407 family · chưa xác minh target")
+            self.val_mcu_family.setText("Chưa đọc target")
             self.val_dev_id.setText("Chưa kiểm tra")
             self.val_flash_size.setText("Chưa kiểm tra")
             self.val_voltage.setText("Chưa kiểm tra")
             self.val_wrp.setText("Chưa kiểm tra")
             self.val_rdp.setText("Chưa kiểm tra")
             return
-        self.val_mcu_family.setText("STM32F407 · target evidence available")
+        self.val_mcu_family.setText(
+            "STM32F407" if info.device_id & 0xFFF == 0x413
+            else "STM32 ID 0x%03X" % (info.device_id & 0xFFF)
+        )
         self.val_dev_id.setText("0x%08X" % info.device_id)
         self.val_flash_size.setText("%d KB" % info.flash_kib)
         self.val_voltage.setText("%.2f V" % info.target_voltage)
