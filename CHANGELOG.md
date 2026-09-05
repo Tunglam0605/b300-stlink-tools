@@ -5,6 +5,13 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-09-05
+
+- Fixed the PROGRAM workflow so clicking **NẠP APPLICATION** runs a fresh read-only preflight automatically instead of requiring the operator to visit DEVICE first. The preflight validates the selected probe/target, flash size, WRP S0-S2, RDP and the current HEX/FlashPlan before the existing flash confirmation.
+- Unified PROGRAM, DEVICE and top status cards around the same `TargetInfo` evidence. An uninspected target is now a neutral pending state rather than a false failure, and unsupported targets are never labelled STM32F407.
+- Invalidates stale target/preflight evidence whenever probe context, selected HEX, rescan, cancellation, debug, Factory or flash activity changes. WRP/RDP/target mismatches still block before erase/program.
+- The canonical flash transaction and Bootloader/metadata safety contract are unchanged. `HW-P1-001` remains OPEN / DEFERRED and no new hardware acceptance is claimed.
+
 ## [0.19.0] - 2026-09-05
 
 - Consolidated the production UI around one canonical owner for each operator action. PROGRAM owns firmware programming, DEVICE owns Target inspection, MONITOR owns zero-halt sampling, DEBUG owns the VS Code bridge, and SETTINGS owns shared configuration/maintenance. Duplicate page-local ST-Link refresh, Target inspect, symbol/workspace and setup actions are removed from the visible production surface.

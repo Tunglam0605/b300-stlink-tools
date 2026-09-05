@@ -1,5 +1,12 @@
 # Biên bản nghiệm thu và phát hành B300 ST-Link Tools
 
+## Bản 0.19.1 - PROGRAM automatic read-only preflight
+
+- Independent pre-merge validation: **114/114 canonical test modules PASS**, including **21/21 PROGRAM preflight cases**.
+- PROGRAM now performs fresh read-only Target/flash/WRP/RDP/HEX validation before handing off to the unchanged canonical Application flash transaction.
+- PROGRAM, DEVICE and top status cards share the same TargetInfo evidence; uninspected state is neutral and stale evidence is invalidated on probe/HEX/context changes.
+- No flash transaction or Bootloader/metadata protection is weakened. `HW-P1-001` remains open and B300 APPLICATION ACCEPTANCE remains **DEFERRED** pending physical-board evidence.
+
 ## Bản 0.19.0 - Shared workspace / UI consolidation
 
 - Windows canonical module-isolated regression matching CI runner: **113/113 test modules PASS** before final release metadata; the final tagged source must repeat the same gate and pass GitHub CI on Windows x64, Ubuntu x64 and Ubuntu ARM64 before publication.
