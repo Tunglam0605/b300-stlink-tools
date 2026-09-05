@@ -5,6 +5,13 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.18.2] - 2026-09-05
+
+- Fixed Live Monitor failing to open AXF/ELF symbols with `arm-none-eabi-nm was not found` in native bundles. Windows, Ubuntu x64 and ARM64 now include nm and addr2line alongside managed GDB, plus objdump for Cortex-Debug.
+- Added build-time checks that reject missing symbol tools and execute each bundled tool before packaging.
+- Kept VS Code setup semiautomatic: install VS Code/Cortex-Debug manually, let B300 configure and open the workspace, then press F5.
+- No flash or target-state behavior changes. HW-P1-001 remains open; B300 APPLICATION ACCEPTANCE is DEFERRED.
+
 ## [0.18.1] - 2026-09-05
 
 - Kept the five-page PROGRAM / MONITOR / DEBUG / DEVICE / SETTINGS workflow, with an independent Monitor lifecycle and no hidden legacy Debug IDE in production.
