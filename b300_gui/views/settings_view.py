@@ -1,4 +1,4 @@
-"""Settings / workstation environment view for B300 v0.18."""
+"""Settings / workstation environment view for B300 v0.19."""
 from __future__ import annotations
 
 from typing import Optional
@@ -20,6 +20,8 @@ class SettingsView(QWidget):
     export_support_bundle_requested = Signal()
     about_requested = Signal()
     release_notes_requested = Signal()
+    manage_gateways_requested = Signal()
+    manage_projects_requested = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -54,14 +56,33 @@ class SettingsView(QWidget):
         header_layout.addWidget(desc)
         self.layout.addWidget(header)
 
+        shared = QFrame()
+        shared.setObjectName("cardSurface")
+        shared_layout = QVBoxLayout(shared)
+        shared_layout.setContentsMargins(14, 12, 14, 12)
+        shared_layout.addWidget(self._eyebrow("1. SHARED RESOURCES"))
+        shared_desc = QLabel("Gateway và Debug Project được lưu một lần rồi dùng chung cho DEBUG, MONITOR và remote workflow.")
+        shared_desc.setWordWrap(True)
+        shared_layout.addWidget(shared_desc)
+        shared_actions = QHBoxLayout()
+        self.btn_manage_gateways = QPushButton("Manage Gateways")
+        self.btn_manage_gateways.clicked.connect(self.manage_gateways_requested.emit)
+        self.btn_manage_projects = QPushButton("Manage Debug Projects")
+        self.btn_manage_projects.clicked.connect(self.manage_projects_requested.emit)
+        shared_actions.addWidget(self.btn_manage_gateways)
+        shared_actions.addWidget(self.btn_manage_projects)
+        shared_actions.addStretch(1)
+        shared_layout.addLayout(shared_actions)
+        self.layout.addWidget(shared)
+
         setup = QFrame()
         setup.setObjectName("cardSurface")
         setup_layout = QVBoxLayout(setup)
         setup_layout.setContentsMargins(14, 12, 14, 12)
-        setup_layout.addWidget(self._eyebrow("1. THIẾT LẬP MÁY"))
+        setup_layout.addWidget(self._eyebrow("2. MACHINE SETUP"))
         setup_desc = QLabel(
             "Setup Wizard kiểm tra/cài các prerequisite do B300 hỗ trợ theo hệ điều hành, ví dụ ST-Link driver trên Windows, "
-            "udev trên Linux và SSH khi dùng Gateway/Client. OpenOCD được bundle; ARM GDB được B300 managed trong gói v0.18."
+            "udev trên Linux và SSH khi dùng Gateway/Client. OpenOCD được bundle; ARM GDB được B300 managed trong gói v0.19."
         )
         setup_desc.setWordWrap(True)
         setup_layout.addWidget(setup_desc)
@@ -75,7 +96,7 @@ class SettingsView(QWidget):
         debug.setObjectName("cardSurface")
         debug_layout = QVBoxLayout(debug)
         debug_layout.setContentsMargins(14, 12, 14, 12)
-        debug_layout.addWidget(self._eyebrow("2. DEBUG TOOLCHAIN"))
+        debug_layout.addWidget(self._eyebrow("3. DEBUG TOOLCHAIN"))
         grid = QGridLayout()
         grid.addWidget(QLabel("OpenOCD"), 0, 0)
         self.lbl_openocd = QLabel("B300 managed · 0.12.0-7")
@@ -102,7 +123,7 @@ class SettingsView(QWidget):
         preference.setObjectName("cardSurface")
         preference_layout = QVBoxLayout(preference)
         preference_layout.setContentsMargins(14, 12, 14, 12)
-        preference_layout.addWidget(self._eyebrow("3. GIAO DIỆN"))
+        preference_layout.addWidget(self._eyebrow("4. APPEARANCE"))
         pref_row = QHBoxLayout()
         pref_row.addWidget(QLabel("Theme"))
         self.btn_toggle_theme = QPushButton("🌓 Sáng / Tối (Ctrl+T)")
@@ -116,7 +137,7 @@ class SettingsView(QWidget):
         version.setObjectName("cardSurface")
         version_layout = QVBoxLayout(version)
         version_layout.setContentsMargins(14, 12, 14, 12)
-        version_layout.addWidget(self._eyebrow("4. PHIÊN BẢN / HỖ TRỢ"))
+        version_layout.addWidget(self._eyebrow("5. VERSION / SUPPORT"))
         version_grid = QGridLayout()
         version_grid.addWidget(QLabel("GUI"), 0, 0)
         self.lbl_gui_version = QLabel("v%s" % __version__)

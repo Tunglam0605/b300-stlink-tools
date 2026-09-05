@@ -1,5 +1,13 @@
 # Biên bản nghiệm thu và phát hành B300 ST-Link Tools
 
+## Bản 0.19.0 - Shared workspace / UI consolidation
+
+- Windows canonical module-isolated regression matching CI runner: **113/113 test modules PASS** before final release metadata; the final tagged source must repeat the same gate and pass GitHub CI on Windows x64, Ubuntu x64 and Ubuntu ARM64 before publication.
+- New shared resources: multiple named Gateway profiles, process-lifetime SSH sessions with password kept in RAM only, and named Debug Project profiles containing workspace + ELF/AXF.
+- Production ownership is consolidated to PROGRAM / MONITOR / DEBUG / DEVICE / SETTINGS; duplicate ST-Link refresh, Target inspect, Gateway endpoint and symbol/workspace controls are removed from visible page-local flows.
+- Safety boundary unchanged: HardwareSession remains authoritative, normal Application flash cannot mass erase or write S0-S2, Live Monitor remains zero-halt, OpenOCD debug listeners remain loopback-only and remote Application programming remains fail-closed.
+- No new physical-board acceptance is claimed by this UI/software release. `HW-P1-001` remains open and B300 APPLICATION ACCEPTANCE remains **DEFERRED** pending hardware evidence.
+
 ## Bản 0.11.0 - Software/Hardware RC
 
 - Software regression: 676 tests, 0 failures/errors, 2 skipped.

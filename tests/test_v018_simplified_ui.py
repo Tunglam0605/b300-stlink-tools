@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,7 +14,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QApplication, QPushButton, QTabWidget
 
+from b300_core.gateway_profiles import GatewayProfileStore
+from b300_core.gateway_sessions import GatewaySessionManager
 from b300_core.models import ImageInfo, ProbeInfo, TargetInfo
+from b300_core.project_profiles import ProjectProfileStore
 from b300_gui.main_window_v18 import MainWindowV18
 from b300_gui.update_dialog import UpdateDialog
 from b300_core.vscode_bridge import BridgeState, DebugRole, VsCodeBridgeState
@@ -30,7 +34,9 @@ class V018SimplifiedUiTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def _make_window(self) -> MainWindowV18:
-        return MainWindowV18(
+        directory = tempfile.mkdtemp(prefix="b300-ui-profile-test-")
+        root = Path(directory)
+        window = MainWindowV18(
             probe_loader=lambda: (
                 ProbeInfo(
                     name="ST-LINK/V2",
@@ -41,12 +47,20 @@ class V018SimplifiedUiTests(unittest.TestCase):
             ),
             automatic_updates=False,
             first_run_setup=False,
+            gateway_store=GatewayProfileStore(root / "gateways.json", legacy_path=root / "legacy.json"),
+            project_store=ProjectProfileStore(root / "projects.json"),
+            gateway_sessions=GatewaySessionManager(),
         )
+        window._test_profile_dir = root
+        return window
 
     def _close(self, window: MainWindowV18) -> None:
+        root = getattr(window, "_test_profile_dir", None)
         window.close()
         window.deleteLater()
         self.app.processEvents()
+        if root is not None:
+            shutil.rmtree(root, ignore_errors=True)
 
     def test_ready_bridge_roles_lock_hardware_and_update_install_until_stopped(self) -> None:
         window = self._make_window()
@@ -65,7 +79,7 @@ class V018SimplifiedUiTests(unittest.TestCase):
                 window.program_view.btn_flash_bootloader,
                 window.program_view.btn_inspect_target,
                 window.device_view.btn_doctor,
-                window.header_bar.machine_setup_btn,
+                window.settings_view.btn_run_setup,
                 window.header_bar.probe_refresh_btn,
                 window.machine_setup_button,
                 window.update_dialog.action_button,
@@ -120,7 +134,8 @@ class V018SimplifiedUiTests(unittest.TestCase):
         try:
             profile = RemoteGatewayProfile("gateway.local", "operator", 22)
             authenticated = SimpleNamespace(profile=profile, connected=True, disconnect=lambda: None)
-            window._vscode_remote_session = authenticated
+            window._gateway_sessions.connected = lambda selected: selected == profile
+            window._gateway_sessions.session = lambda selected: authenticated
             received = []
             class ClientSession(_Session):
                 def start_client(self, config, remote_session=None):
@@ -142,7 +157,7 @@ class V018SimplifiedUiTests(unittest.TestCase):
         try:
             created = []
             window.monitor_view.controller._session_factory = lambda **kwargs: created.append(kwargs)
-            with mock.patch("b300_gui.main_window_v18.RemoteLoginDialog") as dialog:
+            with mock.patch("b300_gui.main_window_v18.GatewayLoginDialog") as dialog:
                 dialog.return_value.exec.return_value = 0
                 with self.assertRaisesRegex(RuntimeError, "cancelled"):
                     window.monitor_view.controller.start(LiveMonitorRequest.client(
@@ -199,8 +214,13 @@ class V018SimplifiedUiTests(unittest.TestCase):
             )
             self.assertTrue(window.program_view.btn_refresh_probe.isHidden())
             self.assertTrue(window.device_view.btn_refresh.isHidden())
-            self.assertTrue(window.settings_view.btn_run_setup.isHidden())
-            self.assertTrue(window.settings_view.btn_toggle_theme.isHidden())
+            self.assertFalse(window.settings_view.btn_run_setup.isHidden())
+            self.assertFalse(window.settings_view.btn_toggle_theme.isHidden())
+            self.assertTrue(window.header_bar.machine_setup_btn.isHidden())
+            self.assertTrue(window.header_bar.theme_btn.isHidden())
+            self.assertTrue(window.header_bar.help_btn.isHidden())
+            self.assertTrue(window.program_view.btn_inspect_target.isHidden())
+            self.assertFalse(window.device_view.btn_doctor.isHidden())
             self.assertTrue(window.machine_setup_button.isHidden())
             self.assertTrue(window.update_channel_label.isHidden())
             self.assertTrue(window.header_bar.segmented_control.isHidden())
@@ -302,7 +322,7 @@ class V018SimplifiedUiTests(unittest.TestCase):
             self.assertEqual(view._current_mode, "local")
             self.assertEqual(view.mode_stack.currentIndex(), 0)
             self.assertTrue(view.btn_mode_local.isChecked())
-            self.assertEqual(view.btn_open_local_vscode.text(), "🚀 OPEN DEBUG IN VS CODE")
+            self.assertEqual(view.btn_open_local_vscode.text(), "Open Debug in VS Code")
             self.assertTrue(view.btn_open_local_vscode.isEnabled())
             self.assertFalse(hasattr(view, "debug_service"))
             self.assertFalse(hasattr(view, "remote_session"))
@@ -331,8 +351,8 @@ class V018SimplifiedUiTests(unittest.TestCase):
             view.select_mode("client")
             self.app.processEvents()
             self.assertEqual(view.mode_stack.currentIndex(), 2)
-            self.assertEqual(view.btn_open_remote_vscode.text(), "🚀 OPEN REMOTE DEBUG IN VS CODE")
-            self.assertEqual(view.btn_test_client_conn.text(), "⚡ TEST CONNECTION")
+            self.assertEqual(view.btn_open_remote_vscode.text(), "Open Remote Debug in VS Code")
+            self.assertEqual(view.btn_test_client_conn.text(), "Test connection")
             self.assertEqual(view.client_local_gdb_spin.value(), 0)
             self.assertFalse(view.client_details_card.is_expanded())
         finally:
@@ -417,11 +437,26 @@ class V018SimplifiedUiTests(unittest.TestCase):
             window.monitor_view.controller._active = False
             self._close(window)
 
+    def test_shared_gateway_and_project_selectors_replace_repeated_connection_fields(self) -> None:
+        window = self._make_window()
+        try:
+            self.assertFalse(window.settings_view.btn_manage_gateways.isHidden())
+            self.assertFalse(window.settings_view.btn_manage_projects.isHidden())
+            self.assertTrue(window.debug_vscode_view.client_host.isHidden())
+            self.assertTrue(window.debug_vscode_view.client_user.isHidden())
+            self.assertTrue(window.debug_vscode_view.client_ssh_port.isHidden())
+            self.assertTrue(window.debug_vscode_view.local_workspace.isHidden())
+            self.assertTrue(window.debug_vscode_view.local_elf.isHidden())
+            self.assertTrue(window.monitor_view.symbol_button.isHidden())
+            self.assertTrue(window.monitor_view.live_panel.browse_symbols_btn.isHidden())
+        finally:
+            self._close(window)
+
     def test_device_page_is_read_only_and_does_not_duplicate_global_actions(self) -> None:
         window = self._make_window()
         try:
             self.assertTrue(window.device_view.btn_refresh.isHidden())
-            self.assertTrue(window.device_view.btn_doctor.isHidden())
+            self.assertFalse(window.device_view.btn_doctor.isHidden())
             self.assertFalse(window.debug_vscode_view.environment_details_card.is_expanded())
         finally:
             self._close(window)

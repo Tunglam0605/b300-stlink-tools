@@ -5,6 +5,15 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-09-05
+
+- Consolidated the production UI around one canonical owner for each operator action. PROGRAM owns firmware programming, DEVICE owns Target inspection, MONITOR owns zero-halt sampling, DEBUG owns the VS Code bridge, and SETTINGS owns shared configuration/maintenance. Duplicate page-local ST-Link refresh, Target inspect, symbol/workspace and setup actions are removed from the visible production surface.
+- Added a shared **Gateway Manager** with multiple named Gateway profiles, default selection, connect/disconnect state and migration from the legacy single `remote_gateway.json` endpoint. Profiles persist only name/host/user/port; SSH passwords are kept only in the running B300 process and are cleared when the application closes.
+- Added a shared **Debug Project Manager** for named workspace + ELF/AXF pairs. MONITOR and DEBUG Local/Client now select the same saved project instead of asking for the same symbol/workspace paths independently.
+- Simplified DEBUG Local/Gateway/Client to one primary action per role, with connection/toolchain diagnostics behind progressive disclosure and one shared Stop Debug action. MONITOR Client selects a saved Gateway instead of duplicating SSH endpoint fields.
+- Preserved the v0.18 safety boundary: HardwareSession arbitration remains authoritative, normal Application flash still cannot mass erase or write Bootloader sectors 0–2, Live Monitor remains zero-halt, OpenOCD debug listeners stay loopback-only and remote Application programming remains fail-closed until separately accepted.
+- Software/UI consolidation does not establish new board acceptance. `HW-P1-001` remains open and B300 APPLICATION ACCEPTANCE remains DEFERRED pending physical-device evidence.
+
 ## [0.18.2] - 2026-09-05
 
 - Fixed Live Monitor failing to open AXF/ELF symbols with `arm-none-eabi-nm was not found` in native bundles. Windows, Ubuntu x64 and ARM64 now include nm and addr2line alongside managed GDB, plus objdump for Cortex-Debug.

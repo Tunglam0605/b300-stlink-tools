@@ -77,7 +77,7 @@ Windows và Ubuntu.
 | `flash` | Validate Intel HEX, read WRP, chỉ xóa Sector 3–7, program, verify, reset và post-verify. |
 | `provision-bootloader` | Factory-only: nạp Bootloader đã được trust vào Sector 0–2, sau đó restore/verify WRP. |
 | `debug` | Gateway/Local/Client debug qua GDB/MI + Safe TCL; có `debug selftest` để nghiệm thu đường Gateway→external Client trên một máy, không ghi flash. |
-| GUI PySide6 | Application provisioning, Factory Bootloader one-click có preflight tự động, Debug, updater và đọc memory/metadata. |
+| GUI PySide6 | 5 workspace PROGRAM / MONITOR / DEBUG / DEVICE / SETTINGS; Gateway Manager và Debug Project Manager dùng chung; Application/Factory provisioning, VS Code debug bridge, updater và target diagnostics. |
 | Thiết lập máy mới | GUI kiểm tra và chỉ cài phần còn thiếu: ST-Link driver/OpenOCD/runtime, OpenSSH Client hoặc Linux udev; hỗ trợ `Cài tất cả` hoặc chọn từng mục. |
 | Setup offline | Cài OpenOCD từ archive xPack gốc có SHA-256 tin cậy cố định; runtime portable/user-local cũng được kiểm toàn bộ cây file. |
 | Agent Skill | Cung cấp skill `b300-ota-stlink` và playbook cho AI agent. |
@@ -89,17 +89,19 @@ Sau khi cài GUI trên một laptop/PC mới, mở **⚙ Thiết lập máy mớ
 
 ## Engineering diagnostics foundation
 
-The GUI Debug tab provides a bounded engineering-debug workflow: start the
-OpenOCD server, optionally select the matching `.elf`/`.axf` symbol file, connect
-through verified GDB/MI, then use **Halt**, **Continue**, **Reset + Halt**, and
-**Stop Debug**. The CLI also provides local integrated one-shot diagnostics through
-GDB/MI on port 3333 and a loopback-only Safe TCL surface on port 6666: `where`,
-`stack`, `registers`, `variable`, bounded `read-words`, hardware `break`, and
-`watch`. A GDB command is not treated as successful until the matching MI token
-receives a valid result record. Breakpoint/watchpoint transactions verify the
-matching stop resource, clean it up in `finally`, and restore a target that was
-running before attach. If OpenOCD exits unexpectedly, the hardware interlock is
-released and the failed debug session is reported.
+The production GUI keeps B300 as the ST-Link programming/safety/control plane and
+uses VS Code + Cortex-Debug for interactive source debugging. DEBUG has explicit
+LOCAL / GATEWAY / CLIENT roles; a saved **Debug Project** supplies the workspace and
+matching ELF/AXF, while a saved **Gateway** supplies the remote host/user/port. The
+same Gateway session is reused by MONITOR and DEBUG during one B300 process, and the
+SSH password is not persisted by the production GUI. OpenOCD GDB/TCL listeners remain
+loopback-only; CLIENT forwards only the required debug channel through authenticated SSH.
+
+The CLI retains bounded GDB/MI + Safe TCL diagnostics (`where`, `stack`, `registers`,
+`variable`, bounded `read-words`, hardware `break`, and `watch`). A GDB command is not
+treated as successful until the matching MI token receives a valid result record.
+Breakpoint/watchpoint transactions verify the matching stop resource, clean it up in
+`finally`, and restore a target that was running before attach.
 
 Flash, Factory provisioning, Memory, and Debug share one exclusive hardware
 session. While Debug owns the ST-Link, destructive provisioning, probe changes,

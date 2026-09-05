@@ -1,6 +1,6 @@
-"""Production MainWindow for B300 ST-Link Tools v0.18 Simplified UX.
+"""Production MainWindow for B300 ST-Link Tools v0.19 Shared-Workspace UX.
 
-B300 v0.18 intentionally is not an IDE.  The production surface is:
+B300 v0.19 intentionally is not an IDE.  The production surface is:
 PROGRAM / MONITOR / DEBUG / DEVICE / SETTINGS, with interactive debugging
 outsourced to VS Code + Cortex-Debug while B300 retains ST-Link/OpenOCD/SSH and
 run-state safety ownership.
@@ -10,15 +10,20 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtWidgets import QMessageBox, QPushButton, QStackedWidget
+from PySide6.QtWidgets import QDialog, QMessageBox, QPushButton, QStackedWidget
 
+from b300_core.gateway_profiles import GatewayProfile, GatewayProfileStore
+from b300_core.gateway_sessions import GatewaySessionManager
 from b300_core.models import ProbeInfo, TargetInfo
+from b300_core.project_profiles import ProjectProfileStore
 from b300_core.vscode_bridge import BridgeState
-from b300_core.remote_profile import RemoteGatewayProfile, load_remote_profile, save_remote_profile
+from b300_core.remote_profile import RemoteGatewayProfile
 from b300_core.remote_session import RemoteSession
 from .main_window import MainWindow
 from .operation_state import OperationState
-from .remote_login_dialog import RemoteLoginDialog
+from .gateway_login_dialog import GatewayLoginDialog
+from .gateway_manager_dialog import GatewayManagerDialog
+from .project_manager_dialog import ProjectManagerDialog
 from .vscode_debug_controller import VsCodeDebugController
 from .views.debug_vscode_view import DebugVsCodeView
 from .views.device_view import DeviceView
@@ -28,20 +33,28 @@ from .views.settings_view import SettingsView
 
 
 class MainWindowV18(MainWindow):
-    """v0.18 simplified window and explicit VS Code debug orchestration."""
+    """v0.19 shared-resource window and explicit VS Code debug orchestration."""
 
     def __init__(self, *args, **kwargs) -> None:
+        gateway_store = kwargs.pop("gateway_store", None)
+        project_store = kwargs.pop("project_store", None)
+        gateway_sessions = kwargs.pop("gateway_sessions", None)
         kwargs.setdefault("legacy_workbenches", False)
         super().__init__(*args, **kwargs)
         # Reuse the base DebugService so HardwareSession arbitration remains
         # authoritative across flash, monitor and interactive debug.
         self._vscode_controller = VsCodeDebugController(debug_service=self.debug_service)
+        self._gateway_store = gateway_store or GatewayProfileStore()
+        self._project_store = project_store or ProjectProfileStore()
+        self._gateway_sessions = gateway_sessions or GatewaySessionManager()
         self._vscode_remote_session: Optional[RemoteSession] = None
-        self._remote_login_dialog: Optional[RemoteLoginDialog] = None
+        self._remote_login_dialog: Optional[GatewayLoginDialog] = None
+        self._gateway_manager_dialog: Optional[GatewayManagerDialog] = None
+        self._project_manager_dialog: Optional[ProjectManagerDialog] = None
         self._pending_remote_request: Optional[dict] = None
         self._configure_v18_navigation()
         self._configure_v18_views()
-        self._restore_v18_remote_profile()
+        self._refresh_shared_profiles()
         self.show_page("program")
 
     # ------------------------------------------------------------------
@@ -52,7 +65,9 @@ class MainWindowV18(MainWindow):
         # remain as compatibility attributes but are not part of production UX.
         self.header_bar.segmented_control.hide()
         self.header_bar.probe_refresh_btn.setObjectName("refreshProbeAction")
-        self.header_bar.machine_setup_btn.setObjectName("machineSetupAction")
+        self.header_bar.theme_btn.hide()
+        self.header_bar.machine_setup_btn.hide()
+        self.header_bar.help_btn.hide()
         self.machine_setup_button.hide()
         self.update_channel_label.hide()
         for btn_name in ("nav_flash_btn", "nav_memory_btn", "nav_debug_btn", "nav_gateway_btn"):
@@ -99,6 +114,7 @@ class MainWindowV18(MainWindow):
         self.program_view.probe_refresh_requested.connect(self.refresh_probes)
         self.program_view.target_inspect_requested.connect(self.inspect_target)
         self.program_view.btn_refresh_probe.hide()
+        self.program_view.btn_inspect_target.hide()
         self.v18_stack.addWidget(self.program_view)
 
         self.monitor_view = MonitorView(
@@ -110,6 +126,8 @@ class MainWindowV18(MainWindow):
         )
         self.monitor_view.log.connect(self.append_log)
         self.monitor_view.operation_state_changed.connect(self._hardware_activity_changed)
+        self.monitor_view.manage_gateways_requested.connect(self._open_gateway_manager)
+        self.monitor_view.manage_projects_requested.connect(self._open_project_manager)
         self.v18_stack.addWidget(self.monitor_view)
 
         self.debug_vscode_view = DebugVsCodeView(self)
@@ -121,13 +139,14 @@ class MainWindowV18(MainWindow):
         self.debug_vscode_view.stop_bridge_requested.connect(self._on_v18_stop_bridge)
         self.debug_vscode_view.refresh_environment_requested.connect(self._refresh_vscode_environment)
         self.debug_vscode_view.legacy_ide_requested.connect(self._on_v18_open_legacy_ide)
+        self.debug_vscode_view.manage_gateways_requested.connect(self._open_gateway_manager)
+        self.debug_vscode_view.manage_projects_requested.connect(self._open_project_manager)
         self.v18_stack.addWidget(self.debug_vscode_view)
 
         self.device_view = DeviceView(self)
         self.device_view.refresh_requested.connect(self.refresh_probes)
         self.device_view.doctor_requested.connect(self.inspect_target)
         self.device_view.btn_refresh.hide()
-        self.device_view.btn_doctor.hide()
         self.v18_stack.addWidget(self.device_view)
 
         self.settings_view = SettingsView(self)
@@ -137,8 +156,9 @@ class MainWindowV18(MainWindow):
         self.settings_view.export_support_bundle_requested.connect(self.export_support_bundle)
         self.settings_view.about_requested.connect(self.show_about)
         self.settings_view.release_notes_requested.connect(self.show_release_notes)
-        self.settings_view.btn_run_setup.hide()
-        self.settings_view.btn_toggle_theme.hide()
+        self.settings_view.manage_gateways_requested.connect(self._open_gateway_manager)
+        self.settings_view.manage_projects_requested.connect(self._open_project_manager)
+        self.settings_view.btn_run_setup.setObjectName("machineSetupAction")
         self.settings_view.btn_check_updates.setObjectName("checkUpdateAction")
         self.v18_stack.addWidget(self.settings_view)
 
@@ -208,6 +228,10 @@ class MainWindowV18(MainWindow):
             self.device_view.set_busy(hardware_busy)
         if hasattr(self, "debug_vscode_view"):
             self.debug_vscode_view.set_hardware_busy(hardware_busy)
+        if hasattr(self, "settings_view"):
+            self.settings_view.btn_run_setup.setEnabled(not hardware_busy)
+            self.settings_view.btn_manage_gateways.setEnabled(not hardware_busy)
+            self.settings_view.btn_manage_projects.setEnabled(not hardware_busy)
 
     def refresh_probes(self) -> None:
         super().refresh_probes()
@@ -249,7 +273,7 @@ class MainWindowV18(MainWindow):
             self.program_view.banner.show_fail(
                 "CHƯA SẴN SÀNG NẠP FIRMWARE",
                 "Target hoặc flash plan chưa đạt điều kiện an toàn.",
-                next_action="Bấm 'Kiểm tra Target' để xác minh WRP Bootloader trước khi nạp.",
+                next_action="Mở DEVICE và bấm 'Kiểm tra Target' để xác minh WRP Bootloader trước khi nạp.",
             )
             return
         self.show_dry_run() if is_dry_run else self.confirm_flash()
@@ -353,19 +377,53 @@ class MainWindowV18(MainWindow):
             self.append_log("Debug bridge STOPPED.")
 
     # ------------------------------------------------------------------
-    # CLIENT SSH + GDB tunnel
+    # Shared Gateway / Project resources
     # ------------------------------------------------------------------
-    def _restore_v18_remote_profile(self) -> None:
+    def _refresh_shared_profiles(self) -> None:
         try:
-            profile = load_remote_profile()
+            gateways = self._gateway_store.list()
+            gateway_default = self._gateway_store.default_id()
         except Exception as error:
-            self.append_log("Remote Gateway profile warning: %s" % error)
-            return
-        if profile is None or not hasattr(self, "debug_vscode_view"):
-            return
-        self.debug_vscode_view.client_host.setText(profile.host)
-        self.debug_vscode_view.client_user.setText(profile.user)
-        self.debug_vscode_view.client_ssh_port.setValue(profile.port)
+            self.append_log("Gateway profile warning: %s" % error)
+            gateways, gateway_default = (), None
+        try:
+            projects = self._project_store.list()
+            project_default = self._project_store.default_id()
+        except Exception as error:
+            self.append_log("Debug project warning: %s" % error)
+            projects, project_default = (), None
+        if hasattr(self, "debug_vscode_view"):
+            self.debug_vscode_view.set_gateway_profiles(gateways, gateway_default)
+            self.debug_vscode_view.set_project_profiles(projects, project_default)
+            selected_id = self.debug_vscode_view.client_gateway_combo.currentData()
+            selected_gateway = next((item for item in gateways if item.profile_id == selected_id), None)
+            if selected_gateway is not None and self._gateway_sessions.connected(selected_gateway.endpoint):
+                self.debug_vscode_view.set_client_connection_status(True, selected_gateway.display_endpoint)
+            elif self._vscode_controller.state.role is None:
+                self.debug_vscode_view.set_client_connection_status(False, "")
+        if hasattr(self, "monitor_view"):
+            self.monitor_view.set_gateway_profiles(gateways, gateway_default)
+            self.monitor_view.set_project_profiles(projects, project_default)
+
+    def _open_gateway_manager(self) -> None:
+        dialog = GatewayManagerDialog(self._gateway_store, self._gateway_sessions, self)
+        self._gateway_manager_dialog = dialog
+        dialog.profiles_changed.connect(self._refresh_shared_profiles)
+        dialog.exec()
+        self._gateway_manager_dialog = None
+        self._refresh_shared_profiles()
+
+    def _open_project_manager(self) -> None:
+        dialog = ProjectManagerDialog(self._project_store, self)
+        self._project_manager_dialog = dialog
+        dialog.profiles_changed.connect(self._refresh_shared_profiles)
+        dialog.exec()
+        self._project_manager_dialog = None
+        self._refresh_shared_profiles()
+
+    # Compatibility alias retained for older tests/callers.
+    def _restore_v18_remote_profile(self) -> None:
+        self._refresh_shared_profiles()
 
     @staticmethod
     def _profile_from_request(request: dict) -> RemoteGatewayProfile:
@@ -375,18 +433,19 @@ class MainWindowV18(MainWindow):
             port=int(request.get("ssh_port", 22)),
         ).validate()
 
+    def _gateway_profile_for_endpoint(self, endpoint: RemoteGatewayProfile) -> GatewayProfile:
+        selected = endpoint.validate()
+        for profile in self._gateway_store.list():
+            if profile.endpoint == selected:
+                return profile
+        return GatewayProfile.create(selected.host, selected.host, selected.user, selected.port)
+
     def _session_matches(self, profile: RemoteGatewayProfile) -> bool:
-        session = self._vscode_remote_session
-        return bool(session is not None and session.profile == profile and session.connected)
+        return self._gateway_sessions.connected(profile)
 
     def _get_or_create_remote_session(self, profile: RemoteGatewayProfile) -> RemoteSession:
-        current = self._vscode_remote_session
-        if current is not None and current.profile != profile:
-            current.disconnect()
-            current = None
-        if current is None:
-            current = RemoteSession(profile)
-            self._vscode_remote_session = current
+        current = self._gateway_sessions.session(profile)
+        self._vscode_remote_session = current
         return current
 
     def _monitor_remote_session(self, request) -> RemoteSession:
@@ -397,61 +456,68 @@ class MainWindowV18(MainWindow):
                 launch_after=False,
             )
         if not self._session_matches(profile):
-            raise RuntimeError("Client Monitor login cancelled or endpoint changed; select the saved Gateway again.")
-        return self._vscode_remote_session
+            raise RuntimeError("Client Monitor login cancelled; choose/connect the Gateway again.")
+        return self._get_or_create_remote_session(profile)
 
     def _show_remote_login(self, request: dict, *, launch_after: bool) -> None:
         try:
-            profile = self._profile_from_request(request)
+            endpoint = self._profile_from_request(request)
+            saved_profile = self._gateway_profile_for_endpoint(endpoint)
         except Exception as error:
             self._show_debug_error("Thông tin Gateway không hợp lệ", error)
             return
-        if self._session_matches(profile):
-            self.debug_vscode_view.set_client_connection_status(True, self._vscode_remote_session.endpoint)
+
+        session = self._get_or_create_remote_session(endpoint)
+        if session.connected:
+            self.debug_vscode_view.set_client_connection_status(True, session.endpoint)
             if launch_after:
-                self._launch_remote_debug(request, self._vscode_remote_session)
+                self._launch_remote_debug(request, session)
             return
 
-        dialog = RemoteLoginDialog(profile.host, profile.user, profile.port, self)
+        if self._gateway_sessions.has_cached_password(endpoint):
+            try:
+                self._gateway_sessions.connect(endpoint, timeout_seconds=12.0)
+            except Exception:
+                pass
+            else:
+                self._vscode_remote_session = self._gateway_sessions.session(endpoint)
+                self.debug_vscode_view.set_client_connection_status(True, self._vscode_remote_session.endpoint)
+                if launch_after:
+                    self._launch_remote_debug(request, self._vscode_remote_session)
+                return
+
+        dialog = GatewayLoginDialog(saved_profile, self)
         self._remote_login_dialog = dialog
         self._pending_remote_request = dict(request)
-
-        # If a remembered credential exists, an empty password asks RemoteSession
-        # to load it from the encrypted per-user credential store.
-        session = self._get_or_create_remote_session(profile)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            self._remote_login_dialog = None
+            self._pending_remote_request = None
+            return
+        secret = dialog.password()
         try:
-            has_remembered = session.credential_store.load(profile) is not None
-        except Exception:
-            has_remembered = False
-        dialog.set_has_remembered_credential(has_remembered)
+            self._gateway_sessions.connect(endpoint, secret, timeout_seconds=12.0)
+            session = self._gateway_sessions.session(endpoint)
+            self._vscode_remote_session = session
+            persisted = self._gateway_store.get(saved_profile.profile_id)
+            if persisted is not None:
+                self._gateway_store.set_default(saved_profile.profile_id)
+        except Exception as error:
+            dialog.password_input.clear()
+            self._remote_login_dialog = None
+            self._pending_remote_request = None
+            self.debug_vscode_view.set_client_connection_status(False, str(error))
+            self._show_debug_error("SSH connection failed", error)
+            return
+        finally:
+            dialog.password_input.clear()
 
-        def login(host: str, user: str, password: str, port: int, remember: bool) -> None:
-            try:
-                selected = RemoteGatewayProfile(host, user, port).validate()
-                selected_session = self._get_or_create_remote_session(selected)
-                selected_session.ensure_connected(
-                    password=password or None, remember=remember, timeout_seconds=12.0
-                )
-                save_remote_profile(selected)
-            except Exception as error:
-                dialog.set_login_error(str(error))
-                self.debug_vscode_view.set_client_connection_status(False, str(error))
-                return
-            dialog.set_login_success()
-            self.debug_vscode_view.client_host.setText(selected.host)
-            self.debug_vscode_view.client_user.setText(selected.user)
-            self.debug_vscode_view.client_ssh_port.setValue(selected.port)
-            self.debug_vscode_view.set_client_connection_status(True, selected_session.endpoint)
-            self.append_log("SSH Client CONNECTED · %s" % selected_session.endpoint)
-            if launch_after:
-                next_request = dict(request)
-                next_request.update(host=selected.host, user=selected.user, ssh_port=selected.port)
-                self._launch_remote_debug(next_request, selected_session)
-
-        dialog.login_requested.connect(login)
-        dialog.exec()
+        self.debug_vscode_view.set_client_connection_status(True, session.endpoint)
+        self.append_log("SSH Client CONNECTED · %s" % session.endpoint)
         self._remote_login_dialog = None
         self._pending_remote_request = None
+        self._refresh_shared_profiles()
+        if launch_after:
+            self._launch_remote_debug(request, session)
 
     def _on_v18_test_client_connection(self, request: dict) -> None:
         self._show_remote_login(request, launch_after=False)
@@ -500,7 +566,7 @@ class MainWindowV18(MainWindow):
         QMessageBox.information(
             self,
             "Debug trong VS Code",
-            "B300 v0.18 dùng VS Code + Cortex-Debug cho debug tương tác. "
+            "B300 v0.19 dùng VS Code + Cortex-Debug cho debug tương tác. "
             "Diagnostics của B300 vẫn có trong PROGRAM và DEVICE.",
         )
 
@@ -513,12 +579,11 @@ class MainWindowV18(MainWindow):
             self._vscode_controller.stop()
         except Exception as error:
             self.append_log("Debug bridge shutdown warning: %s" % error)
-        session = self._vscode_remote_session
-        if session is not None:
-            try:
-                session.disconnect()
-            except Exception as error:
-                self.append_log("SSH shutdown warning: %s" % error)
+        try:
+            self._gateway_sessions.disconnect_all()
+        except Exception as error:
+            self.append_log("SSH shutdown warning: %s" % error)
+        self._vscode_remote_session = None
         super().closeEvent(event)
 
 
