@@ -186,7 +186,7 @@ jobs:
           $timedOut = $false
           try {
             $setup = Start-Process -FilePath $installer `
-              -ArgumentList /VERYSILENT,/SUPPRESSMSGBOXES,/NORESTART,/SP-,/NOICONS,"/DIR=$installRoot" `
+              -ArgumentList /VERYSILENT,/SUPPRESSMSGBOXES,/NORESTART,/NOCLOSEAPPLICATIONS,/SP-,/NOICONS,"/DIR=$installRoot" `
               -PassThru
             if (-not $setup.WaitForExit(60000)) {
               $timedOut = $true

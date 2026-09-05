@@ -210,6 +210,7 @@ class GuiPackagingTests(unittest.TestCase):
             self.assertIn("WaitForExit(60000)", workflow)
             self.assertIn("Installer did not fail within 60 seconds", workflow)
             self.assertIn("taskkill /PID $setup.Id /T /F", workflow)
+            self.assertIn("/NOCLOSEAPPLICATIONS", workflow)
 
     def test_application_root_packaging_preserves_windows_onedir_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
