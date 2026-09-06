@@ -213,7 +213,7 @@ class HeaderBar(QFrame):
         self.help_btn.clicked.connect(self.help_requested.emit)
         layout.addWidget(self.help_btn)
 
-        ThemeManager.instance().theme_changed.connect(lambda _: self._update_theme_icon())
+        ThemeManager.instance().theme_changed.connect(self._update_theme_icon)
 
     def _update_theme_icon(self) -> None:
         is_dark = ThemeManager.instance().is_dark

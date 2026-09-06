@@ -11,6 +11,7 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 - Preserved the 32-word zero-halt SWD budget for every transaction, including DWT PC sampling and repeated 64-bit coherence reads; manual CLI watches remain capped at 64 and typed watches are bounded at 512.
 - Added live batch progress and retained values/timestamps for fields that belong to other batches. A failed compound preflight no longer leaves an enabled Add action for the rejected selection.
 - Prevented transient packaged GDB paths from being persisted to VS Code and automatically migrated legacy B300 attach profiles to the current durable GDB path and live Gateway endpoint.
+- Disconnected global theme callbacks with their Qt widget lifetime so closing and reopening screens no longer emits deleted-object tracebacks.
 - Preserved the flash, loopback-only debug and gateway safety contracts. `HW-P1-001` remains OPEN / DEFERRED.
 
 ## [0.21.1] - 2026-09-06

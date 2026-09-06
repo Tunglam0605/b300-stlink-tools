@@ -164,7 +164,7 @@ class MemoryMapWidget(QFrame):
         legend_h.addStretch(1)
         layout.addLayout(legend_h)
 
-        ThemeManager.instance().theme_changed.connect(lambda _: self.canvas.update())
+        ThemeManager.instance().theme_changed.connect(self.canvas.update)
 
     def set_image_span(self, start_addr: Optional[int], size: Optional[int]) -> None:
         self.canvas.set_image_span(start_addr, size)

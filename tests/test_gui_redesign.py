@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QCoreApplication, QEvent, QSize, Qt
 from PySide6.QtWidgets import QApplication, QScrollArea
 
 from b300_core.models import ImageInfo, ProbeInfo, TargetInfo
@@ -219,6 +220,20 @@ class GuiRedesignTests(unittest.TestCase):
         self.assertEqual(widget.canvas._image_span, (0x08010000, 128 * 1024))
         # Trigger paint without crash
         widget.canvas.repaint()
+
+    def test_theme_change_ignores_destroyed_header_and_memory_widgets(self) -> None:
+        header = HeaderBar()
+        memory = MemoryMapWidget()
+        header.deleteLater()
+        memory.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+        manager = ThemeManager.instance()
+        next_mode = "light" if manager.current_mode == "dark" else "dark"
+        with patch.object(sys, "excepthook") as excepthook:
+            manager.set_theme(next_mode)
+
+        excepthook.assert_not_called()
 
     def test_operator_view_probe_and_action_state(self) -> None:
         op_view = OperatorView()
