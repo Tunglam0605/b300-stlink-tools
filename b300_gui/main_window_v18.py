@@ -15,6 +15,7 @@ from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import QDialog, QLabel, QMessageBox, QPushButton, QStackedWidget, QVBoxLayout
 
 from b300_core.gateway_profiles import GatewayProfile, GatewayProfileStore
+from b300_core.gateway_access import discover_gateway_access
 from b300_core.gateway_sessions import GatewaySessionManager
 from b300_core.models import ProbeInfo, ProbeRef, TargetInfo
 from b300_core.policy import validate_target_for_provisioning, validate_bootloader_write_protection
@@ -49,6 +50,7 @@ class MainWindowV18(MainWindow):
         gateway_store = kwargs.pop("gateway_store", None)
         project_store = kwargs.pop("project_store", None)
         gateway_sessions = kwargs.pop("gateway_sessions", None)
+        gateway_access_provider = kwargs.pop("gateway_access_provider", discover_gateway_access)
         kwargs.setdefault("legacy_workbenches", False)
         super().__init__(*args, **kwargs)
         # Reuse the base DebugService so HardwareSession arbitration remains
@@ -57,6 +59,7 @@ class MainWindowV18(MainWindow):
         self._gateway_store = gateway_store or GatewayProfileStore()
         self._project_store = project_store or ProjectProfileStore()
         self._gateway_sessions = gateway_sessions or GatewaySessionManager()
+        self._gateway_access_provider = gateway_access_provider
         self._vscode_remote_session: Optional[RemoteSession] = None
         self._remote_login_dialog: Optional[GatewayLoginDialog] = None
         self._gateway_manager_dialog: Optional[GatewayManagerDialog] = None
@@ -256,6 +259,10 @@ class MainWindowV18(MainWindow):
         self.v18_stack.addWidget(self.device_view)
 
         self.settings_view = SettingsView(self)
+        try:
+            self.settings_view.set_gateway_access_info(self._gateway_access_provider())
+        except Exception as error:
+            self.append_log("Không thể đọc thông tin đăng nhập Gateway: %s" % error)
         self.settings_view.machine_setup_requested.connect(self.show_machine_setup)
         self.settings_view.toggle_theme_requested.connect(self._on_toggle_theme)
         self.settings_view.check_updates_requested.connect(lambda: self.check_for_updates(manual=True))
@@ -827,6 +834,10 @@ class MainWindowV18(MainWindow):
             self._show_debug_error("Không thể khởi động Gateway", error)
             return
         self._render_bridge_state()
+        try:
+            self.settings_view.set_gateway_access_info(self._gateway_access_provider())
+        except Exception as error:
+            self.append_log("Không thể làm mới thông tin đăng nhập Gateway: %s" % error)
         self.append_log(
             "Gateway SẴN SÀNG · %s · OpenOCD chỉ liên kết cục bộ; TCL không được chuyển tiếp." %
             (state.gdb_target or "địa chỉ chưa được báo cáo")

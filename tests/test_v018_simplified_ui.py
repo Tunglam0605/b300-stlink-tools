@@ -35,10 +35,10 @@ class V018SimplifiedUiTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
 
-    def _make_window(self) -> MainWindowV18:
+    def _make_window(self, **overrides) -> MainWindowV18:
         directory = tempfile.mkdtemp(prefix="b300-ui-profile-test-")
         root = Path(directory)
-        window = MainWindowV18(
+        options = dict(
             probe_loader=lambda: (
                 ProbeInfo(
                     name="ST-LINK/V2",
@@ -53,6 +53,8 @@ class V018SimplifiedUiTests(unittest.TestCase):
             project_store=ProjectProfileStore(root / "projects.json"),
             gateway_sessions=GatewaySessionManager(),
         )
+        options.update(overrides)
+        window = MainWindowV18(**options)
         window._test_profile_dir = root
         return window
 
@@ -359,6 +361,47 @@ class V018SimplifiedUiTests(unittest.TestCase):
             self.assertFalse(window.settings_view.btn_start_gateway.isHidden())
             self.assertFalse(window.settings_view.btn_stop_gateway.isEnabled())
             self.assertIs(window.app_context.gateway_sessions, window._gateway_sessions)
+        finally:
+            self._close(window)
+
+    def test_gateway_card_exposes_copyable_client_login_identity(self) -> None:
+        view = SettingsView()
+        try:
+            view.set_gateway_access_info(SimpleNamespace(
+                user="Admin", hostname="GATEWAY-PC",
+                addresses=("192.168.1.15", "10.0.0.8"),
+                ssh_port=22, ssh_ready=True,
+            ))
+            self.assertEqual(
+                [view.gateway_ip_selector.itemText(index)
+                 for index in range(view.gateway_ip_selector.count())],
+                ["192.168.1.15", "10.0.0.8"],
+            )
+            self.assertIn("Admin@192.168.1.15:22", view.gateway_access_command.text())
+            self.assertIn("mật khẩu tài khoản Windows", view.gateway_password_note.text())
+            self.assertIn("sẵn sàng", view.gateway_ssh_status.text().casefold())
+            view.gateway_ip_selector.setCurrentIndex(1)
+            view.btn_copy_gateway_access.click()
+            self.assertEqual(
+                QApplication.clipboard().text(),
+                "Admin@10.0.0.8:22",
+            )
+        finally:
+            view.close()
+
+    def test_main_window_populates_gateway_client_identity_from_local_machine(self) -> None:
+        info = SimpleNamespace(
+            user="operator", hostname="B300-GATEWAY",
+            addresses=("192.168.10.25",), ssh_port=22, ssh_ready=True,
+        )
+        provider = mock.Mock(return_value=info)
+        window = self._make_window(gateway_access_provider=provider)
+        try:
+            provider.assert_called_once_with()
+            self.assertIn(
+                "operator@192.168.10.25:22",
+                window.settings_view.gateway_access_command.text(),
+            )
         finally:
             self._close(window)
 

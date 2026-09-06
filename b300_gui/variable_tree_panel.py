@@ -97,14 +97,21 @@ class VariableTreePanel(QFrame):
 
     def _selection_changed(self, *_args) -> None:
         node = self._selected_node()
-        allowed = node is not None and node.watchable and not node.has_children
+        allowed = node is not None and (node.watchable or node.has_children)
         self.add_button.setEnabled(allowed)
         if node is not None:
-            self.status.setText(node.reason or "%s · %s · sẵn sàng theo dõi." % (node.path, node.value_type))
+            if node.has_children:
+                self.status.setText(
+                    "%s · thêm toàn bộ trường scalar được hỗ trợ." % node.path
+                )
+            else:
+                self.status.setText(
+                    node.reason or "%s · %s · sẵn sàng theo dõi." % (node.path, node.value_type)
+                )
 
     def _add_selected(self) -> None:
         node = self._selected_node()
-        if node is not None and node.watchable and not node.has_children:
+        if node is not None and (node.watchable or node.has_children):
             self.add_watch_requested.emit(node.node_id)
 
     def _double_clicked(self, index: QModelIndex) -> None:

@@ -6,7 +6,9 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPlainTextEdit, QVBox
 from b300_core.models import ProbeRef
 from b300_core.remote_profile import load_remote_profile
 from b300_core.typed_symbols import TypedSymbolCatalog
-from b300_core.variable_watch import WatchCompileError, compile_watch, compile_watches
+from b300_core.variable_watch import (
+    WatchCompileError, collect_watchable_node_ids, compile_watches,
+)
 from b300_gui.production_live_panel import ProductionLivePanel
 from b300_gui.live_monitor_controller import LiveMonitorController, LiveMonitorRequest
 from b300_gui.variable_tree_panel import VariableTreePanel
@@ -263,12 +265,17 @@ class MonitorView(QWidget):
         try:
             current = tuple(getattr(watch, "node_id", None)
                             for watch in self.live_panel.compiled_watches())
-            node_ids = tuple(item for item in current if item) + (str(node_id),)
+            current_ids = tuple(item for item in current if item)
+            selected_ids = collect_watchable_node_ids(catalog, str(node_id))
+            added_ids = tuple(item for item in selected_ids if item not in current_ids)
+            node_ids = current_ids + added_ids
             watches = compile_watches(catalog, node_ids)
-            watch = watches[-1] if watches else compile_watch(catalog, str(node_id))
-            self.live_panel.add_compiled_watch(watch)
+            by_id = {watch.node_id: watch for watch in watches}
+            for selected_id in added_ids:
+                self.live_panel.add_compiled_watch(by_id[selected_id])
             self.variable_tree_panel.status.setText(
-                "%s · %s · đã thêm Watch Live." % (watch.name, watch.value_type)
+                "%d biến scalar đã được thêm Watch Live." % len(added_ids)
+                if added_ids else "Các biến scalar đã có trong Watch Live."
             )
         except (WatchCompileError, RuntimeError, ValueError) as error:
             self.variable_tree_panel.status.setText(str(error))

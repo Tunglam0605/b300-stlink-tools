@@ -73,6 +73,27 @@ class SettingsView(QWidget):
         self.gateway_status.setObjectName("statusBadge")
         host.body.addWidget(self.gateway_status)
         host.body.addWidget(self._note("Máy chủ OpenSSH · ST-Link USB · OpenOCD\nGỡ lỗi chỉ lắng nghe cục bộ qua đường hầm SSH."))
+        access_row = QHBoxLayout()
+        access_row.addWidget(QLabel("IP cho máy Client"))
+        self.gateway_ip_selector = QComboBox()
+        self.gateway_ip_selector.currentIndexChanged.connect(self._render_gateway_access)
+        access_row.addWidget(self.gateway_ip_selector, 1)
+        host.body.addLayout(access_row)
+        self.gateway_access_command = QLabel("Chưa xác định thông tin đăng nhập SSH.")
+        self.gateway_access_command.setObjectName("monoText")
+        self.gateway_access_command.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        host.body.addWidget(self.gateway_access_command)
+        self.gateway_ssh_status = self._note("SSH · Chưa kiểm tra")
+        host.body.addWidget(self.gateway_ssh_status)
+        self.gateway_password_note = self._note(
+            "Mật khẩu: dùng mật khẩu tài khoản Windows của máy Gateway hoặc SSH key; "
+            "B300 không đọc hay hiển thị mật khẩu."
+        )
+        host.body.addWidget(self.gateway_password_note)
+        self.btn_copy_gateway_access = QPushButton("Sao chép thông tin Client")
+        self.btn_copy_gateway_access.setEnabled(False)
+        self.btn_copy_gateway_access.clicked.connect(self._copy_gateway_access)
+        host.body.addWidget(self.btn_copy_gateway_access)
         actions = QHBoxLayout()
         self.btn_start_gateway = self._button("Khởi chạy Gateway", self.start_gateway_requested)
         self.btn_start_gateway.setObjectName("primaryActionButton")
@@ -207,6 +228,40 @@ class SettingsView(QWidget):
         self.gateway_status.style().unpolish(self.gateway_status)
         self.gateway_status.style().polish(self.gateway_status)
         self._render_host_controls()
+
+    def set_gateway_access_info(self, info) -> None:
+        self._gateway_access_info = info
+        blocked = self.gateway_ip_selector.blockSignals(True)
+        self.gateway_ip_selector.clear()
+        self.gateway_ip_selector.addItems([str(address) for address in info.addresses])
+        self.gateway_ip_selector.blockSignals(blocked)
+        self.gateway_ssh_status.setText(
+            "SSH · Sẵn sàng trên cổng %d" % int(info.ssh_port)
+            if info.ssh_ready else "SSH · Chưa lắng nghe trên cổng %d" % int(info.ssh_port)
+        )
+        self._render_gateway_access()
+
+    def _gateway_access_text(self) -> str:
+        info = getattr(self, "_gateway_access_info", None)
+        address = self.gateway_ip_selector.currentText().strip()
+        if info is None or not address:
+            return ""
+        return "%s@%s:%d" % (info.user, address, int(info.ssh_port))
+
+    def _render_gateway_access(self, *_args) -> None:
+        access = self._gateway_access_text()
+        info = getattr(self, "_gateway_access_info", None)
+        self.gateway_access_command.setText(
+            ("%s · %s" % (info.hostname, access)) if access and info is not None
+            else "Không tìm thấy IPv4 dùng được cho máy Client."
+        )
+        self.btn_copy_gateway_access.setEnabled(bool(access))
+
+    def _copy_gateway_access(self) -> None:
+        access = self._gateway_access_text()
+        if access:
+            from PySide6.QtWidgets import QApplication
+            QApplication.clipboard().setText(access)
 
     def set_hardware_busy(self, busy: bool) -> None:
         self._hardware_busy = bool(busy)

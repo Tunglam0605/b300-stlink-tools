@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -296,6 +297,20 @@ class V018VsCodeBridgeTests(unittest.TestCase):
             VsCodeExternalProfile(
                 "B300 local", "app.elf", "127.0.0.1:3333", gdb_path=temporary_gdb
             ).configuration()
+
+    def test_profile_accepts_active_b300_packaged_gdb_under_temporary_install(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_root = Path(directory) / "installed"
+            executable = app_root / "b300-stlink-gui.exe"
+            gdb = app_root / "vendor" / "gdb" / "bin" / "arm-none-eabi-gdb.exe"
+            gdb.parent.mkdir(parents=True)
+            executable.write_bytes(b"gui")
+            gdb.write_bytes(b"managed gdb")
+            with patch.dict(os.environ, {"B300_APP_ROOT": str(app_root)}, clear=False):
+                config = VsCodeExternalProfile(
+                    "B300 local", "app.elf", "127.0.0.1:3333", gdb_path=str(gdb)
+                ).configuration()
+            self.assertEqual(config["gdbPath"], str(gdb))
 
     def test_launch_writer_appends_managed_profile_to_existing_document(self):
         for original in ({"inputs": []}, {"configurations": [{"name": "Other"}]}):

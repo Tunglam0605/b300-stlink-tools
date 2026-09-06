@@ -76,7 +76,7 @@ class VariableTreeModelTests(unittest.TestCase):
         self.assertEqual(model.data(model.index(0, 3)), "0x200003E4")
         self.assertEqual(model.data(model.index(0, 4)), "Sẵn sàng")
 
-    def test_panel_only_enables_add_watch_for_watchable_leaf(self):
+    def test_panel_allows_compound_selection_and_keeps_leaf_selection(self):
         panel = VariableTreePanel()
         panel.set_catalog(_Catalog())
         selected = []
@@ -85,7 +85,9 @@ class VariableTreeModelTests(unittest.TestCase):
         machine = panel.model.index(0, 0)
         panel.tree.setCurrentIndex(machine)
         self.app.processEvents()
-        self.assertFalse(panel.add_button.isEnabled())
+        self.assertTrue(panel.add_button.isEnabled())
+        panel.add_button.click()
+        self.assertEqual(selected, ["machine"])
 
         panel.model.fetchMore(machine)
         speed = panel.model.index(0, 0, machine)
@@ -93,7 +95,7 @@ class VariableTreeModelTests(unittest.TestCase):
         self.app.processEvents()
         self.assertTrue(panel.add_button.isEnabled())
         panel.add_button.click()
-        self.assertEqual(selected, ["machine.speed"])
+        self.assertEqual(selected, ["machine", "machine.speed"])
         panel.close()
 
 

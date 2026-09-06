@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 
 os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,7 +46,10 @@ def main():
         window = MainWindowV18(service=FakeService(), probe_loader=lambda: (),
             automatic_updates=False, first_run_setup=False,
             gateway_store=GatewayProfileStore(root/'gateways.json', legacy_path=root/'legacy.json'),
-            project_store=ProjectProfileStore(root/'projects.json'))
+            project_store=ProjectProfileStore(root/'projects.json'),
+            gateway_access_provider=lambda: SimpleNamespace(
+                user='operator', hostname='B300-GATEWAY', addresses=('192.168.1.50',),
+                ssh_port=22, ssh_ready=False))
         window.openocd_ready = False
         window.settings_view.set_openocd_status(None)
         window._set_status('XEM TRƯỚC · NGOẠI TUYẾN', 'ready', notify=False)

@@ -44,6 +44,49 @@ def compile_watch(catalog, node_id: str) -> LiveWatch:
     )
 
 
+def collect_watchable_node_ids(catalog, node_id: str) -> Tuple[str, ...]:
+    """Return watchable scalar leaves below one selected DWARF node."""
+    result = []
+    visited = set()
+
+    def visit(selected_id: str) -> None:
+        if selected_id in visited:
+            raise WatchCompileError("type_cycle", "DWARF variable tree contains a cycle.")
+        visited.add(selected_id)
+        try:
+            node = catalog.node(selected_id)
+        except (KeyError, ValueError) as error:
+            raise WatchCompileError(
+                "stale_node", "The selected variable belongs to a stale AXF/ELF catalog."
+            ) from error
+        if not node.has_children:
+            if node.watchable:
+                result.append(node.node_id)
+                if len(result) > MAX_LIVE_WATCHES:
+                    raise WatchCompileError(
+                        "too_many_watches",
+                        "Selected variable contains more than %d watchable fields."
+                        % MAX_LIVE_WATCHES,
+                    )
+            return
+        offset = 0
+        while True:
+            children = tuple(catalog.children(node.node_id, offset, 100))
+            for child in children:
+                visit(child.node_id)
+            offset += len(children)
+            if len(children) < 100:
+                break
+
+    visit(str(node_id))
+    if not result:
+        raise WatchCompileError(
+            "no_watchable_descendants",
+            "The selected variable has no supported scalar fields to watch.",
+        )
+    return tuple(result)
+
+
 def compile_watches(catalog, node_ids: Iterable[str]) -> Tuple[LiveWatch, ...]:
     selected = tuple(str(node_id) for node_id in node_ids)
     if len(selected) > MAX_LIVE_WATCHES:
@@ -67,4 +110,6 @@ def compile_watches(catalog, node_ids: Iterable[str]) -> Tuple[LiveWatch, ...]:
     return watches
 
 
-__all__ = ["WatchCompileError", "compile_watch", "compile_watches"]
+__all__ = [
+    "WatchCompileError", "collect_watchable_node_ids", "compile_watch", "compile_watches",
+]

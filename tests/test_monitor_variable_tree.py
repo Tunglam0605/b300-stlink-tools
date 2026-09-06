@@ -100,6 +100,30 @@ class MonitorVariableTreeTests(unittest.TestCase):
         self.assertEqual(panel.table.item(0, 2).text(), "i16")
         view.close()
 
+    def test_selecting_struct_adds_all_watchable_scalar_descendants(self):
+        panel = ProductionLivePanel()
+        view = MonitorView(live_panel=panel)
+        view.load_typed_symbols(self.image)
+        tree = view.variable_tree_panel
+        machine = next(tree.model.index(row, 0) for row in range(tree.model.rowCount())
+                       if tree.model.data(tree.model.index(row, 0)) == "g_machine")
+        tree.tree.setCurrentIndex(machine)
+        self.app.processEvents()
+
+        self.assertTrue(tree.add_button.isEnabled())
+        tree.add_button.click()
+
+        watches = panel.compiled_watches()
+        self.assertEqual(len(watches), 16)
+        self.assertEqual(
+            tuple(watch.name for watch in watches[:4]),
+            ("g_machine.position.x", "g_machine.position.y",
+             "g_machine.rpm[0]", "g_machine.rpm[1]"),
+        )
+        self.assertEqual(watches[-1].name, "g_machine.next")
+        self.assertIn("16", tree.status.text())
+        view.close()
+
     def test_production_watch_chooser_has_no_manual_type_or_json_preset_controls(self):
         panel = ProductionLivePanel()
         try:
