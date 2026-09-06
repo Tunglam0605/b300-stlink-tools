@@ -5,6 +5,15 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-09-06
+
+- Added Cortex-Debug Live Watch to managed local and SSH profiles, with ownership-aware atomic `launch.json` updates whenever the live Gateway instance, generation or port changes.
+- Added authenticated per-user Gateway status, ensure and rescan commands. SSH clients discover the current loopback GDB/TCL endpoints, start the installed CLI-managed Gateway when needed and avoid creating a second OpenOCD owner.
+- Added an offline DWARF variable catalog for Keil AXF/ELF files with paged global/static, struct, union and array browsing. Scalar members, enum values and bitfields compile into bounded typed watches without manual type entry or JSON presets in the production Monitor.
+- Added multi-variable live tables, recent samples and trends. Gateway loss now cancels the remote monitor, rejects late samples and retains the last value and timestamp with an explicit `STALE` quality.
+- Moved automatic AXF/ELF parsing off the GUI thread, corrected the production B300 logo and aligned the variable tree with the active dark/light theme.
+- Preserved the debug safety boundary: GDB/TCL remain loopback-only, Monitor does not halt/reset/write the target, and Gateway recovery never auto-attaches, resumes or flashes. Two-machine hardware fault-injection acceptance remains pending and `HW-P1-001` stays OPEN / DEFERRED.
+
 ## [0.20.0] - 2026-09-05
 
 - Refactored the five production workspaces to follow one consistent engineering-console layout, with shared project, probe, Target and busy state across PROGRAM, MONITOR, DEBUG, DEVICE and SETTINGS.

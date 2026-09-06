@@ -87,7 +87,24 @@ class RemoteVsCodeTests(unittest.TestCase):
         self.assertEqual(config["hardwareBreakpoints"]["limit"], 6)
         self.assertTrue(config["hardwareWatchpoints"]["require"])
         self.assertEqual(config["hardwareWatchpoints"]["limit"], 4)
+        self.assertEqual(config["liveWatch"], {"enabled": True, "samplesPerSecond": 4})
         self.assertNotIn("load", json.dumps(config).lower())
+        self.assertEqual(config["b300"]["owner"], "b300-stlink-tools")
+        self.assertEqual(config["b300"]["id"], "b300.stm32f407.attach")
+
+    def test_force_write_kit_preserves_unrelated_launch_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "remote-kit"
+            launch = destination / ".vscode" / "launch.json"
+            launch.parent.mkdir(parents=True)
+            launch.write_text(
+                '{"configurations":[{"name":"Python","type":"debugpy"}]}',
+                encoding="utf-8",
+            )
+            self.make_profile().write_kit(destination, force=True)
+            payload = json.loads(launch.read_text(encoding="utf-8"))
+            self.assertEqual(payload["configurations"][0], {"name": "Python", "type": "debugpy"})
+            self.assertEqual(payload["configurations"][1]["b300"]["owner"], "b300-stlink-tools")
 
     def test_parser_accepts_remote_vscode_options(self) -> None:
         args = parse_args([

@@ -11,7 +11,8 @@ from typing import Callable, Optional, Tuple
 from .elf_matcher import discover_symbol_files, find_matching_symbol_file
 from .live_analytics import LiveAnalyticsSnapshot, LiveMonitorStore, LiveSeriesPoint, LiveExecutionTransition
 from .live_monitor import (
-    LiveSample, LiveSummary, run_live_monitor, validate_live_request, validate_live_watch_specs,
+    MAX_LIVE_WATCHES, LiveSample, LiveSummary, LiveWatch, run_live_monitor, validate_compiled_watches,
+    validate_live_request, validate_live_watch_specs,
 )
 from .live_service import LiveMonitorService
 from .models import ProbeRef
@@ -30,10 +31,13 @@ class LocalLiveMonitorConfig:
     sample_limit: Optional[int] = None
     watch_specs: Tuple[str, ...] = ()
     tcl_port: int = 6666
+    compiled_watches: Tuple[LiveWatch, ...] = ()
 
     def validate(self) -> None:
         _validate_symbol_file(self.symbols)
-        _validate_monitor_request(self.interval_seconds, self.sample_limit, self.watch_specs)
+        _validate_monitor_request(
+            self.interval_seconds, self.sample_limit, self.watch_specs, self.compiled_watches,
+        )
         if not 1 <= int(self.tcl_port) <= 65535:
             raise ValueError("Live Monitor TCL port must be in range 1..65535.")
 
@@ -52,6 +56,7 @@ class ClientLiveMonitorConfig:
     symbol_roots: Tuple[Path, ...] = ()
     symbol_max_files: int = 128
     show_console: bool = False
+    compiled_watches: Tuple[LiveWatch, ...] = ()
 
     def validate(self) -> None:
         if self.symbols is not None:
@@ -63,7 +68,9 @@ class ClientLiveMonitorConfig:
                 raise ValueError("Live Monitor symbol root does not exist or is not a directory: %s" % root)
         if not 1 <= int(self.symbol_max_files) <= 512:
             raise ValueError("Live Monitor symbol_max_files must be in range 1..512.")
-        _validate_monitor_request(self.interval_seconds, self.sample_limit, self.watch_specs)
+        _validate_monitor_request(
+            self.interval_seconds, self.sample_limit, self.watch_specs, self.compiled_watches,
+        )
         SshLiveTunnelConfig(
             host=self.host, user=self.user, ssh_port=self.ssh_port,
             local_tcl_port=self.preferred_local_tcl_port, gateway_tcl_port=self.gateway_tcl_port,
@@ -89,9 +96,17 @@ def _validate_symbol_file(path: Path) -> Path:
 
 
 def _validate_monitor_request(interval_seconds: float, sample_limit: Optional[int],
-                              watch_specs: Tuple[str, ...]) -> None:
-    validate_live_watch_specs(watch_specs)
-    validate_live_request(interval_seconds, sample_limit, ())
+                              watch_specs: Tuple[str, ...],
+                              compiled_watches: Tuple[LiveWatch, ...] = ()) -> None:
+    manual = validate_live_watch_specs(watch_specs)
+    typed = validate_compiled_watches(compiled_watches)
+    names = tuple(name for name, _value_type in manual) + tuple(watch.name for watch in typed)
+    if len(set(names)) != len(names):
+        duplicate = next(name for name in names if names.count(name) > 1)
+        raise ValueError("Live watch symbol is duplicated: %s" % duplicate)
+    validate_live_request(interval_seconds, sample_limit, typed)
+    if len(manual) + len(typed) > MAX_LIVE_WATCHES:
+        raise ValueError("At most %d live watches are allowed." % MAX_LIVE_WATCHES)
 
 
 class LiveMonitorSession:
@@ -273,6 +288,7 @@ class LiveMonitorSession:
             return run_live_monitor(
                 tcl, symbols, interval_seconds=config.interval_seconds,
                 sample_limit=config.sample_limit, watch_specs=config.watch_specs,
+                compiled_watches=config.compiled_watches,
                 cancelled=self._cancel.is_set, wait=self._cancel.wait, on_sample=accept,
             )
         finally:

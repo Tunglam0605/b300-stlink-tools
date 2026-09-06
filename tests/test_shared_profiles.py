@@ -61,6 +61,8 @@ class _FakeSession:
         self.connected = False; self.disconnect_calls += 1
         if forget_password:
             self.credential_store.clear(self.profile)
+    def ensure_gateway_ready(self, *, timeout_seconds=15.0):
+        return (timeout_seconds, "READY")
 
 
 class GatewaySessionManagerTests(unittest.TestCase):
@@ -76,6 +78,11 @@ class GatewaySessionManagerTests(unittest.TestCase):
         self.assertTrue(manager.connected(profile))
         manager.disconnect_all()
         self.assertFalse(manager.has_cached_password(profile))
+
+    def test_manager_exposes_shared_gateway_ensure(self):
+        manager = GatewaySessionManager(session_factory=_FakeSession)
+        profile = RemoteGatewayProfile("gateway.local", "operator", 22)
+        self.assertEqual(manager.ensure_gateway_ready(profile, timeout_seconds=9.0), (9.0, "READY"))
 
 
 if __name__ == "__main__":

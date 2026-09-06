@@ -88,6 +88,17 @@ class ProbeMemoryMetadataTests(unittest.TestCase):
         self.assertEqual(len(probes), 1)
         self.assertIsNone(probes[0].serial)
 
+    def test_linux_probe_parser_does_not_trim_binary_descriptor_into_a_serial(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            device = Path(directory) / "1-4"
+            device.mkdir()
+            (device / "idVendor").write_bytes(b"0483\n")
+            (device / "idProduct").write_bytes(b"3748\n")
+            (device / "serial").write_bytes(b"\x1cJ\t\n")
+            probe = parse_linux_sysfs(Path(directory))[0]
+        self.assertIsNone(probe.serial)
+        self.assertEqual(probe.status, "unsafe_serial")
+
     def test_linux_serialless_clone_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             device = Path(directory) / "1-3"

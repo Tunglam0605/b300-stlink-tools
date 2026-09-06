@@ -68,6 +68,12 @@ class FakeRemoteSession:
         self.disconnected = False
         self.listener_ready = listener_ready
         self.checked_ports = []
+        self.generation = 1
+
+    @property
+    def state(self):
+        forwards = ("vscode_gdb",) if self.opened and not self.closed else ()
+        return type("State", (), {"forwards": forwards, "generation": self.generation})()
 
     def require_remote_listener(self, *, remote_port, timeout_seconds=3.0):
         self.checked_ports.append(remote_port)
@@ -116,6 +122,7 @@ class V018VsCodeBridgeTests(unittest.TestCase):
         self.assertEqual(config["gdbTarget"], "127.0.0.1:3333")
         self.assertTrue(config["hardwareBreakpoints"]["require"])
         self.assertTrue(config["hardwareWatchpoints"]["require"])
+        self.assertEqual(config["liveWatch"], {"enabled": True, "samplesPerSecond": 4})
         self.assertNotIn("load", json.dumps(config).lower())
 
         with self.assertRaises(ValueError):
@@ -210,7 +217,7 @@ class V018VsCodeBridgeTests(unittest.TestCase):
         self.assertEqual(profile.gdb_target, "127.0.0.1:3333")
         self.assertEqual(profile.executable, "${workspaceFolder}/build/application.elf")
 
-    def test_launch_writer_is_fail_closed_for_existing_configuration(self) -> None:
+    def test_launch_writer_updates_its_existing_managed_configuration(self) -> None:
         profile = VsCodeExternalProfile(
             name="B300 local",
             executable="${workspaceFolder}/build/application.elf",
@@ -220,8 +227,13 @@ class V018VsCodeBridgeTests(unittest.TestCase):
             root = Path(directory)
             output = profile.write_launch_json(root)
             self.assertTrue(output.is_file())
-            with self.assertRaises(FileExistsError):
-                profile.write_launch_json(root)
+            profile.write_launch_json(root)
+            result = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(len(result["configurations"]), 1)
+            self.assertEqual(
+                result["configurations"][0]["b300"]["id"],
+                "b300.stm32f407.attach",
+            )
 
     def test_launch_writer_preserves_jsonc_workspace_and_replaces_only_named_profile(self):
         original = '''\ufeff{
@@ -231,7 +243,8 @@ class V018VsCodeBridgeTests(unittest.TestCase):
           "compounds": [{"name": "All", "configurations": ["Python", "B300 local"],}],
           "configurations": [
             {"name": "Python", "type": "debugpy", "args": ["a", "b",],},
-            /* Managed attach */ {"name": "B300 local", "gdbTarget": "old"},
+            /* Managed attach */ {"name": "B300 local", "gdbTarget": "old",
+              "b300": {"owner": "b300-stlink-tools", "id": "b300.stm32f407.attach"}},
             {"name": "Other board", "type": "cortex-debug"},
           ],
         }'''
@@ -250,6 +263,39 @@ class V018VsCodeBridgeTests(unittest.TestCase):
             self.assertEqual(len(result["configurations"]), 3)
             self.assertEqual(result["configurations"][1]["gdbTarget"], "127.0.0.1:3333")
             self.assertEqual(result["configurations"][1]["request"], "attach")
+
+    def test_launch_writer_does_not_claim_same_name_without_b300_owner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / ".vscode" / "launch.json"
+            output.parent.mkdir()
+            original = '{"configurations":[{"name":"B300 local","type":"custom"}]}'
+            output.write_text(original, encoding="utf-8")
+            profile = VsCodeExternalProfile("B300 local", "app.elf", "127.0.0.1:3333")
+            with self.assertRaises(FileExistsError):
+                profile.write_launch_json(root)
+            self.assertEqual(output.read_text(encoding="utf-8"), original)
+
+    def test_launch_writer_rejects_revision_conflict_without_changing_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / ".vscode" / "launch.json"
+            output.parent.mkdir()
+            output.write_text('{"configurations":[]}', encoding="utf-8")
+            profile = VsCodeExternalProfile("B300 local", "app.elf", "127.0.0.1:3333")
+            revision = profile.launch_revision(root)
+            changed = '{"configurations":[{"name":"user edit"}]}'
+            output.write_text(changed, encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "changed"):
+                profile.write_launch_json(root, expected_revision=revision)
+            self.assertEqual(output.read_text(encoding="utf-8"), changed)
+
+    def test_profile_rejects_temporary_gdb_path(self):
+        temporary_gdb = str(Path(tempfile.gettempdir()) / "pytest-42" / "arm-none-eabi-gdb")
+        with self.assertRaisesRegex(ValueError, "temporary"):
+            VsCodeExternalProfile(
+                "B300 local", "app.elf", "127.0.0.1:3333", gdb_path=temporary_gdb
+            ).configuration()
 
     def test_launch_writer_appends_managed_profile_to_existing_document(self):
         for original in ({"inputs": []}, {"configurations": [{"name": "Other"}]}):

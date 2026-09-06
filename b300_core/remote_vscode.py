@@ -123,7 +123,12 @@ class RemoteVsCodeProfile:
             "gdbInterruptMode": "exec-interrupt",
             "hardwareBreakpoints": {"require": True, "limit": 6},
             "hardwareWatchpoints": {"require": True, "limit": 4},
+            "liveWatch": {"enabled": True, "samplesPerSecond": 4},
             "showDevDebugOutput": "vscode",
+            "b300": {
+                "owner": "b300-stlink-tools",
+                "id": "b300.stm32f407.attach",
+            },
         }
         if self.rtos:
             config["rtos"] = self.rtos
@@ -191,16 +196,24 @@ class RemoteVsCodeProfile:
         gateway = root / "b300-gateway-command.txt"
         guide = root / "B300-REMOTE-DEBUG.md"
         outputs = (launch, extensions, tunnel, gateway, guide)
-        for output in outputs:
+        for output in outputs[1:]:
             self._check_output(output, force)
-        launch_text = json.dumps(self.launch_json(), indent=2, ensure_ascii=False) + "\n"
         extensions_text = json.dumps(self.extensions_json(), indent=2, ensure_ascii=False) + "\n"
         tunnel_text = self.tunnel_command() + "\n"
         gateway_text = self.gateway_command() + "\n"
         guide_text = self.instructions_text()
         launch.parent.mkdir(parents=True, exist_ok=True)
         root.mkdir(parents=True, exist_ok=True)
-        launch.write_text(launch_text, encoding="utf-8")
+        # Reuse the live bridge's ownership-aware atomic merger so exporting a
+        # kit never discards unrelated user configurations in launch.json.
+        from .vscode_bridge import VsCodeExternalProfile
+        VsCodeExternalProfile(
+            name="B300 STM32F407 · Remote via SSH",
+            executable=self.executable,
+            gdb_target="127.0.0.1:%d" % self.local_gdb_port,
+            gdb_path=self.gdb_path,
+            rtos=self.rtos,
+        ).write_launch_json(root, force=force)
         extensions.write_text(extensions_text, encoding="utf-8")
         tunnel.write_text(tunnel_text, encoding="utf-8")
         gateway.write_text(gateway_text, encoding="utf-8")

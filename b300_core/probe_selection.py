@@ -34,6 +34,9 @@ def select_probe(probes: Sequence[ProbeInfo], requested_serial: Optional[str]) \
 
     if len(available) == 1:
         probe = available[0]
+        # A malformed USB serial descriptor is not safe to pass to OpenOCD as
+        # `adapter serial`, but the repository's single-probe policy still
+        # permits selecting that physical attachment without a serial filter.
         return probe, ProbeRef(probe.serial)
 
     if all(probe.serial is None for probe in available):

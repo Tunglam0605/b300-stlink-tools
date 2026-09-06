@@ -14,6 +14,14 @@ Production có năm trang **PROGRAM / MONITOR / DEBUG / DEVICE / SETTINGS**.
 - **GATEWAY**: máy này giữ ST-Link/OpenOCD và phục vụ Client qua SSH; các cổng debug chỉ bind loopback.
 - **CLIENT**: máy này giữ source/AXF/ELF và kết nối Gateway bằng SSH.
 
+Khi chọn project, MONITOR tự đọc DWARF trong AXF/ELF ở worker nền và hiển thị cây
+global/static, struct/union và mảng. Chọn một scalar/member trong cây để thêm nhiều
+Watch Live; kiểu `u8/i8/u16/i16/u32/i32/f32/f64`, enum và bitfield được lấy từ
+DWARF. Luồng production không yêu cầu nhập kiểu hoặc chọn preset JSON. Pointer chỉ
+hiển thị địa chỉ và không tự dereference. Khi mất bằng chứng Gateway, giá trị cuối
+và timestamp vẫn được giữ để đối chiếu nhưng được đánh dấu `STALE`; mẫu đến muộn
+từ phiên cũ bị bỏ qua.
+
 ## Cần chuẩn bị
 
 ST-Link không bị công cụ khác chiếm dụng. Chọn AXF/ELF từ đúng build đang chạy;
@@ -247,6 +255,12 @@ MONITOR dùng phiên SSH đã xác thực với TCL-only forwarding. DEBUG và M
 lifecycle riêng và cùng tuân thủ HardwareSession. Dừng phiên đang dùng probe trước
 khi chuyển vai trò hoặc nạp firmware.
 
+Client không giả định cổng `3333/6666`. Sau khi SSH xác thực, nó gọi CLI per-user
+`gateway-status`; nếu Gateway chưa chạy, nó gọi idempotent `gateway-ensure`. Snapshot
+READY cung cấp GDB/TCL endpoint loopback thực tế để B300 tạo tunnel. Nếu CLI chưa
+cài hoặc quá cũ, GUI yêu cầu cài/cập nhật thay vì ghi cấu hình sai. Action quét lại
+gửi `gateway-rescan` tới đúng tiến trình owner đang sống và không sinh OpenOCD thứ hai.
+
 Các mục Auto, card Interactive Debug và debugger nội bộ của v0.15–v0.17 chỉ còn
 trong compatibility/tests; không dùng chúng làm hướng dẫn GUI production.
 
@@ -285,6 +299,11 @@ bridge cũng khóa Monitor/update cho đến khi dừng. Gateway guard ghi nhậ
 RUN/HALT ban đầu và khôi phục RUNNING khi cần sau disconnect. VS Code quản lý GDB;
 OpenOCD server-side disable GDB flash programming và ép hardware breakpoint.
 Client kiểm tra listener GDB trên Gateway trước khi báo READY.
+Profile Cortex-Debug do B300 quản lý bật Live Watch ở 4 mẫu/giây. Mỗi lần Gateway
+đổi instance, generation hoặc port, B300 đóng channel GDB cũ, nối lại tunnel và ghi
+atomic riêng entry có owner `b300-stlink-tools` trong `.vscode/launch.json`; các
+configuration khác của workspace được giữ nguyên. B300 không tự F5 hoặc tự resume
+sau khi phục hồi, nên người dùng chủ động attach lại trong VS Code.
 
 Integrated CLI one-shot vẫn dùng GDB/MI với result token, timeout và cleanup riêng.
 

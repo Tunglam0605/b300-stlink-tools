@@ -194,6 +194,8 @@ class DebugVsCodeView(QWidget):
     def set_bridge_state(self, role, state, detail='', gdb_target=None):
         self._bridge_active = str(state).upper() == 'READY'
         state_text = {'READY': 'Sẵn sàng', 'FAILED': 'Lỗi', 'STOPPED': 'Đã dừng', 'STARTING': 'Đang khởi chạy'}.get(str(state).upper(), str(state))
+        if self._bridge_active and str(role).upper() == 'CLIENT' and 'attach again' in str(detail).lower():
+            state_text = 'Sẵn sàng attach lại'
         endpoint = (' · ' + str(gdb_target)) if self._bridge_active and gdb_target else ''
         self.bridge_status.setText('Cầu gỡ lỗi · %s%s' % (state_text, endpoint))
         self.bridge_status.setToolTip(' · '.join(item for item in (detail,gdb_target or '') if item))

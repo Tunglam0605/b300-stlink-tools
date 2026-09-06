@@ -86,3 +86,11 @@ class EngineeringDebugTests(unittest.TestCase):
         self.view.set_bridge_state('CLIENT','FAILED','Forward closed')
         self.assertEqual(self.view.bridge_status.property('state'),'failure')
         self.assertNotIn('43819',self.view.bridge_status.text())
+
+    def test_recovered_gateway_shows_attach_again_state(self):
+        self.view.set_bridge_state(
+            'CLIENT', 'READY',
+            'Gateway endpoint synchronized; ready to attach again in VS Code.',
+            '127.0.0.1:43819',
+        )
+        self.assertIn('Sẵn sàng attach lại', self.view.bridge_status.text())

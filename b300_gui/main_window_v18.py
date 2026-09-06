@@ -19,13 +19,14 @@ from b300_core.gateway_sessions import GatewaySessionManager
 from b300_core.models import ProbeInfo, ProbeRef, TargetInfo
 from b300_core.policy import validate_target_for_provisioning, validate_bootloader_write_protection
 from b300_core.project_profiles import ProjectProfileStore
-from b300_core.vscode_bridge import BridgeState
+from b300_core.vscode_bridge import BridgeState, DebugRole
 from b300_core.remote_profile import RemoteGatewayProfile
 from b300_core.remote_session import RemoteSession
 from .main_window import MainWindow
 from .confirm_dialog import ConfirmFlashDialog
 from .operation_state import OperationState
 from .gateway_login_dialog import GatewayLoginDialog
+from .gateway_health_controller import GatewayHealthController
 from .gateway_manager_dialog import GatewayManagerDialog
 from .project_manager_dialog import ProjectManagerDialog
 from .vscode_debug_controller import VsCodeDebugController
@@ -64,6 +65,11 @@ class MainWindowV18(MainWindow):
         self._context_controller = EngineeringContextController(self)
         self.app_context = self._context_controller.context
         self.shared_context_bar = self._context_controller.bar
+        self._gateway_health = GatewayHealthController(self._gateway_sessions, self)
+        self._gateway_health.snapshot_changed.connect(self._on_gateway_snapshot)
+        self._gateway_health.warning_changed.connect(self._on_gateway_warning)
+        self._gateway_health.recovered.connect(self._on_gateway_recovered)
+        self.app_context.changed.connect(self._sync_gateway_health_binding)
         self._configure_v18_navigation()
         self._configure_v18_views()
         self._configure_engineering_shell()
@@ -82,7 +88,9 @@ class MainWindowV18(MainWindow):
         header = self.header_bar
         header.setFixedHeight(84)
         self.header_logo = QLabel()
-        self.header_logo.setPixmap(QPixmap(str(asset_path('b300-industrial-mark.svg'))).scaled(42, 42, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        self.header_logo.setPixmap(QPixmap(str(asset_path('b300-stlink-icon.png'))).scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        self.header_logo.setFixedSize(52, 52)
+        self.header_logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.header_logo.setAccessibleName('B300 ST-Link Tools')
         header.layout().insertWidget(0, self.header_logo)
         header.brand_title.setStyleSheet('')
@@ -580,6 +588,31 @@ class MainWindowV18(MainWindow):
             if revision == self._target_revision and not self._operation_state().is_hardware_busy:
                 continuation()
             self._finish_pending_close()
+        self._start_pending_post_flash_inspection()
+
+    def _start_pending_post_flash_inspection(self) -> None:
+        """Refresh probe and target truth after the flash worker releases SWD."""
+        if not getattr(self, "_post_flash_reinspect", False) or self._threads:
+            return
+        self._post_flash_reinspect = False
+        self.busy = False
+        self.refresh_probes()
+        if not self.app_context.selected_connection.is_local or not self._probes:
+            self.program_view.banner.show_fail(
+                "Đã nạp nhưng mất kết nối ST-Link",
+                "Không còn phát hiện ST-Link sau khi reset MCU.",
+                "Kiểm tra cáp/nguồn rồi bấm Quét lại.",
+            )
+            self._update_controls()
+            return
+
+        def refreshed():
+            self.program_view.banner.show_pass(
+                "Nạp ứng dụng thành công",
+                "Ứng dụng, STLM CONFIRMED và trạng thái MCU sau nạp đã được xác minh.",
+            )
+
+        self._begin_target_inspection(refreshed)
 
     def cancel_operation(self) -> None:
         super().cancel_operation()
@@ -652,6 +685,7 @@ class MainWindowV18(MainWindow):
             QDateTime.currentDateTime().toString("HH:mm:ss · dd/MM/yyyy"))
         # Programming/reset makes inspection a historical snapshot, not current evidence.
         self._invalidate_target()
+        self._post_flash_reinspect = bool(result.succeeded)
         if result.succeeded:
             self.program_view.banner.show_pass("Nạp ứng dụng thành công", "Ứng dụng và STLM CONFIRMED đã được xác minh.")
         else:
@@ -831,6 +865,54 @@ class MainWindowV18(MainWindow):
             projects, project_default = (), None
         self.app_context.set_profiles(projects, gateways, project_default, gateway_default)
         self.shared_context_bar.render()
+        self._sync_gateway_health_binding()
+
+    def _sync_gateway_health_binding(self, *_args) -> None:
+        connection = self.app_context.selected_connection
+        gateway = getattr(connection, "gateway", None)
+        if gateway is None or not self._gateway_sessions.connected(gateway.endpoint):
+            self._gateway_health.bind(None)
+            self.app_context.set_gateway_health(None, "")
+            return
+        self._gateway_health.bind(gateway.endpoint)
+        self._gateway_health.start()
+
+    def _on_gateway_snapshot(self, snapshot) -> None:
+        self.app_context.set_gateway_health(snapshot, self._gateway_health.warning)
+
+    def _on_gateway_warning(self, warning: str) -> None:
+        self.app_context.set_gateway_health(self._gateway_health.snapshot, warning)
+        if warning and not self.app_context.selected_connection.is_local:
+            self.monitor_view.mark_gateway_stale(warning)
+
+    def _on_gateway_recovered(self, snapshot) -> None:
+        """Rebind the existing Client bridge and refresh only B300's launch entry."""
+        self._on_gateway_snapshot(snapshot)
+        state = self._vscode_controller.state
+        if state.state != BridgeState.READY or state.role != DebugRole.CLIENT:
+            return
+        connection = self.app_context.selected_connection
+        project = self.app_context.selected_project
+        gateway = getattr(connection, "gateway", None)
+        if gateway is None or project is None:
+            return
+        try:
+            result = self._vscode_controller.synchronize_client(
+                session=self._gateway_sessions.session(gateway.endpoint),
+                workspace=project.workspace,
+                symbols=project.symbols,
+                gateway_snapshot=snapshot,
+                profile_id=gateway.profile_id,
+                local_gdb_port=0,
+            )
+            self._render_bridge_state()
+            self.append_log(
+                "Gateway đã đổi endpoint; B300 đã cập nhật tunnel và launch.json tại %s."
+                % result.state.gdb_target
+            )
+        except Exception as error:
+            self.app_context.set_gateway_health(snapshot, str(error))
+            self.append_log("Không thể đồng bộ lại Gateway/launch.json: %s" % error)
 
     def _open_gateway_manager(self) -> None:
         if self._operation_state().is_hardware_busy:
@@ -871,6 +953,31 @@ class MainWindowV18(MainWindow):
                 return profile
         return GatewayProfile.create(selected.host, selected.host, selected.user, selected.port)
 
+    def _rescan_selected_gateway(self) -> None:
+        connection = self.app_context.selected_connection
+        gateway = getattr(connection, "gateway", None)
+        if gateway is None:
+            return
+        request = {
+            "host": gateway.endpoint.host,
+            "user": gateway.endpoint.user,
+            "ssh_port": gateway.endpoint.port,
+        }
+        if not self._gateway_sessions.connected(gateway.endpoint):
+            self._show_remote_login(request, launch_after=False)
+        if not self._gateway_sessions.connected(gateway.endpoint):
+            return
+        try:
+            session = self._gateway_sessions.session(gateway.endpoint)
+            snapshot = session.gateway_rescan(timeout_seconds=15.0)
+            self._gateway_health.bind(gateway.endpoint)
+            self._gateway_health.accept_snapshot(snapshot)
+            self._gateway_health.start()
+            self.append_log("Gateway đã quét lại ST-Link và trạng thái MCU đích.")
+        except Exception as error:
+            self.app_context.set_gateway_health(None, str(error))
+            self._show_debug_error("Không thể quét lại Gateway", error)
+
     def _session_matches(self, profile: RemoteGatewayProfile) -> bool:
         return self._gateway_sessions.connected(profile)
 
@@ -900,6 +1007,7 @@ class MainWindowV18(MainWindow):
 
         session = self._get_or_create_remote_session(endpoint)
         if session.connected:
+            self._sync_gateway_health_binding()
             self.debug_vscode_view.set_client_connection_status(True, session.endpoint)
             if launch_after:
                 self._launch_remote_debug(request, session)
@@ -912,6 +1020,7 @@ class MainWindowV18(MainWindow):
                 pass
             else:
                 self._vscode_remote_session = self._gateway_sessions.session(endpoint)
+                self._sync_gateway_health_binding()
                 self.debug_vscode_view.set_client_connection_status(True, self._vscode_remote_session.endpoint)
                 if launch_after:
                     self._launch_remote_debug(request, self._vscode_remote_session)
@@ -943,6 +1052,7 @@ class MainWindowV18(MainWindow):
             dialog.password_input.clear()
 
         self.debug_vscode_view.set_client_connection_status(True, session.endpoint)
+        self._sync_gateway_health_binding()
         self.append_log("Máy khách SSH ĐÃ KẾT NỐI · %s" % session.endpoint)
         self._remote_login_dialog = None
         self._pending_remote_request = None
@@ -960,12 +1070,14 @@ class MainWindowV18(MainWindow):
         workspace = Path(request.get("workspace", ""))
         elf = Path(request.get("elf", ""))
         local_port = int(request.get("local_gdb_port", 0))
+        profile_id = str(request.get("gateway_id", "")).strip()
         force = False
         while True:
             try:
                 result = self._vscode_controller.start_client(
                     session=session, workspace=workspace, symbols=elf,
                     local_gdb_port=local_port, force_launch_json=force,
+                    profile_id=profile_id,
                 )
                 self._render_bridge_state()
                 self.debug_vscode_view.set_client_connection_status(
@@ -1002,6 +1114,10 @@ class MainWindowV18(MainWindow):
         )
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        self._gateway_health.stop()
+        if not self.monitor_view.prepare_symbol_shutdown():
+            event.ignore()
+            return
         if not self.monitor_view.controller.prepare_shutdown():
             event.ignore()
             return

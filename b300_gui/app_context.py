@@ -29,6 +29,8 @@ class AppContext(QObject):
         self.selected_probe: Optional[str] = None
         self.target_info: Optional[TargetInfo] = None
         self.hardware_busy = False
+        self.gateway_snapshot = None
+        self.gateway_warning = ""
         self.project_profiles = ()
         self.connections = (self.selected_connection,)
         self.probes = ()
@@ -50,6 +52,8 @@ class AppContext(QObject):
             self.selected_probe = None
             self.probes = ()
             self.target_info = None
+            self.gateway_snapshot = None
+            self.gateway_warning = ""
         self.project_profiles, self.connections = projects, connections
         self.selected_project, self.selected_connection = project, connection
         self._profiles_loaded = True
@@ -77,6 +81,8 @@ class AppContext(QObject):
             self.selected_probe = None
             self.probes = ()
             self.target_info = None
+            self.gateway_snapshot = None
+            self.gateway_warning = ""
             self.changed.emit()
         return True
 
@@ -108,4 +114,14 @@ class AppContext(QObject):
     def set_hardware_busy(self, busy):
         if bool(busy) != self.hardware_busy:
             self.hardware_busy = bool(busy)
+            self.changed.emit()
+
+    def set_gateway_health(self, snapshot, warning=""):
+        if self.selected_connection.is_local:
+            snapshot = None
+            warning = ""
+        warning = str(warning or "")
+        if snapshot != self.gateway_snapshot or warning != self.gateway_warning:
+            self.gateway_snapshot = snapshot
+            self.gateway_warning = warning
             self.changed.emit()

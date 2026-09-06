@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest import mock
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QApplication, QPushButton
-from b300_core.live_monitor import LiveSample, LiveValue
+from b300_core.live_monitor import LiveSample, LiveValue, LiveWatch
 from b300_core.offline_symbols import SourceLocation
 from b300_core.remote_profile import RemoteGatewayProfile
 from b300_gui.production_live_panel import ProductionLivePanel
@@ -51,7 +51,7 @@ class EngineeringMonitorTests(unittest.TestCase):
         self.assertEqual(panel.table.item(0, 9).text(), "Nhất quán")
         panel.search_filter.setText("missing")
         self.assertTrue(panel.table.isRowHidden(0))
-        self.assertEqual(panel.watch_specs(), ("speed:f32",))
+        self.assertEqual(panel.watch_specs(), ())
         panel.search_filter.setText("SPEED")
         self.assertFalse(panel.table.isRowHidden(0))
         panel.append_live_sample(sample(1, 99, False))
@@ -72,20 +72,17 @@ class EngineeringMonitorTests(unittest.TestCase):
         self.assertEqual(panel.trend.points("speed"), ())
         self.assertEqual(panel.recent_table.rowCount(), 0)
 
-    def test_refresh_presets_and_watch_presets_keep_existing_behavior(self):
+    def test_refresh_presets_and_typed_watch_removal_keep_existing_behavior(self):
         panel = self.panel()
         self.assertEqual([panel.interval_preset_combo.itemData(i) for i in range(6)],
                          [.1, .2, .5, 1., 2., 5.])
         panel.interval_preset_combo.setCurrentIndex(4)
         self.assertEqual(panel.interval.value(), 2.)
-        panel.expressions.setText("speed")
-        panel.type_combo.setCurrentText("f32")
-        panel.add_watch_btn.click()
-        with tempfile.TemporaryDirectory() as directory:
-            path = panel.export_preset(Path(directory) / "watches.json")
-            panel.clear_history()
-            panel.import_preset(path)
-        self.assertEqual(panel.watch_specs(), ("speed:f32",))
+        panel.add_compiled_watch(LiveWatch(
+            "speed", "f32", 0x20000020, 4, node_id="typed:fixture:speed"
+        ))
+        self.assertEqual([watch.name for watch in panel.compiled_watches()], ["speed"])
+        self.assertEqual(panel.watch_specs(), ())
         panel.table.selectRow(0)
         panel.remove_watch_btn.click()
         self.assertEqual(panel.table.rowCount(), 0)

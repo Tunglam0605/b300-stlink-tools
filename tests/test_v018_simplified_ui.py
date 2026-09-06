@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QApplication, QPushButton, QTabWidget, QComboBox, 
 
 from b300_core.gateway_profiles import GatewayProfile, GatewayProfileStore
 from b300_core.gateway_sessions import GatewaySessionManager
+from b300_core.gateway_status import GatewaySnapshot
 from b300_core.models import ImageInfo, ProbeInfo, TargetInfo
 from b300_core.project_profiles import ProjectProfile, ProjectProfileStore
 from b300_gui.widgets.shared_context_bar import SharedContextBar
@@ -142,7 +143,12 @@ class V018SimplifiedUiTests(unittest.TestCase):
         window = self._make_window()
         try:
             profile = RemoteGatewayProfile("gateway.local", "operator", 22)
-            authenticated = SimpleNamespace(profile=profile, connected=True, disconnect=lambda: None)
+            authenticated = SimpleNamespace(
+                profile=profile, connected=True, disconnect=lambda: None,
+                ensure_gateway_ready=lambda: SimpleNamespace(
+                    attach_ready=True, tcl_endpoint="127.0.0.1:6666",
+                ),
+            )
             window._gateway_sessions.connected = lambda selected: selected == profile
             window._gateway_sessions.session = lambda selected: authenticated
             received = []
@@ -356,6 +362,23 @@ class V018SimplifiedUiTests(unittest.TestCase):
         finally:
             self._close(window)
 
+    def test_remote_probe_refresh_asks_selected_gateway_to_rescan(self) -> None:
+        window = self._make_window()
+        try:
+            gateway = GatewayProfile.create(
+                "Test gateway", "gateway.example", "operator", 2222,
+                profile_id="test-gateway",
+            )
+            window.app_context.set_profiles((), (gateway,))
+            window.app_context.select_connection("test-gateway")
+            window._rescan_selected_gateway = mock.Mock()
+
+            window._context_controller.refresh_probes()
+
+            window._rescan_selected_gateway.assert_called_once_with()
+        finally:
+            self._close(window)
+
     def test_debug_remote_request_resolves_shared_connection_and_automatic_tunnel_port(self) -> None:
         window = self._make_window()
         try:
@@ -371,6 +394,85 @@ class V018SimplifiedUiTests(unittest.TestCase):
             self.assertEqual(request["elf"], Path("main.axf"))
             self.assertFalse(window.program_view.btn_flash_app.isEnabled())
         finally:
+            self._close(window)
+
+    def test_remote_launch_passes_selected_gateway_identity_to_endpoint_bound_controller(self) -> None:
+        window = self._make_window()
+        try:
+            controller = mock.Mock()
+            controller.start_client.return_value = SimpleNamespace(
+                state=SimpleNamespace(gdb_target="127.0.0.1:45123"),
+                symbols=Path("main.axf"),
+            )
+            window._vscode_controller = controller
+            window._render_bridge_state = mock.Mock()
+            session = mock.Mock()
+            request = {
+                "workspace": Path("workspace"),
+                "elf": Path("main.axf"),
+                "local_gdb_port": 0,
+                "gateway_id": "test-gateway",
+            }
+
+            window._launch_remote_debug(request, session)
+
+            controller.start_client.assert_called_once_with(
+                session=session,
+                workspace=Path("workspace"),
+                symbols=Path("main.axf"),
+                local_gdb_port=0,
+                force_launch_json=False,
+                profile_id="test-gateway",
+            )
+        finally:
+            self._close(window)
+
+    def test_gateway_endpoint_change_rewrites_managed_launch_without_reopening_vscode(self) -> None:
+        window = self._make_window()
+        original_controller = window._vscode_controller
+        try:
+            gateway = GatewayProfile.create(
+                "Test gateway", "gateway.example", "operator", 2222,
+                profile_id="test-gateway",
+            )
+            project = ProjectProfile(
+                "test-project", "Test project", Path("workspace"), Path("main.axf")
+            )
+            window.app_context.set_profiles((project,), (gateway,))
+            window.app_context.select_connection("test-gateway")
+            controller = mock.Mock()
+            controller.state = VsCodeBridgeState(
+                DebugRole.CLIENT, BridgeState.READY, "127.0.0.1:51000"
+            )
+            controller.synchronize_client.return_value = SimpleNamespace(
+                state=VsCodeBridgeState(
+                    DebugRole.CLIENT, BridgeState.READY, "127.0.0.1:51000"
+                )
+            )
+            window._vscode_controller = controller
+            changed = GatewaySnapshot.from_record({
+                "schema_version": 1,
+                "instance_id": "gw-next",
+                "generation": 2,
+                "sequence": 3,
+                "state": "READY",
+                "reason_code": "TARGET_VERIFIED",
+                "selected_probe": {"serial": "ABC"},
+                "gdb_endpoint": "127.0.0.1:4333",
+                "tcl_endpoint": "127.0.0.1:6666",
+                "cpu_state": "running",
+                "evidence_age_ms": 0,
+            })
+
+            window._on_gateway_recovered(changed)
+
+            controller.synchronize_client.assert_called_once()
+            kwargs = controller.synchronize_client.call_args.kwargs
+            self.assertEqual(kwargs["gateway_snapshot"], changed)
+            self.assertEqual(kwargs["profile_id"], "test-gateway")
+            self.assertEqual(kwargs["local_gdb_port"], 0)
+        finally:
+            window._vscode_controller = original_controller
             self._close(window)
 
     def test_live_monitor_owns_a_production_controller_and_panel(self) -> None:

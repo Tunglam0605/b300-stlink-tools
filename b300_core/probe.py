@@ -71,6 +71,22 @@ def _read_sysfs_text(path: Path) -> str:
     return path.read_bytes().decode("utf-8", errors="replace").strip()
 
 
+def _read_sysfs_serial(path: Path) -> Tuple[Optional[str], str]:
+    """Read a USB serial without turning binary padding into valid text."""
+    raw = path.read_bytes()
+    try:
+        decoded = raw.decode("ascii")
+    except UnicodeDecodeError:
+        return None, "unsafe_serial"
+    # sysfs text attributes conventionally end in CR/LF.  Other leading or
+    # trailing whitespace/control bytes belong to the descriptor and must not
+    # be stripped because doing so can turn binary data into a plausible serial.
+    value = decoded.rstrip("\r\n")
+    if value and _SAFE_OPENOCD_SERIAL.fullmatch(value):
+        return value, "available"
+    return None, "unsafe_serial" if value else "available"
+
+
 def parse_linux_sysfs(root: Path = Path("/sys/bus/usb/devices")) -> Tuple[ProbeInfo, ...]:
     probes = []
     try:
@@ -86,17 +102,18 @@ def parse_linux_sysfs(root: Path = Path("/sys/bus/usb/devices")) -> Tuple[ProbeI
         if vendor != "0483" or not product.startswith("374"):
             continue
         try:
-            serial = _read_sysfs_text(device / "serial")
+            serial, status = _read_sysfs_serial(device / "serial")
         except OSError:
-            serial = ""
+            serial, status = None, "available"
         # Only expose a serial when it is safe for OpenOCD's `adapter serial`
         # command. A clone without one remains discoverable for safe
         # single-probe auto-selection.
         probes.append(ProbeInfo(
-            serial if serial and _SAFE_OPENOCD_SERIAL.fullmatch(serial) else None,
+            serial,
             "ST-Link %s" % product.upper(),
             "linux-sysfs",
             "%s:%s:%s" % (vendor, product, device.name),
+            status,
         ))
     return _unique(probes)
 

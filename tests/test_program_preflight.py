@@ -249,3 +249,41 @@ class ProgramPreflightTests(unittest.TestCase):
             self.assertIsNone(self.window.target_info)
             self.assertIsNone(self.window.device_view._target_info)
         self.window.busy = False
+
+    def test_successful_flash_reinspects_target_after_worker_releases_hardware(self):
+        from types import SimpleNamespace
+
+        result = SimpleNamespace(
+            succeeded=True,
+            status="succeeded",
+            boot_verification=None,
+            confirmed_metadata=SimpleNamespace(sequence=16),
+            reason="",
+            next_action="",
+        )
+        with mock.patch("b300_gui.main_window.MainWindow._flash_finished"):
+            self.window._flash_finished(result)
+        self.assertIsNone(self.window.target_info)
+
+        with mock.patch.object(self.window, "_begin_target_inspection") as inspect:
+            self.window._start_pending_post_flash_inspection()
+
+        inspect.assert_called_once()
+
+    def test_failed_flash_does_not_start_automatic_reinspection(self):
+        from types import SimpleNamespace
+
+        result = SimpleNamespace(
+            succeeded=False,
+            status="flash_failed",
+            boot_verification=None,
+            confirmed_metadata=None,
+            reason="USB disconnected",
+            next_action="Reconnect ST-Link",
+        )
+        with mock.patch("b300_gui.main_window.MainWindow._flash_finished"):
+            self.window._flash_finished(result)
+        with mock.patch.object(self.window, "_begin_target_inspection") as inspect:
+            self.window._start_pending_post_flash_inspection()
+
+        inspect.assert_not_called()

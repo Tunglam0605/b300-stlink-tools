@@ -36,6 +36,10 @@ class LiveWatch:
     value_type: str
     address: int
     size: int
+    bit_offset: Optional[int] = None
+    bit_size: Optional[int] = None
+    enum_values: Tuple[Tuple[int, str], ...] = ()
+    node_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +51,8 @@ class LiveValue:
     raw_hex: str
     coherent: bool = True
     verification_raw_hex: Optional[str] = None
+    enum_label: Optional[str] = None
+    node_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +84,8 @@ class LiveSample:
                     "value": item.value, "raw_hex": item.raw_hex,
                     "coherent": item.coherent,
                     "verification_raw_hex": item.verification_raw_hex,
+                    "enum_label": item.enum_label,
+                    "node_id": item.node_id,
                 }
                 for item in self.values
             ],
@@ -149,6 +157,46 @@ def validate_live_request(interval_seconds: float, samples: Optional[int], watch
         raise ValueError("At most %d live watches are allowed." % MAX_LIVE_WATCHES)
 
 
+def validate_compiled_watches(watches: Iterable[LiveWatch]) -> Tuple[LiveWatch, ...]:
+    """Validate address-based watches produced from DWARF before opening hardware."""
+    selected = tuple(watches)
+    names = set()
+    node_ids = set()
+    for watch in selected:
+        if not isinstance(watch, LiveWatch):
+            raise ValueError("Compiled Live Watch entries must be LiveWatch values.")
+        if not watch.name or watch.name in names:
+            raise ValueError("Live watch symbol is duplicated: %s" % watch.name)
+        names.add(watch.name)
+        if watch.node_id:
+            if watch.node_id in node_ids:
+                raise ValueError("Typed Live Watch node is duplicated: %s" % watch.node_id)
+            node_ids.add(watch.node_id)
+        expected = _TYPE_FORMATS.get(watch.value_type)
+        if expected is None:
+            raise ValueError("Unsupported live watch type %s; use %s." %
+                             (watch.value_type, ",".join(sorted(_TYPE_FORMATS))))
+        if int(watch.size) != expected[0]:
+            raise ValueError("Compiled Live Watch size does not match type for %s." % watch.name)
+        end = int(watch.address) + int(watch.size)
+        if not any(start <= int(watch.address) and end <= limit for start, limit in F407_RAM_RANGES):
+            raise ValueError("Live watch symbol is not fully inside STM32F407 CCM/SRAM: %s" % watch.name)
+        if watch.bit_size is not None:
+            offset = int(watch.bit_offset or 0)
+            size = int(watch.bit_size)
+            if size <= 0 or offset < 0 or offset + size > watch.size * 8:
+                raise ValueError("Invalid DWARF bitfield span for %s." % watch.name)
+    validate_live_request(MIN_LIVE_INTERVAL_SECONDS, None, selected)
+    addresses = _word_addresses(selected)
+    coherence_addresses = _coherence_addresses(selected)
+    if len(addresses) + len(coherence_addresses) > MAX_LIVE_READ_WORDS:
+        raise ValueError(
+            "Live monitor needs %d SWD word reads including 64-bit coherence checks; max is %d." %
+            (len(addresses) + len(coherence_addresses), MAX_LIVE_READ_WORDS)
+        )
+    return selected
+
+
 def _word_addresses(watches: Sequence[LiveWatch]) -> Tuple[int, ...]:
     addresses = [DWT_PCSR_ADDRESS]
     for watch in watches:
@@ -161,6 +209,20 @@ def _word_addresses(watches: Sequence[LiveWatch]) -> Tuple[int, ...]:
             address += 4
     if len(addresses) > MAX_LIVE_READ_WORDS:
         raise ValueError("Live monitor needs more than %d SWD words in one cycle." % MAX_LIVE_READ_WORDS)
+    return tuple(addresses)
+
+
+def _coherence_addresses(watches: Sequence[LiveWatch]) -> Tuple[int, ...]:
+    addresses = []
+    for watch in watches:
+        if watch.size <= 4:
+            continue
+        address = watch.address & ~3
+        last = (watch.address + watch.size - 1) & ~3
+        while address <= last:
+            if address not in addresses:
+                addresses.append(address)
+            address += 4
     return tuple(addresses)
 
 
@@ -186,10 +248,23 @@ def _decode_watch(watch: LiveWatch, words_by_address: dict,
         coherent = selected == verification
     _size, fmt = _TYPE_FORMATS[watch.value_type]
     value = struct.unpack(fmt, selected)[0] if coherent else None
+    if coherent and watch.bit_size is not None:
+        bit_offset = int(watch.bit_offset or 0)
+        bit_size = int(watch.bit_size)
+        if bit_size <= 0 or bit_offset < 0 or bit_offset + bit_size > watch.size * 8:
+            raise ValueError("Invalid DWARF bitfield span for %s." % watch.name)
+        value = (int(value) >> bit_offset) & ((1 << bit_size) - 1)
+        if watch.value_type.startswith("i") and value & (1 << (bit_size - 1)):
+            value -= 1 << bit_size
+    enum_label = None
+    if coherent and watch.enum_values:
+        enum_label = dict(watch.enum_values).get(int(value))
     return LiveValue(
         watch.name, watch.value_type, watch.address, value, selected.hex().upper(),
         coherent=coherent,
         verification_raw_hex=verification.hex().upper() if verification is not None else None,
+        enum_label=enum_label,
+        node_id=watch.node_id,
     )
 
 
@@ -199,6 +274,7 @@ def run_live_monitor(
     *, interval_seconds: float = 0.5,
     sample_limit: Optional[int] = None,
     watch_specs: Iterable[str] = (),
+    compiled_watches: Iterable[LiveWatch] = (),
     cancelled: Callable[[], bool] = lambda: False,
     wait: Callable[[float], bool] = lambda seconds: (time.sleep(seconds) or False),
     clock: Callable[[], float] = time.monotonic,
@@ -206,30 +282,27 @@ def run_live_monitor(
     state_check_every: int = 10,
 ) -> LiveSummary:
     normalized_specs = validate_live_watch_specs(watch_specs)
-    watches = tuple(
+    manual_watches = tuple(
         parse_live_watch("%s:%s" % (name, value_type), symbols)
         for name, value_type in normalized_specs
     )
+    typed_watches = validate_compiled_watches(compiled_watches)
+    watches = manual_watches + typed_watches
+    names = [watch.name for watch in watches]
+    if len(set(names)) != len(names):
+        duplicate = next(name for name in names if names.count(name) > 1)
+        raise ValueError("Live watch symbol is duplicated: %s" % duplicate)
     validate_live_request(interval_seconds, sample_limit, watches)
-    if tcl.wait_target_state() != "running":
-        raise RuntimeError("Realtime Live Monitor requires a RUNNING target and will not resume it automatically.")
     addresses = _word_addresses(watches)
-    coherence_addresses = []
-    for watch in watches:
-        if watch.size <= 4:
-            continue
-        address = watch.address & ~3
-        last = (watch.address + watch.size - 1) & ~3
-        while address <= last:
-            if address not in coherence_addresses:
-                coherence_addresses.append(address)
-            address += 4
-    request_addresses = addresses + tuple(coherence_addresses)
+    coherence_addresses = _coherence_addresses(watches)
+    request_addresses = addresses + coherence_addresses
     if len(request_addresses) > MAX_LIVE_READ_WORDS:
         raise ValueError(
             "Live monitor needs %d SWD word reads including 64-bit coherence checks; max is %d." %
             (len(request_addresses), MAX_LIVE_READ_WORDS)
         )
+    if tcl.wait_target_state() != "running":
+        raise RuntimeError("Realtime Live Monitor requires a RUNNING target and will not resume it automatically.")
     start = clock()
     cycle = 0
     overruns = 0
@@ -391,4 +464,3 @@ def load_watch_preset(path: Union[str, Path]) -> dict:
         "plot_flags": {n: plot_flags.get(n, True) for n, _ in validated},
         "watches": watches_list,
     }
-

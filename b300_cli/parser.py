@@ -88,7 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     debug.add_argument(
         "debug_mode", nargs="?",
-        choices=("gateway", "client", "server", "vscode", "symbols", "selftest", "inspect", "where", "registers", "stack", "variable", "sample", "live", "poll", "read-words", "break", "watch"),
+        choices=("gateway", "gateway-status", "gateway-ensure", "gateway-rescan", "client", "server", "vscode", "symbols", "selftest", "inspect", "where", "registers", "stack", "variable", "sample", "live", "poll", "read-words", "break", "watch"),
         default="gateway", metavar="mode",
         help="Debug mode: gateway, client, selftest, server (legacy alias), or diagnostics.",
     )
@@ -183,6 +183,7 @@ def build_parser() -> argparse.ArgumentParser:
     debug.add_argument("--count", type=parse_integer, default=1,
                        help="Word count for debug read-words (default: 1, max: 256).")
     debug.add_argument("--dry-run", action="store_true")
+    debug.add_argument("--managed-child", action="store_true", help=argparse.SUPPRESS)
 
     gateway = commands.add_parser(
         "gateway", help="Inspect remote Debug Gateway host readiness.", parents=[json_parent],

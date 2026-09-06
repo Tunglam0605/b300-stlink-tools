@@ -22,8 +22,7 @@ class EngineeringContextController:
         if self.context.selected_connection.is_local:
             self.window.refresh_probes()
         else:
-            self.window.append_log('Remote probe discovery chưa được tích hợp trong UI này; dùng DEBUG VS CODE để kiểm tra SSH.')
-            self.bar.render()
+            self.window._rescan_selected_gateway()
 
     def local_probe_changed(self, *_):
         if self.context.selected_connection.is_local:

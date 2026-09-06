@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -76,6 +76,7 @@ class LiveMonitorController(QObject):
         self._active = False
         self._live_session = None
         self._worker = None
+        self._invalidated_reason = ""
 
     @property
     def active(self) -> bool:
@@ -89,11 +90,17 @@ class LiveMonitorController(QObject):
         if request.role not in {"LOCAL", "CLIENT"}:
             raise ValueError("Live Monitor request role must be LOCAL or CLIENT.")
 
+        self._invalidated_reason = ""
         watch_specs = self.panel.watch_specs()
+        compiled_watches = (
+            tuple(self.panel.compiled_watches())
+            if hasattr(self.panel, "compiled_watches") else ()
+        )
         common = {
             "interval_seconds": float(self.panel.interval.value()),
             "sample_limit": self.panel.sample_limit(),
             "watch_specs": tuple(watch_specs),
+            "compiled_watches": compiled_watches,
         }
         if request.role == "LOCAL":
             if self._selected_probe is None:
@@ -126,12 +133,29 @@ class LiveMonitorController(QObject):
 
         def execute(log, phase, cancel_event):
             try:
+                selected_config = config
+                if request.role == "CLIENT" and remote_session is not None:
+                    ensure_ready = getattr(remote_session, "ensure_gateway_ready", None)
+                    if not callable(ensure_ready):
+                        raise RuntimeError(
+                            "Remote SSH session cannot verify or start the Gateway."
+                        )
+                    snapshot = ensure_ready()
+                    endpoint = getattr(snapshot, "tcl_endpoint", None)
+                    if not getattr(snapshot, "attach_ready", False) or not endpoint:
+                        raise RuntimeError("Gateway did not provide a READY TCL endpoint.")
+                    _host, separator, port_text = str(endpoint).rpartition(":")
+                    if not separator:
+                        raise RuntimeError("Gateway returned an invalid TCL endpoint.")
+                    selected_config = replace(
+                        config, gateway_tcl_port=int(port_text),
+                    )
                 if request.role == "LOCAL":
-                    info = live.start_local(config)
+                    info = live.start_local(selected_config)
                 elif remote_session is not None:
-                    info = live.start_client(config, remote_session=remote_session)
+                    info = live.start_client(selected_config, remote_session=remote_session)
                 else:
-                    info = live.start_client(config)
+                    info = live.start_client(selected_config)
                 log(
                     "LIVE MONITOR CONNECTED: role=%s transport=%s target=%s" %
                     (info.role, info.transport, info.initial_target_state.upper())
@@ -162,6 +186,8 @@ class LiveMonitorController(QObject):
             raise
 
     def _sample_received(self, sample) -> None:
+        if self._invalidated_reason:
+            return
         if not isinstance(sample, LiveSample) and not hasattr(sample, "cycle"):
             return
         self.panel.append_live_sample(sample)
@@ -174,6 +200,10 @@ class LiveMonitorController(QObject):
 
     def _completed(self, result) -> None:
         summary, analytics, info = result
+        if self._invalidated_reason:
+            self.log.emit("Live Monitor invalidated: %s" % self._invalidated_reason)
+            self._finish_operation(history_enabled=True)
+            return
         try:
             self.panel.apply_analytics(analytics)
         except (AttributeError, RuntimeError, TypeError, ValueError) as error:
@@ -187,6 +217,10 @@ class LiveMonitorController(QObject):
 
     def _failed(self, failure) -> None:
         message = getattr(failure, "message", str(failure))
+        if self._invalidated_reason:
+            self.log.emit("Live Monitor invalidated: %s" % self._invalidated_reason)
+            self._finish_operation(history_enabled=True)
+            return
         self.panel.mark_failed(message)
         self.log.emit("Live Monitor failed: %s" % message)
         self._finish_operation(history_enabled=False)
@@ -219,6 +253,19 @@ class LiveMonitorController(QObject):
             self._live_session.cancel()
         if self._worker is not None:
             self._worker.cancel()
+
+    def invalidate(self, reason: str) -> None:
+        """Fail closed on lost Gateway evidence and reject late worker samples."""
+        selected = str(reason or "Gateway không còn cung cấp bằng chứng mới.").strip()
+        self._invalidated_reason = selected
+        marker = getattr(self.panel, "mark_stale", None)
+        if callable(marker):
+            marker(selected)
+        if self._active:
+            if self._live_session is not None:
+                self._live_session.cancel()
+            if self._worker is not None:
+                self._worker.cancel()
 
     def clear(self) -> None:
         if self._active:

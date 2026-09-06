@@ -7,6 +7,7 @@ plus Cortex-Debug owns the interactive debugger UX and GDB data plane.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -48,6 +49,60 @@ class VsCodeBridgeState:
     tunnel_name: Optional[str] = None
     initial_target_state: Optional[str] = None
     detail: str = ""
+    binding: Optional["GatewayEndpointBinding"] = None
+
+
+@dataclass(frozen=True)
+class GatewayEndpointBinding:
+    """Identity of the Gateway generation owned by one local GDB listener."""
+
+    profile_id: str
+    instance_id: str
+    generation: int
+    remote_endpoint: str
+    local_endpoint: str
+    session_generation: int = 0
+
+
+_REVISION_UNSET = object()
+_B300_OWNER = "b300-stlink-tools"
+_B300_CONFIGURATION_ID = "b300.stm32f407.attach"
+
+
+def _launch_revision(output: Path) -> Optional[str]:
+    if not output.exists():
+        return None
+    return hashlib.sha256(output.read_bytes()).hexdigest()
+
+
+def _is_temporary_gdb_path(value: str) -> bool:
+    selected = Path(value).expanduser()
+    if not selected.is_absolute():
+        return False
+    try:
+        path = os.path.normcase(str(selected.resolve(strict=False)))
+        temporary = os.path.normcase(str(Path(tempfile.gettempdir()).resolve(strict=False)))
+        return os.path.commonpath((path, temporary)) == temporary
+    except (OSError, ValueError):
+        return False
+
+
+def _snapshot_endpoint(snapshot) -> tuple[str, int]:
+    state = getattr(snapshot, "state", None)
+    state_text = str(getattr(state, "value", state) or "").upper()
+    if state_text != "READY":
+        raise RuntimeError("Gateway snapshot must be READY before opening a VS Code tunnel.")
+    instance_id = str(getattr(snapshot, "instance_id", "") or "").strip()
+    generation = getattr(snapshot, "generation", None)
+    endpoint = getattr(snapshot, "gdb_endpoint", None)
+    if not instance_id or not isinstance(generation, int) or generation < 0:
+        raise RuntimeError("Gateway READY snapshot has invalid instance/generation identity.")
+    if not isinstance(endpoint, str) or not re.fullmatch(r"127\.0\.0\.1:[0-9]{1,5}", endpoint):
+        raise RuntimeError("Gateway READY snapshot has no valid loopback GDB endpoint.")
+    port = int(endpoint.rsplit(":", 1)[1])
+    if not 1 <= port <= 65535:
+        raise RuntimeError("Gateway READY snapshot GDB port is out of range.")
+    return endpoint, port
 
 
 def _read_launch_document(output: Path) -> Dict[str, object]:
@@ -108,6 +163,7 @@ class VsCodeExternalProfile:
     gdb_path: str = "arm-none-eabi-gdb"
     device: str = "STM32F407ZE"
     rtos: Optional[str] = "FreeRTOS"
+    binding: Optional[GatewayEndpointBinding] = None
 
     def validate(self) -> None:
         if not self.name.strip():
@@ -121,6 +177,17 @@ class VsCodeExternalProfile:
             raise ValueError("VS Code GDB target port must be in range 1..65535.")
         if not self.gdb_path.strip() or "\x00" in self.gdb_path:
             raise ValueError("VS Code GDB path must not be empty.")
+        if _is_temporary_gdb_path(self.gdb_path):
+            raise ValueError("VS Code GDB path must not point into a temporary directory.")
+        if self.binding is not None:
+            if (
+                not self.binding.profile_id.strip()
+                or not self.binding.instance_id.strip()
+                or self.binding.generation < 0
+                or self.binding.local_endpoint != self.gdb_target
+                or not re.fullmatch(r"127\.0\.0\.1:[0-9]{1,5}", self.binding.remote_endpoint)
+            ):
+                raise ValueError("VS Code Gateway binding does not match the live endpoint.")
 
     def configuration(self) -> Dict[str, object]:
         self.validate()
@@ -140,15 +207,35 @@ class VsCodeExternalProfile:
             # so Cortex-Debug never tries to patch flash with software breakpoints.
             "hardwareBreakpoints": {"require": True, "limit": 6},
             "hardwareWatchpoints": {"require": True, "limit": 4},
+            "liveWatch": {"enabled": True, "samplesPerSecond": 4},
         }
         if self.rtos:
             config["rtos"] = self.rtos
+        ownership: Dict[str, object] = {
+            "owner": _B300_OWNER,
+            "id": _B300_CONFIGURATION_ID,
+        }
+        if self.binding is not None:
+            ownership["binding"] = {
+                "profileId": self.binding.profile_id,
+                "instanceId": self.binding.instance_id,
+                "generation": self.binding.generation,
+                "remoteEndpoint": self.binding.remote_endpoint,
+                "localEndpoint": self.binding.local_endpoint,
+            }
+        config["b300"] = ownership
         return config
 
     def launch_json(self) -> Dict[str, object]:
         return {"version": "0.2.0", "configurations": [self.configuration()]}
 
-    def write_launch_json(self, workspace: Path, *, force: bool = False) -> Path:
+    @staticmethod
+    def launch_revision(workspace: Path) -> Optional[str]:
+        root = Path(workspace).expanduser().resolve()
+        return _launch_revision(root / ".vscode" / "launch.json")
+
+    def write_launch_json(self, workspace: Path, *, force: bool = False,
+                          expected_revision=_REVISION_UNSET) -> Path:
         """Create a profile; force permits merging only this named configuration.
 
         Existing JSONC values are preserved semantically; comments/formatting
@@ -158,18 +245,32 @@ class VsCodeExternalProfile:
         if not root.is_dir():
             raise ValueError("VS Code workspace directory does not exist.")
         output = root / ".vscode" / "launch.json"
-        if output.exists() and not force:
-            raise FileExistsError(
-                "Refusing to overwrite existing VS Code launch.json: %s" % output
-            )
+        initial_revision = _launch_revision(output)
+        if expected_revision is not _REVISION_UNSET and initial_revision != expected_revision:
+            raise RuntimeError("VS Code launch.json changed while B300 prepared the debug listener.")
         configuration = self.configuration()
         document = _read_launch_document(output) if output.exists() else {"version": "0.2.0"}
         configurations = document.setdefault("configurations", [])
-        matches = [index for index, item in enumerate(configurations) if item.get("name") == self.name]
-        if len(matches) > 1:
+        owned = [
+            index for index, item in enumerate(configurations)
+            if isinstance(item.get("b300"), dict)
+            and item["b300"].get("owner") == _B300_OWNER
+            and item["b300"].get("id") == _B300_CONFIGURATION_ID
+        ]
+        if len(owned) > 1:
+            raise ValueError("Multiple VS Code configurations claim the B300 managed identity.")
+        named = [index for index, item in enumerate(configurations) if item.get("name") == self.name]
+        if len(named) > 1:
             raise ValueError("Multiple VS Code configurations have the managed profile name: %s" % self.name)
-        if matches:
-            configurations[matches[0]] = configuration
+        if owned:
+            configurations[owned[0]] = configuration
+        elif named:
+            if not force:
+                raise FileExistsError(
+                    "A VS Code configuration named '%s' is not owned by B300; confirmation is required." %
+                    self.name
+                )
+            configurations[named[0]] = configuration
         else:
             configurations.append(configuration)
         payload = json.dumps(document, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
@@ -184,6 +285,8 @@ class VsCodeExternalProfile:
                 stream.write(payload)
                 stream.flush()
                 os.fsync(stream.fileno())
+            if _launch_revision(output) != initial_revision:
+                raise RuntimeError("VS Code launch.json changed before B300 could replace it.")
             os.replace(staged, output)
         finally:
             if staged is not None:
@@ -301,6 +404,7 @@ class VsCodeDebugBridge:
         self._remote_forward: Optional[RemoteForward] = None
         self._server_config: Optional[DebugConfig] = None
         self._guard: Optional[RemoteDebugGuard] = None
+        self._binding: Optional[GatewayEndpointBinding] = None
         self._last_detail = ""
 
     @property
@@ -327,16 +431,32 @@ class VsCodeDebugBridge:
                 openocd_state=openocd.value,
                 initial_target_state=initial,
                 detail=self._last_detail,
+                binding=self._binding,
             )
 
         if self._role == DebugRole.CLIENT:
             session = self._remote_session
             forward = self._remote_forward
-            if session is None or not session.connected or forward is None:
+            forward_alive = False
+            if session is not None and session.connected and forward is not None:
+                try:
+                    session_state = session.state
+                    same_generation = (
+                        self._binding is None
+                        or int(getattr(session_state, "generation", 0)) == self._binding.session_generation
+                    )
+                    forward_alive = (
+                        same_generation
+                        and self.CLIENT_FORWARD_NAME in tuple(getattr(session_state, "forwards", ()))
+                    )
+                except Exception:
+                    forward_alive = False
+            if not forward_alive:
                 return VsCodeBridgeState(
                     role=self._role, state=BridgeState.FAILED, gdb_target=None,
                     tunnel_name=self.CLIENT_FORWARD_NAME,
                     detail="Remote SSH/GDB forward is not active.",
+                    binding=self._binding,
                 )
             return VsCodeBridgeState(
                 role=self._role,
@@ -344,6 +464,7 @@ class VsCodeDebugBridge:
                 gdb_target="127.0.0.1:%d" % forward.local_port,
                 tunnel_name=self.CLIENT_FORWARD_NAME,
                 detail=self._last_detail,
+                binding=self._binding,
             )
 
         return VsCodeBridgeState(None, BridgeState.STOPPED, None, detail=self._last_detail)
@@ -429,8 +550,12 @@ class VsCodeDebugBridge:
         return self.state
 
     def start_client(self, session: RemoteSession, *, remote_gdb_port: int = 3333,
-                     local_gdb_port: int = 0) -> VsCodeBridgeState:
+                     local_gdb_port: int = 0, snapshot=None,
+                     profile_id: Optional[str] = None) -> VsCodeBridgeState:
         self._require_stopped()
+        remote_endpoint = "127.0.0.1:%d" % int(remote_gdb_port)
+        if snapshot is not None:
+            remote_endpoint, remote_gdb_port = _snapshot_endpoint(snapshot)
         if not session.connected:
             raise RuntimeError("Remote B300 SSH session must be connected before Debug Client starts.")
         try:
@@ -451,7 +576,66 @@ class VsCodeDebugBridge:
         self._role = DebugRole.CLIENT
         self._remote_session = session
         self._remote_forward = forward
+        if snapshot is not None:
+            selected_profile = str(profile_id or "").strip()
+            if not selected_profile:
+                session.close_forward(self.CLIENT_FORWARD_NAME)
+                self._role = None
+                self._remote_session = None
+                self._remote_forward = None
+                raise ValueError("Gateway profile_id is required for snapshot-bound VS Code tunnels.")
+            session_generation = int(getattr(session.state, "generation", 0))
+            self._binding = GatewayEndpointBinding(
+                profile_id=selected_profile,
+                instance_id=str(snapshot.instance_id),
+                generation=int(snapshot.generation),
+                remote_endpoint=remote_endpoint,
+                local_endpoint="127.0.0.1:%d" % forward.local_port,
+                session_generation=session_generation,
+            )
         self._last_detail = "VS Code GDB is forwarded through the authenticated SSH session."
+        return self.state
+
+    def sync_client(self, session: RemoteSession, *, snapshot, profile_id: str,
+                    local_gdb_port: int = 0) -> VsCodeBridgeState:
+        """Replace a stale Gateway binding without reusing an existing GDB channel."""
+        remote_endpoint, remote_port = _snapshot_endpoint(snapshot)
+        selected_profile = str(profile_id or "").strip()
+        if not selected_profile:
+            raise ValueError("Gateway profile_id is required for endpoint synchronization.")
+        current = self._binding
+        desired_identity = (
+            selected_profile, str(snapshot.instance_id), int(snapshot.generation), remote_endpoint,
+        )
+        if current is not None and (
+            current.profile_id, current.instance_id, current.generation, current.remote_endpoint,
+        ) == desired_identity and self.state.state == BridgeState.READY:
+            return self.state
+
+        preferred = int(local_gdb_port)
+        if current is not None and preferred == 0:
+            preferred = int(current.local_endpoint.rsplit(":", 1)[1])
+        if self._role is not None and self._role != DebugRole.CLIENT:
+            raise RuntimeError("Cannot synchronize a Gateway endpoint while a local bridge is active.")
+        if self._remote_session is not None:
+            self._remote_session.close_forward(self.CLIENT_FORWARD_NAME)
+        self._role = None
+        self._remote_session = None
+        self._remote_forward = None
+        self._binding = None
+        try:
+            self.start_client(
+                session, remote_gdb_port=remote_port, local_gdb_port=preferred,
+                snapshot=snapshot, profile_id=selected_profile,
+            )
+        except RemoteForwardError:
+            if not preferred:
+                raise
+            self.start_client(
+                session, remote_gdb_port=remote_port, local_gdb_port=0,
+                snapshot=snapshot, profile_id=selected_profile,
+            )
+        self._last_detail = "Gateway endpoint synchronized; ready to attach again in VS Code."
         return self.state
 
     def stop(self) -> VsCodeBridgeState:
@@ -479,6 +663,7 @@ class VsCodeDebugBridge:
             self._remote_forward = None
             self._server_config = None
             self._guard = None
+            self._binding = None
             self._last_detail = cleanup_detail
         return self.state
 
@@ -504,12 +689,14 @@ class VsCodeDebugBridge:
             executable=workspace_executable(program_relative),
             gdb_target=current.gdb_target,
             gdb_path=gdb_path,
+            binding=self._binding,
         )
 
 
 __all__ = [
     "BridgeState",
     "DebugRole",
+    "GatewayEndpointBinding",
     "VsCodeBridgeState",
     "VsCodeDebugBridge",
     "VsCodeExternalProfile",

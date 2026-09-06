@@ -10,7 +10,9 @@ import os
 import signal
 import sys
 import tempfile
+import threading
 import time
+import uuid
 from pathlib import Path
 from typing import List, Optional
 
@@ -33,6 +35,11 @@ from b300_cli.output_paths import validated_output_path
 from b300_cli.live_commands import run_live_client, run_live_local, validate_live_options
 from b300_core.diagnostics import DiagnosticsService
 from b300_core.gateway_readiness import inspect_gateway_readiness
+from b300_core.gateway_protocol import gateway_capabilities
+from b300_core.gateway_supervisor import (
+    GatewayProcessManager, GatewayStatusStore, GatewaySupervisor,
+)
+from b300_core.gateway_status import GatewaySnapshot
 from b300_core.gateway_setup import (
     build_gateway_prepare_plan, client_connection_text, inspect_gateway_host,
     prepare_gateway_host,
@@ -78,6 +85,7 @@ from b300_core.policy import (
 from b300_core.service import B300Service, ProvisioningError
 from b300_core.probe import list_probes
 from b300_core.probe_selection import ProbeSelectionError, select_probe
+from b300_core.probe_presence import ProbePresenceTracker
 from b300_core.support_bundle import collect_support_snapshot, write_support_bundle
 from b300_version import __version__
 
@@ -686,10 +694,32 @@ def run_debug(args: argparse.Namespace, reporter: Reporter) -> int:
         command = openocd_command(args)
         reporter.emit("openocd", command=command, dry_run=True)
         return 0
-    selected_probe = _select_read_probe(args, "debug %s" % args.debug_mode)
-    if selected_probe is None:
-        return 1
-    probe = selected_probe
+    if getattr(args, "managed_child", False):
+        return _run_managed_gateway_child(args, reporter)
+    runtime = None
+    presence = None
+    if getattr(args, "managed_child", False):
+        try:
+            selected_info, probe = select_probe(tuple(list_probes()), args.probe_serial)
+        except ProbeSelectionError as error:
+            runtime = _GatewayRuntimePublisher(
+                GatewayStatusStore(), None,
+                gdb_port=args.gdb_port, tcl_port=args.tcl_port or 6666,
+            )
+            state = "WAITING_PROBE" if error.code == "NO_PROBE" else "WAITING_SELECTION"
+            runtime.publish(state, error.code)
+            return _read_only_error(args, "debug %s" % args.debug_mode, error.code, error.message)
+        runtime = _GatewayRuntimePublisher(
+            GatewayStatusStore(), selected_info,
+            gdb_port=args.gdb_port, tcl_port=args.tcl_port or 6666,
+        )
+        presence = ProbePresenceTracker(selected_info)
+        presence.observe(tuple(list_probes()))
+    else:
+        selected_probe = _select_read_probe(args, "debug %s" % args.debug_mode)
+        if selected_probe is None:
+            return 1
+        probe = selected_probe
     config = DebugConfig(
         probe, args.bind_address, args.gdb_port,
         args.telnet_port, args.tcl_port,
@@ -710,6 +740,11 @@ def run_debug(args: argparse.Namespace, reporter: Reporter) -> int:
 
     def openocd_event(line: str) -> None:
         reporter.emit("openocd_output", line=line)
+        if runtime is not None and runtime.last_state == "READY":
+            lowered = str(line).lower()
+            if any(marker in lowered for marker in (
+                    "libusb", "target not examined", "swd fault", "error:")):
+                runtime.publish("DISCONNECTED", "OPENOCD_HARDWARE_ERROR")
         if guard is not None:
             try:
                 guard.handle_openocd_line(line)
@@ -724,6 +759,8 @@ def run_debug(args: argparse.Namespace, reporter: Reporter) -> int:
         # default action exits immediately and would bypass the guard/service
         # cleanup below, leaving the OpenOCD child process behind.
         previous_sigterm_handler = signal.signal(signal.SIGTERM, request_graceful_shutdown)
+        if runtime is not None:
+            runtime.publish("STARTING", "START_REQUESTED")
         service.start(config, event_sink=openocd_event)
         if args.tcl_port is not None and ipaddress.ip_address(args.bind_address).is_loopback:
             tcl = SafeTclClient(TclEndpoint(args.bind_address, args.tcl_port))
@@ -737,14 +774,49 @@ def run_debug(args: argparse.Namespace, reporter: Reporter) -> int:
                 "remote_guard", guard_event="armed", initial_target_state=initial,
                 policy="restore-running-on-gdb-disconnect-and-server-shutdown",
             )
+            if runtime is not None:
+                runtime.publish("READY", "TARGET_VERIFIED", cpu_state=initial)
         reporter.emit("debug_state", state=DebugState.READY.value)
-        while service.state in (DebugState.READY, DebugState.CONNECTED):
+        current_state = service.state
+        runtime_disconnected = False
+        while current_state in (DebugState.READY, DebugState.CONNECTED):
             time.sleep(0.2)
-        reporter.emit("debug_state", state=service.state.value)
-        return 0 if service.state == DebugState.STOPPED else 1
+            if runtime is not None and presence is not None:
+                if runtime.last_state == "DISCONNECTED":
+                    runtime_disconnected = True
+                    break
+                event = presence.observe(tuple(list_probes()))
+                if event.kind in {"REMOVED", "AMBIGUOUS"}:
+                    reason = "PROBE_REMOVED" if event.kind == "REMOVED" else "PROBE_IDENTITY_AMBIGUOUS"
+                    runtime.publish("DISCONNECTED", reason)
+                    runtime_disconnected = True
+                    break
+                try:
+                    state = guard.tcl.wait_target_state(timeout_seconds=1.0)
+                except Exception:
+                    runtime.publish("DISCONNECTED", "TARGET_UNVERIFIED")
+                    runtime_disconnected = True
+                    break
+                runtime.publish("READY", "TARGET_VERIFIED", cpu_state=state)
+            current_state = service.state
+        if runtime is not None and runtime.last_state == "READY":
+            runtime.publish(
+                "STOPPED" if current_state == DebugState.STOPPED else "FAILED",
+                "GATEWAY_PROCESS_STOPPED" if current_state == DebugState.STOPPED else "OPENOCD_EXITED",
+            )
+        reporter.emit("debug_state", state=current_state.value)
+        if runtime_disconnected:
+            return 1
+        return 0 if current_state == DebugState.STOPPED else 1
     except KeyboardInterrupt:
+        if runtime is not None:
+            runtime.publish("STOPPED", "USER_STOPPED")
         reporter.emit("debug_state", state="STOPPING")
         return 0
+    except Exception:
+        if runtime is not None:
+            runtime.publish("FAILED", "GATEWAY_START_FAILED")
+        raise
     finally:
         if guard is not None:
             try:
@@ -762,6 +834,8 @@ def run_debug(args: argparse.Namespace, reporter: Reporter) -> int:
         try:
             service.stop()
         finally:
+            if runtime is not None and runtime.last_state in {"READY", "STARTING"}:
+                runtime.publish("STOPPED", "GATEWAY_PROCESS_STOPPED")
             if previous_sigterm_handler is not None:
                 signal.signal(signal.SIGTERM, previous_sigterm_handler)
 
@@ -864,6 +938,132 @@ def _linux_setup_record(report: LinuxUsbSetupReport) -> dict:
     }
 
 
+def _run_managed_gateway_child(args: argparse.Namespace, reporter: Reporter) -> int:
+    """Keep one loopback Gateway owner alive across ST-Link unplug/replug."""
+    store = GatewayStatusStore()
+    stop_requested = threading.Event()
+
+    def publish(snapshot: GatewaySnapshot) -> None:
+        store.write(snapshot, owner_pid=os.getpid())
+        reporter.emit(
+            "gateway_state", state=snapshot.state,
+            reason_code=snapshot.reason_code,
+            generation=snapshot.generation,
+        )
+
+    def target_state(config: DebugConfig) -> str:
+        if config.tcl_port is None:
+            raise RuntimeError("Managed Gateway requires its loopback TCL endpoint.")
+        return SafeTclClient(
+            TclEndpoint("127.0.0.1", config.tcl_port)
+        ).wait_target_state(timeout_seconds=1.0)
+
+    supervisor = GatewaySupervisor(
+        service_factory=lambda: DebugService(executable=args.openocd),
+        probe_discovery=list_probes,
+        target_state_probe=target_state,
+        snapshot_sink=publish,
+        gdb_port=args.gdb_port,
+        tcl_port=args.tcl_port or 6666,
+        requested_serial=args.probe_serial,
+    )
+    previous_sigterm_handler = None
+
+    def request_stop(_signum=None, _frame=None) -> None:
+        stop_requested.set()
+
+    if hasattr(signal, "SIGTERM"):
+        previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
+        signal.signal(signal.SIGTERM, request_stop)
+    try:
+        while not stop_requested.is_set():
+            if store.consume_rescan_requests() is True:
+                supervisor.rescan()
+            else:
+                supervisor.maintain_once()
+            time.sleep(0.25)
+        return 0
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        supervisor.stop()
+        if previous_sigterm_handler is not None:
+            signal.signal(signal.SIGTERM, previous_sigterm_handler)
+
+
+def _managed_gateway_command(args: argparse.Namespace) -> tuple:
+    if getattr(sys, "frozen", False):
+        command = [sys.executable]
+    else:
+        command = [sys.executable, str(Path(__file__).resolve())]
+    command.extend([
+        "debug", "gateway", "--bind-address", "127.0.0.1",
+        "--gdb-port", str(args.gdb_port), "--tcl-port", str(args.tcl_port or 6666),
+        "--managed-child", "--json",
+    ])
+    if args.openocd:
+        command.extend(["--openocd", args.openocd])
+    if args.probe_serial:
+        command.extend(["--probe-serial", args.probe_serial])
+    return tuple(command)
+
+
+def run_gateway_runtime_command(args: argparse.Namespace) -> int:
+    manager = GatewayProcessManager()
+    if args.debug_mode == "gateway-status":
+        snapshot = manager.status()
+    elif args.debug_mode == "gateway-rescan":
+        snapshot = manager.rescan(_managed_gateway_command(args))
+    else:
+        snapshot = manager.ensure(_managed_gateway_command(args))
+    record = snapshot.to_record()
+    record.update(gateway_capabilities())
+    record["command"] = "debug %s" % args.debug_mode
+    record["status"] = "ok" if snapshot.attach_ready else "blocked"
+    emit_snapshot(
+        record, args.json,
+        "Gateway %s: %s (%s)" % (args.debug_mode, snapshot.state, snapshot.reason_code),
+    )
+    return 0 if snapshot.attach_ready else 1
+
+
+class _GatewayRuntimePublisher:
+    def __init__(self, store: GatewayStatusStore, selected_probe, *,
+                 gdb_port: int, tcl_port: int) -> None:
+        self.store = store
+        self.selected_probe = selected_probe
+        self.instance_id = uuid.uuid4().hex
+        self.sequence = 0
+        self.generation = 1
+        self.last_state = "STOPPED"
+        self.gdb_port = int(gdb_port)
+        self.tcl_port = int(tcl_port)
+
+    def publish(self, state: str, reason_code: str, *, cpu_state: str = "unknown") -> GatewaySnapshot:
+        self.sequence += 1
+        ready = state == "READY"
+        snapshot = GatewaySnapshot.from_record({
+            "schema_version": 1,
+            "instance_id": self.instance_id,
+            "generation": self.generation,
+            "sequence": self.sequence,
+            "state": state,
+            "reason_code": reason_code,
+            "selected_probe": ({
+                "serial": self.selected_probe.serial,
+                "usb_identity": self.selected_probe.usb_identity,
+                "source": self.selected_probe.source,
+            } if ready and self.selected_probe is not None else None),
+            "gdb_endpoint": "127.0.0.1:%d" % self.gdb_port if ready else None,
+            "tcl_endpoint": "127.0.0.1:%d" % self.tcl_port if ready else None,
+            "cpu_state": cpu_state if ready else "unknown",
+            "evidence_age_ms": 0 if ready else None,
+        })
+        self.store.write(snapshot, owner_pid=os.getpid())
+        self.last_state = state
+        return snapshot
+
+
 
 def main(argv: Optional[List[str]] = None) -> int:
     selected_argv = list(sys.argv[1:] if argv is None else argv)
@@ -894,6 +1094,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         build_parser().error("the following arguments are required: command")
     reporter = Reporter(args.json)
     try:
+        if args.command == "debug" and args.debug_mode in {
+                "gateway-status", "gateway-ensure", "gateway-rescan"}:
+            return run_gateway_runtime_command(args)
+
         if args.command in {"update", "self-update"}:
             return run_update_command(args, __version__)
 

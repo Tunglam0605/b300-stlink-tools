@@ -72,6 +72,28 @@ class LiveMonitorTests(unittest.TestCase):
         self.assertEqual(summary.final_target_state, "running")
         self.assertTrue(all(request[0] == DWT_PCSR_ADDRESS for request in tcl.requests))
 
+    def test_compiled_dwarf_watch_reads_nested_member_without_symbol_lookup(self):
+        class TypedOnlySymbols(FakeSymbols):
+            def symbol(self, name):
+                raise AssertionError("compiled DWARF watch must not use nm symbol lookup: %s" % name)
+
+        watch = LiveWatch(
+            "g_machine.position.x", "i16", 0x20000002, 2,
+            node_id="fixture:g_machine.position.x",
+        )
+        tcl = FakeTcl(((0x08025FDA, 0xFF9C1234),))
+        samples = []
+
+        summary = run_live_monitor(
+            tcl, TypedOnlySymbols(), interval_seconds=0.1, sample_limit=1,
+            compiled_watches=(watch,), on_sample=samples.append,
+        )
+
+        self.assertEqual(summary.samples, 1)
+        self.assertEqual(tcl.requests, [(DWT_PCSR_ADDRESS, 0x20000000)])
+        self.assertEqual(samples[0].values[0].value, -100)
+        self.assertEqual(samples[0].values[0].node_id, "fixture:g_machine.position.x")
+
     def test_monitor_refuses_halted_target_without_resuming(self):
         with self.assertRaisesRegex(RuntimeError, "RUNNING"):
             run_live_monitor(FakeTcl([], states=["halted"]), FakeSymbols(), sample_limit=1)
@@ -197,4 +219,3 @@ class LiveMonitorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -52,6 +52,21 @@ class GatewayReadinessTests(unittest.TestCase):
         probe = next(check for check in report.checks if check.name == "probe")
         self.assertEqual(probe.code, "MULTIPLE_PROBES")
 
+    def test_binary_serial_descriptor_is_treated_as_one_serialless_probe(self) -> None:
+        unsafe = ProbeInfo(None, "ST-Link", "linux-sysfs", "0483:3748:1-1", "unsafe_serial")
+        report = inspect_gateway_readiness(
+            openocd_resolver=lambda _value: "openocd",
+            probe_discovery=lambda: (unsafe,),
+            ssh_probe=lambda _host, _port: True,
+            port_probe=lambda _host, _port: True,
+            ipv4_discovery=lambda: ("10.0.0.2",),
+        )
+        self.assertTrue(report.ready)
+        self.assertEqual(report.conclusion, "READY")
+        probe = next(check for check in report.checks if check.name == "probe")
+        self.assertEqual(probe.code, "PROBE_SELECTED")
+        self.assertIsNone(report.probe.serial)
+
     def test_no_ipv4_is_warning_not_false_hardware_failure(self) -> None:
         report = inspect_gateway_readiness(
             openocd_resolver=lambda _value: "openocd",

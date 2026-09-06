@@ -11,6 +11,7 @@ from unittest import mock
 from b300_core.live_session import (
     ClientLiveMonitorConfig, LiveMonitorSession, LocalLiveMonitorConfig,
 )
+from b300_core.live_monitor import LiveWatch
 from b300_core.models import ProbeRef
 from b300_core.offline_symbols import ElfSymbol, SourceLocation
 from b300_core.remote_profile import RemoteGatewayProfile
@@ -149,6 +150,31 @@ class LiveMonitorSessionTests(unittest.TestCase):
             self.assertFalse(session.active)
             self.assertEqual(service.stopped, 1)
             self.assertTrue(FakeSymbolTable.instances[-1].closed)
+
+    def test_local_session_transports_compiled_dwarf_watch_exactly(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch("b300_core.live_session.find_matching_symbol_file") as matcher:
+            symbols = self.make_symbols(directory)
+            matcher.return_value = (self.matched(symbols), ())
+            watch = LiveWatch(
+                "g_machine.position.x", "u32", 0x20000030, 4,
+                node_id="fixture:g_machine.position.x",
+            )
+            session = LiveMonitorSession(
+                service_factory=FakeService, tcl_factory=FakeTcl,
+                symbol_table_factory=FakeSymbolTable,
+            )
+            session.start_local(LocalLiveMonitorConfig(
+                ProbeRef("ABC"), symbols, interval_seconds=0.1, sample_limit=1,
+                compiled_watches=(watch,),
+            ))
+
+            sample = []
+            session.run(sample.append)
+
+            self.assertEqual(sample[0].values[0].name, "g_machine.position.x")
+            self.assertEqual(sample[0].values[0].node_id, "fixture:g_machine.position.x")
+            session.close()
 
     def test_cancel_interrupts_long_interval_without_waiting_for_interval(self):
         with tempfile.TemporaryDirectory() as directory, \

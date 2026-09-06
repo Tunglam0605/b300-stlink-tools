@@ -14,6 +14,13 @@ from typing import Callable, Dict, Optional, Protocol, Tuple
 from cryptography.fernet import Fernet, InvalidToken
 
 from .remote_profile import RemoteGatewayProfile, default_remote_profile_path
+from .gateway_status import GatewaySnapshot
+from .gateway_protocol import (
+    GATEWAY_ENSURE_COMMAND, GATEWAY_RESCAN_COMMAND, GATEWAY_STATUS_COMMAND,
+)
+
+
+_REMOTE_USER_CLI_ENV = 'env PATH="$HOME/.local/bin:$PATH" '
 
 
 class RemoteSessionError(RuntimeError):
@@ -510,6 +517,92 @@ class RemoteSession:
             raise RemoteForwardError(
                 "Gateway loopback listener 127.0.0.1:%d is unavailable through SSH." % port
             ) from error
+
+    def _run_gateway_cli(self, command: str, *, timeout_seconds: float) -> GatewaySnapshot:
+        allowed = {GATEWAY_STATUS_COMMAND, GATEWAY_ENSURE_COMMAND, GATEWAY_RESCAN_COMMAND}
+        if command not in allowed:
+            raise ValueError("Unsupported remote Gateway CLI command.")
+        if not 0 < float(timeout_seconds) <= 60:
+            raise ValueError("Remote Gateway CLI timeout must be greater than 0 and at most 60 seconds.")
+        with self._lock:
+            if not self.connected or self._client is None:
+                raise RemoteSessionError("SSH session is not connected.")
+            client = self._client
+        try:
+            # Paramiko exec channels are non-interactive and commonly omit
+            # ~/.local/bin even though that is where the B300 CLI installer
+            # places the per-user executable on Linux IPCs.
+            remote_command = _REMOTE_USER_CLI_ENV + command
+            _stdin, stdout, stderr = client.exec_command(
+                remote_command, timeout=float(timeout_seconds)
+            )
+            output = stdout.read(256 * 1024 + 1)
+            error_output = stderr.read(16 * 1024 + 1)
+            if len(output) > 256 * 1024 or len(error_output) > 16 * 1024:
+                raise RemoteSessionError("Gateway CLI response exceeded the supported size.")
+            exit_status = stdout.channel.recv_exit_status()
+        except RemoteSessionError:
+            raise
+        except Exception as error:
+            raise RemoteSessionError("Gateway CLI could not be executed over SSH.") from error
+        text = output.decode("utf-8", "replace") if isinstance(output, bytes) else str(output)
+        records = []
+        for line in text.splitlines():
+            try:
+                candidate = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict) and "state" in candidate:
+                records.append(candidate)
+        if not records:
+            detail = error_output.decode("utf-8", "replace") if isinstance(error_output, bytes) else str(error_output)
+            lowered = detail.casefold()
+            if exit_status == 127 or "command not found" in lowered or "not recognized" in lowered:
+                raise RemoteSessionError(
+                    "B300 CLI is not installed for the SSH user on the Gateway; install the CLI and retry."
+                )
+            if any(marker in lowered for marker in (
+                    "invalid choice", "unrecognized argument", "unknown command")):
+                raise RemoteSessionError(
+                    "Gateway B300 CLI does not support managed Gateway status; update the CLI and retry."
+                )
+            raise RemoteSessionError(
+                "Gateway CLI did not return a supported status snapshot%s." %
+                (" (exit %d)" % exit_status if exit_status else "")
+            ) from (RuntimeError(detail.strip()) if detail.strip() else None)
+        try:
+            snapshot = GatewaySnapshot.from_record(records[-1])
+        except (TypeError, ValueError) as error:
+            raise RemoteSessionError("Gateway CLI returned an invalid status snapshot.") from error
+        if exit_status and snapshot.state == "READY":
+            raise RemoteSessionError("Gateway CLI exited with status %d despite reporting READY." % exit_status)
+        return snapshot
+
+    def gateway_status(self, *, timeout_seconds: float = 5.0) -> GatewaySnapshot:
+        """Read the authenticated Gateway's current fail-closed snapshot."""
+        return self._run_gateway_cli(
+            GATEWAY_STATUS_COMMAND, timeout_seconds=timeout_seconds,
+        )
+
+    def gateway_rescan(self, *, timeout_seconds: float = 15.0) -> GatewaySnapshot:
+        """Ask the Gateway owner to rediscover ST-Link and refresh target evidence."""
+        return self._run_gateway_cli(
+            GATEWAY_RESCAN_COMMAND, timeout_seconds=timeout_seconds,
+        )
+
+    def ensure_gateway_ready(self, *, timeout_seconds: float = 15.0) -> GatewaySnapshot:
+        """Idempotently ask the authenticated per-user CLI to provide a READY Gateway."""
+        current = self.gateway_status(timeout_seconds=min(timeout_seconds, 5.0))
+        if current.attach_ready:
+            return current
+        result = self._run_gateway_cli(
+            GATEWAY_ENSURE_COMMAND, timeout_seconds=timeout_seconds,
+        )
+        if not result.attach_ready:
+            raise RemoteSessionError(
+                "Gateway is not ready: %s (%s)." % (result.state, result.reason_code)
+            )
+        return result
 
     def open_forward(self, name: str, *, remote_port: int, local_port: int = 0,
                      remote_host: str = "127.0.0.1",

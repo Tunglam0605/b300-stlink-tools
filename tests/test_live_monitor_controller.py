@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from b300_core.live_monitor import LiveSample, LiveValue
+from b300_core.live_monitor import LiveSample, LiveValue, LiveWatch
 from b300_core.models import ProbeRef
 from b300_core.offline_symbols import SourceLocation
 from b300_core.remote_profile import RemoteGatewayProfile
@@ -79,6 +79,9 @@ class _Panel:
 
     def watch_specs(self):
         return ("speed:f32",)
+
+    def compiled_watches(self):
+        return ()
 
     def sample_limit(self):
         return 2
@@ -176,7 +179,11 @@ class LiveMonitorControllerTests(unittest.TestCase):
                 self.assertEqual(panel.control_states[-1], (True, False, True))
 
     def test_client_uses_authenticated_session_from_provider(self) -> None:
-        authenticated = object()
+        authenticated = SimpleNamespace(
+            ensure_gateway_ready=lambda: SimpleNamespace(
+                attach_ready=True, tcl_endpoint="127.0.0.1:7666",
+            )
+        )
         received = []
         class ClientSession(_Session):
             def start_client(self, config, remote_session=None):
@@ -194,6 +201,40 @@ class LiveMonitorControllerTests(unittest.TestCase):
                 symbols, host="gateway.local", user="operator"))
         self.assertEqual(received, [authenticated])
         self.assertTrue(session.closed)
+
+    def test_client_asks_gateway_for_live_tcl_port_and_starts_it_before_monitoring(self) -> None:
+        class GatewaySession:
+            def __init__(self):
+                self.ensure_calls = 0
+
+            def ensure_gateway_ready(self):
+                self.ensure_calls += 1
+                return SimpleNamespace(
+                    attach_ready=True, tcl_endpoint="127.0.0.1:7666",
+                )
+
+        class ClientSession(_Session):
+            def start_client(self, config, remote_session=None):
+                self.started_config = config
+                self.remote_session = remote_session
+                return self.start_local(config)
+
+        gateway = GatewaySession()
+        session = ClientSession(())
+        with tempfile.TemporaryDirectory() as directory:
+            symbols = Path(directory) / "application.axf"
+            symbols.write_bytes(b"ELF")
+            controller = LiveMonitorController(
+                _Panel(), remote_session_provider=lambda _request: gateway,
+                session_factory=lambda **_kwargs: session, worker_factory=_InlineWorker,
+            )
+            controller.start(live_monitor_controller.LiveMonitorRequest.client(
+                symbols, host="gateway.local", user="operator",
+            ))
+
+        self.assertEqual(gateway.ensure_calls, 1)
+        self.assertEqual(session.started_config.gateway_tcl_port, 7666)
+        self.assertIs(session.remote_session, gateway)
 
     def test_cancelled_client_login_does_not_create_transport(self) -> None:
         sessions = []
@@ -247,6 +288,27 @@ class LiveMonitorControllerTests(unittest.TestCase):
         self.assertEqual(session.started_config.watch_specs, ("speed:f32",))
         self.assertEqual(session.started_config.sample_limit, 2)
         self.assertEqual(session.started_config.interval_seconds, 0.5)
+
+    def test_controller_forwards_compiled_typed_watches_to_session_config(self) -> None:
+        panel = _Panel()
+        typed = LiveWatch(
+            "g_machine.position.x", "i16", 0x20000002, 2,
+            node_id="fixture:g_machine.position.x",
+        )
+        panel.watch_specs = lambda: ()
+        panel.compiled_watches = lambda: (typed,)
+        session = _Session(())
+        with tempfile.TemporaryDirectory() as directory:
+            symbols = Path(directory) / "application.axf"
+            symbols.write_bytes(b"ELF")
+            controller = LiveMonitorController(
+                panel, selected_probe=lambda: ProbeRef("ABC"),
+                session_factory=lambda **_kwargs: session, worker_factory=_InlineWorker,
+            )
+            controller.start(live_monitor_controller.LiveMonitorRequest.local(symbols))
+
+        self.assertEqual(session.started_config.watch_specs, ())
+        self.assertEqual(session.started_config.compiled_watches, (typed,))
 
     def test_client_request_uses_tcl_only_loopback_transport(self) -> None:
         class ClientSession(_Session):
@@ -529,7 +591,6 @@ class LiveMonitorViewTests(unittest.TestCase):
         from b300_gui.production_live_panel import ProductionLivePanel
         context = AppContext()
         panel = ProductionLivePanel()
-        panel.expressions.setText("speed:f32")
         sample = LiveSample(
             cycle=0,
             scheduled_elapsed_seconds=0.0,
@@ -581,7 +642,6 @@ class LiveMonitorViewTests(unittest.TestCase):
         from b300_gui.production_live_panel import ProductionLivePanel
         context = AppContext()
         panel = ProductionLivePanel()
-        panel.expressions.setText("speed:f32")
         session = ClientSession(())
         controller = LiveMonitorController(
             panel,

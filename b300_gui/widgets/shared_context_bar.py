@@ -81,11 +81,26 @@ class SharedContextBar(QFrame):
         self.target_label.setToolTip(self.target_label.text())
         connection = context.selected_connection
         connected = bool(connection.gateway and context.gateway_sessions and context.gateway_sessions.connected(connection.gateway.endpoint))
-        text = ('Đã phát hiện ST-Link' if context.probes else 'Chưa phát hiện ST-Link') if connection.is_local else ('SSH đã kết nối' if connected else 'SSH chưa kết nối')
+        snapshot = getattr(context, 'gateway_snapshot', None)
+        warning = getattr(context, 'gateway_warning', '')
+        if connection.is_local:
+            text = 'Đã phát hiện ST-Link' if context.probes else 'Chưa phát hiện ST-Link'
+            state = 'success' if context.probes else 'neutral'
+        elif warning:
+            text = warning
+            state = 'failure'
+        elif snapshot is not None and snapshot.attach_ready:
+            text = 'Gateway sẵn sàng · %s' % snapshot.gdb_endpoint
+            state = 'success'
+        else:
+            text = 'SSH đã kết nối · đang kiểm tra Gateway' if connected else 'SSH chưa kết nối'
+            state = 'neutral'
         self.connection_status.setText(text)
-        self.connection_status.setToolTip('Trạng thái kết nối SSH; việc kiểm tra MCU đích được thực hiện riêng.' if not connection.is_local else 'Trạng thái phát hiện ST-Link qua USB; việc kiểm tra MCU đích được thực hiện riêng.')
-        self.connection_status.setProperty('state', 'success' if connected else 'neutral')
+        self.connection_status.setToolTip(warning or ('Trạng thái Gateway được xác minh qua SSH.' if not connection.is_local else 'Trạng thái phát hiện ST-Link qua USB; việc kiểm tra MCU đích được thực hiện riêng.'))
+        self.connection_status.setProperty('state', state)
+        self.connection_status.style().unpolish(self.connection_status)
+        self.connection_status.style().polish(self.connection_status)
         for widget in (self.project_combo,self.connection_combo,self.probe_combo,self.manage_projects_button,self.manage_connections_button,self.refresh_probes_button):
             widget.setEnabled(not context.hardware_busy)
-        self.refresh_probes_button.setEnabled(not context.hardware_busy and connection.is_local)
-        self.refresh_probes_button.setToolTip('Quét ST-Link cục bộ' if connection.is_local else 'Chưa hỗ trợ quét ST-Link từ xa; hãy kiểm tra SSH tại GỠ LỖI VS CODE.')
+        self.refresh_probes_button.setEnabled(not context.hardware_busy)
+        self.refresh_probes_button.setToolTip('Quét ST-Link cục bộ' if connection.is_local else 'Quét lại ST-Link trên Gateway qua SSH')

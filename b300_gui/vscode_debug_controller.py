@@ -16,6 +16,7 @@ from b300_core.vscode_bridge import (
     BridgeState,
     VsCodeBridgeState,
     VsCodeDebugBridge,
+    VsCodeExternalProfile,
     launch_vscode,
 )
 from b300_core.vscode_environment import VsCodeEnvironmentStatus, inspect_vscode_environment
@@ -72,17 +73,21 @@ class VsCodeDebugController:
             ) from error
         return root, image, relative
 
-    @staticmethod
-    def _check_launch_json(workspace: Path, force: bool) -> None:
-        launch = workspace / ".vscode" / "launch.json"
-        if launch.exists() and not force:
-            raise FileExistsError("VS Code launch.json already exists: %s" % launch)
+    def _require_live_listener(self, expected: VsCodeBridgeState) -> VsCodeBridgeState:
+        current = self.bridge.state
+        if not isinstance(current, VsCodeBridgeState):
+            return expected
+        if current.state != BridgeState.READY or current.gdb_target != expected.gdb_target:
+            raise RuntimeError("B300 debug listener changed before VS Code could be opened.")
+        if expected.binding is not None and current.binding != expected.binding:
+            raise RuntimeError("Gateway generation changed before VS Code could be opened.")
+        return current
 
     def start_local(self, *, probe: ProbeRef, workspace: Path, symbols: Path,
                     force_launch_json: bool = False) -> DebugLaunchResult:
         status = self._require_environment()
         root, image, relative = self._validate_workspace_symbols(workspace, symbols)
-        self._check_launch_json(root, force_launch_json)
+        launch_revision = VsCodeExternalProfile.launch_revision(root)
         started = False
         try:
             state = self.bridge.start_local(probe)
@@ -90,7 +95,10 @@ class VsCodeDebugController:
             if state.state != BridgeState.READY:
                 raise RuntimeError("B300 local debug bridge did not become READY.")
             profile = self.bridge.profile(program_relative=relative, gdb_path=status.gdb_path)
-            launch = profile.write_launch_json(root, force=force_launch_json)
+            launch = profile.write_launch_json(
+                root, force=force_launch_json, expected_revision=launch_revision
+            )
+            state = self._require_live_listener(state)
             launch_vscode(root, executable=status.vscode_path)
             return DebugLaunchResult(state, launch, root, image)
         except Exception:
@@ -108,23 +116,66 @@ class VsCodeDebugController:
         return state
 
     def start_client(self, *, session: RemoteSession, workspace: Path, symbols: Path,
-                     local_gdb_port: int = 0, force_launch_json: bool = False) -> DebugLaunchResult:
+                     local_gdb_port: int = 0, force_launch_json: bool = False,
+                     gateway_snapshot=None, profile_id: Optional[str] = None) -> DebugLaunchResult:
         status = self._require_environment()
         root, image, relative = self._validate_workspace_symbols(workspace, symbols)
-        self._check_launch_json(root, force_launch_json)
+        launch_revision = VsCodeExternalProfile.launch_revision(root)
+        selected_profile = str(profile_id or "").strip()
+        if not selected_profile:
+            raise ValueError("Gateway profile identity is required before opening VS Code.")
         started = False
         try:
-            state = self.bridge.start_client(session, local_gdb_port=int(local_gdb_port))
+            snapshot = gateway_snapshot
+            if snapshot is None:
+                ensure_ready = getattr(session, "ensure_gateway_ready", None)
+                if not callable(ensure_ready):
+                    raise RuntimeError("Remote SSH session cannot verify Gateway readiness.")
+                snapshot = ensure_ready()
+            client_kwargs = {
+                "local_gdb_port": int(local_gdb_port),
+                "snapshot": snapshot,
+                "profile_id": selected_profile,
+            }
+            state = self.bridge.start_client(session, **client_kwargs)
             started = True
             if state.state != BridgeState.READY:
                 raise RuntimeError("B300 remote GDB tunnel did not become READY.")
             profile = self.bridge.profile(program_relative=relative, gdb_path=status.gdb_path)
-            launch = profile.write_launch_json(root, force=force_launch_json)
+            launch = profile.write_launch_json(
+                root, force=force_launch_json, expected_revision=launch_revision
+            )
+            state = self._require_live_listener(state)
             launch_vscode(root, executable=status.vscode_path)
             return DebugLaunchResult(state, launch, root, image)
         except Exception:
             if started:
                 self.bridge.stop()
+            raise
+
+    def synchronize_client(self, *, session: RemoteSession, workspace: Path,
+                           symbols: Path, gateway_snapshot, profile_id: str,
+                           local_gdb_port: int = 0,
+                           force_launch_json: bool = False) -> DebugLaunchResult:
+        """Rebind a recovered Gateway and update B300 config without auto-attaching."""
+        status = self._require_environment()
+        root, image, relative = self._validate_workspace_symbols(workspace, symbols)
+        launch_revision = VsCodeExternalProfile.launch_revision(root)
+        state = self.bridge.sync_client(
+            session, snapshot=gateway_snapshot, profile_id=profile_id,
+            local_gdb_port=int(local_gdb_port),
+        )
+        if state.state != BridgeState.READY:
+            raise RuntimeError("B300 remote GDB tunnel did not become READY after Gateway recovery.")
+        try:
+            profile = self.bridge.profile(program_relative=relative, gdb_path=status.gdb_path)
+            launch = profile.write_launch_json(
+                root, force=force_launch_json, expected_revision=launch_revision
+            )
+            state = self._require_live_listener(state)
+            return DebugLaunchResult(state, launch, root, image)
+        except Exception:
+            self.bridge.stop()
             raise
 
     def stop(self) -> VsCodeBridgeState:

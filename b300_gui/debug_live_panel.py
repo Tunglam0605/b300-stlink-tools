@@ -36,6 +36,7 @@ class DebugLivePanel(QFrame):
         self.setObjectName("cardSurface")
         self.buffer = VariableSampleBuffer(max_samples=self.VARIABLES_CAPACITY)
         self.rows: Dict[str, int] = {}
+        self._compiled_watch_by_name = {}
         self._timeline_samples: List[dict] = []
         self._live_variable_items: List[dict] = []
         self._build_ui()
@@ -385,6 +386,7 @@ class DebugLivePanel(QFrame):
             var_name = self.table.item(row, 0).text() if self.table.item(row, 0) else None
             if var_name in self.rows:
                 del self.rows[var_name]
+            self._compiled_watch_by_name.pop(var_name, None)
             self.table.removeRow(row)
         # Re-index rows
         self.rows.clear()
@@ -401,6 +403,8 @@ class DebugLivePanel(QFrame):
             if name_item is None or not name_item.text().strip():
                 continue
             name = name_item.text().strip()
+            if name in self._compiled_watch_by_name:
+                continue
             value_type = type_item.text().strip() if type_item and type_item.text().strip() else self.type_combo.currentText()
             specs.append("%s:%s" % (name, value_type))
         if not specs:
@@ -411,6 +415,30 @@ class DebugLivePanel(QFrame):
                     specs.append(item if ":" in item else "%s:%s" % (item, self.type_combo.currentText()))
         validate_live_watch_specs(specs)
         return tuple(specs)
+
+    def compiled_watches(self):
+        """Return immutable DWARF-compiled watches separately from manual NAME:TYPE specs."""
+        return tuple(self._compiled_watch_by_name.values())
+
+    def add_compiled_watch(self, watch) -> None:
+        """Add a leaf selected from the typed catalog without asking for a type."""
+        self._compiled_watch_by_name[watch.name] = watch
+        row = self.rows.get(watch.name)
+        if row is None:
+            row = self.table.rowCount()
+            self.table.insertRow(row)
+            self.rows[watch.name] = row
+        self.table.setItem(row, 0, QTableWidgetItem(watch.name))
+        self.table.setItem(row, 1, QTableWidgetItem("—"))
+        self.table.setItem(row, 2, QTableWidgetItem(watch.value_type))
+        self.table.setItem(row, 3, QTableWidgetItem("0x%08X" % watch.address))
+        self.table.setItem(row, 4, QTableWidgetItem("—"))
+        check_item = QTableWidgetItem()
+        check_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+        check_item.setCheckState(Qt.CheckState.Checked)
+        self.table.setItem(row, 5, check_item)
+        if self.table.columnCount() > 9:
+            self.table.setItem(row, 9, QTableWidgetItem("Chờ mẫu"))
 
     def append_live_sample(self, sample: LiveSample) -> Tuple[VariableSample, ...]:
         self.append_timeline_sample(

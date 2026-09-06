@@ -50,6 +50,8 @@ class GatewaySessionManager:
         except Exception: return False
     def connect(self,profile:RemoteGatewayProfile,password:Optional[str]=None,*,timeout_seconds:float=12.0)->RemoteSessionState:
         return self.session(profile).ensure_connected(password=password,remember=True,timeout_seconds=timeout_seconds)
+    def ensure_gateway_ready(self,profile:RemoteGatewayProfile,*,timeout_seconds:float=15.0):
+        return self.session(profile).ensure_gateway_ready(timeout_seconds=timeout_seconds)
     def disconnect(self,profile:RemoteGatewayProfile,*,forget_for_session:bool=False)->bool:
         key=self._key(profile)
         with self._lock: current=self._sessions.get(key)
