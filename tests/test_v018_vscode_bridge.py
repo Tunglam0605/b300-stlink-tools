@@ -302,7 +302,8 @@ class V018VsCodeBridgeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             app_root = Path(directory) / "installed"
             executable = app_root / "b300-stlink-gui.exe"
-            gdb = app_root / "vendor" / "gdb" / "bin" / "arm-none-eabi-gdb.exe"
+            gdb_name = "arm-none-eabi-gdb.exe" if os.name == "nt" else "arm-none-eabi-gdb"
+            gdb = app_root / "vendor" / "gdb" / "bin" / gdb_name
             gdb.parent.mkdir(parents=True)
             executable.write_bytes(b"gui")
             gdb.write_bytes(b"managed gdb")
@@ -316,7 +317,8 @@ class V018VsCodeBridgeTests(unittest.TestCase):
     def test_profile_rejects_temporary_gdb_from_untrusted_app_root_environment(self):
         with tempfile.TemporaryDirectory() as directory:
             app_root = Path(directory) / "attacker-controlled"
-            gdb = app_root / "vendor" / "gdb" / "bin" / "arm-none-eabi-gdb.exe"
+            gdb_name = "arm-none-eabi-gdb.exe" if os.name == "nt" else "arm-none-eabi-gdb"
+            gdb = app_root / "vendor" / "gdb" / "bin" / gdb_name
             gdb.parent.mkdir(parents=True)
             gdb.write_bytes(b"untrusted gdb")
             with patch.dict(os.environ, {"B300_APP_ROOT": str(app_root)}, clear=False):
