@@ -93,16 +93,11 @@ def _is_active_packaged_gdb_path(value: str) -> bool:
     if not selected.is_absolute() or not selected.is_file():
         return False
     executable_name = "arm-none-eabi-gdb.exe" if os.name == "nt" else "arm-none-eabi-gdb"
-    roots = [Path(sys.executable).resolve().parent]
-    configured_root = os.environ.get("B300_APP_ROOT")
-    if configured_root:
-        roots.insert(0, Path(configured_root).expanduser().resolve())
+    app_root = Path(sys.executable).resolve().parent
     try:
         resolved = selected.resolve(strict=True)
-        return any(
-            resolved == (root / "vendor" / "gdb" / "bin" / executable_name).resolve(strict=False)
-            for root in roots
-        )
+        expected = app_root / "vendor" / "gdb" / "bin" / executable_name
+        return resolved == expected.resolve(strict=False)
     except (OSError, ValueError):
         return False
 

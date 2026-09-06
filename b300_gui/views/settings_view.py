@@ -86,7 +86,7 @@ class SettingsView(QWidget):
         self.gateway_ssh_status = self._note("SSH · Chưa kiểm tra")
         host.body.addWidget(self.gateway_ssh_status)
         self.gateway_password_note = self._note(
-            "Mật khẩu: dùng mật khẩu tài khoản Windows của máy Gateway hoặc SSH key; "
+            "Mật khẩu: dùng mật khẩu tài khoản đăng nhập của máy Gateway hoặc SSH key; "
             "B300 không đọc hay hiển thị mật khẩu."
         )
         host.body.addWidget(self.gateway_password_note)
@@ -251,10 +251,15 @@ class SettingsView(QWidget):
     def _render_gateway_access(self, *_args) -> None:
         access = self._gateway_access_text()
         info = getattr(self, "_gateway_access_info", None)
-        self.gateway_access_command.setText(
-            ("%s · %s" % (info.hostname, access)) if access and info is not None
-            else "Không tìm thấy IPv4 dùng được cho máy Client."
-        )
+        if info is None:
+            text = "Chưa xác định thông tin đăng nhập SSH."
+        elif access:
+            text = "%s · %s" % (info.hostname, access)
+        else:
+            text = "%s · %s · Không tìm thấy IPv4 dùng được cho máy Client." % (
+                info.hostname, info.user,
+            )
+        self.gateway_access_command.setText(text)
         self.btn_copy_gateway_access.setEnabled(bool(access))
 
     def _copy_gateway_access(self) -> None:

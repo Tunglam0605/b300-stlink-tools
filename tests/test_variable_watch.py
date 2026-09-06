@@ -108,6 +108,13 @@ class VariableWatchTests(unittest.TestCase):
             compile_watches(_Catalog(wide), tuple(node.node_id for node in wide))
         self.assertEqual(too_wide.exception.reason_code, "read_budget")
 
+    def test_distinct_dwarf_nodes_with_the_same_display_path_are_rejected_atomically(self):
+        first = replace(_node("cu1:status", 0x20000000), name="status", path="status")
+        second = replace(_node("cu2:status", 0x20000004), name="status", path="status")
+        with self.assertRaises(WatchCompileError) as duplicate:
+            compile_watches(_Catalog((first, second)), (first.node_id, second.node_id))
+        self.assertEqual(duplicate.exception.reason_code, "duplicate_watch")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -306,11 +306,24 @@ class V018VsCodeBridgeTests(unittest.TestCase):
             gdb.parent.mkdir(parents=True)
             executable.write_bytes(b"gui")
             gdb.write_bytes(b"managed gdb")
-            with patch.dict(os.environ, {"B300_APP_ROOT": str(app_root)}, clear=False):
+            with patch("b300_core.vscode_bridge.sys.executable", str(executable)), \
+                    patch.dict(os.environ, {}, clear=True):
                 config = VsCodeExternalProfile(
                     "B300 local", "app.elf", "127.0.0.1:3333", gdb_path=str(gdb)
                 ).configuration()
             self.assertEqual(config["gdbPath"], str(gdb))
+
+    def test_profile_rejects_temporary_gdb_from_untrusted_app_root_environment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app_root = Path(directory) / "attacker-controlled"
+            gdb = app_root / "vendor" / "gdb" / "bin" / "arm-none-eabi-gdb.exe"
+            gdb.parent.mkdir(parents=True)
+            gdb.write_bytes(b"untrusted gdb")
+            with patch.dict(os.environ, {"B300_APP_ROOT": str(app_root)}, clear=False):
+                with self.assertRaisesRegex(ValueError, "temporary"):
+                    VsCodeExternalProfile(
+                        "B300 local", "app.elf", "127.0.0.1:3333", gdb_path=str(gdb)
+                    ).configuration()
 
     def test_launch_writer_appends_managed_profile_to_existing_document(self):
         for original in ({"inputs": []}, {"configurations": [{"name": "Other"}]}):

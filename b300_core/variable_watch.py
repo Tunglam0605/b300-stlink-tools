@@ -94,6 +94,11 @@ def compile_watches(catalog, node_ids: Iterable[str]) -> Tuple[LiveWatch, ...]:
     if len(set(selected)) != len(selected):
         raise WatchCompileError("duplicate_watch", "A typed variable can only be watched once.")
     watches = tuple(compile_watch(catalog, node_id) for node_id in selected)
+    names = tuple(watch.name for watch in watches)
+    if len(set(names)) != len(names):
+        raise WatchCompileError(
+            "duplicate_watch", "Typed variables must have unique display paths.",
+        )
     base_addresses = {DWT_PCSR_ADDRESS}
     verification_reads = 0
     for watch in watches:

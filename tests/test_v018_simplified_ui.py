@@ -378,7 +378,7 @@ class V018SimplifiedUiTests(unittest.TestCase):
                 ["192.168.1.15", "10.0.0.8"],
             )
             self.assertIn("Admin@192.168.1.15:22", view.gateway_access_command.text())
-            self.assertIn("mật khẩu tài khoản Windows", view.gateway_password_note.text())
+            self.assertIn("mật khẩu tài khoản đăng nhập", view.gateway_password_note.text())
             self.assertIn("sẵn sàng", view.gateway_ssh_status.text().casefold())
             view.gateway_ip_selector.setCurrentIndex(1)
             view.btn_copy_gateway_access.click()
@@ -386,6 +386,21 @@ class V018SimplifiedUiTests(unittest.TestCase):
                 QApplication.clipboard().text(),
                 "Admin@10.0.0.8:22",
             )
+        finally:
+            view.close()
+
+    def test_gateway_card_keeps_identity_visible_without_an_ipv4_address(self) -> None:
+        view = SettingsView()
+        try:
+            view.set_gateway_access_info(SimpleNamespace(
+                user="operator", hostname="B300-GATEWAY",
+                addresses=(), ssh_port=22, ssh_ready=False,
+            ))
+            text = view.gateway_access_command.text()
+            self.assertIn("B300-GATEWAY", text)
+            self.assertIn("operator", text)
+            self.assertIn("Không tìm thấy IPv4", text)
+            self.assertFalse(view.btn_copy_gateway_access.isEnabled())
         finally:
             view.close()
 
