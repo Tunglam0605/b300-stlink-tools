@@ -5,6 +5,14 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.21.2] - 2026-09-07
+
+- Fixed large compound DWARF watches such as the 167-field `xAgvInfor`: all supported scalar descendants are added atomically and sampled in deterministic round-robin batches.
+- Preserved the 32-word zero-halt SWD budget for every transaction, including DWT PC sampling and repeated 64-bit coherence reads; manual CLI watches remain capped at 64 and typed watches are bounded at 512.
+- Added live batch progress and retained values/timestamps for fields that belong to other batches. A failed compound preflight no longer leaves an enabled Add action for the rejected selection.
+- Prevented transient packaged GDB paths from being persisted to VS Code and automatically migrated legacy B300 attach profiles to the current durable GDB path and live Gateway endpoint.
+- Preserved the flash, loopback-only debug and gateway safety contracts. `HW-P1-001` remains OPEN / DEFERRED.
+
 ## [0.21.1] - 2026-09-06
 
 - Fixed typed Monitor selection so choosing a struct, union or array adds all supported scalar descendants atomically. The watch-count ceiling is now 64 while the existing 32-word SWD read budget, duplicate guard and atomic validation remain enforced.

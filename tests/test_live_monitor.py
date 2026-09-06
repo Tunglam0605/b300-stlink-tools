@@ -201,6 +201,14 @@ class LiveMonitorTests(unittest.TestCase):
         self.assertEqual(len(batches), 3)
         self.assertTrue(all(live_watch_read_count(batch) <= 32 for batch in batches))
 
+    def test_read_count_deduplicates_overlapping_f64_coherence_words(self):
+        watches = (
+            LiveWatch("union.double_a", "f64", 0x20000000, 8, node_id="a"),
+            LiveWatch("union.double_b", "f64", 0x20000000, 8, node_id="b"),
+        )
+
+        self.assertEqual(live_watch_read_count(watches), 5)
+
     def test_large_typed_set_is_sampled_round_robin_as_partial_batches(self):
         watches = tuple(
             LiveWatch("v%d" % index, "u8", 0x20000000 + index, 1,

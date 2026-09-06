@@ -12,7 +12,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 from dataclasses import dataclass
 from enum import Enum
@@ -84,20 +83,6 @@ def _is_temporary_gdb_path(value: str) -> bool:
         path = os.path.normcase(str(selected.resolve(strict=False)))
         temporary = os.path.normcase(str(Path(tempfile.gettempdir()).resolve(strict=False)))
         return os.path.commonpath((path, temporary)) == temporary
-    except (OSError, ValueError):
-        return False
-
-
-def _is_active_packaged_gdb_path(value: str) -> bool:
-    selected = Path(value).expanduser()
-    if not selected.is_absolute() or not selected.is_file():
-        return False
-    executable_name = "arm-none-eabi-gdb.exe" if os.name == "nt" else "arm-none-eabi-gdb"
-    app_root = Path(sys.executable).resolve().parent
-    try:
-        resolved = selected.resolve(strict=True)
-        expected = app_root / "vendor" / "gdb" / "bin" / executable_name
-        return resolved == expected.resolve(strict=False)
     except (OSError, ValueError):
         return False
 
@@ -192,8 +177,7 @@ class VsCodeExternalProfile:
             raise ValueError("VS Code GDB target port must be in range 1..65535.")
         if not self.gdb_path.strip() or "\x00" in self.gdb_path:
             raise ValueError("VS Code GDB path must not be empty.")
-        if (_is_temporary_gdb_path(self.gdb_path)
-                and not _is_active_packaged_gdb_path(self.gdb_path)):
+        if _is_temporary_gdb_path(self.gdb_path):
             raise ValueError("VS Code GDB path must not point into a temporary directory.")
         if self.binding is not None:
             if (
@@ -281,7 +265,18 @@ class VsCodeExternalProfile:
         if owned:
             configurations[owned[0]] = configuration
         elif named:
-            if not force:
+            legacy_b300_names = {
+                "B300 STM32F407 · Remote via Gateway",
+                "B300 STM32F407 · Local ST-Link",
+                "B300 STM32F407 · Gateway Local Debug",
+            }
+            legacy = (
+                self.name in legacy_b300_names
+                and configurations[named[0]].get("type") == "cortex-debug"
+                and configurations[named[0]].get("request") == "attach"
+                and configurations[named[0]].get("servertype") == "external"
+            )
+            if not force and not legacy:
                 raise FileExistsError(
                     "A VS Code configuration named '%s' is not owned by B300; confirmation is required." %
                     self.name

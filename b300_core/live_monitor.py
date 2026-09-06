@@ -199,15 +199,15 @@ def live_watch_read_count(watches: Iterable[LiveWatch]) -> int:
     """Return the exact SWD word count for one zero-halt sample transaction."""
     selected = tuple(watches)
     addresses = {DWT_PCSR_ADDRESS}
-    coherence_reads = 0
+    coherence_addresses = set()
     for watch in selected:
         first = int(watch.address) & ~3
         last = (int(watch.address) + int(watch.size) - 1) & ~3
         words = ((last - first) // 4) + 1
         addresses.update(first + index * 4 for index in range(words))
         if int(watch.size) > 4:
-            coherence_reads += words
-    return len(addresses) + coherence_reads
+            coherence_addresses.update(first + index * 4 for index in range(words))
+    return len(addresses) + len(coherence_addresses)
 
 
 def plan_live_watch_batches(

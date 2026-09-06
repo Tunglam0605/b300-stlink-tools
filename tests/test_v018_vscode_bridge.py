@@ -298,7 +298,7 @@ class V018VsCodeBridgeTests(unittest.TestCase):
                 "B300 local", "app.elf", "127.0.0.1:3333", gdb_path=temporary_gdb
             ).configuration()
 
-    def test_profile_accepts_active_b300_packaged_gdb_under_temporary_install(self):
+    def test_profile_rejects_active_b300_packaged_gdb_under_temporary_install(self):
         with tempfile.TemporaryDirectory() as directory:
             app_root = Path(directory) / "installed"
             executable = app_root / "b300-stlink-gui.exe"
@@ -307,12 +307,37 @@ class V018VsCodeBridgeTests(unittest.TestCase):
             gdb.parent.mkdir(parents=True)
             executable.write_bytes(b"gui")
             gdb.write_bytes(b"managed gdb")
-            with patch("b300_core.vscode_bridge.sys.executable", str(executable)), \
-                    patch.dict(os.environ, {}, clear=True):
-                config = VsCodeExternalProfile(
-                    "B300 local", "app.elf", "127.0.0.1:3333", gdb_path=str(gdb)
-                ).configuration()
-            self.assertEqual(config["gdbPath"], str(gdb))
+            with patch.dict(os.environ, {}, clear=True):
+                with self.assertRaisesRegex(ValueError, "temporary"):
+                    VsCodeExternalProfile(
+                        "B300 local", "app.elf", "127.0.0.1:3333", gdb_path=str(gdb)
+                    ).configuration()
+
+    def test_launch_writer_migrates_exact_legacy_b300_profile_without_confirmation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / ".vscode" / "launch.json"
+            output.parent.mkdir()
+            output.write_text(json.dumps({"configurations": [{
+                "name": "B300 STM32F407 · Remote via Gateway",
+                "type": "cortex-debug",
+                "request": "attach",
+                "servertype": "external",
+                "gdbTarget": "127.0.0.1:59235",
+                "gdbPath": r"C:\\Users\\Admin\\AppData\\Local\\Temp\\old\\arm-none-eabi-gdb.exe",
+            }]}), encoding="utf-8")
+
+            VsCodeExternalProfile(
+                "B300 STM32F407 · Remote via Gateway",
+                "${workspaceFolder}/Objects/F407/Main_V2_F407.axf",
+                "127.0.0.1:41234",
+                gdb_path=r"C:\\Users\\Admin\\AppData\\Local\\B300-STLink\\vendor\\gdb\\bin\\arm-none-eabi-gdb.exe",
+            ).write_launch_json(root)
+
+            config = json.loads(output.read_text(encoding="utf-8"))["configurations"][0]
+            self.assertEqual(config["gdbTarget"], "127.0.0.1:41234")
+            self.assertIn("B300-STLink", config["gdbPath"])
+            self.assertEqual(config["b300"]["owner"], "b300-stlink-tools")
 
     def test_profile_rejects_temporary_gdb_from_untrusted_app_root_environment(self):
         with tempfile.TemporaryDirectory() as directory:
