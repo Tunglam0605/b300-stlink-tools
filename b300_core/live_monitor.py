@@ -17,7 +17,8 @@ from .tcl_client import SafeTclClient
 DWT_PCSR_ADDRESS = 0xE000101C
 MIN_LIVE_INTERVAL_SECONDS = 0.1
 MAX_LIVE_INTERVAL_SECONDS = 60.0
-MAX_LIVE_WATCHES = 64
+MAX_MANUAL_LIVE_WATCHES = 64
+MAX_LIVE_WATCHES = 512
 MAX_LIVE_SAMPLES = 100000
 MAX_LIVE_READ_WORDS = 32
 F407_RAM_RANGES = ((0x10000000, 0x10010000), (0x20000000, 0x20020000))
@@ -127,8 +128,8 @@ def validate_live_watch_specs(specs: Iterable[str]) -> Tuple[Tuple[str, str], ..
         if any(existing_name == name for existing_name, _existing_type in selected):
             raise ValueError("Live watch symbol is duplicated: %s" % name)
         selected.append((name, value_type))
-    if len(selected) > MAX_LIVE_WATCHES:
-        raise ValueError("At most %d live watches are allowed." % MAX_LIVE_WATCHES)
+    if len(selected) > MAX_MANUAL_LIVE_WATCHES:
+        raise ValueError("At most %d manual live watches are allowed." % MAX_MANUAL_LIVE_WATCHES)
     return tuple(selected)
 
 
@@ -187,14 +188,47 @@ def validate_compiled_watches(watches: Iterable[LiveWatch]) -> Tuple[LiveWatch, 
             if size <= 0 or offset < 0 or offset + size > watch.size * 8:
                 raise ValueError("Invalid DWARF bitfield span for %s." % watch.name)
     validate_live_request(MIN_LIVE_INTERVAL_SECONDS, None, selected)
-    addresses = _word_addresses(selected)
-    coherence_addresses = _coherence_addresses(selected)
-    if len(addresses) + len(coherence_addresses) > MAX_LIVE_READ_WORDS:
-        raise ValueError(
-            "Live monitor needs %d SWD word reads including 64-bit coherence checks; max is %d." %
-            (len(addresses) + len(coherence_addresses), MAX_LIVE_READ_WORDS)
-        )
     return selected
+
+
+def live_watch_read_count(watches: Iterable[LiveWatch]) -> int:
+    """Return the exact SWD word count for one zero-halt sample transaction."""
+    selected = tuple(watches)
+    addresses = {DWT_PCSR_ADDRESS}
+    coherence_reads = 0
+    for watch in selected:
+        first = int(watch.address) & ~3
+        last = (int(watch.address) + int(watch.size) - 1) & ~3
+        words = ((last - first) // 4) + 1
+        addresses.update(first + index * 4 for index in range(words))
+        if int(watch.size) > 4:
+            coherence_reads += words
+    return len(addresses) + coherence_reads
+
+
+def plan_live_watch_batches(
+    watches: Iterable[LiveWatch],
+) -> Tuple[Tuple[LiveWatch, ...], ...]:
+    """Partition one logical typed-watch set into deterministic bounded reads."""
+    selected = validate_compiled_watches(watches)
+    if not selected:
+        return ((),)
+    batches = []
+    current = []
+    for watch in selected:
+        candidate = tuple(current + [watch])
+        if current and live_watch_read_count(candidate) > MAX_LIVE_READ_WORDS:
+            batches.append(tuple(current))
+            current = [watch]
+        else:
+            current.append(watch)
+        if live_watch_read_count(current) > MAX_LIVE_READ_WORDS:
+            raise ValueError(
+                "Live watch %s cannot fit within the %d-word SWD read budget." %
+                (watch.name, MAX_LIVE_READ_WORDS)
+            )
+    batches.append(tuple(current))
+    return tuple(batches)
 
 
 def _word_addresses(watches: Sequence[LiveWatch]) -> Tuple[int, ...]:

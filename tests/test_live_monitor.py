@@ -5,7 +5,8 @@ import unittest
 from types import SimpleNamespace
 
 from b300_core.live_monitor import (
-    DWT_PCSR_ADDRESS, LiveWatch, _decode_watch, run_live_monitor, validate_live_request,
+    DWT_PCSR_ADDRESS, LiveWatch, _decode_watch, live_watch_read_count,
+    plan_live_watch_batches, run_live_monitor, validate_live_request,
 )
 from b300_core.offline_symbols import ElfSymbol, SourceLocation
 
@@ -160,6 +161,32 @@ class LiveMonitorTests(unittest.TestCase):
             validate_live_watch_specs(tuple("v%d:u32" % i for i in range(65)))
         with self.assertRaisesRegex(ValueError, "duplicated"):
             validate_live_watch_specs(("xTickCount:u32", "xTickCount:i32"))
+
+    def test_large_packed_typed_watch_set_is_partitioned_without_reordering(self):
+        watches = tuple(
+            LiveWatch("v%d" % index, "u8", 0x20000000 + index, 1,
+                      node_id="node-%d" % index)
+            for index in range(167)
+        )
+        batches = plan_live_watch_batches(watches)
+
+        self.assertEqual(
+            tuple(watch.name for batch in batches for watch in batch),
+            tuple(watch.name for watch in watches),
+        )
+        self.assertGreater(len(batches), 1)
+        self.assertTrue(all(live_watch_read_count(batch) <= 32 for batch in batches))
+
+    def test_batch_planner_accounts_for_repeated_f64_coherence_reads(self):
+        watches = tuple(
+            LiveWatch("wide%d" % index, "f64", 0x20000000 + index * 8, 8,
+                      node_id="wide-%d" % index)
+            for index in range(16)
+        )
+        batches = plan_live_watch_batches(watches)
+
+        self.assertEqual(len(batches), 3)
+        self.assertTrue(all(live_watch_read_count(batch) <= 32 for batch in batches))
 
     def test_save_and_load_watch_preset_roundtrip(self):
         from b300_core.live_monitor import save_watch_preset, load_watch_preset

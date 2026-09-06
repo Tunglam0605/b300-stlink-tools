@@ -5,8 +5,7 @@ from __future__ import annotations
 from typing import Iterable, Tuple
 
 from .live_monitor import (
-    DWT_PCSR_ADDRESS, F407_RAM_RANGES, MAX_LIVE_READ_WORDS, MAX_LIVE_WATCHES,
-    LiveWatch,
+    F407_RAM_RANGES, MAX_LIVE_WATCHES, LiveWatch, plan_live_watch_batches,
 )
 
 
@@ -99,19 +98,10 @@ def compile_watches(catalog, node_ids: Iterable[str]) -> Tuple[LiveWatch, ...]:
         raise WatchCompileError(
             "duplicate_watch", "Typed variables must have unique display paths.",
         )
-    base_addresses = {DWT_PCSR_ADDRESS}
-    verification_reads = 0
-    for watch in watches:
-        first = watch.address & ~3
-        last = (watch.address + watch.size - 1) & ~3
-        words = ((last - first) // 4) + 1
-        base_addresses.update(first + index * 4 for index in range(words))
-        if watch.size > 4:
-            verification_reads += words
-    if len(base_addresses) + verification_reads > MAX_LIVE_READ_WORDS:
-        raise WatchCompileError(
-            "read_budget", "Typed watches need more than %d SWD word reads per cycle." % MAX_LIVE_READ_WORDS,
-        )
+    try:
+        plan_live_watch_batches(watches)
+    except ValueError as error:
+        raise WatchCompileError("read_budget", str(error)) from error
     return watches
 
 

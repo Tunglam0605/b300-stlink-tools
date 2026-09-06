@@ -96,17 +96,22 @@ class VariableWatchTests(unittest.TestCase):
             _Catalog(seventeen), tuple(node.node_id for node in seventeen)
         )), 17)
 
-        sixty_five = tuple(
-            _node("b%d" % i, 0x20000100 + i, "u8", 1) for i in range(65)
+        packed = tuple(
+            _node("b%d" % i, 0x20000100 + i, "u8", 1) for i in range(167)
+        )
+        self.assertEqual(
+            len(compile_watches(_Catalog(packed), tuple(node.node_id for node in packed))),
+            167,
+        )
+
+        too_many_nodes = tuple(
+            _node("m%d" % i, 0x20001000 + i, "u8", 1) for i in range(513)
         )
         with self.assertRaises(WatchCompileError) as too_many:
-            compile_watches(_Catalog(sixty_five), tuple(node.node_id for node in sixty_five))
+            compile_watches(
+                _Catalog(too_many_nodes), tuple(node.node_id for node in too_many_nodes)
+            )
         self.assertEqual(too_many.exception.reason_code, "too_many_watches")
-
-        wide = tuple(_node("w%d" % i, 0x20000000 + i * 8, "f64", 8) for i in range(16))
-        with self.assertRaises(WatchCompileError) as too_wide:
-            compile_watches(_Catalog(wide), tuple(node.node_id for node in wide))
-        self.assertEqual(too_wide.exception.reason_code, "read_budget")
 
     def test_distinct_dwarf_nodes_with_the_same_display_path_are_rejected_atomically(self):
         first = replace(_node("cu1:status", 0x20000000), name="status", path="status")
