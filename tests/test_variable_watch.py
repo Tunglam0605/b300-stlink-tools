@@ -92,8 +92,15 @@ class VariableWatchTests(unittest.TestCase):
 
     def test_watch_and_swd_word_budgets_are_enforced_during_compile(self):
         seventeen = tuple(_node("n%d" % i, 0x20000000 + i * 4) for i in range(17))
+        self.assertEqual(len(compile_watches(
+            _Catalog(seventeen), tuple(node.node_id for node in seventeen)
+        )), 17)
+
+        sixty_five = tuple(
+            _node("b%d" % i, 0x20000100 + i, "u8", 1) for i in range(65)
+        )
         with self.assertRaises(WatchCompileError) as too_many:
-            compile_watches(_Catalog(seventeen), tuple(node.node_id for node in seventeen))
+            compile_watches(_Catalog(sixty_five), tuple(node.node_id for node in sixty_five))
         self.assertEqual(too_many.exception.reason_code, "too_many_watches")
 
         wide = tuple(_node("w%d" % i, 0x20000000 + i * 8, "f64", 8) for i in range(16))

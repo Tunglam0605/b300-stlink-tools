@@ -7,7 +7,7 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [0.21.1] - 2026-09-06
 
-- Fixed typed Monitor selection so choosing a struct, union or array adds all supported scalar descendants atomically, while preserving duplicate, watch-count and SWD read-budget limits.
+- Fixed typed Monitor selection so choosing a struct, union or array adds all supported scalar descendants atomically. The watch-count ceiling is now 64 while the existing 32-word SWD read budget, duplicate guard and atomic validation remain enforced.
 - Fixed VS Code launch generation for an active B300 bundle installed under a temporary test/update location. Only the exact packaged `vendor/gdb` executable is accepted; unrelated temporary GDB paths remain blocked.
 - Added Gateway client connection details to Settings: Windows username, hostname, selectable local IPv4 address, SSH listener state, port and a copyable `user@ip:port` target. Passwords remain undiscoverable and are never displayed, copied or persisted.
 - Preserved the existing flash, loopback-only debug and zero-halt Monitor safety contracts. `HW-P1-001` remains OPEN / DEFERRED.

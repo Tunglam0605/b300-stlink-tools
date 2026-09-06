@@ -156,8 +156,8 @@ class LiveMonitorTests(unittest.TestCase):
             validate_live_watch_specs(("xTickCount",))
         with self.assertRaisesRegex(ValueError, "Unsupported"):
             validate_live_watch_specs(("xTickCount:pointer",))
-        with self.assertRaisesRegex(ValueError, "At most 16"):
-            validate_live_watch_specs(tuple("v%d:u32" % i for i in range(17)))
+        with self.assertRaisesRegex(ValueError, "At most 64"):
+            validate_live_watch_specs(tuple("v%d:u32" % i for i in range(65)))
         with self.assertRaisesRegex(ValueError, "duplicated"):
             validate_live_watch_specs(("xTickCount:u32", "xTickCount:i32"))
 
