@@ -10,9 +10,44 @@ from PySide6.QtWidgets import QApplication
 
 from b300_core.live_monitor import LiveSample, LiveValue
 from b300_core.offline_symbols import SourceLocation
+from b300_core.typed_symbols import VariableNode
 from b300_gui.production_live_panel import ProductionLivePanel
 from b300_gui.views.monitor_view import MonitorView
 from tests.test_typed_symbols import _build_keil_fixture
+
+
+class _LargeCatalog:
+    fingerprint = "a" * 64
+
+    def __init__(self, count=167):
+        self.root = VariableNode(
+            node_id="large", name="large", type_name="Large_t", kind="structure",
+            address=0x20000000, byte_size=count, has_children=True,
+            availability="browse_only", reason=None, path="large",
+            source_file="fixture.c", value_type=None,
+        )
+        self.children_nodes = tuple(
+            VariableNode(
+                node_id="large.f%d" % index, name="f%d" % index,
+                type_name="uint8_t", kind="scalar",
+                address=0x20000000 + index, byte_size=1, has_children=False,
+                availability="watchable", reason=None, path="large.f%d" % index,
+                source_file="fixture.c", value_type="u8",
+            )
+            for index in range(count)
+        )
+        self.nodes = {node.node_id: node for node in (self.root,) + self.children_nodes}
+
+    def roots(self, query="", offset=0, limit=100):
+        rows = (self.root,) if not query or query.casefold() in self.root.name else ()
+        return rows[offset:offset + limit]
+
+    def children(self, node_id, offset=0, limit=100):
+        rows = self.children_nodes if node_id == self.root.node_id else ()
+        return rows[offset:offset + limit]
+
+    def node(self, node_id):
+        return self.nodes[node_id]
 
 
 class _Signal:
@@ -122,6 +157,41 @@ class MonitorVariableTreeTests(unittest.TestCase):
         )
         self.assertEqual(watches[-1].name, "g_machine.next")
         self.assertIn("16", tree.status.text())
+        view.close()
+
+    def test_selecting_large_struct_adds_all_167_scalar_descendants(self):
+        panel = ProductionLivePanel()
+        view = MonitorView(live_panel=panel)
+        tree = view.variable_tree_panel
+        tree.set_catalog(_LargeCatalog(167))
+        tree.tree.setCurrentIndex(tree.model.index(0, 0))
+        self.app.processEvents()
+
+        tree.add_button.click()
+
+        self.assertEqual(len(panel.compiled_watches()), 167)
+        self.assertEqual(panel.compiled_watches()[0].name, "large.f0")
+        self.assertEqual(panel.compiled_watches()[-1].name, "large.f166")
+        self.assertIn("167", tree.status.text())
+        view.close()
+
+    def test_failed_large_struct_preflight_disables_add_until_selection_changes(self):
+        panel = ProductionLivePanel()
+        view = MonitorView(live_panel=panel)
+        tree = view.variable_tree_panel
+        tree.set_catalog(_LargeCatalog(513))
+        root = tree.model.index(0, 0)
+        tree.tree.setCurrentIndex(root)
+        self.app.processEvents()
+
+        tree.add_button.click()
+
+        self.assertEqual(panel.compiled_watches(), ())
+        self.assertFalse(tree.add_button.isEnabled())
+        tree.model.fetchMore(root)
+        tree.tree.setCurrentIndex(tree.model.index(0, 0, root))
+        self.app.processEvents()
+        self.assertTrue(tree.add_button.isEnabled())
         view.close()
 
     def test_production_watch_chooser_has_no_manual_type_or_json_preset_controls(self):

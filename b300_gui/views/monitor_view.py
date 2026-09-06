@@ -279,6 +279,7 @@ class MonitorView(QWidget):
             )
         except (WatchCompileError, RuntimeError, ValueError) as error:
             self.variable_tree_panel.status.setText(str(error))
+            self.variable_tree_panel.add_button.setEnabled(False)
 
     def set_project_profiles(self, profiles, default_id=None):
         items = tuple(profiles)

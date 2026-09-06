@@ -60,6 +60,34 @@ class EngineeringMonitorTests(unittest.TestCase):
         self.assertEqual(panel.buffer.snapshot()[-1].raw_value, "<incoherent>")
         self.assertNotIn(99, [point[1] for point in panel.trend.points("speed")])
 
+    def test_partial_batch_keeps_other_rows_and_displays_batch_progress(self):
+        panel = self.panel()
+        panel.add_compiled_watch(LiveWatch(
+            "speed", "f32", 0x20000020, 4, node_id="typed:speed"
+        ))
+        panel.add_compiled_watch(LiveWatch(
+            "direction", "u8", 0x20000024, 1, node_id="typed:direction"
+        ))
+        first = LiveSample(
+            0, 0.0, 0.0, .002, False, 0x08010000,
+            SourceLocation(0x08010000, "main", "main.c", 1),
+            (LiveValue("direction", "u8", 0x20000024, 7, "07", node_id="typed:direction"),),
+            batch_index=0, batch_count=2,
+        )
+        second = LiveSample(
+            1, 0.5, 0.5, .002, False, 0x08010000,
+            SourceLocation(0x08010000, "main", "main.c", 1),
+            (LiveValue("speed", "f32", 0x20000020, 12.5, "00004841", node_id="typed:speed"),),
+            batch_index=1, batch_count=2,
+        )
+
+        panel.append_live_sample(first)
+        direction_before = panel.table.item(panel.rows["direction"], 1).text()
+        panel.append_live_sample(second)
+
+        self.assertEqual(panel.table.item(panel.rows["direction"], 1).text(), direction_before)
+        self.assertIn("nhóm 2/2", panel.status.text())
+
     def test_trend_and_recent_samples_are_bounded_and_clear_with_history(self):
         panel = self.panel()
         self.assertEqual(panel.trend.points("speed"), ())

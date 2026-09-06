@@ -475,9 +475,16 @@ class DebugLivePanel(QFrame):
         suffix = " · không nhất quán %d" % coherence_failures if coherence_failures else ""
         limit = self.sample_limit()
         progress = "%d/%d mẫu" % (sample.cycle + 1, limit) if limit is not None else "%d mẫu · Liên tục" % (sample.cycle + 1)
+        batch_count = int(getattr(sample, "batch_count", 1) or 1)
+        batch_index = int(getattr(sample, "batch_index", 0) or 0)
+        batch_status = (
+            " · nhóm %d/%d" % (batch_index + 1, batch_count)
+            if batch_count > 1 else ""
+        )
         self.status.setText(
-            "%s · %d biến · đọc %.1f ms%s" % (
-                progress, len(sample.values), sample.read_duration_seconds * 1000.0, suffix,
+            "%s%s · %d biến · đọc %.1f ms%s" % (
+                progress, batch_status, len(sample.values),
+                sample.read_duration_seconds * 1000.0, suffix,
             )
         )
         return tuple(converted)
