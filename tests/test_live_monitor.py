@@ -39,6 +39,19 @@ class FakeTcl:
         return self.rows.pop(0)
 
 
+class AutoFakeTcl:
+    def __init__(self):
+        self.requests = []
+
+    def wait_target_state(self):
+        return "running"
+
+    def read_word_addresses(self, addresses):
+        self.requests.append(tuple(addresses))
+        return [0x08010101 if address == DWT_PCSR_ADDRESS else address
+                for address in addresses]
+
+
 class FakeClock:
     def __init__(self):
         self.now = 0.0
@@ -187,6 +200,34 @@ class LiveMonitorTests(unittest.TestCase):
 
         self.assertEqual(len(batches), 3)
         self.assertTrue(all(live_watch_read_count(batch) <= 32 for batch in batches))
+
+    def test_large_typed_set_is_sampled_round_robin_as_partial_batches(self):
+        watches = tuple(
+            LiveWatch("v%d" % index, "u8", 0x20000000 + index, 1,
+                      node_id="node-%d" % index)
+            for index in range(167)
+        )
+        tcl = AutoFakeTcl()
+        clock = FakeClock()
+        samples = []
+
+        summary = run_live_monitor(
+            tcl, FakeSymbols(), interval_seconds=0.1, sample_limit=3,
+            compiled_watches=watches, clock=clock, wait=clock.wait,
+            on_sample=samples.append,
+        )
+
+        self.assertEqual(summary.samples, 3)
+        self.assertEqual(
+            [(sample.batch_index, sample.batch_count) for sample in samples],
+            [(0, 2), (1, 2), (0, 2)],
+        )
+        self.assertEqual(
+            [sample.values[0].name for sample in samples],
+            ["v0", "v124", "v0"],
+        )
+        self.assertTrue(all(len(request) <= 32 for request in tcl.requests))
+        self.assertTrue(all(DWT_PCSR_ADDRESS in request for request in tcl.requests))
 
     def test_save_and_load_watch_preset_roundtrip(self):
         from b300_core.live_monitor import save_watch_preset, load_watch_preset

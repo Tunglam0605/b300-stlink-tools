@@ -66,6 +66,8 @@ class LiveSample:
     pc: int
     source: SourceLocation
     values: Tuple[LiveValue, ...]
+    batch_index: int = 0
+    batch_count: int = 1
 
     def to_record(self) -> dict:
         return {
@@ -78,6 +80,8 @@ class LiveSample:
             "function": self.source.function,
             "file": self.source.file,
             "line": self.source.line,
+            "batch_index": self.batch_index,
+            "batch_count": self.batch_count,
             "values": [
                 {
                     "name": item.name, "type": item.value_type,
@@ -327,14 +331,7 @@ def run_live_monitor(
         duplicate = next(name for name in names if names.count(name) > 1)
         raise ValueError("Live watch symbol is duplicated: %s" % duplicate)
     validate_live_request(interval_seconds, sample_limit, watches)
-    addresses = _word_addresses(watches)
-    coherence_addresses = _coherence_addresses(watches)
-    request_addresses = addresses + coherence_addresses
-    if len(request_addresses) > MAX_LIVE_READ_WORDS:
-        raise ValueError(
-            "Live monitor needs %d SWD word reads including 64-bit coherence checks; max is %d." %
-            (len(request_addresses), MAX_LIVE_READ_WORDS)
-        )
+    batches = plan_live_watch_batches(watches)
     if tcl.wait_target_state() != "running":
         raise RuntimeError("Realtime Live Monitor requires a RUNNING target and will not resume it automatically.")
     start = clock()
@@ -354,6 +351,11 @@ def run_live_monitor(
             if cancelled():
                 was_cancelled = True
                 break
+            batch_index = cycle % len(batches)
+            batch = batches[batch_index]
+            addresses = _word_addresses(batch)
+            coherence_addresses = _coherence_addresses(batch)
+            request_addresses = addresses + coherence_addresses
             read_started = clock()
             words = tcl.read_word_addresses(request_addresses)
             read_finished = clock()
@@ -364,7 +366,7 @@ def run_live_monitor(
             source = symbols.source_location(pc)
             values = tuple(
                 _decode_watch(watch, mapping, verification_mapping if watch.size > 4 else None)
-                for watch in watches
+                for watch in batch
             )
             duration = read_finished - read_started
             overrun = duration > float(interval_seconds)
@@ -375,6 +377,7 @@ def run_live_monitor(
                 captured_elapsed_seconds=read_finished - start,
                 read_duration_seconds=duration, overrun=overrun,
                 pc=pc, source=source, values=values,
+                batch_index=batch_index, batch_count=len(batches),
             )
             if on_sample is not None:
                 on_sample(sample)

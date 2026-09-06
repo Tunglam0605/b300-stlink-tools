@@ -11,8 +11,9 @@ from typing import Callable, Optional, Tuple
 from .elf_matcher import discover_symbol_files, find_matching_symbol_file
 from .live_analytics import LiveAnalyticsSnapshot, LiveMonitorStore, LiveSeriesPoint, LiveExecutionTransition
 from .live_monitor import (
-    MAX_LIVE_WATCHES, LiveSample, LiveSummary, LiveWatch, run_live_monitor, validate_compiled_watches,
-    validate_live_request, validate_live_watch_specs,
+    MAX_LIVE_WATCHES, LiveSample, LiveSummary, LiveWatch, plan_live_watch_batches,
+    run_live_monitor, validate_compiled_watches, validate_live_request,
+    validate_live_watch_specs,
 )
 from .live_service import LiveMonitorService
 from .models import ProbeRef
@@ -100,6 +101,7 @@ def _validate_monitor_request(interval_seconds: float, sample_limit: Optional[in
                               compiled_watches: Tuple[LiveWatch, ...] = ()) -> None:
     manual = validate_live_watch_specs(watch_specs)
     typed = validate_compiled_watches(compiled_watches)
+    plan_live_watch_batches(typed)
     names = tuple(name for name, _value_type in manual) + tuple(watch.name for watch in typed)
     if len(set(names)) != len(names):
         duplicate = next(name for name in names if names.count(name) > 1)
