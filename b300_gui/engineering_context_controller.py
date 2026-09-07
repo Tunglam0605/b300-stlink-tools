@@ -51,8 +51,13 @@ class EngineeringContextController:
                     if project and project.application_hex:
                         window.program_view.set_file_path(project.application_hex)
                 self._selection = (project, connection, context.selected_probe)
-                window.device_view.set_probes(context.probes)
                 window.debug_vscode_view.set_probes(context.probes)
+            window.device_view.set_probes(
+                context.probes,
+                context.selected_probe,
+                source="local" if connection.is_local else "gateway",
+                unavailable_reason=context.gateway_warning,
+            )
             if old != current:
                 window._update_controls()
             if not connection.is_local:

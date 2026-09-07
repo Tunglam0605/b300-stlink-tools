@@ -5,6 +5,12 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.21.3] - 2026-09-07
+
+- Distinguished local USB ST-Link discovery from remote Gateway probe evidence throughout the shared header, probe picker and Device page.
+- Replaced the false remote “ST-Link not found” state with explicit Gateway pending/unavailable states and refreshed the Device page when Gateway health changes without a selection change.
+- Localized the old-Gateway-CLI recovery message while retaining the required CLI update action.
+
 ## [0.21.2] - 2026-09-07
 
 - Fixed large compound DWARF watches such as the 167-field `xAgvInfor`: all supported scalar descendants are added atomically and sampled in deterministic round-robin batches.

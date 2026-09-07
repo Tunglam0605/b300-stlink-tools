@@ -75,14 +75,24 @@ class SharedContextBar(QFrame):
         context = self.context
         self._populate(self.project_combo, [(p.name,p.project_id,'\n'.join((str(p.workspace),str(p.symbols),str(p.application_hex or 'Chưa có tệp HEX ứng dụng')))) for p in context.project_profiles], context.selected_project.project_id if context.selected_project else None, 'Chưa chọn dự án')
         self._populate(self.connection_combo, [(c.name,c.connection_id,c.gateway.display_endpoint if c.gateway else 'ST-Link cục bộ') for c in context.connections], context.selected_connection.connection_id, 'ST-Link cục bộ')
-        self._populate(self.probe_combo, [(p.name,p.serial,p.serial or 'Chưa có số sê-ri') for p in context.probes], context.selected_probe, 'Chưa phát hiện ST-Link')
+        connection = context.selected_connection
+        warning = getattr(context, 'gateway_warning', '')
+        probe_placeholder = (
+            'Gateway chưa trả về trạng thái ST-Link' if not connection.is_local and warning
+            else 'Đang đọc ST-Link trên Gateway' if not connection.is_local
+            else 'Chưa phát hiện ST-Link cục bộ'
+        )
+        self._populate(
+            self.probe_combo,
+            [(p.name,p.serial,p.serial or 'Chưa có số sê-ri') for p in context.probes],
+            context.selected_probe,
+            probe_placeholder,
+        )
         target = context.target_info
         self.target_label.setText('MCU đích  0x%03X · %d KiB' % (target.device_id,target.flash_kib) if target else 'MCU đích  Chưa kiểm tra')
         self.target_label.setToolTip(self.target_label.text())
-        connection = context.selected_connection
         connected = bool(connection.gateway and context.gateway_sessions and context.gateway_sessions.connected(connection.gateway.endpoint))
         snapshot = getattr(context, 'gateway_snapshot', None)
-        warning = getattr(context, 'gateway_warning', '')
         if connection.is_local:
             text = 'Đã phát hiện ST-Link' if context.probes else 'Chưa phát hiện ST-Link'
             state = 'success' if context.probes else 'neutral'

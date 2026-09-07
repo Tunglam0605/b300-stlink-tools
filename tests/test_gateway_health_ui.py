@@ -55,6 +55,17 @@ class GatewayHealthUiTests(unittest.TestCase):
         self.assertIsNone(context.gateway_snapshot)
         self.assertEqual(context.gateway_warning, "")
 
+    def test_remote_probe_picker_names_gateway_as_its_source(self):
+        context = AppContext()
+        gateway = GatewayProfile.create("PC", "192.168.1.158", "aubot", 22, profile_id="pc")
+        context.set_profiles((), (gateway,), default_gateway_id="pc")
+        context.set_gateway_health(None, "Gateway CLI cần được cập nhật")
+        bar = SharedContextBar(context)
+        self.addCleanup(bar.close)
+
+        self.assertIn("Gateway", bar.probe_combo.currentText())
+        self.assertNotEqual(bar.probe_combo.currentText(), "Chưa phát hiện ST-Link")
+
 
 if __name__ == "__main__":
     unittest.main()

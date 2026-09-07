@@ -1589,7 +1589,10 @@ class MainWindow(QMainWindow):
             if probe_error is not None:
                 detail = "OpenOCD sẵn sàng · Không thể quét ST-Link"
             else:
-                detail = "%d mạch nạp ST-Link" % len(probes) if probes else "OpenOCD sẵn sàng"
+                detail = (
+                    "Cục bộ: %d mạch nạp ST-Link" % len(probes)
+                    if probes else "Cục bộ: chưa phát hiện ST-Link · OpenOCD sẵn sàng"
+                )
             self._set_status(detail, "normal")
         else:
             detail = "Chưa tìm thấy OpenOCD; hãy chạy Thiết lập môi trường"

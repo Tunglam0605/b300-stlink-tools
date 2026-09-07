@@ -187,18 +187,37 @@ class DeviceView(QWidget):
         self._arrange_summary(5 if self.width() >= 1050 else 3 if self.width() >= 650 else 2)
         self.details_layout.setDirection(QBoxLayout.Direction.LeftToRight if self.width() >= 950 else QBoxLayout.Direction.TopToBottom)
 
-    def set_probes(self, probes: Sequence[ProbeInfo], selected_serial: Optional[str] = None) -> None:
+    def set_probes(
+            self, probes: Sequence[ProbeInfo], selected_serial: Optional[str] = None,
+            *, source: str = "local", unavailable_reason: str = "") -> None:
         self._probes = list(probes)
+        remote = str(source).lower() == "gateway"
+        reason = str(unavailable_reason or "").strip()
         selected = next((p for p in probes if selected_serial and p.serial == selected_serial), None)
         if selected is None and len(probes) == 1:
             selected = probes[0]
+        self.kpi_probe_name.setToolTip(reason)
+        self.kpi_probe_serial.setToolTip(reason)
+        self.kpi_probe_status.setToolTip(reason)
         if selected:
             self.kpi_probe_name.setText(selected.name)
-            self.kpi_probe_serial.setText("Sê-ri: %s" % (selected.serial or "Chưa có số sê-ri"))
-            self.kpi_probe_status.setText("ĐẦU DÒ SẴN SÀNG")
+            serial = selected.serial or "Chưa có số sê-ri"
+            self.kpi_probe_serial.setText(
+                "%s · Nguồn: %s" % (serial, "Gateway qua SSH" if remote else "USB cục bộ")
+            )
+            self.kpi_probe_status.setText(
+                "ĐẦU DÒ GATEWAY SẴN SÀNG" if remote else "ĐẦU DÒ CỤC BỘ SẴN SÀNG"
+            )
+        elif remote:
+            self.kpi_probe_name.setText(
+                "Chưa đọc được ST-Link trên Gateway" if reason
+                else "Đang chờ trạng thái ST-Link trên Gateway"
+            )
+            self.kpi_probe_serial.setText("Nguồn: Gateway qua SSH")
+            self.kpi_probe_status.setText("KHÔNG XÁC ĐỊNH" if reason else "ĐANG KIỂM TRA")
         else:
             self.kpi_probe_name.setText("Chọn ST-Link trên thanh chung" if probes else "Không tìm thấy ST-Link")
-            self.kpi_probe_serial.setText("Sê-ri: —")
+            self.kpi_probe_serial.setText("Nguồn: USB cục bộ · Sê-ri: —")
             self.kpi_probe_status.setText("Chưa chọn" if probes else "MẤT KẾT NỐI")
 
     def set_target_info(self, info: Optional[TargetInfo]) -> None:

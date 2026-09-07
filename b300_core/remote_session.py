@@ -564,7 +564,8 @@ class RemoteSession:
             if any(marker in lowered for marker in (
                     "invalid choice", "unrecognized argument", "unknown command")):
                 raise RemoteSessionError(
-                    "Gateway B300 CLI does not support managed Gateway status; update the CLI and retry."
+                    "CLI B300 trên Gateway chưa hỗ trợ trạng thái Gateway; "
+                    "hãy cập nhật (update) CLI trên máy Gateway rồi thử lại."
                 )
             raise RemoteSessionError(
                 "Gateway CLI did not return a supported status snapshot%s." %

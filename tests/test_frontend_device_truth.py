@@ -22,6 +22,19 @@ class FrontendDeviceTruthTests(unittest.TestCase):
                       view.val_rev_id, view.kpi_volt_badge, view.val_boot_prot):
             self.assertIn("Chưa", label.text())
 
+    def test_remote_probe_status_does_not_claim_local_stlink_is_missing(self):
+        view = DeviceView()
+        try:
+            reason = "Gateway CLI cần được cập nhật"
+            view.set_probes((), source="gateway", unavailable_reason=reason)
+
+            self.assertIn("Gateway", view.kpi_probe_name.text())
+            self.assertNotIn("Không tìm thấy ST-Link", view.kpi_probe_name.text())
+            self.assertIn("KHÔNG XÁC ĐỊNH", view.kpi_probe_status.text())
+            self.assertEqual(view.kpi_probe_name.toolTip(), reason)
+        finally:
+            view.close()
+
     def test_protection_evidence_is_updated_and_cleared(self):
         view = DeviceView()
         view.set_target_info(TargetInfo(0x413, 512, 3.3, "WRP", (0, 1, 2), True))

@@ -437,6 +437,25 @@ class V018SimplifiedUiTests(unittest.TestCase):
         finally:
             self._close(window)
 
+    def test_gateway_warning_replaces_remote_probe_status_without_selection_change(self) -> None:
+        window = self._make_window()
+        try:
+            gateway = GatewayProfile.create(
+                "PC", "192.168.1.158", "aubot", 22, profile_id="pc"
+            )
+            window.app_context.set_profiles((), (gateway,))
+            window.app_context.select_connection("pc")
+            self.assertIn("Gateway", window.device_view.kpi_probe_name.text())
+
+            warning = "Gateway CLI cần được cập nhật"
+            window.app_context.gateway_warning = warning
+            window._context_controller.changed()
+
+            self.assertEqual(window.device_view.kpi_probe_name.toolTip(), warning)
+            self.assertIn("KHÔNG XÁC ĐỊNH", window.device_view.kpi_probe_status.text())
+        finally:
+            self._close(window)
+
     def test_debug_remote_request_resolves_shared_connection_and_automatic_tunnel_port(self) -> None:
         window = self._make_window()
         try:
