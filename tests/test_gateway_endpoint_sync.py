@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from b300_core.remote_session import RemoteForward, RemoteForwardError
+from b300_core.gateway_status import GatewaySnapshot
 from b300_core.vscode_bridge import (
     BridgeState,
     GatewayEndpointBinding,
@@ -36,6 +37,7 @@ class EndpointSession:
         self._generation = 7
         self.opened = []
         self.closed = []
+        self.listener_checks = []
         self.reject_local_port = None
 
     @property
@@ -44,6 +46,7 @@ class EndpointSession:
         return SessionState(names, self._generation)
 
     def require_remote_listener(self, *, remote_port, timeout_seconds=3.0):
+        self.listener_checks.append(remote_port)
         return None
 
     def open_forward(self, name, *, remote_port, local_port=0,
@@ -62,10 +65,68 @@ class EndpointSession:
 
 
 def ready(*, instance="gw-a", generation=1, port=3333):
-    return Snapshot("READY", instance, generation, f"127.0.0.1:{port}")
+    return GatewaySnapshot.from_record({
+        "schema_version": 1,
+        "instance_id": instance,
+        "generation": generation,
+        "sequence": 1,
+        "state": "READY",
+        "reason_code": "TARGET_VERIFIED",
+        "selected_probe": {"serial": "SAFE123", "usb_identity": "usb:1"},
+        "gdb_endpoint": f"127.0.0.1:{port}",
+        "tcl_endpoint": "127.0.0.1:6666",
+        "cpu_state": "running",
+        "evidence_age_ms": 0,
+    })
 
 
 class GatewayEndpointSyncTests(unittest.TestCase):
+    def test_ready_snapshot_does_not_probe_gdb_with_a_phantom_connection(self):
+        session = EndpointSession()
+        bridge = VsCodeDebugBridge()
+
+        bridge.start_client(session, snapshot=ready(), profile_id="lab")
+
+        self.assertEqual(session.listener_checks, [])
+        self.assertEqual(session.opened, [("vscode_gdb", 3333, 0)])
+
+    def test_partial_ready_object_cannot_bypass_snapshot_validation(self):
+        session = EndpointSession()
+        bridge = VsCodeDebugBridge()
+
+        with self.assertRaisesRegex(RuntimeError, "validated Gateway snapshot"):
+            bridge.start_client(
+                session,
+                snapshot=Snapshot("READY", "gw-a", 1, "127.0.0.1:3333"),
+                profile_id="lab",
+            )
+
+        self.assertEqual(session.listener_checks, [])
+        self.assertEqual(session.opened, [])
+
+    def test_direct_invalid_gateway_snapshot_cannot_bypass_canonical_validation(self):
+        session = EndpointSession()
+        bridge = VsCodeDebugBridge()
+        invalid = GatewaySnapshot(
+            schema_version=1,
+            instance_id="gw-a",
+            generation=1,
+            sequence=1,
+            state="READY",
+            reason_code="TARGET_UNVERIFIED",
+            selected_probe=None,
+            gdb_endpoint="127.0.0.1:3333",
+            tcl_endpoint=None,
+            cpu_state="unknown",
+            evidence_age_ms=None,
+        )
+
+        with self.assertRaisesRegex(ValueError, "selected probe"):
+            bridge.start_client(session, snapshot=invalid, profile_id="lab")
+
+        self.assertEqual(session.listener_checks, [])
+        self.assertEqual(session.opened, [])
+
     def test_configuration_rejects_binding_that_does_not_match_live_endpoint(self):
         binding = GatewayEndpointBinding(
             "lab", "gw-a", 1, "127.0.0.1:3333", "127.0.0.1:45100", 7

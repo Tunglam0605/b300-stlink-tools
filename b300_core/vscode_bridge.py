@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Callable, Dict, Optional
 
 from .debug_service import DebugConfig, DebugService, DebugState
+from .gateway_status import GatewaySnapshot
 from .gdb_runtime import resolve_gdb
 from .models import ProbeRef
 from .process_startup import child_process_kwargs
@@ -110,6 +111,11 @@ def _snapshot_endpoint(snapshot) -> tuple[str, int]:
     state_text = str(getattr(state, "value", state) or "").upper()
     if state_text != "READY":
         raise RuntimeError("Gateway snapshot must be READY before opening a VS Code tunnel.")
+    if not isinstance(snapshot, GatewaySnapshot):
+        raise RuntimeError(
+            "VS Code Client requires a fully validated Gateway snapshot before opening a tunnel."
+        )
+    snapshot = GatewaySnapshot.from_record(snapshot.to_record())
     instance_id = str(getattr(snapshot, "instance_id", "") or "").strip()
     generation = getattr(snapshot, "generation", None)
     endpoint = getattr(snapshot, "gdb_endpoint", None)
@@ -580,14 +586,15 @@ class VsCodeDebugBridge:
             remote_endpoint, remote_gdb_port = _snapshot_endpoint(snapshot)
         if not session.connected:
             raise RuntimeError("Remote B300 SSH session must be connected before Debug Client starts.")
-        try:
-            session.require_remote_listener(remote_port=int(remote_gdb_port))
-        except RemoteForwardError as error:
-            raise RemoteForwardError(
-                "Gateway GDB listener is unavailable. Start Debug Gateway on the remote "
-                "workstation, then retry Debug Client. If Gateway is already running, "
-                "check that SSH TCP forwarding is allowed."
-            ) from error
+        if snapshot is None:
+            try:
+                session.require_remote_listener(remote_port=int(remote_gdb_port))
+            except RemoteForwardError as error:
+                raise RemoteForwardError(
+                    "Gateway GDB listener is unavailable. Start Debug Gateway on the remote "
+                    "workstation, then retry Debug Client. If Gateway is already running, "
+                    "check that SSH TCP forwarding is allowed."
+                ) from error
         forward = session.open_forward(
             self.CLIENT_FORWARD_NAME,
             remote_port=int(remote_gdb_port),

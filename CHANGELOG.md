@@ -5,6 +5,12 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.21.9] - 2026-09-07
+
+- Removed the redundant raw GDB listener preflight when a validated READY Gateway snapshot already identifies the loopback endpoint. The preflight opened a phantom GDB connection that OpenOCD counted but did not report as disconnected, which could consume a Cortex-Debug connection slot and prevent the managed run-state guard from restoring a previously running target after VS Code and Live Watch detached.
+- Verified the real Windows-to-Ubuntu Cortex-Debug path with its primary and LiveGDB connections: `xTickCount` evaluated successfully, both clients disconnected cleanly, the Gateway generation remained stable and the STM32F407 automatically returned to `running`.
+- Preserved authenticated SSH transport, loopback-only GDB/TCL endpoints and the no-flash debug policy.
+
 ## [0.21.8] - 2026-09-07
 
 - Prevented ordinary OpenOCD GDB/memory errors from being misclassified as a lost ST-Link or SWD transport. The managed Gateway now restarts only for explicit USB, unexamined-target or SWD-fault evidence, so Cortex-Debug and its Live Watch connection no longer tear down their own GDB endpoint.
