@@ -103,8 +103,8 @@ class RemoteVsCodeTests(unittest.TestCase):
             )
             self.make_profile().write_kit(destination, force=True)
             payload = json.loads(launch.read_text(encoding="utf-8"))
-            self.assertEqual(payload["configurations"][0], {"name": "Python", "type": "debugpy"})
-            self.assertEqual(payload["configurations"][1]["b300"]["owner"], "b300-stlink-tools")
+            self.assertEqual(payload["configurations"][0]["b300"]["owner"], "b300-stlink-tools")
+            self.assertEqual(payload["configurations"][1], {"name": "Python", "type": "debugpy"})
 
     def test_parser_accepts_remote_vscode_options(self) -> None:
         args = parse_args([
