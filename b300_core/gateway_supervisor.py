@@ -19,6 +19,7 @@ from .models import ProbeInfo
 from .probe import list_probes
 from .probe_presence import ProbePresenceTracker
 from .probe_selection import ProbeSelectionError, select_probe
+from .remote_debug_guard import RemoteDebugGuard
 from .tcl_client import SafeTclClient, TclEndpoint
 from .process_startup import child_process_kwargs
 
@@ -258,6 +259,7 @@ class GatewaySupervisor:
     def __init__(self, *, service_factory: Callable[[], object] = DebugService,
                  probe_discovery: Callable[[], Sequence[ProbeInfo]] = list_probes,
                  target_state_probe: Optional[Callable[[DebugConfig], str]] = None,
+                 remote_guard_factory: Optional[Callable[[DebugConfig], object]] = None,
                  snapshot_sink: Optional[Callable[[GatewaySnapshot], None]] = None,
                  clock: Callable[[], float] = time.monotonic,
                  gdb_port: int = 3333, tcl_port: int = 6666,
@@ -269,6 +271,7 @@ class GatewaySupervisor:
         self._service_factory = service_factory
         self._probe_discovery = probe_discovery
         self._target_state_probe = target_state_probe or self._probe_target_state
+        self._remote_guard_factory = remote_guard_factory or self._create_remote_guard
         self._sink = snapshot_sink
         self._clock = clock
         self._gdb_port = int(gdb_port)
@@ -278,6 +281,7 @@ class GatewaySupervisor:
         self._sequence = 0
         self._generation = 0
         self._service = None
+        self._remote_guard = None
         self._selected: Optional[ProbeInfo] = None
         self._presence: Optional[ProbePresenceTracker] = None
         self._evidence_at: Optional[float] = None
@@ -356,6 +360,7 @@ class GatewaySupervisor:
                 service.stop()
                 self._service = None
                 return self._publish("DISCONNECTED", "OPENOCD_HARDWARE_ERROR")
+            self._arm_remote_guard(config, cpu_state)
             self._evidence_at = self._clock()
             return self._publish("READY", "TARGET_VERIFIED", cpu_state=cpu_state)
 
@@ -368,8 +373,7 @@ class GatewaySupervisor:
                     or (self._snapshot.state == "DISCONNECTED"
                         and self._snapshot.reason_code == "OPENOCD_HARDWARE_ERROR")):
                 if service is not None:
-                    service.stop()
-                    self._service = None
+                    self._stop_service("hardware_error")
                 return self._publish("DISCONNECTED", "OPENOCD_HARDWARE_ERROR")
             if service is None or service.state not in (DebugState.READY, DebugState.CONNECTED):
                 return self._publish("FAILED", "OPENOCD_EXITED")
@@ -377,8 +381,7 @@ class GatewaySupervisor:
                 return self._publish("FAILED", "PROBE_IDENTITY_LOST")
             presence = self._presence.observe(tuple(self._probe_discovery()))
             if presence.kind in {"REMOVED", "AMBIGUOUS"}:
-                service.stop()
-                self._service = None
+                self._stop_service("probe_removed")
                 reason = "PROBE_REMOVED" if presence.kind == "REMOVED" else "PROBE_IDENTITY_AMBIGUOUS"
                 return self._publish("DISCONNECTED", reason)
             try:
@@ -392,9 +395,9 @@ class GatewaySupervisor:
                     raise RuntimeError("unverified target")
             except Exception:
                 return self._publish("DISCONNECTED", "TARGET_UNVERIFIED")
+            self._arm_remote_guard(config, cpu_state)
             if self._hardware_error:
-                service.stop()
-                self._service = None
+                self._stop_service("hardware_error")
                 return self._publish("DISCONNECTED", "OPENOCD_HARDWARE_ERROR")
             self._evidence_at = self._clock()
             return self._publish("READY", "TARGET_VERIFIED", cpu_state=cpu_state)
@@ -423,13 +426,15 @@ class GatewaySupervisor:
         with self._lock:
             self._manual_stop = True
             if self._service is not None:
-                self._service.stop()
-                self._service = None
+                self._stop_service("server_shutdown")
             self._hardware_error = False
             return self._publish("STOPPED", "USER_STOPPED")
 
     def _on_openocd_line(self, line: str) -> None:
         lowered = str(line).lower()
+        guard = self._remote_guard
+        if guard is not None:
+            guard.handle_openocd_line(line)
         if any(marker in lowered for marker in ("libusb", "target not examined", "swd fault", "error:")):
             # The owner loop performs serialized cleanup.  This callback only
             # revokes the public READY claim immediately.
@@ -437,6 +442,26 @@ class GatewaySupervisor:
             with self._lock:
                 if self._service is not None:
                     self._publish("DISCONNECTED", "OPENOCD_HARDWARE_ERROR")
+
+    def _arm_remote_guard(self, config: DebugConfig, initial_state: str) -> None:
+        if self._remote_guard is not None:
+            return
+        guard = self._remote_guard_factory(config)
+        guard.capture_initial_state(initial_state)
+        self._remote_guard = guard
+
+    def _stop_service(self, reason: str) -> None:
+        service = self._service
+        guard = self._remote_guard
+        self._remote_guard = None
+        if guard is not None:
+            try:
+                guard.restore_initial_state(reason=reason)
+            except Exception:
+                pass
+        if service is not None:
+            service.stop()
+        self._service = None
 
     def _publish(self, state: str, reason_code: str,
                  *, cpu_state: str = "unknown") -> GatewaySnapshot:
@@ -474,6 +499,12 @@ class GatewaySupervisor:
         if config.tcl_port is None:
             raise RuntimeError("Gateway health requires a loopback TCL endpoint.")
         return SafeTclClient(TclEndpoint("127.0.0.1", config.tcl_port)).wait_target_state()
+
+    @staticmethod
+    def _create_remote_guard(config: DebugConfig) -> RemoteDebugGuard:
+        if config.tcl_port is None:
+            raise RuntimeError("Managed Gateway run-state guard requires loopback TCL.")
+        return RemoteDebugGuard(SafeTclClient(TclEndpoint("127.0.0.1", config.tcl_port)))
 
 
 __all__ = [

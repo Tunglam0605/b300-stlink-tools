@@ -29,12 +29,14 @@ class RemoteDebugGuard:
         self._gdb_connections = 0
         self._lock = threading.RLock()
 
-    def capture_initial_state(self) -> str:
+    def capture_initial_state(self, state: Optional[str] = None) -> str:
         with self._lock:
-            state = self.tcl.wait_target_state()
-            self.initial_target_state = state
-            self._emit("armed", "initial_target_state=%s" % state)
-            return state
+            captured = self.tcl.wait_target_state() if state is None else str(state).lower()
+            if captured not in {"running", "halted"}:
+                raise RuntimeError("Remote debug guard requires a verified initial target state.")
+            self.initial_target_state = captured
+            self._emit("armed", "initial_target_state=%s" % captured)
+            return captured
 
     def handle_openocd_line(self, line: str) -> None:
         text = str(line).lower()

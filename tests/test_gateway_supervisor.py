@@ -13,6 +13,7 @@ from b300_core.gateway_supervisor import (
 )
 from b300_core.gateway_status import GatewaySnapshot
 from b300_core.models import ProbeInfo
+from b300_core.remote_debug_guard import RemoteDebugGuard
 
 
 PROBE = ProbeInfo("SAFE123", "ST-Link", "test", "usb:1")
@@ -23,6 +24,7 @@ class FakeService:
         self._state = DebugState.STOPPED
         self.start_calls = []
         self.stop_calls = 0
+        self.event_sink = None
 
     @property
     def state(self):
@@ -30,11 +32,29 @@ class FakeService:
 
     def start(self, config, event_sink=None):
         self.start_calls.append(config)
+        self.event_sink = event_sink
         self._state = DebugState.READY
 
     def stop(self):
         self.stop_calls += 1
         self._state = DebugState.STOPPED
+
+    def emit(self, line):
+        self.event_sink(line)
+
+
+class FakeTcl:
+    def __init__(self, state="running"):
+        self.state = state
+        self.resume_calls = 0
+
+    def wait_target_state(self):
+        return self.state
+
+    def resume_target(self):
+        self.resume_calls += 1
+        self.state = "running"
+        return self.state
 
 
 class StartupHardwareErrorService(FakeService):
@@ -44,6 +64,44 @@ class StartupHardwareErrorService(FakeService):
 
 
 class GatewaySupervisorTests(unittest.TestCase):
+    def test_managed_owner_restores_running_only_after_last_gdb_disconnect(self) -> None:
+        service = FakeService()
+        tcl = FakeTcl("running")
+        supervisor = GatewaySupervisor(
+            service_factory=lambda: service,
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=lambda _config: tcl.state,
+            remote_guard_factory=lambda _config: RemoteDebugGuard(tcl),
+        )
+        self.assertEqual(supervisor.ensure().state, "READY")
+
+        service.emit("Info : accepting 'gdb' connection on tcp/3333")
+        service.emit("Info : accepting 'gdb' connection on tcp/3333")
+        tcl.state = "halted"
+        service.emit("Info : dropped 'gdb' connection")
+        self.assertEqual((tcl.state, tcl.resume_calls), ("halted", 0))
+
+        service.emit("Info : dropped 'gdb' connection")
+        self.assertEqual((tcl.state, tcl.resume_calls), ("running", 1))
+
+    def test_managed_owner_shutdown_restores_a_previously_running_target(self) -> None:
+        service = FakeService()
+        tcl = FakeTcl("running")
+        supervisor = GatewaySupervisor(
+            service_factory=lambda: service,
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=lambda _config: tcl.state,
+            remote_guard_factory=lambda _config: RemoteDebugGuard(tcl),
+        )
+        supervisor.ensure()
+        service.emit("Info : accepting 'gdb' connection on tcp/3333")
+        tcl.state = "halted"
+
+        supervisor.stop()
+
+        self.assertEqual((tcl.state, tcl.resume_calls), ("running", 1))
+        self.assertEqual(service.stop_calls, 1)
+
     def test_ready_is_published_only_after_fresh_target_evidence(self) -> None:
         service = FakeService()
         seen = []
