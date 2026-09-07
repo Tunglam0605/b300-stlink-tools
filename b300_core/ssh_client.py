@@ -66,10 +66,10 @@ def managed_ssh_options(
 
 
 def password_ssh_options() -> Tuple[str, ...]:
-    """Return ordinary interactive OpenSSH authentication options without secrets."""
+    """Return ordinary OpenSSH authentication options without persisting secrets."""
     return (
-        "-o", "PreferredAuthentications=password,keyboard-interactive",
+        "-o", "PreferredAuthentications=publickey,password,keyboard-interactive",
         "-o", "PasswordAuthentication=yes",
         "-o", "KbdInteractiveAuthentication=yes",
-        "-o", "PubkeyAuthentication=no",
+        "-o", "PubkeyAuthentication=yes",
     )

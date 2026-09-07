@@ -326,7 +326,7 @@ Máy Gateway chưa có SSH có thể dùng chức năng chuẩn bị Gateway tro
 # Gateway
 b300-stlink gateway quickstart --confirm-system-change
 
-# Client: lưu endpoint (password sẽ được OpenSSH hỏi khi kết nối)
+# Client: lưu endpoint (dùng key đã cấp quyền hoặc OpenSSH hỏi password)
 b300-stlink gateway client-setup --ssh-host <gateway> --ssh-user <user>
 
 # Client

@@ -99,7 +99,7 @@ Live Client dùng SSH local forwarding **TCL-only**:
 127.0.0.1:<client-tcl> -> SSH -> 127.0.0.1:6666 trên Gateway
 ```
 
-Không forward GDB `3333` cho action `live`. SSH dùng prompt password/keyboard-interactive thông thường; host key được OpenSSH xác nhận/lưu theo `known_hosts` mặc định của user. `ExitOnForwardFailure=yes` vẫn bắt buộc, password không được B300 lưu hay đưa vào lệnh/log.
+Không forward GDB `3333` cho action `live`. SSH thử public key đã được tài khoản cho phép trước, sau đó mới dùng prompt password/keyboard-interactive; host key được OpenSSH xác nhận/lưu theo `known_hosts` mặc định của user. `ExitOnForwardFailure=yes` vẫn bắt buộc, password không được B300 lưu hay đưa vào lệnh/log.
 
 ## Ý nghĩa Execution Timeline
 

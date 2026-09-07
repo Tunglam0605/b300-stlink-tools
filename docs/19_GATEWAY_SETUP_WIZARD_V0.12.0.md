@@ -1,6 +1,6 @@
 # B300 ST-Link Tools v0.12.0 — Gateway Setup & Remote Workflow
 
-> **Lưu ý v0.14.1:** Nội dung bên dưới ghi lại workflow key-managed của v0.12.0. Bản hiện tại dùng SSH password-interactive thông thường: `client-setup` chỉ lưu `host/user/port`, OpenSSH hỏi password khi kết nối và tự quản lý host key trong `known_hosts` mặc định. Không cần tạo/copy B300 public key. GDB/TCL vẫn chỉ loopback qua SSH tunnel.
+> **Lưu ý v0.21.7:** Nội dung bên dưới ghi lại workflow key-managed của v0.12.0. Bản hiện tại chỉ lưu `host/user/port`, dùng public key đã được tài khoản cho phép nếu có và fallback sang password-interactive; OpenSSH tự quản lý host key trong `known_hosts` mặc định. Không bắt buộc tạo/copy B300 public key. GDB/TCL vẫn chỉ loopback qua SSH tunnel.
 
 ## Mục tiêu
 

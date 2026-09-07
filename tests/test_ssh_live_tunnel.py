@@ -35,14 +35,14 @@ class FakeTcl:
 
 
 class SshLiveTunnelTests(unittest.TestCase):
-    def test_argv_forwards_tcl_only_with_password_interactive_ssh(self):
+    def test_argv_forwards_tcl_only_with_key_or_password_ssh(self):
         config = SshLiveTunnelConfig("gateway.local", "automation", local_tcl_port=16666, gateway_tcl_port=6666)
         argv = config.argv("ssh")
         rendered = " ".join(argv)
-        self.assertIn("PreferredAuthentications=password,keyboard-interactive", rendered)
+        self.assertIn("PreferredAuthentications=publickey,password,keyboard-interactive", rendered)
         self.assertIn("PasswordAuthentication=yes", rendered)
         self.assertIn("KbdInteractiveAuthentication=yes", rendered)
-        self.assertIn("PubkeyAuthentication=no", rendered)
+        self.assertIn("PubkeyAuthentication=yes", rendered)
         self.assertIn("ExitOnForwardFailure=yes", rendered)
         self.assertIn("127.0.0.1:16666:127.0.0.1:6666", rendered)
         self.assertNotIn(":3333", rendered)

@@ -5,6 +5,11 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.21.7] - 2026-09-07
+
+- Fixed headless SSH Client, Live Monitor and VS Code forwarding on machines with an already-authorized OpenSSH key: ordinary SSH now tries public-key authentication first and still falls back to password or keyboard-interactive prompts without persisting a password.
+- Verified the real Windows-to-Ubuntu Gateway Live Monitor path on the connected STM32F407 with five `xTickCount:u32` samples, zero overruns and final target state `running`. Debug ports remain loopback-only and no flash path changed.
+
 ## [0.21.6] - 2026-09-07
 
 - Fixed Cortex-Debug shutdown with Live Watch: the run-state guard now counts both GDB connections and restores a previously running target only after the final connection drops.

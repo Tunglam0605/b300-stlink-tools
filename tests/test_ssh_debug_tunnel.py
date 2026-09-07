@@ -35,14 +35,14 @@ class FakeTcl:
 
 
 class SshDebugTunnelTests(unittest.TestCase):
-    def test_argv_forwards_only_loopback_gdb_and_tcl(self):
+    def test_argv_forwards_only_loopback_gdb_and_tcl_with_key_or_password(self):
         config = SshDebugTunnelConfig("gateway.local", "automation", local_gdb_port=13333, local_tcl_port=16666)
         argv = config.argv("ssh")
         rendered = " ".join(argv)
-        self.assertIn("PreferredAuthentications=password,keyboard-interactive", rendered)
+        self.assertIn("PreferredAuthentications=publickey,password,keyboard-interactive", rendered)
         self.assertIn("PasswordAuthentication=yes", rendered)
         self.assertIn("KbdInteractiveAuthentication=yes", rendered)
-        self.assertIn("PubkeyAuthentication=no", rendered)
+        self.assertIn("PubkeyAuthentication=yes", rendered)
         self.assertIn("127.0.0.1:13333:127.0.0.1:3333", rendered)
         self.assertIn("127.0.0.1:16666:127.0.0.1:6666", rendered)
         self.assertTrue(rendered.endswith("automation@gateway.local"))

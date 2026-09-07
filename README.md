@@ -94,7 +94,8 @@ uses VS Code + Cortex-Debug for interactive source debugging. DEBUG has explicit
 LOCAL / GATEWAY / CLIENT roles; a saved **Debug Project** supplies the workspace and
 matching ELF/AXF, while a saved **Gateway** supplies the remote host/user/port. The
 same Gateway session is reused by MONITOR and DEBUG during one B300 process, and the
-SSH password is not persisted by the production GUI. OpenOCD GDB/TCL listeners remain
+SSH tries an already-authorized user key first and falls back to an interactive password;
+the password is not persisted by the production GUI. OpenOCD GDB/TCL listeners remain
 loopback-only; CLIENT forwards only the required debug channel through authenticated SSH.
 
 The CLI retains bounded GDB/MI + Safe TCL diagnostics (`where`, `stack`, `registers`,

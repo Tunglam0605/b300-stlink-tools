@@ -541,7 +541,7 @@ class B300StlinkTests(unittest.TestCase):
             self.assertEqual(result, 1)
             self.assertIn(expected, output.getvalue())
 
-    def test_debug_client_dry_run_uses_password_ssh_loopback_forwarding(self) -> None:
+    def test_debug_client_dry_run_uses_key_or_password_ssh_loopback_forwarding(self) -> None:
         module = tool()
         output = io.StringIO()
         with redirect_stdout(output):
@@ -559,7 +559,8 @@ class B300StlinkTests(unittest.TestCase):
         rendered = " ".join(record["ssh_command"])
         self.assertIn("PasswordAuthentication=yes", rendered)
         self.assertIn("KbdInteractiveAuthentication=yes", rendered)
-        self.assertIn("PubkeyAuthentication=no", rendered)
+        self.assertIn("PubkeyAuthentication=yes", rendered)
+        self.assertIn("PreferredAuthentications=publickey,password,keyboard-interactive", rendered)
         self.assertNotIn("-i", record["ssh_command"])
         self.assertNotIn("KnownHostsFile", rendered)
         self.assertIn("127.0.0.1:3333", rendered)

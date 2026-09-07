@@ -53,16 +53,16 @@ class RemoteGatewayProfileTests(unittest.TestCase):
 
 
 class RemoteConnectivityTests(unittest.TestCase):
-    def test_connectivity_argv_is_password_interactive_and_public_ports_are_not_used(self):
+    def test_connectivity_argv_supports_key_or_password_and_public_ports_are_not_used(self):
         argv = build_connectivity_argv(
             RemoteGatewayProfile("192.168.1.109", "automation", 22),
             ssh_executable="ssh-test",
         )
         expected_options = (
-            "-o", "PreferredAuthentications=password,keyboard-interactive",
+            "-o", "PreferredAuthentications=publickey,password,keyboard-interactive",
             "-o", "PasswordAuthentication=yes",
             "-o", "KbdInteractiveAuthentication=yes",
-            "-o", "PubkeyAuthentication=no",
+            "-o", "PubkeyAuthentication=yes",
         )
         self.assertEqual(argv[2:2 + len(expected_options)], expected_options)
         joined = " ".join(argv)

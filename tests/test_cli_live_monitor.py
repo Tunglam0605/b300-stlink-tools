@@ -77,7 +77,7 @@ class CliLiveMonitorTests(unittest.TestCase):
         self.assertEqual(command.count("-L"), 1)
         self.assertIn("127.0.0.1:16666:127.0.0.1:6666", rendered)
         self.assertNotIn(":3333", rendered)
-        for option in ("PasswordAuthentication=yes", "KbdInteractiveAuthentication=yes", "PubkeyAuthentication=no", "PreferredAuthentications=password,keyboard-interactive"):
+        for option in ("PasswordAuthentication=yes", "KbdInteractiveAuthentication=yes", "PubkeyAuthentication=yes", "PreferredAuthentications=publickey,password,keyboard-interactive"):
             self.assertIn(option, command)
         self.assertNotIn("-i", command)
         self.assertNotIn("KnownHostsFile", rendered)

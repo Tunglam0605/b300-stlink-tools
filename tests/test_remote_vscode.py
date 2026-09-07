@@ -43,7 +43,7 @@ class RemoteVsCodeTests(unittest.TestCase):
         self.assertIn("--probe-serial", gateway)
         self.assertIn("127.0.0.1:3333:127.0.0.1:3333", tunnel)
         self.assertNotIn("6666", tunnel)
-        self.assertIn("PreferredAuthentications=password,keyboard-interactive", tunnel)
+        self.assertIn("PreferredAuthentications=publickey,password,keyboard-interactive", tunnel)
         self.assertIn("PasswordAuthentication=yes", tunnel)
         self.assertIn("ExitOnForwardFailure=yes", tunnel)
         self.assertIn("ConnectTimeout=8", tunnel)
