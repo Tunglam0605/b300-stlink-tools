@@ -261,11 +261,11 @@ class V018VsCodeBridgeTests(unittest.TestCase):
             result = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(result["inputs"], [{"id": "path", "default": "https://host/a/*b*/,]"}])
             self.assertEqual(result["compounds"], [{"name": "All", "configurations": ["Python", "B300 local"]}])
-            self.assertEqual(result["configurations"][0], {"name": "Python", "type": "debugpy", "args": ["a", "b"]})
+            self.assertEqual(result["configurations"][1], {"name": "Python", "type": "debugpy", "args": ["a", "b"]})
             self.assertEqual(result["configurations"][2], {"name": "Other board", "type": "cortex-debug"})
             self.assertEqual(len(result["configurations"]), 3)
-            self.assertEqual(result["configurations"][1]["gdbTarget"], "127.0.0.1:3333")
-            self.assertEqual(result["configurations"][1]["request"], "attach")
+            self.assertEqual(result["configurations"][0]["gdbTarget"], "127.0.0.1:3333")
+            self.assertEqual(result["configurations"][0]["request"], "attach")
 
     def test_launch_writer_does_not_claim_same_name_without_b300_owner(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -392,10 +392,33 @@ class V018VsCodeBridgeTests(unittest.TestCase):
                 output.write_text(json.dumps(original), encoding="utf-8")
                 VsCodeExternalProfile("B300 local", "app.elf", "127.0.0.1:3333").write_launch_json(root, force=True)
                 result = json.loads(output.read_text(encoding="utf-8"))
-                self.assertEqual(result["configurations"][:-1], original.get("configurations", []))
-                self.assertEqual(result["configurations"][-1]["name"], "B300 local")
+                self.assertEqual(result["configurations"][1:], original.get("configurations", []))
+                self.assertEqual(result["configurations"][0]["name"], "B300 local")
                 if "inputs" in original:
                     self.assertEqual(result["inputs"], [])
+
+    def test_launch_writer_places_managed_profile_first_for_new_workstations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / ".vscode" / "launch.json"
+            output.parent.mkdir()
+            output.write_text(json.dumps({"configurations": [{
+                "name": "STM32F407 Main Debug via Raspberry Pi",
+                "type": "cortex-debug",
+                "request": "launch",
+                "inputs": "raspberryPiHost",
+            }]}), encoding="utf-8")
+
+            VsCodeExternalProfile(
+                "B300 STM32F407 · Remote via Gateway",
+                "${workspaceFolder}/Objects/F407/Main_V2_F407.axf",
+                "127.0.0.1:41234",
+                gdb_path=r"C:\Toolchain\bin\arm-none-eabi-gdb.exe",
+            ).write_launch_json(root)
+
+            configs = json.loads(output.read_text(encoding="utf-8"))["configurations"]
+            self.assertEqual(configs[0]["name"], "B300 STM32F407 · Remote via Gateway")
+            self.assertEqual(configs[1]["name"], "STM32F407 Main Debug via Raspberry Pi")
 
     def test_launch_writer_refuses_malformed_or_ambiguous_document_without_changes(self):
         documents = [

@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Optional
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QTimer, Signal
 
 from b300_core.live_monitor import LiveSample
 from b300_core.live_session import (
@@ -52,6 +52,7 @@ class LiveMonitorController(QObject):
 
     operation_state_changed = Signal(bool)
     log = Signal(str)
+    RENDER_INTERVAL_MS = 250
 
     def __init__(
         self,
@@ -77,6 +78,10 @@ class LiveMonitorController(QObject):
         self._live_session = None
         self._worker = None
         self._invalidated_reason = ""
+        self._pending_samples = []
+        self._render_timer = QTimer(self)
+        self._render_timer.setSingleShot(True)
+        self._render_timer.timeout.connect(self._flush_pending_samples)
 
     @property
     def active(self) -> bool:
@@ -91,6 +96,8 @@ class LiveMonitorController(QObject):
             raise ValueError("Live Monitor request role must be LOCAL or CLIENT.")
 
         self._invalidated_reason = ""
+        self._pending_samples.clear()
+        self._render_timer.stop()
         watch_specs = self.panel.watch_specs()
         compiled_watches = (
             tuple(self.panel.compiled_watches())
@@ -190,7 +197,16 @@ class LiveMonitorController(QObject):
             return
         if not isinstance(sample, LiveSample) and not hasattr(sample, "cycle"):
             return
+        append_many = getattr(self.panel, "append_live_samples", None)
+        if callable(append_many):
+            self._pending_samples.append(sample)
+            if not self._render_timer.isActive():
+                self._render_timer.start(self.RENDER_INTERVAL_MS)
+            return
         self.panel.append_live_sample(sample)
+        self._apply_live_analytics()
+
+    def _apply_live_analytics(self) -> None:
         live = self._live_session
         if live is not None:
             try:
@@ -198,8 +214,24 @@ class LiveMonitorController(QObject):
             except (AttributeError, RuntimeError, TypeError, ValueError):
                 pass
 
+    def _flush_pending_samples(self) -> None:
+        """Render queued worker samples in one bounded GUI update."""
+        self._render_timer.stop()
+        pending = tuple(self._pending_samples)
+        self._pending_samples.clear()
+        if not pending or self._invalidated_reason:
+            return
+        append_many = getattr(self.panel, "append_live_samples", None)
+        if callable(append_many):
+            append_many(pending)
+        else:
+            for sample in pending:
+                self.panel.append_live_sample(sample)
+        self._apply_live_analytics()
+
     def _completed(self, result) -> None:
         summary, analytics, info = result
+        self._flush_pending_samples()
         if self._invalidated_reason:
             self.log.emit("Live Monitor invalidated: %s" % self._invalidated_reason)
             self._finish_operation(history_enabled=True)
@@ -216,6 +248,7 @@ class LiveMonitorController(QObject):
         self._finish_operation(history_enabled=True)
 
     def _failed(self, failure) -> None:
+        self._flush_pending_samples()
         message = getattr(failure, "message", str(failure))
         if self._invalidated_reason:
             self.log.emit("Live Monitor invalidated: %s" % self._invalidated_reason)
@@ -257,6 +290,7 @@ class LiveMonitorController(QObject):
     def invalidate(self, reason: str) -> None:
         """Fail closed on lost Gateway evidence and reject late worker samples."""
         selected = str(reason or "Gateway không còn cung cấp bằng chứng mới.").strip()
+        self._flush_pending_samples()
         self._invalidated_reason = selected
         marker = getattr(self.panel, "mark_stale", None)
         if callable(marker):

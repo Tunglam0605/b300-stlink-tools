@@ -5,6 +5,12 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.21.10] - 2026-09-07
+
+- Prevented the Windows GUI from becoming unresponsive when a large DWARF structure expands to hundreds of Live Monitor variables. Worker samples are now queued cheaply and rendered in bounded 250 ms batches; accepted samples, per-batch timestamps, stale evidence and bounded export history remain intact.
+- Batched trend repainting and limited the visible recent-value table to 50 rows while retaining the existing bounded history, reducing a measured 168-variable local render to approximately 5–10 ms.
+- Placed the B300-managed Cortex-Debug profile first in `launch.json` while preserving user profiles, so a project copied to a new workstation no longer defaults to an unrelated Raspberry Pi debug configuration.
+
 ## [0.21.9] - 2026-09-07
 
 - Removed the redundant raw GDB listener preflight when a validated READY Gateway snapshot already identifies the loopback endpoint. The preflight opened a phantom GDB connection that OpenOCD counted but did not report as disconnected, which could consume a Cortex-Debug connection slot and prevent the managed run-state guard from restoring a previously running target after VS Code and Live Watch detached.

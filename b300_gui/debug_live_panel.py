@@ -440,12 +440,31 @@ class DebugLivePanel(QFrame):
         if self.table.columnCount() > 9:
             self.table.setItem(row, 9, QTableWidgetItem("Chờ mẫu"))
 
-    def append_live_sample(self, sample: LiveSample) -> Tuple[VariableSample, ...]:
-        self.append_timeline_sample(
-            sample.captured_elapsed_seconds, sample.pc, sample.source.function or "??",
-            sample.source.file or "??", sample.source.line,
-        )
+    @staticmethod
+    def _converted_live_values(sample: LiveSample) -> Tuple[VariableSample, ...]:
         converted = []
+        for value in sample.values:
+            raw_value = str(value.value) if value.coherent else "<incoherent>"
+            numeric = None
+            if value.coherent and isinstance(value.value, (int, float)) and not isinstance(value.value, bool):
+                numeric = float(value.value)
+            converted.append(VariableSample(
+                cycle=sample.cycle, elapsed_seconds=sample.captured_elapsed_seconds,
+                captured_at_unix_ms=0, expression=value.name, raw_value=raw_value,
+                numeric_value=numeric,
+            ))
+        return tuple(converted)
+
+    def append_live_sample(
+        self, sample: LiveSample, *, record_samples: bool = True,
+        append_timeline: bool = True,
+    ) -> Tuple[VariableSample, ...]:
+        if append_timeline:
+            self.append_timeline_sample(
+                sample.captured_elapsed_seconds, sample.pc, sample.source.function or "??",
+                sample.source.file or "??", sample.source.line,
+            )
+        converted = self._converted_live_values(sample)
         for value in sample.values:
             row = self.rows.get(value.name)
             if row is None:
@@ -457,20 +476,13 @@ class DebugLivePanel(QFrame):
                 check_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
                 check_item.setCheckState(Qt.CheckState.Checked)
                 self.table.setItem(row, 5, check_item)
-            raw_value = str(value.value) if value.coherent else "<incoherent>"
-            numeric = None
-            if value.coherent and isinstance(value.value, (int, float)) and not isinstance(value.value, bool):
-                numeric = float(value.value)
-            self.table.setItem(row, 1, QTableWidgetItem(raw_value if value.coherent else "<không nhất quán>"))
+            shown_value = str(value.value) if value.coherent else "<không nhất quán>"
+            self.table.setItem(row, 1, QTableWidgetItem(shown_value))
             self.table.setItem(row, 2, QTableWidgetItem(value.value_type))
             self.table.setItem(row, 3, QTableWidgetItem("0x%08X" % value.address))
             self.table.setItem(row, 4, QTableWidgetItem("%.3f" % sample.captured_elapsed_seconds))
-            converted.append(VariableSample(
-                cycle=sample.cycle, elapsed_seconds=sample.captured_elapsed_seconds,
-                captured_at_unix_ms=0, expression=value.name, raw_value=raw_value,
-                numeric_value=numeric,
-            ))
-        self.buffer.extend(converted)
+        if record_samples:
+            self.buffer.extend(converted)
         coherence_failures = sum(1 for value in sample.values if not value.coherent)
         suffix = " · không nhất quán %d" % coherence_failures if coherence_failures else ""
         limit = self.sample_limit()
@@ -487,7 +499,7 @@ class DebugLivePanel(QFrame):
                 sample.read_duration_seconds * 1000.0, suffix,
             )
         )
-        return tuple(converted)
+        return converted
 
     @staticmethod
     def _format_stat_value(value) -> str:

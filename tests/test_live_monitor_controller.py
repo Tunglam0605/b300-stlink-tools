@@ -138,6 +138,62 @@ class _Session:
 
 
 class LiveMonitorControllerTests(unittest.TestCase):
+    def test_large_typed_batches_are_coalesced_before_rendering(self) -> None:
+        """A fast 168-variable stream must not flood Qt with one render per batch."""
+        from b300_gui.production_live_panel import ProductionLivePanel
+
+        app = QApplication.instance() or QApplication([])
+        panel = ProductionLivePanel()
+        self.addCleanup(panel.deleteLater)
+        controller = LiveMonitorController(panel)
+        received = []
+        panel.sample_received.connect(received.append)
+
+        for batch_index in range(3):
+            values = tuple(
+                LiveValue(
+                    "large.f%d" % (batch_index * 56 + index), "u8",
+                    0x20000100 + batch_index * 56 + index, index, "%02X" % index,
+                    node_id="large.f%d" % (batch_index * 56 + index),
+                )
+                for index in range(56)
+            )
+            controller._sample_received(LiveSample(
+                cycle=batch_index,
+                scheduled_elapsed_seconds=batch_index * 0.1,
+                captured_elapsed_seconds=(batch_index + 1) * 0.1,
+                read_duration_seconds=0.09,
+                overrun=False,
+                pc=0x08010000,
+                source=SourceLocation(0x08010000, "main", "main.c", 1),
+                values=values,
+                batch_index=batch_index,
+                batch_count=3,
+            ))
+        controller._sample_received(LiveSample(
+            cycle=3, scheduled_elapsed_seconds=0.3, captured_elapsed_seconds=0.4,
+            read_duration_seconds=0.09, overrun=False, pc=0x08010000,
+            source=SourceLocation(0x08010000, "main", "main.c", 1),
+            values=(LiveValue(
+                "large.f0", "u8", 0x20000100, 99, "63", node_id="large.f0",
+            ),), batch_index=0, batch_count=3,
+        ))
+
+        self.assertEqual(panel.table.rowCount(), 0)
+        self.assertEqual(received, [])
+
+        controller._flush_pending_samples()
+
+        self.assertEqual(panel.table.rowCount(), 168)
+        self.assertEqual(len(panel.buffer), 169)
+        self.assertEqual(len(received), 4)
+        self.assertEqual(sum(len(sample.values) for sample in received), 169)
+        self.assertEqual(panel.table.item(panel.rows["large.f0"], 4).text(), "0.400")
+        self.assertEqual(panel.table.item(panel.rows["large.f56"], 4).text(), "0.200")
+        self.assertEqual(panel.table.item(panel.rows["large.f0"], 1).text(), "99")
+        self.assertLessEqual(panel.recent_table.rowCount(), 50)
+        app.processEvents()
+
     def test_stop_during_startup_survives_session_cancellation_reset(self) -> None:
         for role in ("LOCAL", "CLIENT"):
             with self.subTest(role=role):

@@ -71,6 +71,24 @@ class MonitorFreshnessTests(unittest.TestCase):
         self.assertEqual(panel.samples, [])
         self.assertEqual(panel.stale, ["Mất kết nối ST-Link trên Gateway."])
 
+    def test_gateway_loss_flushes_already_accepted_production_sample_as_stale(self):
+        panel = ProductionLivePanel()
+        controller = LiveMonitorController(panel)
+        controller._active = True
+        try:
+            controller._sample_received(_sample())
+            self.assertEqual(panel.table.rowCount(), 0)
+
+            controller.invalidate("Mất kết nối Gateway.")
+
+            self.assertEqual(panel.table.rowCount(), 1)
+            self.assertEqual(len(panel.buffer), 1)
+            self.assertEqual(panel.table.item(0, 1).text(), "7")
+            self.assertEqual(panel.table.item(0, 4).text(), "0.200")
+            self.assertIn("STALE", panel.table.item(0, 9).text())
+        finally:
+            panel.deleteLater()
+
     def test_stale_view_keeps_last_value_and_timestamp_but_marks_quality(self):
         with tempfile.TemporaryDirectory() as directory:
             image = _build_keil_fixture(directory)

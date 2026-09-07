@@ -18,16 +18,26 @@ class TrendWidget(QWidget):
         self.setAccessibleName("Giá trị biến đã nhận theo thời gian")
 
     def append_value(self, name, elapsed, value, coherent=True):
+        self.append_values(((name, elapsed, value, coherent),))
+
+    def append_values(self, values):
+        changed = False
+        for name, elapsed, value, coherent in values:
+            changed = self._append_value(name, elapsed, value, coherent) or changed
+        if changed:
+            self.update()
+
+    def _append_value(self, name, elapsed, value, coherent=True):
         if not coherent or isinstance(value, bool) or not isinstance(value, (int, float)):
-            return
+            return False
         if not math.isfinite(float(value)) or not math.isfinite(float(elapsed)):
-            return
+            return False
         if name not in self._series:
             if len(self._series) >= self.MAX_SIGNALS:
                 del self._series[next(iter(self._series))]
             self._series[name] = deque(maxlen=self.CAPACITY)
         self._series[name].append((float(elapsed), float(value)))
-        self.update()
+        return True
 
     def points(self, name):
         return tuple(self._series.get(name, ()))

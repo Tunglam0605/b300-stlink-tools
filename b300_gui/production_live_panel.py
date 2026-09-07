@@ -1,4 +1,5 @@
 """Engineering Monitor presentation over the existing zero-halt panel API."""
+from collections import deque
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QPushButton, QSpinBox, QSplitter, QTableWidget,
@@ -11,6 +12,7 @@ class ProductionLivePanel(DebugLivePanel):
     sample_received = Signal(object)
     history_cleared = Signal()
     RECENT_CAPACITY = 200
+    RECENT_VIEW_CAPACITY = 50
 
     def _build_ui(self):
         self.setObjectName("engineeringCard")
@@ -95,6 +97,7 @@ class ProductionLivePanel(DebugLivePanel):
         label.setObjectName("sectionTitle")
         recent_layout.addWidget(label)
         self.recent_table = self._table(("Thời gian (s)", "Biến", "Giá trị"))
+        self._recent_records = deque(maxlen=self.RECENT_CAPACITY)
         self.recent_table.setMinimumHeight(120)
         recent_layout.addWidget(self.recent_table)
         self.detail_splitter.addWidget(recent_panel)
@@ -189,24 +192,68 @@ class ProductionLivePanel(DebugLivePanel):
         return ()
 
     def append_live_sample(self, sample):
-        converted = super().append_live_sample(sample)
-        for value in sample.values:
-            self.table.setItem(self.rows[value.name], 9, QTableWidgetItem(
-                "Nhất quán" if value.coherent else "Không nhất quán"))
-            self.trend.append_value(value.name, sample.captured_elapsed_seconds, value.value, value.coherent)
-            if self.signal_selector.findText(value.name) < 0:
-                if self.signal_selector.count() >= self.trend.MAX_SIGNALS:
-                    self.signal_selector.removeItem(0)
-                self.signal_selector.addItem(value.name)
-            self.recent_table.insertRow(0)
-            for column, text in enumerate(("%.3f" % sample.captured_elapsed_seconds,
-                                           value.name, str(value.value) if value.coherent else "<không nhất quán>")):
-                self.recent_table.setItem(0, column, QTableWidgetItem(text))
-            if self.recent_table.rowCount() > self.RECENT_CAPACITY:
-                self.recent_table.removeRow(self.RECENT_CAPACITY)
-        self._filter_rows()
-        self.sample_received.emit(sample)
-        return converted
+        return self.append_live_samples((sample,))
+
+    def append_live_samples(self, samples):
+        """Coalesce worker batches into one bounded Qt render operation."""
+        selected = tuple(samples)
+        if not selected:
+            return ()
+        order = []
+        names = set()
+        for sample in selected:
+            for value in sample.values:
+                if value.name not in names:
+                    order.append(value.name)
+                    names.add(value.name)
+
+        recorded = []
+        self.table.setUpdatesEnabled(False)
+        try:
+            for sample in selected:
+                recorded.extend(super().append_live_sample(sample))
+                for value in sample.values:
+                    self.table.setItem(self.rows[value.name], 9, QTableWidgetItem(
+                        "Nhất quán" if value.coherent else "Không nhất quán"))
+        finally:
+            self.table.setUpdatesEnabled(True)
+
+        if self.signal_selector.count() == 0:
+            for name in order[-self.trend.MAX_SIGNALS:]:
+                self.signal_selector.addItem(name)
+        plotted_names = {
+            self.signal_selector.itemText(index)
+            for index in range(self.signal_selector.count())
+        }
+        trend_values = []
+        for sample in selected:
+            for value in sample.values:
+                if value.name in plotted_names:
+                    trend_values.append((
+                        value.name, sample.captured_elapsed_seconds,
+                        value.value, value.coherent,
+                    ))
+                self._recent_records.appendleft((
+                    "%.3f" % sample.captured_elapsed_seconds,
+                    value.name,
+                    str(value.value) if value.coherent else "<không nhất quán>",
+                ))
+        self.trend.append_values(trend_values)
+
+        visible = tuple(self._recent_records)[:self.RECENT_VIEW_CAPACITY]
+        self.recent_table.setUpdatesEnabled(False)
+        try:
+            self.recent_table.setRowCount(len(visible))
+            for row, record in enumerate(visible):
+                for column, text in enumerate(record):
+                    self.recent_table.setItem(row, column, QTableWidgetItem(text))
+        finally:
+            self.recent_table.setUpdatesEnabled(True)
+        if self.search_filter.text().strip():
+            self._filter_rows()
+        for sample in selected:
+            self.sample_received.emit(sample)
+        return tuple(recorded)
 
     def mark_stale(self, reason):
         """Keep last values/timestamps visible but revoke their live quality."""
@@ -224,6 +271,7 @@ class ProductionLivePanel(DebugLivePanel):
 
     def clear_history(self):
         super().clear_history()
+        self._recent_records.clear()
         self.trend.clear()
         self.signal_selector.clear()
         self.recent_table.setRowCount(0)
@@ -231,6 +279,7 @@ class ProductionLivePanel(DebugLivePanel):
 
     def reset_for_sampling(self):
         super().reset_for_sampling()
+        self._recent_records.clear()
         self.trend.clear()
         self.signal_selector.clear()
         self.recent_table.setRowCount(0)

@@ -290,16 +290,18 @@ class VsCodeExternalProfile:
         if len(named) > 1:
             raise ValueError("Multiple VS Code configurations have the managed profile name: %s" % self.name)
         if owned:
-            configurations[owned[0]] = configuration
+            configurations.pop(owned[0])
         elif named:
             if not force:
                 raise FileExistsError(
                     "A VS Code configuration named '%s' is not owned by B300; confirmation is required." %
                     self.name
                 )
-            configurations[named[0]] = configuration
-        else:
-            configurations.append(configuration)
+            configurations.pop(named[0])
+        # VS Code initially selects the first profile in a workspace that has
+        # no local debug selection yet. Keep B300 first so a copied project on
+        # a new workstation does not open an unrelated Raspberry Pi profile.
+        configurations.insert(0, configuration)
         payload = json.dumps(document, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
         output.parent.mkdir(parents=True, exist_ok=True)
         staged = None
