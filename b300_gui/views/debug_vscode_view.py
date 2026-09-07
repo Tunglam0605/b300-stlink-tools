@@ -82,7 +82,7 @@ class DebugVsCodeView(QWidget):
         self.work_row.addWidget(environment, 4)
         self.environment_card = environment
         guide = SectionCard('Hướng dẫn gỡ lỗi nhanh', icon='file')
-        for number, title, detail in (('1','Chọn dự án & kết nối','Dùng thanh Dự án / Kết nối ở phía trên.'),('2','Mở VS Code','B300 chuẩn bị launch.json và kết nối gỡ lỗi.'),('3','Bắt đầu gỡ lỗi','Nhấn F5 trong VS Code với Cortex-Debug.')):
+        for number, title, detail in (('1','Chọn dự án & kết nối','Dùng thanh Dự án / Kết nối ở phía trên.'),('2','Mở VS Code','B300 chuẩn bị launch.json và kết nối gỡ lỗi.'),('3','Bắt đầu / kết thúc','Nhấn F5 để bắt đầu; nhấn Shift+F5 để dừng Cortex-Debug an toàn.')):
             row = QHBoxLayout()
             badge = QLabel(number); badge.setObjectName('iconTile'); badge.setFixedSize(30,30); badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
             texts = QVBoxLayout(); heading=QLabel(title); heading.setObjectName('sectionTitle')

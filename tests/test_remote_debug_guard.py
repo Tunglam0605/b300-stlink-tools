@@ -32,6 +32,22 @@ class RemoteDebugGuardTests(unittest.TestCase):
         self.assertEqual(tcl.state, "running")
         self.assertTrue(any(event == "restored" for event, _message in events))
 
+    def test_two_gdb_connections_restore_only_after_last_disconnect(self) -> None:
+        tcl = FakeTcl("running")
+        guard = RemoteDebugGuard(tcl)
+        guard.capture_initial_state()
+        guard.handle_openocd_line("Info : accepting 'gdb' connection on tcp/3333")
+        guard.handle_openocd_line("Info : accepting 'gdb' connection on tcp/3333")
+
+        tcl.state = "halted"
+        guard.handle_openocd_line("Info : dropped 'gdb' connection")
+        self.assertEqual(tcl.resume_calls, 0)
+        self.assertEqual(tcl.state, "halted")
+
+        guard.handle_openocd_line("Info : dropped 'gdb' connection")
+        self.assertEqual(tcl.resume_calls, 1)
+        self.assertEqual(tcl.state, "running")
+
     def test_preexisting_halted_target_is_never_forced_running(self) -> None:
         tcl = FakeTcl("halted")
         guard = RemoteDebugGuard(tcl)

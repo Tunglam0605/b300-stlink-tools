@@ -2,7 +2,7 @@ import os
 os.environ.setdefault('QT_QPA_PLATFORM','offscreen')
 from pathlib import Path
 import unittest
-from PySide6.QtWidgets import QApplication, QComboBox, QLineEdit, QSpinBox
+from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QLineEdit, QSpinBox
 from b300_core.gateway_profiles import GatewayProfile
 from b300_core.project_profiles import ProjectProfile
 from b300_core.vscode_environment import VsCodeEnvironmentStatus
@@ -94,3 +94,7 @@ class EngineeringDebugTests(unittest.TestCase):
             '127.0.0.1:43819',
         )
         self.assertIn('Sẵn sàng attach lại', self.view.bridge_status.text())
+
+    def test_quick_guide_shows_the_cortex_debug_stop_shortcut(self):
+        visible_text = " ".join(label.text() for label in self.view.findChildren(QLabel))
+        self.assertIn("Shift+F5", visible_text)

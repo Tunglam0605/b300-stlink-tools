@@ -5,6 +5,12 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.21.6] - 2026-09-07
+
+- Fixed Cortex-Debug shutdown with Live Watch: the run-state guard now counts both GDB connections and restores a previously running target only after the final connection drops.
+- Prevented stale packaged GUI copies opened from the Windows temporary directory from persisting transient GDB paths; they now hand off only to an equal-or-newer canonical installation whose complete runtime manifest verifies successfully.
+- Added the correct `Shift+F5` Cortex-Debug stop shortcut to the production Debug guide. The flash, Bootloader protection and loopback-only debug contracts are unchanged; `HW-P1-001` remains OPEN / DEFERRED.
+
 ## [0.21.5] - 2026-09-07
 
 - Fixed managed Gateway recovery after VS Code closes or Cortex-Debug detaches: a transient TCL target-state probe failure now revokes attach readiness without destroying the active OpenOCD owner, then automatically re-verifies it on the next health cycle.

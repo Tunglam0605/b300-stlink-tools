@@ -26,7 +26,7 @@ class RemoteDebugGuard:
         self.tcl = tcl
         self.event_sink = event_sink
         self.initial_target_state: Optional[str] = None
-        self._gdb_seen = False
+        self._gdb_connections = 0
         self._lock = threading.RLock()
 
     def capture_initial_state(self) -> str:
@@ -40,15 +40,23 @@ class RemoteDebugGuard:
         text = str(line).lower()
         if "accepting 'gdb' connection" in text:
             with self._lock:
-                self._gdb_seen = True
-                self._emit("gdb_connected", "external GDB connection accepted")
+                self._gdb_connections += 1
+                self._emit(
+                    "gdb_connected",
+                    "external GDB connection accepted; active=%d" % self._gdb_connections,
+                )
             return
         if "dropped 'gdb' connection" in text:
             with self._lock:
-                if not self._gdb_seen:
+                if self._gdb_connections <= 0:
                     return
-                self._gdb_seen = False
-            self.restore_initial_state(reason="gdb_disconnect")
+                self._gdb_connections -= 1
+                self._emit(
+                    "gdb_disconnected",
+                    "external GDB connection dropped; active=%d" % self._gdb_connections,
+                )
+                if self._gdb_connections == 0:
+                    self.restore_initial_state(reason="last_gdb_disconnect")
 
     def restore_initial_state(self, *, reason: str) -> RemoteGuardSnapshot:
         with self._lock:
