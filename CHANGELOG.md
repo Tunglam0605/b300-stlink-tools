@@ -5,6 +5,12 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.21.5] - 2026-09-07
+
+- Fixed managed Gateway recovery after VS Code closes or Cortex-Debug detaches: a transient TCL target-state probe failure now revokes attach readiness without destroying the active OpenOCD owner, then automatically re-verifies it on the next health cycle.
+- Prevented the `TARGET_UNVERIFIED` restart loop that could leave B300 Monitor unavailable even after all GDB processes had exited.
+- Verified on the connected STM32F407 that two simultaneous GDB sessions can read `xTickCount`, detach, restore the target to `running`, and leave the same Gateway instance `READY`. `HW-P1-001` remains OPEN / DEFERRED.
+
 ## [0.21.4] - 2026-09-07
 
 - Fixed Cortex-Debug Live Watch for local and SSH Gateway sessions by configuring OpenOCD for the debugger's main GDB connection plus its dedicated live-monitor GDB connection before target initialization.

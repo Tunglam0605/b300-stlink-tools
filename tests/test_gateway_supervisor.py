@@ -37,6 +37,12 @@ class FakeService:
         self._state = DebugState.STOPPED
 
 
+class StartupHardwareErrorService(FakeService):
+    def start(self, config, event_sink=None):
+        super().start(config, event_sink=event_sink)
+        event_sink("Error: libusb_bulk_transfer failed")
+
+
 class GatewaySupervisorTests(unittest.TestCase):
     def test_ready_is_published_only_after_fresh_target_evidence(self) -> None:
         service = FakeService()
@@ -129,6 +135,57 @@ class GatewaySupervisorTests(unittest.TestCase):
         self.assertEqual(result.reason_code, "OPENOCD_EXITED")
         self.assertIsNone(result.gdb_endpoint)
 
+    def test_transient_target_probe_failure_reuses_openocd_and_recovers(self) -> None:
+        service = FakeService()
+        target_states = iter(("running", RuntimeError("GDB attach busy"), "running"))
+
+        def target_state(_config):
+            result = next(target_states)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        supervisor = GatewaySupervisor(
+            service_factory=lambda: service,
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=target_state,
+        )
+        self.assertEqual(supervisor.maintain_once().state, "READY")
+
+        unavailable = supervisor.maintain_once()
+        self.assertEqual((unavailable.state, unavailable.reason_code),
+                         ("DISCONNECTED", "TARGET_UNVERIFIED"))
+        self.assertEqual(service.stop_calls, 0)
+
+        recovered = supervisor.maintain_once()
+        self.assertEqual((recovered.state, recovered.cpu_state), ("READY", "running"))
+        self.assertEqual(len(service.start_calls), 1)
+        self.assertEqual(service.stop_calls, 0)
+
+    def test_initial_target_probe_failure_keeps_started_openocd_for_retry(self) -> None:
+        service = FakeService()
+        target_states = iter((RuntimeError("target settling"), "halted"))
+
+        def target_state(_config):
+            result = next(target_states)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        supervisor = GatewaySupervisor(
+            service_factory=lambda: service,
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=target_state,
+        )
+        first = supervisor.ensure()
+        self.assertEqual((first.state, first.reason_code),
+                         ("DISCONNECTED", "TARGET_UNVERIFIED"))
+        self.assertEqual(service.stop_calls, 0)
+
+        recovered = supervisor.ensure()
+        self.assertEqual((recovered.state, recovered.cpu_state), ("READY", "halted"))
+        self.assertEqual(len(service.start_calls), 1)
+
     def test_fatal_openocd_log_revokes_ready_and_cleans_owner(self) -> None:
         service = FakeService()
         supervisor = GatewaySupervisor(
@@ -138,9 +195,116 @@ class GatewaySupervisorTests(unittest.TestCase):
         )
         supervisor.ensure()
         supervisor._on_openocd_line("Error: libusb_bulk_transfer failed")
-        result = supervisor.observe()
+        result = supervisor.maintain_once()
         self.assertEqual(result.state, "DISCONNECTED")
         self.assertEqual(result.reason_code, "OPENOCD_HARDWARE_ERROR")
+        self.assertEqual(service.stop_calls, 1)
+
+    def test_all_public_cycles_clean_hardware_error_before_any_recreate(self) -> None:
+        for action in ("ensure", "rescan", "maintain_once"):
+            services = []
+
+            def make_service():
+                service = FakeService()
+                services.append(service)
+                return service
+
+            supervisor = GatewaySupervisor(
+                service_factory=make_service,
+                probe_discovery=lambda: (PROBE,),
+                target_state_probe=lambda _config: "running",
+            )
+            supervisor.ensure()
+            supervisor._on_openocd_line("Error: swd fault")
+
+            result = getattr(supervisor, action)()
+
+            self.assertEqual((result.state, result.reason_code),
+                             ("DISCONNECTED", "OPENOCD_HARDWARE_ERROR"))
+            self.assertEqual(len(services), 1)
+            self.assertEqual(services[0].stop_calls, 1)
+
+    def test_startup_hardware_error_takes_precedence_over_target_probe_failure(self) -> None:
+        service = StartupHardwareErrorService()
+        supervisor = GatewaySupervisor(
+            service_factory=lambda: service,
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=lambda _config: (_ for _ in ()).throw(
+                RuntimeError("target unavailable")
+            ),
+        )
+
+        result = supervisor.ensure()
+
+        self.assertEqual((result.state, result.reason_code),
+                         ("DISCONNECTED", "OPENOCD_HARDWARE_ERROR"))
+        self.assertEqual(service.stop_calls, 1)
+        self.assertIsNone(supervisor._service)
+
+    def test_hardware_error_during_target_retry_stops_retained_owner(self) -> None:
+        service = FakeService()
+        target_states = iter(("running", RuntimeError("GDB busy")))
+
+        def target_state(_config):
+            result = next(target_states)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        supervisor = GatewaySupervisor(
+            service_factory=lambda: service,
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=target_state,
+        )
+        supervisor.ensure()
+        supervisor.observe()
+        supervisor._on_openocd_line("Error: target not examined")
+
+        result = supervisor.maintain_once()
+
+        self.assertEqual((result.state, result.reason_code),
+                         ("DISCONNECTED", "OPENOCD_HARDWARE_ERROR"))
+        self.assertEqual(service.stop_calls, 1)
+        self.assertIsNone(supervisor._service)
+
+    def test_hardware_error_latched_inside_probe_never_publishes_ready(self) -> None:
+        service = FakeService()
+        snapshots = []
+        supervisor = None
+
+        def target_state(_config):
+            supervisor._on_openocd_line("Error: swd fault during target probe")
+            return "running"
+
+        supervisor = GatewaySupervisor(
+            service_factory=lambda: service,
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=target_state,
+            snapshot_sink=snapshots.append,
+        )
+
+        result = supervisor.ensure()
+
+        self.assertEqual((result.state, result.reason_code),
+                         ("DISCONNECTED", "OPENOCD_HARDWARE_ERROR"))
+        self.assertFalse(any(item.attach_ready for item in snapshots))
+        self.assertEqual(service.stop_calls, 1)
+
+    def test_latched_fault_is_fail_closed_even_before_callback_publishes(self) -> None:
+        service = FakeService()
+        supervisor = GatewaySupervisor(
+            service_factory=lambda: service,
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=lambda _config: "running",
+        )
+        supervisor.ensure()
+        supervisor._hardware_error = True
+
+        result = supervisor.maintain_once()
+
+        self.assertEqual((result.state, result.reason_code),
+                         ("DISCONNECTED", "OPENOCD_HARDWARE_ERROR"))
+        self.assertFalse(result.attach_ready)
         self.assertEqual(service.stop_calls, 1)
 
     def test_one_probe_with_unsafe_descriptor_runs_without_adapter_serial(self) -> None:

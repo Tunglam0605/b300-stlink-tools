@@ -281,6 +281,7 @@ class GatewaySupervisor:
         self._selected: Optional[ProbeInfo] = None
         self._presence: Optional[ProbePresenceTracker] = None
         self._evidence_at: Optional[float] = None
+        self._hardware_error = False
         self._manual_stop = False
         self._lock = threading.RLock()
         self._snapshot = GatewaySnapshot.from_record({
@@ -305,9 +306,11 @@ class GatewaySupervisor:
     def ensure(self) -> GatewaySnapshot:
         with self._lock:
             self._manual_stop = False
-            if self._snapshot.state == "READY" and self._service is not None:
-                if self._service.state in (DebugState.READY, DebugState.CONNECTED):
+            if self._service is not None:
+                if (self._snapshot.state == "READY"
+                        and self._service.state in (DebugState.READY, DebugState.CONNECTED)):
                     return self._snapshot
+                return self.observe()
             try:
                 selected, probe_ref = select_probe(
                     tuple(self._probe_discovery()), self._requested_serial,
@@ -326,17 +329,33 @@ class GatewaySupervisor:
             self._publish("STARTING", "START_REQUESTED")
             service = self._service_factory()
             self._service = service
+            self._hardware_error = False
             try:
                 service.start(config, event_sink=self._on_openocd_line)
-                cpu_state = str(self._target_state_probe(config)).lower()
-                if cpu_state not in {"running", "halted"}:
-                    raise RuntimeError("OpenOCD did not return verified target run state.")
             except Exception:
                 try:
                     service.stop()
                 finally:
                     self._service = None
                 return self._publish("FAILED", "TARGET_UNVERIFIED")
+            if self._hardware_error:
+                service.stop()
+                self._service = None
+                return self._publish("DISCONNECTED", "OPENOCD_HARDWARE_ERROR")
+            try:
+                cpu_state = str(self._target_state_probe(config)).lower()
+                if cpu_state not in {"running", "halted"}:
+                    raise RuntimeError("OpenOCD did not return verified target run state.")
+            except Exception:
+                # GDB attach/detach can briefly delay the independent TCL
+                # health probe. Revoke attach readiness, but retain this
+                # verified OpenOCD owner so the next health cycle can recover
+                # without colliding with its still-bound listeners.
+                return self._publish("DISCONNECTED", "TARGET_UNVERIFIED")
+            if self._hardware_error:
+                service.stop()
+                self._service = None
+                return self._publish("DISCONNECTED", "OPENOCD_HARDWARE_ERROR")
             self._evidence_at = self._clock()
             return self._publish("READY", "TARGET_VERIFIED", cpu_state=cpu_state)
 
@@ -345,12 +364,13 @@ class GatewaySupervisor:
             if self._manual_stop or self._snapshot.state == "STOPPED":
                 return self._snapshot
             service = self._service
-            if (self._snapshot.state == "DISCONNECTED"
-                    and self._snapshot.reason_code == "OPENOCD_HARDWARE_ERROR"):
+            if (self._hardware_error
+                    or (self._snapshot.state == "DISCONNECTED"
+                        and self._snapshot.reason_code == "OPENOCD_HARDWARE_ERROR")):
                 if service is not None:
                     service.stop()
                     self._service = None
-                return self._snapshot
+                return self._publish("DISCONNECTED", "OPENOCD_HARDWARE_ERROR")
             if service is None or service.state not in (DebugState.READY, DebugState.CONNECTED):
                 return self._publish("FAILED", "OPENOCD_EXITED")
             if self._presence is None:
@@ -371,15 +391,17 @@ class GatewaySupervisor:
                 if cpu_state not in {"running", "halted"}:
                     raise RuntimeError("unverified target")
             except Exception:
+                return self._publish("DISCONNECTED", "TARGET_UNVERIFIED")
+            if self._hardware_error:
                 service.stop()
                 self._service = None
-                return self._publish("DISCONNECTED", "TARGET_UNVERIFIED")
+                return self._publish("DISCONNECTED", "OPENOCD_HARDWARE_ERROR")
             self._evidence_at = self._clock()
             return self._publish("READY", "TARGET_VERIFIED", cpu_state=cpu_state)
 
     def rescan(self) -> GatewaySnapshot:
         with self._lock:
-            if self._snapshot.state == "READY":
+            if self._service is not None:
                 return self.observe()
             return self.ensure()
 
@@ -393,7 +415,7 @@ class GatewaySupervisor:
         with self._lock:
             if self._manual_stop:
                 return self._snapshot
-            if self._snapshot.state == "READY":
+            if self._service is not None:
                 return self.observe()
             return self.ensure()
 
@@ -403,6 +425,7 @@ class GatewaySupervisor:
             if self._service is not None:
                 self._service.stop()
                 self._service = None
+            self._hardware_error = False
             return self._publish("STOPPED", "USER_STOPPED")
 
     def _on_openocd_line(self, line: str) -> None:
@@ -410,8 +433,9 @@ class GatewaySupervisor:
         if any(marker in lowered for marker in ("libusb", "target not examined", "swd fault", "error:")):
             # The owner loop performs serialized cleanup.  This callback only
             # revokes the public READY claim immediately.
+            self._hardware_error = True
             with self._lock:
-                if self._snapshot.state == "READY":
+                if self._service is not None:
                     self._publish("DISCONNECTED", "OPENOCD_HARDWARE_ERROR")
 
     def _publish(self, state: str, reason_code: str,
