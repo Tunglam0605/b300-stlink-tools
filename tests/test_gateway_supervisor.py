@@ -51,6 +51,7 @@ class GatewaySupervisorTests(unittest.TestCase):
         self.assertEqual(result.state, "READY")
         self.assertEqual(result.cpu_state, "running")
         self.assertEqual([item.state for item in seen], ["STARTING", "READY"])
+        self.assertEqual(service.start_calls[0].gdb_max_connections, 2)
 
     def test_two_concurrent_ensure_calls_create_one_debug_owner(self) -> None:
         service = FakeService()

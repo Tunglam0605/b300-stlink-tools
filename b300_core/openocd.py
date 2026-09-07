@@ -260,7 +260,8 @@ def build_boot_verify_command(probe: ProbeRef, executable: str) -> List[str]:
 
 def build_debug_command(probe: ProbeRef, executable: str, bind_address: str,
                         gdb_port: int, telnet_port: Optional[int] = None,
-                        tcl_port: Optional[int] = None) -> List[str]:
+                        tcl_port: Optional[int] = None,
+                        gdb_max_connections: int = 1) -> List[str]:
     return _base_command(
         probe,
         executable,
@@ -269,6 +270,7 @@ def build_debug_command(probe: ProbeRef, executable: str, bind_address: str,
         tcl_port=tcl_port,
         bind_address=bind_address,
     ) + [
+        "-c", "stm32f4x.cpu configure -gdb-max-connections %d" % int(gdb_max_connections),
         "-c", "gdb flash_program disable",
         "-c", "gdb breakpoint_override hard",
         "-c", "init",

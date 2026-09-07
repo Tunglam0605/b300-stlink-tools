@@ -54,6 +54,7 @@ class DebugServiceTests(unittest.TestCase):
         self.assertIn("tcl port disabled", commands[0])
         self.assertIn("gdb flash_program disable", commands[0])
         self.assertIn("gdb breakpoint_override hard", commands[0])
+        self.assertIn("stm32f4x.cpu configure -gdb-max-connections 1", commands[0])
         rendered = " ".join(commands[0]).lower()
         self.assertNotIn("erase_sector", rendered)
         self.assertNotIn("program {", rendered)
@@ -94,6 +95,29 @@ class DebugServiceTests(unittest.TestCase):
         self.assertEqual(state, DebugState.READY)
         self.assertIn("gdb port 3333", commands[0])
         self.assertIn("tcl port 6666", commands[0])
+        service.stop()
+
+    def test_gateway_profile_allows_cortex_debug_live_watch_connection(self) -> None:
+        process = FakeProcess()
+        process.stdout = iter([
+            "Info : Listening on port 3333 for gdb connections\n",
+            "Info : Listening on port 6666 for tcl connections\n",
+        ])
+        commands = []
+        service = DebugService(
+            executable="openocd",
+            process_factory=lambda command, **kwargs: commands.append(command) or process,
+        )
+
+        service.start(DebugConfig(
+            ProbeRef("DEBUG123"), tcl_port=6666, gdb_max_connections=2,
+        ))
+
+        self.assertIn("stm32f4x.cpu configure -gdb-max-connections 2", commands[0])
+        self.assertLess(
+            commands[0].index("stm32f4x.cpu configure -gdb-max-connections 2"),
+            commands[0].index("init"),
+        )
         service.stop()
 
     def test_non_loopback_tcl_is_rejected_before_process_launch(self) -> None:

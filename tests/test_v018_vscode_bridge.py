@@ -144,6 +144,7 @@ class V018VsCodeBridgeTests(unittest.TestCase):
         self.assertEqual(debug.last_config.gdb_port, 3333)
         self.assertIsNone(debug.last_config.telnet_port)
         self.assertEqual(debug.last_config.tcl_port, 6666)
+        self.assertEqual(debug.last_config.gdb_max_connections, 2)
         bridge.stop()
         self.assertEqual(debug.stops, 1)
 
@@ -153,6 +154,7 @@ class V018VsCodeBridgeTests(unittest.TestCase):
         self.assertEqual(state.role, DebugRole.GATEWAY)
         self.assertEqual(debug.last_config.bind_address, "127.0.0.1")
         self.assertEqual(debug.last_config.tcl_port, 6666)
+        self.assertEqual(debug.last_config.gdb_max_connections, 2)
         self.assertIn("private", state.detail.lower())
 
     def test_gdb_disconnect_restores_running_target_without_forwarding_tcl(self) -> None:

@@ -98,6 +98,7 @@ def validate_debug_args(args: argparse.Namespace) -> None:
     DebugConfig(
         ProbeRef(args.probe_serial), args.bind_address, args.gdb_port,
         args.telnet_port, args.tcl_port,
+        gdb_max_connections=getattr(args, "gdb_max_connections", 1),
     ).validate()
 
 
@@ -113,6 +114,7 @@ def openocd_command(args: argparse.Namespace):
         args.gdb_port,
         args.telnet_port,
         args.tcl_port,
+        getattr(args, "gdb_max_connections", 1),
     )
 
 
@@ -671,6 +673,7 @@ def run_debug_gateway(args: argparse.Namespace, reporter: Reporter) -> int:
     args.bind_address = "127.0.0.1"
     if args.tcl_port is None:
         args.tcl_port = 6666
+    args.gdb_max_connections = 2
     DebugConfig(
         ProbeRef(args.probe_serial), args.bind_address, args.gdb_port, None, args.tcl_port,
     ).validate()
@@ -723,11 +726,13 @@ def run_debug(args: argparse.Namespace, reporter: Reporter) -> int:
     config = DebugConfig(
         probe, args.bind_address, args.gdb_port,
         args.telnet_port, args.tcl_port,
+        gdb_max_connections=getattr(args, "gdb_max_connections", 1),
     )
     config.validate()
     command = build_debug_command(
         probe, resolve_openocd(args.openocd), args.bind_address,
         args.gdb_port, args.telnet_port, args.tcl_port,
+        getattr(args, "gdb_max_connections", 1),
     )
     reporter.emit("openocd", command=command, dry_run=False)
     service = DebugService(executable=args.openocd)

@@ -542,6 +542,7 @@ class VsCodeDebugBridge:
             gdb_port=int(gdb_port),
             telnet_port=None,
             tcl_port=int(tcl_port),
+            gdb_max_connections=2,
         )
         config.validate()
         self._server_config = config

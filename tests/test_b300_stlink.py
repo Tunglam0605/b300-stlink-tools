@@ -526,6 +526,7 @@ class B300StlinkTests(unittest.TestCase):
         self.assertIn("telnet port disabled", command)
         self.assertIn("gdb flash_program disable", command)
         self.assertIn("gdb breakpoint_override hard", command)
+        self.assertIn("stm32f4x.cpu configure -gdb-max-connections 2", command)
         for forbidden in ("flash erase_sector", "mass_erase", "program {", "flash protect", "mww "):
             self.assertNotIn(forbidden, command)
 

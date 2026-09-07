@@ -5,6 +5,12 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.21.4] - 2026-09-07
+
+- Fixed Cortex-Debug Live Watch for local and SSH Gateway sessions by configuring OpenOCD for the debugger's main GDB connection plus its dedicated live-monitor GDB connection before target initialization.
+- Kept GDB/TCL loopback-only, Telnet disabled and the existing no-flash debug policy unchanged.
+- Verified two simultaneous GDB Remote Protocol clients against the connected STM32F407 through the Ubuntu Gateway. `HW-P1-001` remains OPEN / DEFERRED.
+
 ## [0.21.3] - 2026-09-07
 
 - Distinguished local USB ST-Link discovery from remote Gateway probe evidence throughout the shared header, probe picker and Device page.

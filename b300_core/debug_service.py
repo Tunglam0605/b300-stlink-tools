@@ -36,6 +36,7 @@ class DebugConfig:
     gdb_port: int = 3333
     telnet_port: Optional[int] = None
     tcl_port: Optional[int] = None
+    gdb_max_connections: int = 1
 
     def validate(self) -> None:
         address = ipaddress.ip_address(self.bind_address)
@@ -50,6 +51,8 @@ class DebugConfig:
         enabled_ports = [port for _label, port in named_ports if port is not None]
         if len(enabled_ports) != len(set(enabled_ports)):
             raise ValueError("OpenOCD debug ports must be distinct.")
+        if not 1 <= int(self.gdb_max_connections) <= 32:
+            raise ValueError("GDB maximum connections must be in range 1..32.")
 
 
 class DebugProcess(Protocol):
@@ -104,6 +107,7 @@ class DebugService:
                 command = build_debug_command(
                     config.probe, self.executable, config.bind_address,
                     config.gdb_port, config.telnet_port, config.tcl_port,
+                    config.gdb_max_connections,
                 )
                 self._process = self._process_factory(
                     command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,

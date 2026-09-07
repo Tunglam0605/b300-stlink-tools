@@ -321,6 +321,7 @@ class GatewaySupervisor:
             self._generation = max(self._generation + 1, presence.generation)
             config = DebugConfig(
                 probe_ref, "127.0.0.1", self._gdb_port, None, self._tcl_port,
+                gdb_max_connections=2,
             )
             self._publish("STARTING", "START_REQUESTED")
             service = self._service_factory()
@@ -364,6 +365,7 @@ class GatewaySupervisor:
                 config = DebugConfig(
                     select_probe((presence.probe,), presence.probe.serial)[1],
                     "127.0.0.1", self._gdb_port, None, self._tcl_port,
+                    gdb_max_connections=2,
                 )
                 cpu_state = str(self._target_state_probe(config)).lower()
                 if cpu_state not in {"running", "halted"}:
