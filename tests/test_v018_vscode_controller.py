@@ -55,8 +55,8 @@ class V018VsCodeControllerTests(unittest.TestCase):
                     probe=ProbeRef("probe"), workspace=workspace, symbols=symbols
                 )
             payload = __import__("json").loads(launch_json.read_text(encoding="utf-8"))
-            self.assertEqual(payload["configurations"][0], {"name": "Python", "type": "debugpy"})
-            self.assertEqual(payload["configurations"][1]["b300"]["owner"], "b300-stlink-tools")
+            self.assertEqual(payload["configurations"][0]["b300"]["owner"], "b300-stlink-tools")
+            self.assertEqual(payload["configurations"][1], {"name": "Python", "type": "debugpy"})
 
     def test_local_launch_uses_backend_profile_and_shell_free_launcher(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
