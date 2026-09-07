@@ -5,6 +5,12 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.21.8] - 2026-09-07
+
+- Prevented ordinary OpenOCD GDB/memory errors from being misclassified as a lost ST-Link or SWD transport. The managed Gateway now restarts only for explicit USB, unexamined-target or SWD-fault evidence, so Cortex-Debug and its Live Watch connection no longer tear down their own GDB endpoint.
+- Rebuilt a failed Client GDB tunnel and rewrote the managed VS Code launch entry when a READY Gateway returns with a new generation, instead of leaving Cortex-Debug pointed at an expired dynamic loopback port.
+- Preserved loopback-only GDB/TCL binding, the two-client run-state guard and the no-flash debug policy.
+
 ## [0.21.7] - 2026-09-07
 
 - Fixed headless SSH Client, Live Monitor and VS Code forwarding on machines with an already-authorized OpenSSH key: ordinary SSH now tries public-key authentication first and still falls back to password or keyboard-interactive prompts without persisting a password.

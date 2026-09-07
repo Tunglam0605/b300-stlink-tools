@@ -258,6 +258,25 @@ class GatewaySupervisorTests(unittest.TestCase):
         self.assertEqual(result.reason_code, "OPENOCD_HARDWARE_ERROR")
         self.assertEqual(service.stop_calls, 1)
 
+    def test_gdb_memory_error_does_not_restart_healthy_openocd(self) -> None:
+        service = FakeService()
+        supervisor = GatewaySupervisor(
+            service_factory=lambda: service,
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=lambda _config: "running",
+        )
+        initial = supervisor.ensure()
+
+        supervisor._on_openocd_line(
+            "Error: Failed to read memory at 0x20000030 while target is running"
+        )
+        result = supervisor.maintain_once()
+
+        self.assertEqual((result.state, result.reason_code),
+                         ("READY", "TARGET_VERIFIED"))
+        self.assertEqual(result.generation, initial.generation)
+        self.assertEqual(service.stop_calls, 0)
+
     def test_all_public_cycles_clean_hardware_error_before_any_recreate(self) -> None:
         for action in ("ensure", "rescan", "maintain_once"):
             services = []

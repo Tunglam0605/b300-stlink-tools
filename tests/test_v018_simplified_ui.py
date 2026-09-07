@@ -552,6 +552,55 @@ class V018SimplifiedUiTests(unittest.TestCase):
             window._vscode_controller = original_controller
             self._close(window)
 
+    def test_gateway_recovery_rebuilds_a_failed_client_tunnel(self) -> None:
+        window = self._make_window()
+        original_controller = window._vscode_controller
+        try:
+            gateway = GatewayProfile.create(
+                "Test gateway", "gateway.example", "operator", 2222,
+                profile_id="test-gateway",
+            )
+            project = ProjectProfile(
+                "test-project", "Test project", Path("workspace"), Path("main.axf")
+            )
+            window.app_context.set_profiles((project,), (gateway,))
+            window.app_context.select_connection("test-gateway")
+            controller = mock.Mock()
+            controller.state = VsCodeBridgeState(
+                DebugRole.CLIENT, BridgeState.FAILED, None,
+                detail="Remote SSH/GDB forward is not active.",
+            )
+            controller.synchronize_client.return_value = SimpleNamespace(
+                state=VsCodeBridgeState(
+                    DebugRole.CLIENT, BridgeState.READY, "127.0.0.1:52000"
+                )
+            )
+            window._vscode_controller = controller
+            changed = GatewaySnapshot.from_record({
+                "schema_version": 1,
+                "instance_id": "gw-recovered",
+                "generation": 3,
+                "sequence": 4,
+                "state": "READY",
+                "reason_code": "TARGET_VERIFIED",
+                "selected_probe": {"serial": "ABC"},
+                "gdb_endpoint": "127.0.0.1:3333",
+                "tcl_endpoint": "127.0.0.1:6666",
+                "cpu_state": "running",
+                "evidence_age_ms": 0,
+            })
+
+            window._on_gateway_recovered(changed)
+
+            controller.synchronize_client.assert_called_once()
+            self.assertEqual(
+                controller.synchronize_client.call_args.kwargs["gateway_snapshot"],
+                changed,
+            )
+        finally:
+            window._vscode_controller = original_controller
+            self._close(window)
+
     def test_live_monitor_owns_a_production_controller_and_panel(self) -> None:
         window = self._make_window()
         try:

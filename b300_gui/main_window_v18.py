@@ -900,7 +900,8 @@ class MainWindowV18(MainWindow):
         """Rebind the existing Client bridge and refresh only B300's launch entry."""
         self._on_gateway_snapshot(snapshot)
         state = self._vscode_controller.state
-        if state.state != BridgeState.READY or state.role != DebugRole.CLIENT:
+        if (state.role != DebugRole.CLIENT
+                or state.state not in (BridgeState.READY, BridgeState.FAILED)):
             return
         connection = self.app_context.selected_connection
         project = self.app_context.selected_project

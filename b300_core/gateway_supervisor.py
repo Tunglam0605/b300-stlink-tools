@@ -435,7 +435,8 @@ class GatewaySupervisor:
         guard = self._remote_guard
         if guard is not None:
             guard.handle_openocd_line(line)
-        if any(marker in lowered for marker in ("libusb", "target not examined", "swd fault", "error:")):
+        if any(marker in lowered for marker in (
+                "libusb", "target not examined", "swd fault")):
             # The owner loop performs serialized cleanup.  This callback only
             # revokes the public READY claim immediately.
             self._hardware_error = True
