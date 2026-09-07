@@ -67,6 +67,24 @@ class GatewayEndpointBinding:
 _REVISION_UNSET = object()
 _B300_OWNER = "b300-stlink-tools"
 _B300_CONFIGURATION_ID = "b300.stm32f407.attach"
+_B300_LEGACY_NAMES = {
+    "B300 STM32F407 · Remote via Gateway",
+    "B300 STM32F407 · Local ST-Link",
+    "B300 STM32F407 · Gateway Local Debug",
+}
+
+
+def _is_legacy_b300_configuration(item: Dict[str, object]) -> bool:
+    return (
+        item.get("name") in _B300_LEGACY_NAMES
+        and item.get("type") == "cortex-debug"
+        and item.get("request") == "attach"
+        and item.get("servertype") == "external"
+        and not (
+            isinstance(item.get("b300"), dict)
+            and item["b300"].get("owner") == _B300_OWNER
+        )
+    )
 
 
 def _launch_revision(output: Path) -> Optional[str]:
@@ -251,6 +269,9 @@ class VsCodeExternalProfile:
         configuration = self.configuration()
         document = _read_launch_document(output) if output.exists() else {"version": "0.2.0"}
         configurations = document.setdefault("configurations", [])
+        configurations[:] = [
+            item for item in configurations if not _is_legacy_b300_configuration(item)
+        ]
         owned = [
             index for index, item in enumerate(configurations)
             if isinstance(item.get("b300"), dict)
@@ -265,18 +286,7 @@ class VsCodeExternalProfile:
         if owned:
             configurations[owned[0]] = configuration
         elif named:
-            legacy_b300_names = {
-                "B300 STM32F407 · Remote via Gateway",
-                "B300 STM32F407 · Local ST-Link",
-                "B300 STM32F407 · Gateway Local Debug",
-            }
-            legacy = (
-                self.name in legacy_b300_names
-                and configurations[named[0]].get("type") == "cortex-debug"
-                and configurations[named[0]].get("request") == "attach"
-                and configurations[named[0]].get("servertype") == "external"
-            )
-            if not force and not legacy:
+            if not force:
                 raise FileExistsError(
                     "A VS Code configuration named '%s' is not owned by B300; confirmation is required." %
                     self.name

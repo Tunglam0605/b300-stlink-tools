@@ -339,6 +339,35 @@ class V018VsCodeBridgeTests(unittest.TestCase):
             self.assertIn("B300-STLink", config["gdbPath"])
             self.assertEqual(config["b300"]["owner"], "b300-stlink-tools")
 
+    def test_launch_writer_removes_stale_legacy_b300_profiles_when_owned_profile_exists(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / ".vscode" / "launch.json"
+            output.parent.mkdir()
+            legacy = {
+                "name": "B300 STM32F407 · Remote via Gateway",
+                "type": "cortex-debug", "request": "attach", "servertype": "external",
+                "gdbTarget": "127.0.0.1:59235", "gdbPath": "expired-gdb",
+            }
+            owned = VsCodeExternalProfile(
+                "B300 STM32F407 · Local ST-Link", "app.axf", "127.0.0.1:3333"
+            ).configuration()
+            output.write_text(json.dumps({
+                "configurations": [legacy, {"name": "Python", "type": "debugpy"}, owned]
+            }), encoding="utf-8")
+
+            VsCodeExternalProfile(
+                "B300 STM32F407 · Remote via Gateway", "app.axf", "127.0.0.1:41234"
+            ).write_launch_json(root)
+
+            configs = json.loads(output.read_text(encoding="utf-8"))["configurations"]
+            b300 = [item for item in configs if item.get("b300", {}).get("owner") == "b300-stlink-tools"]
+            self.assertEqual(len(b300), 1)
+            self.assertEqual(b300[0]["gdbTarget"], "127.0.0.1:41234")
+            self.assertEqual([item["name"] for item in configs if item.get("type") == "cortex-debug"],
+                             ["B300 STM32F407 · Remote via Gateway"])
+            self.assertIn({"name": "Python", "type": "debugpy"}, configs)
+
     def test_profile_rejects_temporary_gdb_from_untrusted_app_root_environment(self):
         with tempfile.TemporaryDirectory() as directory:
             app_root = Path(directory) / "attacker-controlled"
