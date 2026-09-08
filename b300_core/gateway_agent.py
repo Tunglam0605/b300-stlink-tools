@@ -118,7 +118,10 @@ class GatewayAgentOwnerLock:
                     raw = self.path.read_text(encoding="ascii").strip()
                     existing = int(raw)
                 except (OSError, UnicodeError, ValueError):
-                    raise RuntimeError("LOCK_CORRUPT")
+                    # A concurrent creator may have reserved the lock file but
+                    # not written its PID yet. Treat that brief window as busy;
+                    # never reclaim an unreadable lock owned by another caller.
+                    raise RuntimeError("ALREADY_RUNNING")
                 if existing > 0 and self._process_alive(existing):
                     raise RuntimeError("ALREADY_RUNNING")
                 try:
