@@ -273,6 +273,28 @@ class GatewayLeasePublicSnapshot:
             lease.gateway_generation, lease.probe_serial, lease.reason_code,
         )
 
+    @classmethod
+    def from_record(cls, record: Mapping[str, object]) -> "GatewayLeasePublicSnapshot":
+        """Parse the public lease portion returned by Gateway Agent status."""
+        if not isinstance(record, Mapping):
+            raise ValueError("Gateway lease snapshot must be an object.")
+        required = ("active", "lease_id", "generation", "client_label", "mode",
+                    "state", "acquired_at", "heartbeat_age_seconds",
+                    "gateway_instance_id", "gateway_generation", "probe_serial",
+                    "reason_code")
+        if any(name not in record for name in required):
+            raise ValueError("Gateway lease snapshot is incomplete.")
+        if type(record["active"]) is not bool:
+            raise ValueError("Gateway lease activity must be boolean.")
+        return cls(
+            bool(record["active"]), str(record["lease_id"]), int(record["generation"]),
+            str(record["client_label"]), str(record["mode"]), str(record["state"]),
+            str(record["acquired_at"]), int(record["heartbeat_age_seconds"]),
+            str(record["gateway_instance_id"]), int(record["gateway_generation"]),
+            None if record["probe_serial"] is None else str(record["probe_serial"]),
+            str(record["reason_code"]),
+        )
+
     def to_record(self) -> dict:
         return {
             "active": self.active,

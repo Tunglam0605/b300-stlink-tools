@@ -121,6 +121,28 @@ class GatewayHealthControllerTests(unittest.TestCase):
         self.assertEqual(state.gateway_generation, 2)
         self.assertEqual(state.sequence, 7)
 
+    def test_authenticated_lease_evidence_is_published_and_cleared_on_rebind(self):
+        from dataclasses import replace
+        from b300_gui.app_context import AppContext
+        from b300_core.gateway_agent import GatewayAgentStatus
+        from b300_core.gateway_lease import GatewayLeasePublicSnapshot
+        context = AppContext()
+        controller = GatewayHealthController(FakeManager(), context=context, worker_factory=None)
+        agent = GatewayAgentStatus("agent-01", 1234, 1.0, "READY", "IDLE")
+        lease = GatewayLeasePublicSnapshot.from_record({
+            "active": True, "lease_id": "lease-1", "generation": 2,
+            "client_label": "ENG-LAPTOP-02", "mode": "VSCODE_DEBUG",
+            "state": "ACTIVE", "acquired_at": "2026-09-08T01:02:03Z",
+            "heartbeat_age_seconds": 1, "gateway_instance_id": "gw-a",
+            "gateway_generation": 3, "probe_serial": "ABC", "reason_code": "LEASE_ACTIVE",
+        })
+        controller.accept_snapshot(replace(snapshot(), agent_status=agent, lease_snapshot=lease))
+        self.assertEqual(context.gateway_agent_snapshot, agent)
+        self.assertEqual(context.gateway_lease_snapshot, lease)
+        controller.bind(RemoteGatewayProfile("new-ipc", "operator", 22))
+        self.assertIsNone(context.gateway_agent_snapshot)
+        self.assertIsNone(context.gateway_lease_snapshot)
+
     def test_late_worker_completion_is_rejected_after_rebind(self):
         old_token = self.controller._bind_token
         self.controller.bind(RemoteGatewayProfile("new-ipc", "operator", 22))

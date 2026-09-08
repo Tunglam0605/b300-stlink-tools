@@ -50,6 +50,9 @@ class GatewaySnapshot:
     gdb_connection_count: Optional[int] = None
     gdb_activity_generation: Optional[int] = None
     gdb_ever_attached: Optional[bool] = None
+    # Optional authenticated/public control evidence attached by GUI clients.
+    agent_status: object = None
+    lease_snapshot: object = None
 
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> "GatewaySnapshot":
@@ -113,6 +116,7 @@ class GatewaySnapshot:
             schema_version, instance_id, generation, sequence, state, reason_code,
             selected_probe, gdb_endpoint, tcl_endpoint, cpu_state, evidence_age_ms,
             gdb_connection_count, gdb_activity_generation, gdb_ever_attached,
+            None, None,
         )
 
     @property

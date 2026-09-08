@@ -1082,6 +1082,11 @@ def run_gateway_agent_command(args: argparse.Namespace) -> int:
         record = status.to_record() if status is not None else {
             "state": "STOPPED", "reason_code": "GATEWAY_AGENT_NOT_RUNNING",
         }
+        lease = GatewayLeaseStore().read()
+        if lease is not None:
+            record["lease_snapshot"] = GatewayLeasePublicSnapshot.from_lease(
+                lease, time.monotonic()
+            ).to_record()
         record.update(gateway_capabilities())
         emit_snapshot(record, args.json, "Gateway Agent: %s" % record["state"])
         return 0 if status is not None else 1

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Optional
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
 from b300_core.gateway_protocol import GATEWAY_STATUS_COMMAND
 from b300_core.gateway_status import GatewaySnapshot, GatewaySnapshotTracker
+from b300_core.gateway_agent import GatewayAgentStatus
+from b300_core.gateway_lease import GatewayLeasePublicSnapshot
 from b300_core.remote_profile import RemoteGatewayProfile
 from b300_core.models import ProbeInfo
 
@@ -118,6 +121,9 @@ class GatewayHealthController(QObject):
         self._transport_stale = False
         self._had_snapshot = False
         self._set_warning("")
+        if self._context is not None:
+            self._context.set_gateway_agent_status(None)
+            self._context.set_gateway_lease_snapshot(None)
 
     def start(self) -> None:
         if self._profile is None:
@@ -144,9 +150,22 @@ class GatewayHealthController(QObject):
             session = self._sessions.session(profile)
             status = getattr(session, "gateway_status", None)
             if callable(status):
-                return status(timeout_seconds=5.0)
-            # Compatibility with the first protocol implementation.
-            return session._run_gateway_cli(GATEWAY_STATUS_COMMAND, timeout_seconds=5.0)
+                snapshot = status(timeout_seconds=5.0)
+            else:
+                # Compatibility with the first protocol implementation.
+                snapshot = session._run_gateway_cli(GATEWAY_STATUS_COMMAND, timeout_seconds=5.0)
+            control = getattr(session, "_run_gateway_control", None)
+            if callable(control):
+                try:
+                    result = control("b300-stlink debug gateway-agent-status --json", timeout_seconds=5.0)
+                    agent = GatewayAgentStatus.from_record(result)
+                    lease_record = result.get("lease_snapshot")
+                    lease = (GatewayLeasePublicSnapshot.from_record(lease_record)
+                             if isinstance(lease_record, dict) else None)
+                    snapshot = replace(snapshot, agent_status=agent, lease_snapshot=lease)
+                except Exception:
+                    pass
+            return snapshot
 
         worker = self._worker_factory(operation, self)
         self._worker = worker
