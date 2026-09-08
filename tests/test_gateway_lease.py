@@ -128,6 +128,44 @@ class GatewayLeaseContractTests(unittest.TestCase):
         self.assertEqual(grant.token, "secret-token")
         self.assertNotIn("secret-token", json.dumps(grant.public.to_record()))
 
+    def test_public_snapshot_rejects_untrusted_types_values_and_extra_fields(self) -> None:
+        invalid = (
+            {"lease_id": "bad/id"},
+            {"generation": True},
+            {"generation": -1},
+            {"generation": 2 ** 31},
+            {"client_label": " C:\\secrets\\token "},
+            {"mode": "FLASH"},
+            {"state": "IDLE"},
+            {"acquired_at": "2026-09-08T09:00:00Z\nsecret"},
+            {"heartbeat_age_seconds": -1},
+            {"heartbeat_age_seconds": 86401},
+            {"heartbeat_age_seconds": True},
+            {"gateway_instance_id": "gateway/one"},
+            {"gateway_generation": "2"},
+            {"gateway_generation": 2 ** 31},
+            {"probe_serial": "serial;secret"},
+            {"reason_code": "bad reason"},
+            {"_extra": "ignored"},
+        )
+        base = GatewayLeasePublicSnapshot.from_lease(
+            GatewayLease.from_record(valid_record()), now_mono=103.4,
+        ).to_record()
+        for changes in invalid:
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                candidate = dict(base)
+                candidate.update(changes)
+                GatewayLeasePublicSnapshot.from_record(candidate)
+
+    def test_public_snapshot_preserves_safe_values_and_normalizes_mode(self) -> None:
+        base = GatewayLeasePublicSnapshot.from_lease(
+            GatewayLease.from_record(valid_record()), now_mono=103.4,
+        ).to_record()
+        base["mode"] = "live_watch"
+        snapshot = GatewayLeasePublicSnapshot.from_record(base)
+        self.assertEqual(snapshot.mode, "LIVE_WATCH")
+        self.assertEqual(snapshot.heartbeat_age_seconds, 3)
+
     def test_store_round_trip_never_persists_raw_token_and_clear_is_generation_safe(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "lease.json"

@@ -22,12 +22,17 @@ LEASE_STATES = frozenset({
 MAX_IDENTIFIER_LENGTH = 64
 MAX_CLIENT_LABEL_LENGTH = 64
 MAX_TOKEN_LENGTH = 256
+MAX_GENERATION = 2 ** 31 - 1
+MAX_HEARTBEAT_AGE_SECONDS = 86400
 
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z0-9._-]+$")
 _SAFE_REASON = re.compile(r"^[A-Z][A-Z0-9_]*$")
 _HEX_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]+")
 _WHITESPACE = re.compile(r"\s+")
+_TIMESTAMP = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
+)
 
 
 def _strict_int(value: object, label: str, *, minimum: int = 0) -> int:
@@ -282,17 +287,59 @@ class GatewayLeasePublicSnapshot:
                     "state", "acquired_at", "heartbeat_age_seconds",
                     "gateway_instance_id", "gateway_generation", "probe_serial",
                     "reason_code")
-        if any(name not in record for name in required):
+        if set(record) != set(required):
             raise ValueError("Gateway lease snapshot is incomplete.")
         if type(record["active"]) is not bool:
             raise ValueError("Gateway lease activity must be boolean.")
+        active = record["active"]
+        lease_id = record["lease_id"]
+        generation = record["generation"]
+        label = record["client_label"]
+        mode = record["mode"]
+        state = record["state"]
+        acquired_at = record["acquired_at"]
+        heartbeat_age = record["heartbeat_age_seconds"]
+        instance_id = record["gateway_instance_id"]
+        gateway_generation = record["gateway_generation"]
+        reason = record["reason_code"]
+        if active:
+            lease_id = _safe_identifier(lease_id, "Gateway lease id")
+            generation = _strict_int(generation, "Gateway lease generation")
+            if generation > MAX_GENERATION:
+                raise ValueError("Gateway lease generation is out of bounds.")
+            instance_id = _safe_identifier(instance_id, "Gateway lease instance id")
+            gateway_generation = _strict_int(
+                gateway_generation, "Gateway lease Gateway generation",
+            )
+            if gateway_generation > MAX_GENERATION:
+                raise ValueError("Gateway lease Gateway generation is out of bounds.")
+            if (not isinstance(label, str) or sanitize_client_label(label) != label
+                    or "/" in label or "\\" in label):
+                raise ValueError("Gateway lease client label must already be sanitized.")
+            if not isinstance(mode, str) or mode.strip().upper() not in LEASE_MODES:
+                raise ValueError("Unsupported Gateway lease mode: %s." % mode)
+            mode = mode.strip().upper()
+            if not isinstance(state, str) or state not in LEASE_STATES:
+                raise ValueError("Unsupported Gateway lease state: %s." % state)
+        else:
+            if (lease_id != "" or generation != 0 or label != "" or mode != ""
+                    or state != "IDLE" or instance_id != "" or gateway_generation != 0):
+                raise ValueError("Inactive Gateway lease snapshot contains active data.")
+        if not isinstance(acquired_at, str) or (
+                acquired_at and (_TIMESTAMP.fullmatch(acquired_at) is None)):
+            raise ValueError("Gateway lease acquired_at is invalid.")
+        heartbeat_age = _strict_int(
+            heartbeat_age, "Gateway lease heartbeat age",
+        )
+        if heartbeat_age > MAX_HEARTBEAT_AGE_SECONDS:
+            raise ValueError("Gateway lease heartbeat age is out of bounds.")
+        serial = _optional_probe_serial(record["probe_serial"])
+        if not isinstance(reason, str) or len(reason) > MAX_IDENTIFIER_LENGTH \
+                or _SAFE_REASON.fullmatch(reason) is None:
+            raise ValueError("Gateway lease reason code is invalid.")
         return cls(
-            bool(record["active"]), str(record["lease_id"]), int(record["generation"]),
-            str(record["client_label"]), str(record["mode"]), str(record["state"]),
-            str(record["acquired_at"]), int(record["heartbeat_age_seconds"]),
-            str(record["gateway_instance_id"]), int(record["gateway_generation"]),
-            None if record["probe_serial"] is None else str(record["probe_serial"]),
-            str(record["reason_code"]),
+            bool(active), lease_id, generation, label, mode, state,
+            acquired_at, heartbeat_age, instance_id, gateway_generation, serial, reason,
         )
 
     def to_record(self) -> dict:
