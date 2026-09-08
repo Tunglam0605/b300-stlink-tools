@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import threading
 import time
+import os
 import unittest
 from pathlib import Path
 
@@ -89,6 +90,17 @@ class GatewayAgentTests(unittest.TestCase):
         path.write_text('{"protocol_version": 999}', encoding="utf-8")
         self.assertIsNone(self.store.read_response(request_id))
         self.assertFalse(path.exists())
+
+    def test_expired_completion_tombstone_is_pruned_before_replay_check(self):
+        request = GatewayRequest.create("status", {}, request_id="req-expired-done", timeout_seconds=5)
+        self.store._prepare()
+        marker = self.store.completed_path(request.request_id)
+        marker.write_text("completed\n", encoding="ascii")
+        old = time.time() - 2 * 3600
+        os.utime(str(marker), (old, old))
+        result = self.store.submit_request(request, timeout_seconds=0.01)
+        self.assertEqual(result["reason_code"], "AGENT_RESPONSE_TIMEOUT")
+        self.assertFalse(marker.exists())
 
     def test_oversized_request_never_reaches_coordinator(self):
         path = self.store.requests_dir / "req-oversized.json"

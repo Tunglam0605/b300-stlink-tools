@@ -131,6 +131,9 @@ class GatewayRequestStore:
         return path
 
     def submit_request(self, request: GatewayRequest, *, timeout_seconds: float = 10.0) -> dict:
+        # Prepare first so expired response/tombstone artifacts are pruned
+        # before replay checks below.
+        self._prepare()
         if (self.response_path(request.request_id).exists()
                 or self.completed_path(request.request_id).exists()):
             return self._error(request.request_id, "REQUEST_REPLAYED")
