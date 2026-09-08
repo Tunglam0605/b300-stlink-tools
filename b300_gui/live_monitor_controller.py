@@ -222,7 +222,8 @@ class LiveMonitorController(QObject):
                 if _binding is None:
                     raise RuntimeError("Gateway restart requires a fresh binding.")
                 config = replace(config, bound_tcl_endpoint=_binding.tcl_endpoint)
-            elif callable(getattr(remote_session, "gateway_status", None)):
+            elif (self._gateway_lease_client is None
+                  and callable(getattr(remote_session, "gateway_status", None))):
                 coordinator = self._coordinator_factory(
                     remote_session, request.profile_id or request.host,
                 )
