@@ -16,6 +16,7 @@ from PySide6.QtCore import QObject, Signal
 from b300_core.models import ProbeRef
 from b300_core.remote_session import RemoteSession
 from b300_core.gateway_lease_client import GatewayLeaseClient
+from b300_core.gateway_status import GatewaySnapshot
 from b300_core.vscode_bridge import (
     BridgeState,
     VsCodeBridgeState,
@@ -97,7 +98,11 @@ class VsCodeDebugController:
                 self.bridge.stop()
             finally:
                 self._release_debug("Gateway lease lost")
-        threading.Thread(target=teardown, daemon=True).start()
+        dispatcher = self._ui_dispatcher
+        if dispatcher is None:
+            teardown()
+        else:
+            dispatcher.submit(teardown)
 
     @property
     def state(self) -> VsCodeBridgeState:
@@ -256,14 +261,20 @@ class VsCodeDebugController:
                 if snapshot is not None:
                     pass
                 else:
-                    snapshot = type("LeaseSnapshot", (), {
-                        "attach_ready": True,
-                        "instance_id": grant.public.get("gateway_instance_id", ""),
-                        "generation": grant.public.get("gateway_generation", 0),
+                    public = grant.public
+                    snapshot = GatewaySnapshot.from_record({
+                        "schema_version": 1,
+                        "instance_id": public.gateway_instance_id,
+                        "generation": public.gateway_generation,
                         "sequence": 0,
-                        "gdb_endpoint": grant.public.get("gdb_endpoint"),
-                        "tcl_endpoint": grant.public.get("tcl_endpoint"),
-                    })()
+                        "state": "READY",
+                        "reason_code": public.reason_code,
+                        "selected_probe": {"serial": public.probe_serial or "unknown"},
+                        "gdb_endpoint": public.gdb_endpoint,
+                        "tcl_endpoint": public.tcl_endpoint,
+                        "cpu_state": "halted",
+                        "evidence_age_ms": 0,
+                    })
             client_kwargs = {
                 "local_gdb_port": int(local_gdb_port),
                 "snapshot": snapshot,

@@ -98,7 +98,7 @@ def build_gateway_agent_setup_plan(report: GatewayAgentSetupReport, *, cli_path:
     if system == "windows":
         command = (
             "schtasks", "/Create", "/TN", TASK_NAME, "/SC", "ONLOGON",
-            "/TR", '"%s debug gateway-agent --managed-child --json"' % cli,
+            "/TR", '"%s" debug gateway-agent --managed-child --json' % cli,
             "/F",
         )
         return GatewayAgentSetupPlan(system, (command,), not report.autostart_enabled, False)

@@ -78,6 +78,7 @@ class LiveMonitorController(QObject):
         coordinator_factory=GatewayClientCoordinator,
         lease_client_factory=GatewayLeaseClient,
         context=None,
+        ui_dispatcher=None,
     ) -> None:
         super().__init__(parent)
         self.panel = panel
@@ -108,6 +109,7 @@ class LiveMonitorController(QObject):
         self._render_timer.setSingleShot(True)
         self._render_timer.timeout.connect(self._flush_pending_samples)
         self._context = context
+        self._ui_dispatcher = ui_dispatcher
         self._lease_token = None
         self._recovery_worker = None
         self._recovery_token = 0
@@ -115,6 +117,9 @@ class LiveMonitorController(QObject):
 
     def set_context(self, context) -> None:
         self._context = context
+
+    def set_ui_dispatcher(self, dispatcher) -> None:
+        self._ui_dispatcher = dispatcher
 
     def _publish_monitor(self, *, live: bool = False) -> None:
         apply = getattr(self._context, "apply_device_state", None)
@@ -144,7 +149,11 @@ class LiveMonitorController(QObject):
                 self.stop()
             except Exception:
                 self._release_monitor("Gateway lease lost")
-        threading.Thread(target=teardown, daemon=True).start()
+        dispatcher = getattr(self, "_ui_dispatcher", None)
+        if dispatcher is None:
+            teardown()
+        else:
+            dispatcher.submit(teardown)
 
     @property
     def active(self) -> bool:

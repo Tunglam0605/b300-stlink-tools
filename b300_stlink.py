@@ -1051,6 +1051,11 @@ def _managed_agent_command() -> tuple:
 def _run_gateway_agent(args: argparse.Namespace) -> int:
     instance_id = uuid.uuid4().hex
     status_store = GatewayAgentStatusStore()
+    owner_lock = GatewayAgentOwnerLock(status_store.start_lock_path)
+    try:
+        owner_lock.acquire()
+    except RuntimeError:
+        return 1
     supervisor = GatewaySupervisor(
         service_factory=lambda: DebugService(executable=args.openocd),
         probe_discovery=list_probes,
@@ -1067,9 +1072,12 @@ def _run_gateway_agent(args: argparse.Namespace) -> int:
 
     agent = GatewayAgent(coordinator, request_store=GatewayRequestStore(), status_sink=publish)
     try:
-        return agent.run()
-    except KeyboardInterrupt:
-        return 0
+        try:
+            return agent.run()
+        except KeyboardInterrupt:
+            return 0
+    finally:
+        owner_lock.release()
 
 
 def run_gateway_agent_command(args: argparse.Namespace) -> int:

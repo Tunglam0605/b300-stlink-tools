@@ -73,7 +73,19 @@ class GatewayAgentStatusStore:
             with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
                 json.dump(selected.to_record(), handle, sort_keys=True, separators=(",", ":"))
                 handle.write("\n"); handle.flush(); os.fsync(handle.fileno())
-            os.replace(str(temp), str(self.path))
+            # Windows may briefly deny replacement while a status reader has
+            # the previous file open. Retry for a bounded interval so the
+            # status heartbeat cannot die from a transient sharing violation.
+            replaced = False
+            for attempt in range(5):
+                try:
+                    os.replace(str(temp), str(self.path))
+                    replaced = True
+                    break
+                except PermissionError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.01)
         finally:
             try: temp.unlink()
             except OSError: pass

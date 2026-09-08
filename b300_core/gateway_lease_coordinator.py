@@ -86,19 +86,17 @@ class GatewayLeaseCoordinator:
             self._recovery_required = True
         self._last_generation = self._lease.generation if self._lease is not None else 0
         self._restart_attempted_generation: Optional[int] = None
+        self._gateway_endpoints = (None, None)
 
         # A process restart cannot compare monotonic deadlines from the old
-        # process safely. Give the previous owner one bounded reconnect window.
+        # process safely. Fail closed until ownership is positively reconciled.
         if self._lease is not None:
-            now = self._clock()
-            self._lease = replace(
-                self._lease,
-                state="GRACE",
-                last_heartbeat_mono=now,
-                deadline_mono=now,
-                grace_deadline_mono=now + self.policy.reconnect_grace_seconds,
-                reason_code="LEASE_GRACE",
-            )
+            # A restarted Agent cannot trust monotonic deadlines or a fresh
+            # empty supervisor. Preserve the lease and fail closed until an
+            # explicit recovery workflow positively reconciles ownership.
+            self._recovery_required = True
+            self._lease = replace(self._lease, state="RECOVERY_REQUIRED",
+                                  reason_code="RECOVERY_REQUIRED")
             self.store.write(self._lease)
 
     def acquire(self, request: GatewayLeaseRequest) -> AcquireResult:
@@ -156,9 +154,9 @@ class GatewayLeaseCoordinator:
             )
             self._restart_attempted_generation = None
             self._persist_locked(active)
-            public = GatewayLeasePublicSnapshot.from_lease(active, now)
-            public = replace(public, gdb_endpoint=getattr(gateway, "gdb_endpoint", None),
-                              tcl_endpoint=getattr(gateway, "tcl_endpoint", None))
+            self._gateway_endpoints = (getattr(gateway, "gdb_endpoint", None),
+                                       getattr(gateway, "tcl_endpoint", None))
+            public = self._public_locked(active, now)
             return GatewayLeaseGrant(active.lease_id, token, active.generation, public)
 
     def renew(self, lease_id: str, token: str,
@@ -179,7 +177,7 @@ class GatewayLeaseCoordinator:
                 reason_code="LEASE_ACTIVE",
             )
             self._persist_locked(renewed)
-            return GatewayLeasePublicSnapshot.from_lease(renewed, now)
+            return self._public_locked(renewed, now)
 
     def release(self, lease_id: str, token: str,
                 generation: int) -> GatewayLeasePublicSnapshot:
@@ -200,9 +198,9 @@ class GatewayLeaseCoordinator:
             if lease is None:
                 return _inactive("GATEWAY_IDLE")
             if lease.state == "GRACE":
-                return GatewayLeasePublicSnapshot.from_lease(lease, now)
+                return self._public_locked(lease, now)
             if lease.state in {"CLEANING", "RECOVERY_REQUIRED"}:
-                return GatewayLeasePublicSnapshot.from_lease(lease, now)
+                return self._public_locked(lease, now)
 
             gateway = self.supervisor.maintain_once()
             if gateway.attach_ready:
@@ -214,7 +212,9 @@ class GatewayLeaseCoordinator:
                     reason_code="LEASE_ACTIVE",
                 )
                 self._persist_locked(refreshed)
-                return GatewayLeasePublicSnapshot.from_lease(refreshed, now)
+                self._gateway_endpoints = (getattr(gateway, "gdb_endpoint", None),
+                                           getattr(gateway, "tcl_endpoint", None))
+                return self._public_locked(refreshed, now)
 
             if (gateway.reason_code == "OPENOCD_EXITED"
                     and self._restart_attempted_generation != lease.generation):
@@ -233,7 +233,9 @@ class GatewayLeaseCoordinator:
                         reason_code="LEASE_ACTIVE",
                     )
                     self._persist_locked(refreshed)
-                    return GatewayLeasePublicSnapshot.from_lease(refreshed, now)
+                    self._gateway_endpoints = (getattr(recovered, "gdb_endpoint", None),
+                                               getattr(recovered, "tcl_endpoint", None))
+                    return self._public_locked(refreshed, now)
             return self._enter_grace_locked(gateway.reason_code, now)
 
     def public_snapshot(self) -> GatewayLeasePublicSnapshot:
@@ -242,7 +244,7 @@ class GatewayLeaseCoordinator:
                 return _inactive("RECOVERY_REQUIRED")
             if self._lease is None:
                 return _inactive("GATEWAY_IDLE")
-            return GatewayLeasePublicSnapshot.from_lease(self._lease, self._clock())
+            return self._public_locked(self._lease, self._clock())
 
     def shutdown(self, reason_code: str = "AGENT_SHUTDOWN") -> GatewayLeasePublicSnapshot:
         with self._lock:
@@ -287,7 +289,7 @@ class GatewayLeaseCoordinator:
                 reason_code="LEASE_GRACE",
             )
             self._persist_locked(grace)
-            return GatewayLeasePublicSnapshot.from_lease(grace, now)
+            return self._public_locked(grace, now)
         return None
 
     def _enter_grace_locked(self, reason_code: str,
@@ -303,7 +305,7 @@ class GatewayLeaseCoordinator:
             reason_code=reason_code,
         )
         self._persist_locked(grace)
-        return GatewayLeasePublicSnapshot.from_lease(grace, now)
+        return self._public_locked(grace, now)
 
     def _cleanup_locked(self, final_reason: str) -> GatewayLeasePublicSnapshot:
         lease = self._lease
@@ -329,15 +331,23 @@ class GatewayLeaseCoordinator:
                 reason_code="CLEANUP_IN_PROGRESS",
             )
             self._persist_locked(failed)
-            return GatewayLeasePublicSnapshot.from_lease(failed, self._clock())
+            return self._public_locked(failed, self._clock())
         self.store.clear_if_generation(cleaning.generation)
         self._lease = None
+        self._gateway_endpoints = (None, None)
         self._restart_attempted_generation = None
         return _inactive(final_reason)
 
     def _persist_locked(self, lease: GatewayLease) -> None:
         self.store.write(lease)
         self._lease = lease
+
+    def _public_locked(self, lease: GatewayLease, now: float) -> GatewayLeasePublicSnapshot:
+        return replace(
+            GatewayLeasePublicSnapshot.from_lease(lease, now),
+            gdb_endpoint=self._gateway_endpoints[0],
+            tcl_endpoint=self._gateway_endpoints[1],
+        )
 
 
 __all__ = ["AcquireResult", "GatewayLeaseCoordinator"]
