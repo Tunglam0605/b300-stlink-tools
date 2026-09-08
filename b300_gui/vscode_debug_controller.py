@@ -91,6 +91,14 @@ class VsCodeDebugController:
             self._context.apply_device_state(**updates)
         self._lease_token = None
 
+    def _on_gateway_lease_lost(self) -> None:
+        def teardown():
+            try:
+                self.bridge.stop()
+            finally:
+                self._release_debug("Gateway lease lost")
+        threading.Thread(target=teardown, daemon=True).start()
+
     @property
     def state(self) -> VsCodeBridgeState:
         return self.bridge.state
@@ -223,7 +231,7 @@ class VsCodeDebugController:
                     self._gateway_lease_client = self._lease_client_factory(
                         session, client_id=selected_profile,
                         client_label=selected_profile,
-                        on_lost=lambda: self._release_debug("Gateway lease lost"),
+                        on_lost=self._on_gateway_lease_lost,
                     )
                 except TypeError:
                     self._gateway_lease_client = self._lease_client_factory(

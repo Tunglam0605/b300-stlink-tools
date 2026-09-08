@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import time
 import uuid
 import hashlib
+import threading
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
@@ -137,6 +138,14 @@ class LiveMonitorController(QObject):
             apply(**updates)
         self._lease_token = None
 
+    def _on_gateway_lease_lost(self) -> None:
+        def teardown():
+            try:
+                self.stop()
+            except Exception:
+                self._release_monitor("Gateway lease lost")
+        threading.Thread(target=teardown, daemon=True).start()
+
     @property
     def active(self) -> bool:
         return self._active
@@ -204,7 +213,7 @@ class LiveMonitorController(QObject):
                     lease_client = self._lease_client_factory(
                         remote_session, client_id=request.profile_id or request.host,
                         client_label=request.user or request.host,
-                        on_lost=lambda: self._release_monitor("Gateway lease lost"),
+                        on_lost=self._on_gateway_lease_lost,
                     )
                 except TypeError:
                     lease_client = self._lease_client_factory(
