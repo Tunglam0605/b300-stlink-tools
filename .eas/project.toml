@@ -1,0 +1,7 @@
+kind = "project-profile"
+schema_version = 1
+id = "b300-stlink-tools"
+preset = "embedded"
+
+# Tracked, commit-friendly configuration only. Do not place secrets here.
+[values]
