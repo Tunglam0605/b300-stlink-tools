@@ -215,6 +215,10 @@ class GatewayRequestStore:
                 return None
             return record
         except (OSError, UnicodeError, json.JSONDecodeError):
+            try:
+                path.unlink()
+            except OSError:
+                pass
             return None
 
     def acknowledge_response(self, request_id: str) -> None:
