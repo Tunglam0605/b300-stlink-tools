@@ -119,15 +119,22 @@ class GatewayAgentOwnerLock:
                     existing = int(raw)
                 except (OSError, UnicodeError, ValueError):
                     # A concurrent creator may have reserved the lock file but
-                    # not written its PID yet. Treat that brief window as busy;
-                    # never reclaim an unreadable lock owned by another caller.
-                    raise RuntimeError("ALREADY_RUNNING")
+                    # not written its PID yet. Treat only an empty/transient
+                    # file as busy; preserve fail-closed handling for corrupt
+                    # non-empty owner records.
+                    try:
+                        transient = not self.path.read_text(encoding="ascii").strip()
+                    except OSError:
+                        transient = True
+                    raise RuntimeError("ALREADY_RUNNING" if transient else "LOCK_CORRUPT")
                 if existing > 0 and self._process_alive(existing):
                     raise RuntimeError("ALREADY_RUNNING")
                 try:
                     self.path.unlink()
                 except FileNotFoundError:
                     continue
+                except OSError:
+                    raise RuntimeError("ALREADY_RUNNING")
         raise RuntimeError("ALREADY_RUNNING")
 
     def release(self) -> None:
