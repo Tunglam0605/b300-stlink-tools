@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import tarfile
 import unittest
 import zipfile
 from contextlib import redirect_stderr
@@ -516,6 +517,42 @@ class GuiPackagingTests(unittest.TestCase):
         self.assertIn("flavor=gui", metadata)
         self.assertIn("resources/firmware/b300_bootloader_f407ze_com3_v00060500.hex", names)
         self.assertIn("resources/firmware/b300_bootloader_manifest.json", names)
+
+    def test_internal_linux_archives_stage_gateway_agent_unit_for_x64_and_arm64(self) -> None:
+        """Linux x64 and ARM64 bundles both carry the systemd-user unit."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            openocd = root / "openocd"
+            (openocd / "bin").mkdir(parents=True)
+            (openocd / "bin" / "openocd").write_bytes(b"openocd")
+            xpack = root / "xpack-openocd.tar.gz"
+            xpack.write_bytes(b"trusted")
+            bootstrap = root / "install.sh"
+            bootstrap.write_bytes(b"#!/bin/sh\n")
+            executable = root / "b300-stlink"
+            executable.write_bytes(b"cli")
+            manifest_digest = hashlib.sha256(
+                package_internal.openocd_manifest(openocd)
+            ).hexdigest()
+            for platform in ("linux-x64", "linux-arm64"):
+                output = root / (platform + ".tar.gz")
+                with mock.patch.object(
+                    package_internal, "TRUSTED_TREE_MANIFESTS",
+                    {platform: manifest_digest},
+                ):
+                    self.assertEqual(package_internal.main([
+                        "--flavor", "cli", "--executable", str(executable),
+                        "--openocd-root", str(openocd), "--bootstrap", str(bootstrap),
+                        "--output", str(output), "--platform", platform,
+                        "--openocd-archive", xpack.name, "--openocd-sha256", "A" * 64,
+                        "--openocd-package", str(xpack),
+                        "--internal-distribution-approved",
+                    ]), 0)
+                with tarfile.open(output, "r:gz") as archive:
+                    self.assertIn(
+                        "packaging/linux/b300-stlink-gateway-agent.service",
+                        archive.getnames(),
+                    )
 
     def test_internal_cli_zip_excludes_gui(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

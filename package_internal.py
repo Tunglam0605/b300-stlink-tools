@@ -171,7 +171,7 @@ def main(argv=None) -> int:
             stage_tree(stage, args.application_root)
         else:
             stage_file(stage, args.executable, args.executable.name, executable_file=True)
-        if args.platform == "linux-x64":
+        if args.platform in {"linux-x64", "linux-arm64"}:
             unit = Path(__file__).resolve().parent / "packaging/linux/b300-stlink-gateway-agent.service"
             if unit.is_file():
                 stage_file(stage, unit, "packaging/linux/b300-stlink-gateway-agent.service")
