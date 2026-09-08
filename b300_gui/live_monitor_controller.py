@@ -207,6 +207,11 @@ class LiveMonitorController(QObject):
                 )
                 lease_client.start("LIVE_WATCH", probe_serial=None)
                 self._gateway_lease_client = lease_client
+                grant = lease_client.grant
+                if grant is None or not grant.public.get("tcl_endpoint"):
+                    lease_client.close()
+                    raise RuntimeError("Gateway lease did not provide a valid TCL endpoint.")
+                config = replace(config, bound_tcl_endpoint=grant.public["tcl_endpoint"])
             if coordinator is not None:
                 if _binding is None:
                     raise RuntimeError("Gateway restart requires a fresh binding.")
@@ -241,21 +246,7 @@ class LiveMonitorController(QObject):
                     if coordinator is not None:
                         selected_config = config
                     else:
-                        ensure_ready = getattr(remote_session, "ensure_gateway_ready", None)
-                        if not callable(ensure_ready):
-                            raise RuntimeError(
-                                "Remote SSH session cannot verify or start the Gateway."
-                            )
-                        snapshot = ensure_ready()
-                        endpoint = getattr(snapshot, "tcl_endpoint", None)
-                        if not getattr(snapshot, "attach_ready", False) or not endpoint:
-                            raise RuntimeError("Gateway did not provide a READY TCL endpoint.")
-                        _host, separator, port_text = str(endpoint).rpartition(":")
-                        if not separator:
-                            raise RuntimeError("Gateway returned an invalid TCL endpoint.")
-                        selected_config = replace(
-                            config, gateway_tcl_port=int(port_text),
-                        )
+                        raise RuntimeError("Gateway lease binding is missing.")
                 if request.role == "LOCAL":
                     info = live.start_local(selected_config)
                 elif remote_session is not None:

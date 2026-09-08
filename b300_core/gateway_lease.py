@@ -326,11 +326,12 @@ class GatewayLeasePublicSnapshot:
             mode = mode.strip().upper()
             if not isinstance(state, str) or state not in LEASE_STATES:
                 raise ValueError("Unsupported Gateway lease state: %s." % state)
-            for endpoint, label in ((gdb_endpoint, "GDB"), (tcl_endpoint, "TCL")):
+            for endpoint, endpoint_label in ((gdb_endpoint, "GDB"), (tcl_endpoint, "TCL")):
                 if endpoint is not None and (
                         not isinstance(endpoint, str) or not endpoint.startswith("127.0.0.1:")
-                        or not endpoint.rpartition(":")[2].isdigit()):
-                    raise ValueError("Gateway lease %s endpoint is invalid." % label)
+                        or not endpoint.rpartition(":")[2].isdigit()
+                        or not 1 <= int(endpoint.rpartition(":")[2]) <= 65535):
+                    raise ValueError("Gateway lease %s endpoint is invalid." % endpoint_label)
         else:
             if (lease_id != "" or generation != 0 or label != "" or mode != ""
                     or state != "IDLE" or instance_id != "" or gateway_generation != 0):

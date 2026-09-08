@@ -227,10 +227,17 @@ class VsCodeDebugController:
                 self._gateway_lease_client.start("VSCODE_DEBUG")
             snapshot = gateway_snapshot
             if snapshot is None:
-                ensure_ready = getattr(session, "ensure_gateway_ready", None)
-                if not callable(ensure_ready):
-                    raise RuntimeError("Remote SSH session cannot verify Gateway readiness.")
-                snapshot = ensure_ready()
+                grant = self._gateway_lease_client.grant if self._gateway_lease_client else None
+                if grant is None or not grant.public.get("gdb_endpoint"):
+                    raise RuntimeError("Gateway lease binding is missing.")
+                snapshot = type("LeaseSnapshot", (), {
+                    "attach_ready": True,
+                    "instance_id": grant.public.get("gateway_instance_id", ""),
+                    "generation": grant.public.get("gateway_generation", 0),
+                    "sequence": 0,
+                    "gdb_endpoint": grant.public.get("gdb_endpoint"),
+                    "tcl_endpoint": grant.public.get("tcl_endpoint"),
+                })()
             client_kwargs = {
                 "local_gdb_port": int(local_gdb_port),
                 "snapshot": snapshot,
