@@ -15,6 +15,7 @@ from PySide6.QtCore import QObject, Signal
 
 from b300_core.models import ProbeRef
 from b300_core.remote_session import RemoteSession
+from b300_core.gateway_lease_client import GatewayLeaseClient
 from b300_core.vscode_bridge import (
     BridgeState,
     VsCodeBridgeState,
@@ -48,7 +49,8 @@ class GuiDispatcher(QObject):
 class VsCodeDebugController:
     """Small orchestration facade used by ``MainWindowV18``."""
 
-    def __init__(self, *, debug_service=None, context=None, ui_dispatcher=None) -> None:
+    def __init__(self, *, debug_service=None, context=None, ui_dispatcher=None,
+                 lease_client_factory=GatewayLeaseClient) -> None:
         self.bridge = VsCodeDebugBridge(debug_service=debug_service)
         self.bridge.set_last_client_detached_handler(self._on_last_client_detached)
         self._environment: Optional[VsCodeEnvironmentStatus] = None
@@ -58,6 +60,8 @@ class VsCodeDebugController:
         self._context = context
         self._ui_dispatcher = ui_dispatcher
         self._lease_token = None
+        self._lease_client_factory = lease_client_factory
+        self._gateway_lease_client = None
 
     def set_ui_dispatcher(self, dispatcher) -> None:
         self._ui_dispatcher = dispatcher
@@ -211,6 +215,16 @@ class VsCodeDebugController:
             raise ValueError("Gateway profile identity is required before opening VS Code.")
         started = False
         try:
+            if (self._gateway_lease_client is None
+                    and getattr(session, "supports_gateway_leases", False) is True
+                    and callable(getattr(session, "ensure_gateway_agent", None))
+                    and callable(getattr(session, "acquire_gateway", None))):
+                self._gateway_lease_client = self._lease_client_factory(
+                    session,
+                    client_id=selected_profile,
+                    client_label=selected_profile,
+                )
+                self._gateway_lease_client.start("VSCODE_DEBUG")
             snapshot = gateway_snapshot
             if snapshot is None:
                 ensure_ready = getattr(session, "ensure_gateway_ready", None)
@@ -237,6 +251,9 @@ class VsCodeDebugController:
         except Exception:
             if started:
                 self.bridge.stop()
+            if self._gateway_lease_client is not None:
+                self._gateway_lease_client.close()
+                self._gateway_lease_client = None
             self._release_debug("VS Code remote debug launch failed")
             raise
 
@@ -269,6 +286,9 @@ class VsCodeDebugController:
 
     def stop(self) -> VsCodeBridgeState:
         state = self.bridge.stop()
+        if self._gateway_lease_client is not None:
+            self._gateway_lease_client.close()
+            self._gateway_lease_client = None
         self._release_debug("VS Code debug stopped")
         return state
 

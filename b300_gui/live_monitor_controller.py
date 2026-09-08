@@ -17,6 +17,7 @@ from b300_core.live_session import (
     ClientLiveMonitorConfig, LiveMonitorSession, LocalLiveMonitorConfig,
 )
 from b300_core.gateway_client import GatewayClientCoordinator
+from b300_core.gateway_lease_client import GatewayLeaseClient
 from b300_core.models import ProbeRef
 from .debug_live_panel import DebugLivePanel
 from .workers import FunctionWorker
@@ -74,6 +75,7 @@ class LiveMonitorController(QObject):
         worker_factory=FunctionWorker,
         recovery_worker_factory=FunctionWorker,
         coordinator_factory=GatewayClientCoordinator,
+        lease_client_factory=GatewayLeaseClient,
         context=None,
     ) -> None:
         super().__init__(parent)
@@ -86,6 +88,8 @@ class LiveMonitorController(QObject):
         self._worker_factory = worker_factory
         self._recovery_worker_factory = recovery_worker_factory
         self._coordinator_factory = coordinator_factory
+        self._lease_client_factory = lease_client_factory
+        self._gateway_lease_client = None
         self._gateway_coordinator = None
         self._gateway_binding = None
         self._epoch = 0
@@ -192,6 +196,17 @@ class LiveMonitorController(QObject):
             remote_session = self._remote_session_provider(request)
             if remote_session is None:
                 raise RuntimeError("Client Live Monitor requires an authenticated session.")
+            if (coordinator is None and self._gateway_lease_client is None
+                    and getattr(remote_session, "supports_gateway_leases", False) is True
+                    and callable(getattr(remote_session, "ensure_gateway_agent", None))
+                    and callable(getattr(remote_session, "acquire_gateway", None))):
+                lease_client = self._lease_client_factory(
+                    remote_session,
+                    client_id=request.profile_id or request.host,
+                    client_label=request.user or request.host,
+                )
+                lease_client.start("LIVE_WATCH", probe_serial=None)
+                self._gateway_lease_client = lease_client
             if coordinator is not None:
                 if _binding is None:
                     raise RuntimeError("Gateway restart requires a fresh binding.")
@@ -381,6 +396,9 @@ class LiveMonitorController(QObject):
             closer = getattr(coordinator, "close", None)
             if callable(closer):
                 closer()
+        lease_client, self._gateway_lease_client = self._gateway_lease_client, None
+        if lease_client is not None:
+            lease_client.close()
         self.panel.set_control_state(
             start_enabled=True, stop_enabled=False,
             history_enabled=history_enabled,

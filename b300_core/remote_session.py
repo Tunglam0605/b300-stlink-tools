@@ -348,6 +348,8 @@ ForwardServerFactory = Callable[..., object]
 class RemoteSession:
     """One authenticated SSH connection reused by GDB, TCL and Live Monitor forwards."""
 
+    supports_gateway_leases = True
+
     def __init__(self, profile: RemoteGatewayProfile, *,
                  credential_store: Optional[CredentialStore] = None,
                  ssh_client_factory: Optional[SshClientFactory] = None,
