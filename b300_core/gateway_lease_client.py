@@ -109,8 +109,13 @@ class GatewayLeaseClient:
             self._invalidate_local()
             raise RuntimeError("Gateway lease is no longer valid.")
         if isinstance(result, dict):
+            try:
+                generation = int(result.get("generation", grant.generation))
+            except (TypeError, ValueError):
+                self._invalidate_local()
+                raise RuntimeError("Gateway lease renewal returned malformed generation.")
             if (result.get("lease_id", grant.lease_id) != grant.lease_id
-                    or int(result.get("generation", grant.generation)) != grant.generation):
+                    or generation != grant.generation):
                 self._invalidate_local()
                 raise RuntimeError("Gateway lease renewal belongs to a stale generation.")
         return result

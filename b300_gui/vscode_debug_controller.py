@@ -239,6 +239,9 @@ class VsCodeDebugController:
                     )
                 self._gateway_lease_client.start("VSCODE_DEBUG")
             snapshot = gateway_snapshot
+            if self._gateway_lease_client is not None and self._gateway_lease_client.grant is not None:
+                # A caller supplied snapshot cannot override authoritative lease evidence.
+                snapshot = None
             if snapshot is None:
                 grant = self._gateway_lease_client.grant if self._gateway_lease_client else None
                 if grant is None or not grant.public.get("gdb_endpoint"):
