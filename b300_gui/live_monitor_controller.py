@@ -236,7 +236,8 @@ class LiveMonitorController(QObject):
         live = self._session_factory(openocd_executable=self._openocd_executable)
         self._live_session = live
         self._gateway_coordinator = coordinator
-        self._gateway_binding = (_binding if _binding is not None else coordinated.binding) if coordinator is not None else None
+        self._gateway_binding = (_binding if _binding is not None else coordinated.binding) if coordinator is not None else (
+            self._gateway_lease_client.grant.public if self._gateway_lease_client and self._gateway_lease_client.grant else None)
         self.panel.reset_for_sampling()
         self.panel.set_control_state(
             start_enabled=False, stop_enabled=True, history_enabled=False,
@@ -249,7 +250,7 @@ class LiveMonitorController(QObject):
             try:
                 selected_config = config
                 if request.role == "CLIENT" and remote_session is not None:
-                    if coordinator is not None:
+                    if coordinator is not None or self._gateway_lease_client is not None:
                         selected_config = config
                     else:
                         raise RuntimeError("Gateway lease binding is missing.")
