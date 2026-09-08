@@ -9,6 +9,7 @@ from unittest import mock
 import b300_stlink
 from b300_cli.parser import parse_args
 from b300_core.gateway_protocol import (
+    GATEWAY_AGENT_ENSURE_COMMAND, GATEWAY_AGENT_STATUS_COMMAND,
     GATEWAY_ENSURE_COMMAND, GATEWAY_STATUS_COMMAND, gateway_capabilities,
 )
 from b300_core.debug_service import DebugState
@@ -23,6 +24,7 @@ class GatewayProtocolTests(unittest.TestCase):
         self.assertIn("gateway-status", capabilities["capabilities"])
         self.assertIn("gateway-ensure", capabilities["capabilities"])
         self.assertIn("gateway-gdb-activity-v1", capabilities["capabilities"])
+        self.assertIn("gateway-exclusive-lease-v1", capabilities["capabilities"])
 
     def test_remote_commands_are_fixed_per_user_cli_commands(self) -> None:
         self.assertEqual(GATEWAY_STATUS_COMMAND, "b300-stlink debug gateway-status --json")
@@ -31,9 +33,26 @@ class GatewayProtocolTests(unittest.TestCase):
         self.assertNotIn("sudo", rendered)
         self.assertNotIn("password", rendered)
         self.assertNotIn("0.0.0.0", rendered)
+        self.assertEqual(
+            GATEWAY_AGENT_STATUS_COMMAND,
+            "b300-stlink debug gateway-agent-status --json",
+        )
+        self.assertEqual(
+            GATEWAY_AGENT_ENSURE_COMMAND,
+            "b300-stlink debug gateway-agent-ensure --json",
+        )
 
     def test_parser_exposes_gateway_runtime_commands(self) -> None:
         for mode in ("gateway-status", "gateway-ensure", "gateway-rescan"):
+            with self.subTest(mode=mode):
+                args = parse_args(["debug", mode, "--json"])
+                self.assertEqual(args.debug_mode, mode)
+
+    def test_parser_exposes_gateway_agent_control_commands(self) -> None:
+        for mode in (
+            "gateway-agent", "gateway-agent-status", "gateway-agent-ensure",
+            "gateway-acquire", "gateway-renew", "gateway-release",
+        ):
             with self.subTest(mode=mode):
                 args = parse_args(["debug", mode, "--json"])
                 self.assertEqual(args.debug_mode, mode)

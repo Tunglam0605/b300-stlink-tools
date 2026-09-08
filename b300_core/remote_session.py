@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import socket
 import tempfile
 import threading
@@ -16,6 +17,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from .remote_profile import RemoteGatewayProfile, default_remote_profile_path
 from .gateway_status import GatewaySnapshot
 from .gateway_protocol import (
+    GATEWAY_AGENT_ENSURE_COMMAND, GATEWAY_AGENT_STATUS_COMMAND,
     GATEWAY_ENSURE_COMMAND, GATEWAY_PROTOCOL_VERSION, GATEWAY_RESCAN_COMMAND,
     GATEWAY_STATUS_COMMAND,
 )
@@ -689,6 +691,135 @@ class RemoteSession:
                 next_action="Check the Gateway CLI error output and retry.", retriable=True,
             )
         return snapshot
+
+    def _run_gateway_control(self, command: str, arguments: Tuple[str, ...] = (), *,
+                             timeout_seconds: float = 10.0) -> dict:
+        """Run one fixed Gateway Agent command and return bounded JSON output."""
+        allowed = {
+            GATEWAY_AGENT_STATUS_COMMAND, GATEWAY_AGENT_ENSURE_COMMAND,
+            "b300-stlink debug gateway-acquire --json",
+            "b300-stlink debug gateway-renew --json",
+            "b300-stlink debug gateway-release --json",
+        }
+        if command not in allowed:
+            raise ValueError("Unsupported remote Gateway Agent command.")
+        if not 0 < float(timeout_seconds) <= 60:
+            raise ValueError("Remote Gateway Agent timeout is out of range.")
+        with self._lock:
+            if not self.connected or self._client is None:
+                raise RemoteSessionError("SSH session is not connected.")
+            client = self._client
+        remote_command = _remote_cli_resolver(self.profile.cli_path)
+        # Each argument is a bounded value produced by the lease client. Quote it
+        # as one shell word because Paramiko accepts a command string only.
+        remote_command += " " + " ".join(shlex.quote(item) for item in command.split()[1:])
+        if arguments:
+            remote_command += " " + " ".join(shlex.quote(str(item)) for item in arguments)
+        try:
+            _stdin, stdout, stderr = client.exec_command(remote_command, timeout=float(timeout_seconds))
+            output = stdout.read(256 * 1024 + 1)
+            error_output = stderr.read(16 * 1024 + 1)
+            if len(output) > 256 * 1024 or len(error_output) > 16 * 1024:
+                raise RemoteSessionError(
+                    "Gateway Agent response exceeded the supported size.",
+                    reason_code="CLI_RESPONSE_TOO_LARGE", phase="gateway_cli",
+                    retriable=False,
+                )
+            exit_status = stdout.channel.recv_exit_status()
+        except RemoteSessionError:
+            raise
+        except Exception as error:
+            raise RemoteSessionError(
+                "Gateway Agent command could not be executed over SSH.",
+                reason_code="CLI_EXECUTION_FAILED", phase="gateway_cli",
+            ) from error
+        records = []
+        text = output.decode("utf-8", "replace") if isinstance(output, bytes) else str(output)
+        for line in text.splitlines():
+            try:
+                candidate = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict) and ("status" in candidate or "state" in candidate):
+                records.append(candidate)
+        if not records:
+            detail = error_output.decode("utf-8", "replace") if isinstance(error_output, bytes) else str(error_output)
+            raise RemoteSessionError(
+                "Gateway Agent returned no supported JSON response.",
+                reason_code="CLI_RESPONSE_INVALID", phase="gateway_protocol",
+                next_action="Update the Gateway CLI and retry.", retriable=False,
+            ) from (RuntimeError(detail.strip()) if detail.strip() else None)
+        record = records[-1]
+        protocol_version = record.get("protocol_version")
+        capabilities = record.get("capabilities")
+        if type(protocol_version) is not int or protocol_version != GATEWAY_PROTOCOL_VERSION:
+            raise RemoteSessionError(
+                "Gateway Agent protocol version is incompatible.",
+                reason_code="PROTOCOL_MISMATCH", phase="gateway_protocol",
+                next_action="Update B300 CLI on the Gateway, then retry.", retriable=False,
+            )
+        if not isinstance(capabilities, list) or "gateway-exclusive-lease-v1" not in capabilities:
+            raise RemoteSessionError(
+                "Gateway CLI does not advertise exclusive lease support.",
+                reason_code="CLI_TOO_OLD", phase="gateway_cli",
+                next_action="Update B300 CLI on the Gateway, then retry.", retriable=False,
+            )
+        if record.get("status") == "error":
+            result = record.get("result") if isinstance(record.get("result"), dict) else {}
+            if record.get("reason_code") == "GATEWAY_BUSY":
+                from .gateway_lease_client import GatewayBusyError
+                raise GatewayBusyError(
+                    "Gateway is busy.", client_label=str(result.get("client_label", "")),
+                    mode=str(result.get("mode", "")),
+                    heartbeat_age_seconds=int(result.get("heartbeat_age_seconds", 0)),
+                )
+            raise RemoteSessionError(
+                "Gateway Agent rejected the request: %s" % record.get("reason_code", "UNKNOWN"),
+                reason_code=str(record.get("reason_code", "GATEWAY_COMMAND_FAILED")),
+                phase="gateway_lease", retriable=True,
+            )
+        if exit_status and record.get("status") not in {"ok", "ready"}:
+            raise RemoteSessionError(
+                "Gateway Agent exited with status %d." % exit_status,
+                reason_code="GATEWAY_COMMAND_FAILED", phase="gateway_cli",
+            )
+        return record.get("result", record)
+
+    def ensure_gateway_agent(self, *, timeout_seconds: float = 10.0) -> dict:
+        return self._run_gateway_control(
+            GATEWAY_AGENT_ENSURE_COMMAND, timeout_seconds=timeout_seconds,
+        )
+
+    def acquire_gateway(self, request: dict, *, timeout_seconds: float = 15.0):
+        from .gateway_lease_client import RemoteLeaseGrant
+        required = {"request_id", "client_id", "client_label", "mode", "probe_serial"}
+        if set(request) != required:
+            raise ValueError("Gateway lease request fields are invalid.")
+        result = self._run_gateway_control(
+            "b300-stlink debug gateway-acquire --json",
+            ("--request-id", request["request_id"], "--client-id", request["client_id"],
+             "--client-label", request["client_label"], "--lease-mode", request["mode"])
+            + (("--probe-serial", request["probe_serial"]) if request.get("probe_serial") else ()),
+            timeout_seconds=timeout_seconds,
+        )
+        return RemoteLeaseGrant(
+            lease_id=str(result["lease_id"]), token=str(result["lease_token"]),
+            generation=int(result["lease_generation"]), public=result,
+        )
+
+    def renew_gateway(self, grant, *, timeout_seconds: float = 5.0) -> dict:
+        return self._run_gateway_control(
+            "b300-stlink debug gateway-renew --json",
+            ("--lease-id", grant.lease_id, "--lease-token", grant.token,
+             "--lease-generation", str(grant.generation)), timeout_seconds=timeout_seconds,
+        )
+
+    def release_gateway(self, grant, *, timeout_seconds: float = 5.0) -> dict:
+        return self._run_gateway_control(
+            "b300-stlink debug gateway-release --json",
+            ("--lease-id", grant.lease_id, "--lease-token", grant.token,
+             "--lease-generation", str(grant.generation)), timeout_seconds=timeout_seconds,
+        )
 
     def gateway_status(self, *, timeout_seconds: float = 5.0) -> GatewaySnapshot:
         """Read the authenticated Gateway's current fail-closed snapshot."""

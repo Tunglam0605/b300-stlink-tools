@@ -36,6 +36,13 @@ from b300_cli.output_paths import validated_output_path
 from b300_cli.live_commands import run_live_client, run_live_local, validate_live_options
 from b300_core.diagnostics import DiagnosticsService
 from b300_core.gateway_readiness import inspect_gateway_readiness
+from b300_core.gateway_agent import (
+    GatewayAgent, GatewayAgentProcessManager, GatewayAgentStatus,
+    GatewayAgentStatusStore,
+)
+from b300_core.gateway_agent_protocol import GatewayRequest, GatewayRequestStore
+from b300_core.gateway_lease import GatewayLeaseStore
+from b300_core.gateway_lease_coordinator import GatewayLeaseCoordinator
 from b300_core.gateway_protocol import gateway_capabilities
 from b300_core.gateway_supervisor import (
     GatewayProcessManager, GatewayStatusStore, GatewaySupervisor,
@@ -1033,6 +1040,83 @@ def run_gateway_runtime_command(args: argparse.Namespace) -> int:
     return 0 if snapshot.attach_ready else 1
 
 
+def _managed_agent_command() -> tuple:
+    command = [sys.executable]
+    if not getattr(sys, "frozen", False):
+        command.append(str(Path(__file__).resolve()))
+    command.extend(["debug", "gateway-agent", "--managed-child", "--json"])
+    return tuple(command)
+
+
+def _run_gateway_agent(args: argparse.Namespace) -> int:
+    instance_id = uuid.uuid4().hex
+    status_store = GatewayAgentStatusStore()
+    supervisor = GatewaySupervisor(
+        service_factory=lambda: DebugService(executable=args.openocd),
+        probe_discovery=list_probes,
+        gdb_port=args.gdb_port,
+        tcl_port=args.tcl_port or 6666,
+        requested_serial=args.probe_serial,
+    )
+    coordinator = GatewayLeaseCoordinator(supervisor, store=GatewayLeaseStore())
+
+    def publish(item) -> None:
+        status_store.write(GatewayAgentStatus(
+            instance_id, os.getpid(), time.monotonic(), item.state, item.reason_code,
+        ))
+
+    agent = GatewayAgent(coordinator, request_store=GatewayRequestStore(), status_sink=publish)
+    try:
+        return agent.run()
+    except KeyboardInterrupt:
+        return 0
+
+
+def run_gateway_agent_command(args: argparse.Namespace) -> int:
+    mode = args.debug_mode
+    if mode == "gateway-agent":
+        return _run_gateway_agent(args)
+    manager = GatewayAgentProcessManager()
+    if mode == "gateway-agent-status":
+        status = manager.status()
+        record = status.to_record() if status is not None else {
+            "state": "STOPPED", "reason_code": "GATEWAY_AGENT_NOT_RUNNING",
+        }
+        record.update(gateway_capabilities())
+        emit_snapshot(record, args.json, "Gateway Agent: %s" % record["state"])
+        return 0 if status is not None else 1
+    manager.ensure_running(_managed_agent_command())
+    if mode == "gateway-agent-ensure":
+        status = manager.status()
+        record = status.to_record() if status is not None else {
+            "state": "STOPPED", "reason_code": "GATEWAY_AGENT_START_TIMEOUT",
+        }
+        record.update(gateway_capabilities())
+        emit_snapshot(record, args.json, "Gateway Agent: %s" % record["state"])
+        return 0 if status is not None else 1
+
+    if mode == "gateway-acquire":
+        required = (args.client_id, args.client_label, args.lease_mode)
+        if any(item is None for item in required):
+            raise ValueError("gateway-acquire requires --client-id, --client-label and --lease-mode.")
+        request = GatewayRequest.create("acquire", {
+            "client_id": args.client_id, "client_label": args.client_label,
+            "mode": args.lease_mode, "probe_serial": args.probe_serial,
+        }, request_id=args.request_id)
+    else:
+        if args.lease_id is None or args.lease_token is None or args.lease_generation is None:
+            raise ValueError("gateway renew/release requires lease id, token and generation.")
+        operation = "renew" if mode == "gateway-renew" else "release"
+        request = GatewayRequest.create(operation, {
+            "lease_id": args.lease_id, "lease_token": args.lease_token,
+            "lease_generation": args.lease_generation,
+        }, request_id=args.request_id)
+    record = GatewayRequestStore().submit_request(request)
+    record.update(gateway_capabilities())
+    emit_snapshot(record, args.json, "%s: %s" % (mode, record.get("reason_code", "OK")))
+    return 0 if record.get("status") == "ok" else 1
+
+
 class _GatewayRuntimePublisher:
     def __init__(self, store: GatewayStatusStore, selected_probe, *,
                  gdb_port: int, tcl_port: int) -> None:
@@ -1106,6 +1190,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.command == "debug" and args.debug_mode in {
                 "gateway-status", "gateway-ensure", "gateway-rescan"}:
             return run_gateway_runtime_command(args)
+        if args.command == "debug" and args.debug_mode in {
+                "gateway-agent", "gateway-agent-status", "gateway-agent-ensure",
+                "gateway-acquire", "gateway-renew", "gateway-release"}:
+            return run_gateway_agent_command(args)
 
         if args.command in {"update", "self-update"}:
             return run_update_command(args, __version__)

@@ -88,7 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     debug.add_argument(
         "debug_mode", nargs="?",
-        choices=("gateway", "gateway-status", "gateway-ensure", "gateway-rescan", "client", "server", "vscode", "symbols", "selftest", "inspect", "where", "registers", "stack", "variable", "sample", "live", "poll", "read-words", "break", "watch"),
+        choices=("gateway", "gateway-status", "gateway-ensure", "gateway-rescan", "gateway-agent", "gateway-agent-status", "gateway-agent-ensure", "gateway-acquire", "gateway-renew", "gateway-release", "client", "server", "vscode", "symbols", "selftest", "inspect", "where", "registers", "stack", "variable", "sample", "live", "poll", "read-words", "break", "watch"),
         default="gateway", metavar="mode",
         help="Debug mode: gateway, client, selftest, server (legacy alias), or diagnostics.",
     )
@@ -184,6 +184,13 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Word count for debug read-words (default: 1, max: 256).")
     debug.add_argument("--dry-run", action="store_true")
     debug.add_argument("--managed-child", action="store_true", help=argparse.SUPPRESS)
+    debug.add_argument("--lease-mode", choices=("LIVE_WATCH", "VSCODE_DEBUG"))
+    debug.add_argument("--client-id")
+    debug.add_argument("--client-label")
+    debug.add_argument("--request-id")
+    debug.add_argument("--lease-id")
+    debug.add_argument("--lease-token", help=argparse.SUPPRESS)
+    debug.add_argument("--lease-generation", type=parse_integer)
 
     gateway = commands.add_parser(
         "gateway", help="Inspect remote Debug Gateway host readiness.", parents=[json_parent],
