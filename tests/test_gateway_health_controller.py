@@ -2,8 +2,10 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import unittest
+from types import SimpleNamespace
 
 from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QObject, Signal
 
 from b300_core.gateway_status import GatewaySnapshot
 from b300_core.remote_profile import RemoteGatewayProfile
@@ -33,6 +35,30 @@ class FakeManager:
 
     def session(self, _profile):
         return self._session
+
+
+class InlineWorker(QObject):
+    completed = Signal(object)
+    failed = Signal(object)
+    finished = Signal()
+
+    def __init__(self, operation, parent=None):
+        super().__init__(parent)
+        self.operation = operation
+
+    def start(self):
+        try:
+            self.completed.emit(self.operation(lambda *_: None, lambda *_: None, None))
+        except Exception as error:
+            self.failed.emit(error)
+        finally:
+            self.finished.emit()
+
+    def isRunning(self):
+        return False
+
+    def deleteLater(self):
+        pass
 
 
 class GatewayHealthControllerTests(unittest.TestCase):
@@ -140,6 +166,48 @@ class GatewayHealthControllerTests(unittest.TestCase):
         self.assertEqual(context.gateway_agent_snapshot, agent)
         self.assertEqual(context.gateway_lease_snapshot, lease)
         controller.bind(RemoteGatewayProfile("new-ipc", "operator", 22))
+        self.assertIsNone(context.gateway_agent_snapshot)
+        self.assertIsNone(context.gateway_lease_snapshot)
+
+    def test_control_response_publishes_agent_and_lease_evidence_end_to_end(self):
+        from b300_gui.app_context import AppContext
+        from b300_core.gateway_agent import GatewayAgentStatus
+        from b300_core.gateway_lease import GatewayLeasePublicSnapshot
+        context = AppContext()
+        session = SimpleNamespace()
+        session.gateway_status = lambda timeout_seconds: snapshot(sequence=2)
+        session._run_gateway_control = lambda command, timeout_seconds: {
+            **GatewayAgentStatus("agent-01", 1234, 1.0, "READY", "IDLE").to_record(),
+            "status": "ok", "protocol_version": 1, "tool_version": "1.0.0",
+            "capabilities": ["gateway-exclusive-lease-v1"],
+            "lease_snapshot": GatewayLeasePublicSnapshot.from_record({
+                "active": True, "lease_id": "lease-1", "generation": 2,
+                "client_label": "ENG-LAPTOP-02", "mode": "VSCODE_DEBUG",
+                "state": "ACTIVE", "acquired_at": "2026-09-08T01:02:03Z",
+                "heartbeat_age_seconds": 1, "gateway_instance_id": "gw-a",
+                "gateway_generation": 3, "probe_serial": "ABC", "reason_code": "LEASE_ACTIVE",
+            }).to_record(),
+        }
+        manager = type("Manager", (), {"session": lambda self, profile: session})()
+        controller = GatewayHealthController(manager, context=context, worker_factory=InlineWorker)
+        controller.bind(self.profile)
+        controller.poll_now()
+        self.assertEqual(context.gateway_agent_snapshot.instance_id, "agent-01")
+        self.assertEqual(context.gateway_lease_snapshot.lease_id, "lease-1")
+
+    def test_malformed_control_response_clears_stale_evidence(self):
+        from dataclasses import replace
+        from b300_gui.app_context import AppContext
+        from b300_core.gateway_agent import GatewayAgentStatus
+        context = AppContext()
+        session = SimpleNamespace()
+        session.gateway_status = lambda timeout_seconds: snapshot(sequence=2)
+        session._run_gateway_control = lambda command, timeout_seconds: {"state": "READY"}
+        manager = type("Manager", (), {"session": lambda self, profile: session})()
+        controller = GatewayHealthController(manager, context=context, worker_factory=InlineWorker)
+        controller.bind(self.profile)
+        controller.accept_snapshot(replace(snapshot(sequence=1), agent_status=GatewayAgentStatus("agent", 1, 1.0, "READY", "IDLE")))
+        controller.poll_now()
         self.assertIsNone(context.gateway_agent_snapshot)
         self.assertIsNone(context.gateway_lease_snapshot)
 

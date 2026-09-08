@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Optional
+from typing import Mapping, Optional
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
@@ -26,6 +26,28 @@ _REASON_MESSAGES = {
     "SERVICE_FAILED": "Dịch vụ gỡ lỗi trên Gateway bị lỗi.",
     "STOPPED": "Gateway chưa chạy.",
 }
+
+
+def _parse_gateway_agent_control(record):
+    """Parse only the authenticated, public Agent and lease fields.
+
+    The status command deliberately wraps the Agent record with CLI status and
+    capability metadata, so the strict Agent schema must receive a bounded
+    projection rather than the top-level response.
+    """
+    if not isinstance(record, Mapping):
+        raise ValueError("Gateway Agent control response must be an object.")
+    agent_fields = (
+        "schema_version", "instance_id", "pid", "heartbeat_mono",
+        "state", "reason_code",
+    )
+    if not all(field in record for field in agent_fields):
+        raise ValueError("Gateway Agent control response is missing status fields.")
+    agent = GatewayAgentStatus.from_record({field: record[field] for field in agent_fields})
+    lease_record = record.get("lease_snapshot")
+    lease = (GatewayLeasePublicSnapshot.from_record(lease_record)
+             if isinstance(lease_record, Mapping) else None)
+    return agent, lease
 
 
 class GatewayHealthController(QObject):
@@ -158,13 +180,12 @@ class GatewayHealthController(QObject):
             if callable(control):
                 try:
                     result = control("b300-stlink debug gateway-agent-status --json", timeout_seconds=5.0)
-                    agent = GatewayAgentStatus.from_record(result)
-                    lease_record = result.get("lease_snapshot")
-                    lease = (GatewayLeasePublicSnapshot.from_record(lease_record)
-                             if isinstance(lease_record, dict) else None)
+                    agent, lease = _parse_gateway_agent_control(result)
                     snapshot = replace(snapshot, agent_status=agent, lease_snapshot=lease)
-                except Exception:
-                    pass
+                except (TypeError, ValueError, AttributeError):
+                    # Never retain stale authenticated evidence after an
+                    # invalid or malformed control response.
+                    snapshot = replace(snapshot, agent_status=None, lease_snapshot=None)
             return snapshot
 
         worker = self._worker_factory(operation, self)
