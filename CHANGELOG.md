@@ -5,6 +5,15 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-09-09
+
+- Added an idle, same-user Gateway Agent that grants one generation-bound remote lease at a time for Live Monitor or VS Code debugging. Lease acquisition, renewal, expiry, explicit release and restart recovery now coordinate the single owned OpenOCD instance.
+- Added lease-bound Gateway endpoint and generation propagation through SSH clients, Live Monitor and Cortex-Debug. Clients release tunnels, sessions and UI ownership when their lease is lost; stale generations cannot reopen an old binding.
+- Added bounded private Gateway Agent request/response storage, replay protection, malformed-state recovery, response cleanup and redacted public diagnostics.
+- Added Windows Scheduled Task and Linux systemd-user Gateway Agent setup, including `gateway quickstart --confirm-system-change` composition and packaged Linux ARM64 service assets.
+- Preserved loopback-only GDB/TCL endpoints, disabled Telnet, no-flash debug behavior, strict secret redaction and the existing Application, Factory, WRP and RDP safety contracts.
+- Software and mock validation cover lease ownership, endpoint propagation, stale-generation rejection, heartbeat-loss teardown, recovery, packaging and protocol behavior. Direct physical-hardware, IPC and disconnect acceptance remains `HW-P1-001 OPEN / DEFERRED`.
+
 ## [0.22.0] - 2026-09-08
 
 - Added coordinated SSH Gateway/CLI discovery and bounded automatic Gateway recovery for remote Live Monitor and VS Code debug sessions, including protocol/tool-version validation and stale binding protection.
