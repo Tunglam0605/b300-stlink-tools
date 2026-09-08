@@ -253,7 +253,14 @@ class LiveMonitorController(QObject):
                     if coordinator is not None or self._gateway_lease_client is not None:
                         selected_config = config
                     else:
-                        raise RuntimeError("Gateway lease binding is missing.")
+                        ensure_ready = getattr(remote_session, "ensure_gateway_ready", None)
+                        if not callable(ensure_ready):
+                            raise RuntimeError("Gateway lease binding is missing.")
+                        snapshot = ensure_ready()
+                        endpoint = getattr(snapshot, "tcl_endpoint", None)
+                        if not getattr(snapshot, "attach_ready", False) or not endpoint:
+                            raise RuntimeError("Gateway did not provide a READY TCL endpoint.")
+                        selected_config = replace(config, gateway_tcl_port=int(str(endpoint).rpartition(":")[2]))
                 if request.role == "LOCAL":
                     info = live.start_local(selected_config)
                 elif remote_session is not None:
