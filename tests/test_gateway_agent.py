@@ -69,6 +69,27 @@ class GatewayAgentTests(unittest.TestCase):
         self.assertEqual(replay["reason_code"], "REQUEST_REPLAYED")
         self.assertEqual([call[0] for call in self.coordinator.calls].count("status"), 1)
 
+    def test_acknowledge_response_removes_artifact_and_keeps_replay_guard(self):
+        request = GatewayRequest.create("status", {}, request_id="req-ack", timeout_seconds=5)
+        self.store.enqueue(request)
+        self.agent.run_once()
+        self.assertTrue(self.store.response_path("req-ack").exists())
+        response = self.store.read_response("req-ack")
+        self.assertEqual(response["status"], "ok")
+        self.store.acknowledge_response("req-ack")
+        self.assertFalse(self.store.response_path("req-ack").exists())
+        self.assertTrue(self.store.completed_path("req-ack").exists())
+        replay = self.store.submit_request(request)
+        self.assertEqual(replay["reason_code"], "REQUEST_REPLAYED")
+
+    def test_malformed_response_is_discarded(self):
+        request_id = "req-malformed"
+        self.store.responses_dir.mkdir(parents=True, exist_ok=True)
+        path = self.store.response_path(request_id)
+        path.write_text('{"protocol_version": 999}', encoding="utf-8")
+        self.assertIsNone(self.store.read_response(request_id))
+        self.assertFalse(path.exists())
+
     def test_oversized_request_never_reaches_coordinator(self):
         path = self.store.requests_dir / "req-oversized.json"
         path.parent.mkdir(parents=True, exist_ok=True)

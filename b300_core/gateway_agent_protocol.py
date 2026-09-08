@@ -109,13 +109,14 @@ class GatewayRequestStore:
         self.root = Path(root) if root is not None else gateway_runtime_root() / "agent-control"
         self.requests_dir = self.root / "requests"
         self.responses_dir = self.root / "responses"
+        self.completed_dir = self.root / "completed"
         self._clock = clock
         self._sleep = sleep
 
     def enqueue(self, request: GatewayRequest) -> Path:
         selected = GatewayRequest.from_record(request.to_record())
         self._prepare()
-        if self.response_path(selected.request_id).exists():
+        if self.response_path(selected.request_id).exists() or self.completed_path(selected.request_id).exists():
             raise FileExistsError("REQUEST_REPLAYED")
         path = self.request_path(selected.request_id)
         data = json.dumps(selected.to_record(), sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -130,7 +131,8 @@ class GatewayRequestStore:
         return path
 
     def submit_request(self, request: GatewayRequest, *, timeout_seconds: float = 10.0) -> dict:
-        if self.response_path(request.request_id).exists():
+        if (self.response_path(request.request_id).exists()
+                or self.completed_path(request.request_id).exists()):
             return self._error(request.request_id, "REQUEST_REPLAYED")
         try:
             self.enqueue(request)
@@ -140,6 +142,7 @@ class GatewayRequestStore:
         while self._clock() < deadline:
             response = self.read_response(request.request_id)
             if response is not None:
+                self.acknowledge_response(request.request_id)
                 return response
             self._sleep(min(0.05, max(0.0, deadline - self._clock())))
         return self._error(request.request_id, "AGENT_RESPONSE_TIMEOUT")
@@ -195,15 +198,45 @@ class GatewayRequestStore:
             except OSError: pass
 
     def read_response(self, request_id: str) -> Optional[dict]:
-        path = self.response_path(_id(request_id))
+        selected_id = _id(request_id)
+        path = self.response_path(selected_id)
         try:
             raw = path.read_bytes()
             if len(raw) > MAX_RESPONSE_BYTES:
+                path.unlink(missing_ok=True)
                 return None
             record = json.loads(raw.decode("utf-8"))
-            return record if isinstance(record, dict) else None
+            if not isinstance(record, dict):
+                path.unlink(missing_ok=True)
+                return None
+            if (record.get("protocol_version") != AGENT_PROTOCOL_VERSION
+                    or record.get("request_id") != selected_id):
+                path.unlink(missing_ok=True)
+                return None
+            return record
         except (OSError, UnicodeError, json.JSONDecodeError):
             return None
+
+    def acknowledge_response(self, request_id: str) -> None:
+        """Consume a completed response while retaining replay protection."""
+        selected_id = _id(request_id)
+        self._prepare()
+        marker = self.completed_path(selected_id)
+        try:
+            fd = os.open(str(marker), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            try:
+                os.write(fd, b"completed\n")
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        except FileExistsError:
+            pass
+        try:
+            self.response_path(selected_id).unlink()
+        except FileNotFoundError:
+            pass
+
+    consume_response = acknowledge_response
 
     def complete(self, request_id: str) -> None:
         try: self.request_path(_id(request_id)).unlink()
@@ -215,16 +248,30 @@ class GatewayRequestStore:
     def response_path(self, request_id: str) -> Path:
         return self.responses_dir / (_id(request_id) + ".json")
 
+    def completed_path(self, request_id: str) -> Path:
+        return self.completed_dir / (_id(request_id) + ".done")
+
     def _prepare(self) -> None:
         self.requests_dir.mkdir(parents=True, exist_ok=True)
         self.responses_dir.mkdir(parents=True, exist_ok=True)
+        self.completed_dir.mkdir(parents=True, exist_ok=True)
         if os.name != "nt":
             os.chmod(str(self.root), 0o700)
             os.chmod(str(self.requests_dir), 0o700)
             os.chmod(str(self.responses_dir), 0o700)
+            os.chmod(str(self.completed_dir), 0o700)
         cutoff = time.time() - RESPONSE_RETENTION_SECONDS
         try:
             for path in self.responses_dir.glob("*.json"):
+                try:
+                    if path.stat().st_mtime < cutoff:
+                        path.unlink()
+                except OSError:
+                    pass
+        except OSError:
+            pass
+        try:
+            for path in self.completed_dir.glob("*.done"):
                 try:
                     if path.stat().st_mtime < cutoff:
                         path.unlink()
