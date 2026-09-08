@@ -208,8 +208,6 @@ class GatewayRequestStore:
     def complete(self, request_id: str) -> None:
         try: self.request_path(_id(request_id)).unlink()
         except FileNotFoundError: pass
-        try: self.response_path(_id(request_id)).unlink()
-        except FileNotFoundError: pass
 
     def request_path(self, request_id: str) -> Path:
         return self.requests_dir / (_id(request_id) + ".json")
