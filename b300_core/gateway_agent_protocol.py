@@ -19,6 +19,7 @@ from .gateway_supervisor import gateway_runtime_root
 AGENT_PROTOCOL_VERSION = 1
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 64 * 1024
+RESPONSE_RETENTION_SECONDS = 3600.0
 MAX_PENDING_REQUESTS = 128
 AGENT_OPERATIONS = frozenset({"status", "acquire", "renew", "release", "rescan", "shutdown"})
 _SAFE_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -139,12 +140,6 @@ class GatewayRequestStore:
         while self._clock() < deadline:
             response = self.read_response(request.request_id)
             if response is not None:
-                # The submitting client has consumed the response; remove it
-                # immediately so completed artifacts cannot accumulate.
-                try:
-                    self.response_path(request.request_id).unlink()
-                except OSError:
-                    pass
                 return response
             self._sleep(min(0.05, max(0.0, deadline - self._clock())))
         return self._error(request.request_id, "AGENT_RESPONSE_TIMEOUT")
@@ -229,6 +224,16 @@ class GatewayRequestStore:
             os.chmod(str(self.root), 0o700)
             os.chmod(str(self.requests_dir), 0o700)
             os.chmod(str(self.responses_dir), 0o700)
+        cutoff = time.time() - RESPONSE_RETENTION_SECONDS
+        try:
+            for path in self.responses_dir.glob("*.json"):
+                try:
+                    if path.stat().st_mtime < cutoff:
+                        path.unlink()
+                except OSError:
+                    pass
+        except OSError:
+            pass
 
     @staticmethod
     def _error(request_id: str, reason: str) -> dict:
