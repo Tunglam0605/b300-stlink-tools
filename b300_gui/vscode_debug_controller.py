@@ -219,11 +219,16 @@ class VsCodeDebugController:
                     and getattr(session, "supports_gateway_leases", False) is True
                     and callable(getattr(session, "ensure_gateway_agent", None))
                     and callable(getattr(session, "acquire_gateway", None))):
-                self._gateway_lease_client = self._lease_client_factory(
-                    session,
-                    client_id=selected_profile,
-                    client_label=selected_profile,
-                )
+                try:
+                    self._gateway_lease_client = self._lease_client_factory(
+                        session, client_id=selected_profile,
+                        client_label=selected_profile,
+                        on_lost=lambda: self._release_debug("Gateway lease lost"),
+                    )
+                except TypeError:
+                    self._gateway_lease_client = self._lease_client_factory(
+                        session, client_id=selected_profile, client_label=selected_profile,
+                    )
                 self._gateway_lease_client.start("VSCODE_DEBUG")
             snapshot = gateway_snapshot
             if snapshot is None:

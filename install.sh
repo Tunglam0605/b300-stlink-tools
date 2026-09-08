@@ -64,6 +64,8 @@ applications_root="${share_root}/applications"
 desktop_target="${applications_root}/b300-stlink-gui.desktop"
 icons_root="${share_root}/icons/hicolor/scalable/apps"
 icon_target="${icons_root}/b300-stlink-gui.svg"
+systemd_user_root="${home_root}/.config/systemd/user"
+systemd_unit_target="${systemd_user_root}/b300-stlink-gateway-agent.service"
 if path_within "$bundle_root" "$install_root" || path_within "$install_root" "$bundle_root"; then
   printf '%s\n' 'Run b300-stlink self-update from a managed install; source and destination overlap.' >&2
   exit 1
@@ -74,6 +76,10 @@ for managed_path in \
 do
   reject_path_components "$managed_path" "$home_root"
 done
+if [ -f "$bundle_root/packaging/linux/b300-stlink-gateway-agent.service" ]; then
+  reject_path_components "$systemd_user_root" "$home_root"
+  reject_path_components "$systemd_unit_target" "$home_root"
+fi
 if [ ! -x "$bundle_root/b300-stlink" ] && [ ! -x "$bundle_root/b300-stlink-gui" ]; then
   printf '%s\n' 'Incomplete B300 native bundle: executable is missing.' >&2
   exit 1
@@ -88,6 +94,10 @@ if [ -x "$bundle_root/b300-stlink-gui" ]; then
 fi
 mkdir -p "$install_root" "$bin_root"
 cp -a "$bundle_root"/. "$install_root"/
+if [ -f "$install_root/packaging/linux/b300-stlink-gateway-agent.service" ]; then
+  mkdir -p "$systemd_user_root"
+  cp "$install_root/packaging/linux/b300-stlink-gateway-agent.service" "$systemd_unit_target"
+fi
 cat > "$cli_launcher" <<'EOF'
 #!/bin/sh
 set -eu

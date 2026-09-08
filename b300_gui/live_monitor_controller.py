@@ -200,11 +200,17 @@ class LiveMonitorController(QObject):
                     and getattr(remote_session, "supports_gateway_leases", False) is True
                     and callable(getattr(remote_session, "ensure_gateway_agent", None))
                     and callable(getattr(remote_session, "acquire_gateway", None))):
-                lease_client = self._lease_client_factory(
-                    remote_session,
-                    client_id=request.profile_id or request.host,
-                    client_label=request.user or request.host,
-                )
+                try:
+                    lease_client = self._lease_client_factory(
+                        remote_session, client_id=request.profile_id or request.host,
+                        client_label=request.user or request.host,
+                        on_lost=lambda: self._release_monitor("Gateway lease lost"),
+                    )
+                except TypeError:
+                    lease_client = self._lease_client_factory(
+                        remote_session, client_id=request.profile_id or request.host,
+                        client_label=request.user or request.host,
+                    )
                 lease_client.start("LIVE_WATCH", probe_serial=None)
                 self._gateway_lease_client = lease_client
                 grant = lease_client.grant
