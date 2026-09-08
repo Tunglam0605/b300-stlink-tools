@@ -1,0 +1,12 @@
+[Unit]
+Description=B300 ST-Link Gateway Agent
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/b300-stlink debug gateway-agent --managed-child --json
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

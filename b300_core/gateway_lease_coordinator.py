@@ -77,7 +77,13 @@ class GatewayLeaseCoordinator:
         self._lease_id_factory = lease_id_factory
         self._acquired_at_factory = acquired_at_factory
         self._lock = threading.RLock()
-        self._lease = self.store.read()
+        try:
+            self._lease = self.store.read()
+            self._recovery_required = False
+        except RuntimeError:
+            # Corrupt persisted state must fail closed without touching hardware.
+            self._lease = None
+            self._recovery_required = True
         self._last_generation = self._lease.generation if self._lease is not None else 0
         self._restart_attempted_generation: Optional[int] = None
 
@@ -99,6 +105,8 @@ class GatewayLeaseCoordinator:
         if not isinstance(request, GatewayLeaseRequest):
             raise ValueError("Gateway lease acquire requires a validated request.")
         with self._lock:
+            if self._recovery_required:
+                return _inactive("RECOVERY_REQUIRED")
             now = self._clock()
             if self._lease is not None:
                 self._advance_expiry_locked(now)
@@ -148,7 +156,10 @@ class GatewayLeaseCoordinator:
             )
             self._restart_attempted_generation = None
             self._persist_locked(active)
-            return GatewayLeaseGrant.from_lease(active, token, now)
+            public = GatewayLeasePublicSnapshot.from_lease(active, now)
+            public = replace(public, gdb_endpoint=getattr(gateway, "gdb_endpoint", None),
+                              tcl_endpoint=getattr(gateway, "tcl_endpoint", None))
+            return GatewayLeaseGrant(active.lease_id, token, active.generation, public)
 
     def renew(self, lease_id: str, token: str,
               generation: int) -> GatewayLeasePublicSnapshot:
@@ -227,6 +238,8 @@ class GatewayLeaseCoordinator:
 
     def public_snapshot(self) -> GatewayLeasePublicSnapshot:
         with self._lock:
+            if self._recovery_required:
+                return _inactive("RECOVERY_REQUIRED")
             if self._lease is None:
                 return _inactive("GATEWAY_IDLE")
             return GatewayLeasePublicSnapshot.from_lease(self._lease, self._clock())
@@ -301,9 +314,16 @@ class GatewayLeaseCoordinator:
             reason_code="CLEANUP_IN_PROGRESS",
         )
         self._persist_locked(cleaning)
-        try:
-            self.supervisor.stop()
-        except Exception:
+        error = []
+        def stop_gateway():
+            try:
+                self.supervisor.stop()
+            except Exception as exc:
+                error.append(exc)
+        worker = threading.Thread(target=stop_gateway, name="b300-gateway-cleanup", daemon=True)
+        worker.start()
+        worker.join(timeout=self.policy.cleanup_timeout_seconds)
+        if worker.is_alive() or error:
             failed = replace(
                 cleaning, state="RECOVERY_REQUIRED",
                 reason_code="CLEANUP_IN_PROGRESS",

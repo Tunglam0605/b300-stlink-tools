@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from typing import Optional
+import sys
+from pathlib import Path
 
 from b300_core.gateway_setup import (
     build_gateway_prepare_plan, client_connection_text, inspect_gateway_host, prepare_gateway_host,
@@ -15,6 +17,7 @@ from b300_core.ssh_identity import (
     inspect_ssh_client_prerequisites,
     prepare_ssh_client_prerequisites, public_key_identity,
 )
+from b300_core.gateway_agent_setup import prepare_gateway_agent_setup
 
 def gateway_host_record(report, command: str, plan=None) -> dict:
     record = {
@@ -108,6 +111,19 @@ def gateway_quickstart(args) -> tuple[int, dict, str]:
     else:
         after = before
         changed = False
+    # Compose per-user Gateway Agent setup into quickstart after confirmation.
+    agent_setup = None
+    if args.confirm_system_change:
+        try:
+            agent_setup = prepare_gateway_agent_setup(
+                cli_path=Path(sys.argv[0]).resolve(), system_name=after.platform,
+            )
+            changed = changed or agent_setup.changed
+        except Exception as error:
+            record = gateway_host_record(after, "gateway quickstart", plan)
+            record.update({"status": "blocked", "reason_code": "AGENT_SETUP_FAILED",
+                           "next_action": "Install the Gateway Agent service, then retry quickstart."})
+            return 1, record, "Gateway Agent setup failed: %s" % error
     hosts = tuple(after.ipv4_addresses) or (after.hostname,)
     connections = [RemoteGatewayProfile(host, after.username, after.ssh_port).validate() for host in hosts]
     client_commands = [
@@ -126,6 +142,13 @@ def gateway_quickstart(args) -> tuple[int, dict, str]:
         "client_setup_command": client_commands[0] if not ambiguous else None,
         "client_setup_commands": client_commands,
         "network_selection_required": ambiguous,
+        "gateway_agent_setup": ({
+            "platform": agent_setup.after.platform,
+            "installed": agent_setup.after.installed,
+            "running": agent_setup.after.running,
+            "autostart_enabled": agent_setup.after.autostart_enabled,
+            "reason_code": agent_setup.after.reason_code,
+        } if agent_setup is not None else None),
         "next_action": (
             "Choose the client_setup_commands entry reachable from the Client network, then use the account password when OpenSSH prompts."
             if ambiguous else

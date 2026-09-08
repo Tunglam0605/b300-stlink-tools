@@ -31,7 +31,8 @@ class GatewayBusyError(RuntimeError):
 
 class GatewayLeaseClient:
     def __init__(self, session, *, client_id: str, client_label: str,
-                 heartbeat_interval_seconds: float = 5.0) -> None:
+                 heartbeat_interval_seconds: float = 5.0,
+                 on_lost: Optional[callable] = None) -> None:
         if not str(client_id).strip() or not str(client_label).strip():
             raise ValueError("Gateway lease client identity is required.")
         if not 0.1 <= float(heartbeat_interval_seconds) <= 30:
@@ -45,6 +46,7 @@ class GatewayLeaseClient:
         self._heartbeat_stop = threading.Event()
         self._heartbeat_thread = None
         self._closed = False
+        self._on_lost = on_lost
 
     @property
     def grant(self) -> Optional[RemoteLeaseGrant]:
@@ -106,6 +108,11 @@ class GatewayLeaseClient:
         if isinstance(result, dict) and result.get("reason_code") == "LEASE_INVALID":
             self._invalidate_local()
             raise RuntimeError("Gateway lease is no longer valid.")
+        if isinstance(result, dict):
+            if (result.get("lease_id", grant.lease_id) != grant.lease_id
+                    or int(result.get("generation", grant.generation)) != grant.generation):
+                self._invalidate_local()
+                raise RuntimeError("Gateway lease renewal belongs to a stale generation.")
         return result
 
     def close(self) -> None:
@@ -127,9 +134,23 @@ class GatewayLeaseClient:
                 pass
 
     def _invalidate_local(self) -> None:
+        callback = None
+        grant = None
         with self._lock:
+            grant = self._grant
             self._grant = None
             self._heartbeat_stop.set()
+            callback = self._on_lost
+        if grant is not None:
+            try:
+                self.session.release_gateway(grant)
+            except Exception:
+                pass
+        if callback is not None:
+            try:
+                callback()
+            except Exception:
+                pass
 
     def _heartbeat_loop(self) -> None:
         while not self._heartbeat_stop.wait(self.heartbeat_interval_seconds):

@@ -266,6 +266,8 @@ class GatewayLeasePublicSnapshot:
     gateway_generation: int
     probe_serial: Optional[str]
     reason_code: str
+    gdb_endpoint: Optional[str] = None
+    tcl_endpoint: Optional[str] = None
 
     @classmethod
     def from_lease(cls, lease: GatewayLease,
@@ -287,7 +289,8 @@ class GatewayLeasePublicSnapshot:
                     "state", "acquired_at", "heartbeat_age_seconds",
                     "gateway_instance_id", "gateway_generation", "probe_serial",
                     "reason_code")
-        if set(record) != set(required):
+        allowed = set(required) | {"gdb_endpoint", "tcl_endpoint"}
+        if not set(record).issubset(allowed) or not set(required).issubset(record):
             raise ValueError("Gateway lease snapshot is incomplete.")
         if type(record["active"]) is not bool:
             raise ValueError("Gateway lease activity must be boolean.")
@@ -302,6 +305,8 @@ class GatewayLeasePublicSnapshot:
         instance_id = record["gateway_instance_id"]
         gateway_generation = record["gateway_generation"]
         reason = record["reason_code"]
+        gdb_endpoint = record.get("gdb_endpoint")
+        tcl_endpoint = record.get("tcl_endpoint")
         if active:
             lease_id = _safe_identifier(lease_id, "Gateway lease id")
             generation = _strict_int(generation, "Gateway lease generation")
@@ -321,10 +326,16 @@ class GatewayLeasePublicSnapshot:
             mode = mode.strip().upper()
             if not isinstance(state, str) or state not in LEASE_STATES:
                 raise ValueError("Unsupported Gateway lease state: %s." % state)
+            for endpoint, label in ((gdb_endpoint, "GDB"), (tcl_endpoint, "TCL")):
+                if endpoint is not None and (
+                        not isinstance(endpoint, str) or not endpoint.startswith("127.0.0.1:")
+                        or not endpoint.rpartition(":")[2].isdigit()):
+                    raise ValueError("Gateway lease %s endpoint is invalid." % label)
         else:
             if (lease_id != "" or generation != 0 or label != "" or mode != ""
                     or state != "IDLE" or instance_id != "" or gateway_generation != 0):
                 raise ValueError("Inactive Gateway lease snapshot contains active data.")
+            gdb_endpoint = tcl_endpoint = None
         if not isinstance(acquired_at, str) or (
                 acquired_at and (_TIMESTAMP.fullmatch(acquired_at) is None)):
             raise ValueError("Gateway lease acquired_at is invalid.")
@@ -340,6 +351,7 @@ class GatewayLeasePublicSnapshot:
         return cls(
             bool(active), lease_id, generation, label, mode, state,
             acquired_at, heartbeat_age, instance_id, gateway_generation, serial, reason,
+            gdb_endpoint, tcl_endpoint,
         )
 
     def to_record(self) -> dict:
@@ -356,6 +368,8 @@ class GatewayLeasePublicSnapshot:
             "gateway_generation": self.gateway_generation,
             "probe_serial": self.probe_serial,
             "reason_code": self.reason_code,
+            "gdb_endpoint": self.gdb_endpoint,
+            "tcl_endpoint": self.tcl_endpoint,
         }
 
 

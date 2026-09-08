@@ -1082,7 +1082,21 @@ def run_gateway_agent_command(args: argparse.Namespace) -> int:
         record = status.to_record() if status is not None else {
             "state": "STOPPED", "reason_code": "GATEWAY_AGENT_NOT_RUNNING",
         }
-        lease = GatewayLeaseStore().read()
+        try:
+            lease = GatewayLeaseStore().read()
+        except RuntimeError:
+            record["lease_snapshot"] = {
+                "active": False, "lease_id": "", "generation": 0,
+                "client_label": "", "mode": "", "state": "IDLE",
+                "acquired_at": "", "heartbeat_age_seconds": 0,
+                "gateway_instance_id": "", "gateway_generation": 0,
+                "probe_serial": None, "reason_code": "RECOVERY_REQUIRED",
+                "gdb_endpoint": None, "tcl_endpoint": None,
+            }
+            record["reason_code"] = "RECOVERY_REQUIRED"
+            record.update(gateway_capabilities())
+            emit_snapshot(record, args.json, "Gateway Agent: RECOVERY_REQUIRED")
+            return 1
         if lease is not None:
             record["lease_snapshot"] = GatewayLeasePublicSnapshot.from_lease(
                 lease, time.monotonic()
