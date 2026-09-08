@@ -6,6 +6,7 @@ import unittest
 
 from b300_core.remote_profile import RemoteGatewayProfile
 from b300_core.remote_session import RemoteSession, RemoteSessionError
+from b300_version import __version__
 
 from tests.test_remote_session import FakeClient, MemoryStore
 
@@ -57,7 +58,7 @@ def snapshot(state, **changes):
         "schema_version": 1,
         "protocol_version": 1,
         "capabilities": ["gateway-status", "gateway-ensure", "gateway-rescan"],
-        "tool_version": "0.21.10",
+        "tool_version": __version__,
         "instance_id": "gateway-a",
         "generation": 0,
         "sequence": 1,
@@ -274,7 +275,7 @@ class GatewayRemoteEnsureTests(unittest.TestCase):
 
     def test_invalid_gateway_snapshot_has_protocol_error_details(self) -> None:
         record = {"state": "READY", "protocol_version": 1,
-                  "capabilities": ["gateway-status"], "tool_version": "0.21.10"}
+                  "capabilities": ["gateway-status"], "tool_version": __version__}
         session = RemoteSession(
             self.profile, credential_store=MemoryStore(), ssh_client_factory=lambda: GatewayClient([record]),
         )
