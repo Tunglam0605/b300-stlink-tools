@@ -601,6 +601,29 @@ class V018SimplifiedUiTests(unittest.TestCase):
             window._vscode_controller = original_controller
             self._close(window)
 
+    def test_gateway_health_snapshot_is_observed_by_client_lifecycle(self) -> None:
+        window = self._make_window()
+        original_controller = window._vscode_controller
+        try:
+            controller = mock.Mock()
+            controller.observe_gateway_snapshot.return_value = True
+            controller.state = VsCodeBridgeState(None, BridgeState.STOPPED, None)
+            window._vscode_controller = controller
+            changed = GatewaySnapshot.from_record({
+                "schema_version": 1, "instance_id": "gw", "generation": 1, "sequence": 1,
+                "state": "READY", "reason_code": "TARGET_VERIFIED",
+                "selected_probe": {"serial": "ABC"}, "gdb_endpoint": "127.0.0.1:3333",
+                "tcl_endpoint": "127.0.0.1:6666", "cpu_state": "running", "evidence_age_ms": 0,
+                "gdb_connection_count": 0, "gdb_activity_generation": 2, "gdb_ever_attached": True,
+            })
+
+            window._on_gateway_snapshot(changed)
+
+            controller.observe_gateway_snapshot.assert_called_once_with(changed)
+        finally:
+            window._vscode_controller = original_controller
+            self._close(window)
+
     def test_live_monitor_owns_a_production_controller_and_panel(self) -> None:
         window = self._make_window()
         try:

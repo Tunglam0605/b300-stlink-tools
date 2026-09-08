@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 import platform
@@ -13,7 +14,7 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Optional, Sequence
+from typing import Callable, Mapping, Optional, Sequence
 
 from .diagnostics import DiagnosticsService
 from .gdb_runtime import GdbRuntimeInfo, gdb_runtime_info
@@ -24,8 +25,17 @@ from .service import B300Service
 
 SUPPORT_BUNDLE_SCHEMA_VERSION = 1
 SUPPORT_BUNDLE_MAX_BYTES = 2 * 1024 * 1024
+SUPPORT_TIMELINE_MAX_ENTRIES = 32
 _WINDOWS_ABSOLUTE_PATH = re.compile(r"(?i)(?<![A-Za-z0-9])[A-Z]:[\\/][^\r\n\t\"']+")
 _UNIX_HOME_PATH = re.compile(r"/(?:home|Users)/[^/\s]+(?:/[^\s\"']*)?")
+_SAFE_EVIDENCE_TOKEN = re.compile(r"^[A-Za-z0-9._+-]{1,80}$")
+_SAFE_VERSION = re.compile(r"^v?\d+(?:[._+-][A-Za-z0-9]+)*$")
+_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
+_SESSION_STATES = frozenset({
+    "connecting", "connected", "disconnected", "error", "stopped", "starting", "ready",
+    "waiting_probe", "waiting_selection", "failed",
+})
+_TUNNEL_NAMES = frozenset({"gdb", "tcl", "vscode-gdb"})
 
 
 def _portable_basename(value: Optional[str]) -> Optional[str]:
@@ -46,6 +56,122 @@ def _safe_text(value: object, secrets=()) -> str:
     if home:
         text = text.replace(home, "<HOME>").replace(home.replace("\\", "/"), "<HOME>")
     return text
+
+
+def _evidence_token(value: object) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text if _SAFE_EVIDENCE_TOKEN.fullmatch(text) else None
+
+
+def _loopback_endpoint(value: object) -> Optional[str]:
+    text = str(value).strip()
+    host, separator, port_text = text.rpartition(":")
+    if not separator:
+        return None
+    try:
+        address = ipaddress.ip_address(host)
+        port = int(port_text)
+    except ValueError:
+        return None
+    if not address.is_loopback or not 1 <= port <= 65535:
+        return None
+    return "%s:%d" % (address, port)
+
+
+def _operational_evidence_record(evidence: Optional[Mapping[str, object]]) -> Optional[dict]:
+    """Normalize explicitly supplied operational evidence without retaining identities or logs."""
+    if not isinstance(evidence, Mapping):
+        return None
+    record = {}
+    versions = evidence.get("versions")
+    if isinstance(versions, Mapping):
+        selected = {
+            name: token for name in ("gui", "core", "cli")
+            if (token := _evidence_token(versions.get(name))) is not None
+            and _SAFE_VERSION.fullmatch(token)
+        }
+        if selected:
+            record["versions"] = selected
+    gateway = evidence.get("gateway")
+    if isinstance(gateway, Mapping):
+        selected = {}
+        try:
+            protocol_version = int(gateway.get("protocol_version"))
+        except (TypeError, ValueError):
+            protocol_version = -1
+        if 0 <= protocol_version <= 9999:
+            selected["protocol_version"] = protocol_version
+        if (state := _evidence_token(gateway.get("session_state"))) in _SESSION_STATES:
+            selected["session_state"] = state
+        for name in ("generation", "sequence"):
+            try:
+                value = int(gateway.get(name))
+            except (TypeError, ValueError):
+                continue
+            if 0 <= value <= 2 ** 31 - 1:
+                selected[name] = value
+        if (reason_code := _evidence_token(gateway.get("reason_code"))) is not None and reason_code == reason_code.upper():
+            selected["reason_code"] = reason_code
+        if selected:
+            record["gateway"] = selected
+    process = evidence.get("process")
+    if isinstance(process, Mapping):
+        selected = {}
+        if (owner := _evidence_token(process.get("owner"))) is not None and owner.casefold().startswith("b300"):
+            selected["owner"] = owner
+        for name in ("pid", "parent_pid"):
+            try:
+                identifier = int(process.get(name))
+            except (TypeError, ValueError):
+                continue
+            if 0 <= identifier <= 2 ** 31 - 1:
+                selected[name] = identifier
+        if selected:
+            record["process"] = selected
+    tunnels = evidence.get("tunnels")
+    if isinstance(tunnels, Sequence) and not isinstance(tunnels, (str, bytes)):
+        selected = []
+        for tunnel in tunnels[:16]:
+            if not isinstance(tunnel, Mapping):
+                continue
+            name = _evidence_token(tunnel.get("name"))
+            local = _loopback_endpoint(tunnel.get("local_endpoint"))
+            gateway_endpoint = _loopback_endpoint(tunnel.get("gateway_endpoint"))
+            if name in _TUNNEL_NAMES and local is not None and gateway_endpoint is not None:
+                selected.append({"name": name, "local_endpoint": local,
+                                 "gateway_endpoint": gateway_endpoint})
+        record["tunnels"] = selected
+    axf = evidence.get("axf")
+    if isinstance(axf, Mapping):
+        basename = _portable_basename(axf.get("basename") or axf.get("path"))
+        digest = str(axf.get("sha256") or "").strip().lower()
+        if basename and _SHA256.fullmatch(digest):
+            record["axf"] = {"basename": basename, "sha256": digest}
+    timeline = evidence.get("timeline")
+    if isinstance(timeline, Sequence) and not isinstance(timeline, (str, bytes)):
+        selected = []
+        for item in timeline[-SUPPORT_TIMELINE_MAX_ENTRIES:]:
+            if not isinstance(item, Mapping):
+                continue
+            at_utc = str(item.get("at_utc") or "").strip()
+            if not at_utc.endswith("Z"):
+                continue
+            try:
+                datetime.fromisoformat(at_utc.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            event = _evidence_token(item.get("event"))
+            if event is None or event != event.upper():
+                continue
+            entry = {"at_utc": at_utc, "event": event}
+            for name in ("state", "code"):
+                if (token := _evidence_token(item.get(name))) is not None and token == token.upper():
+                    entry[name] = token
+            selected.append((datetime.fromisoformat(at_utc.replace("Z", "+00:00")), entry))
+        record["timeline"] = [entry for _timestamp, entry in sorted(selected, key=lambda item: item[0])]
+    return record
 
 
 @dataclass(frozen=True)
@@ -198,6 +324,7 @@ def collect_support_snapshot(
     gdb_info: Callable[[], GdbRuntimeInfo] = gdb_runtime_info,
     probe_serial: Optional[str] = None,
     now: Optional[Callable[[], datetime]] = None,
+    operational_evidence: Optional[Mapping[str, object]] = None,
 ) -> dict:
     """Collect bounded read-only support evidence; subsystem failures remain data, not exceptions."""
     selected_service = service or B300Service()
@@ -247,6 +374,8 @@ def collect_support_snapshot(
         "application_health": _health_record(health),
         "application_health_error": health_error,
     }
+    if (evidence := _operational_evidence_record(operational_evidence)) is not None:
+        snapshot["operational_evidence"] = evidence
     return snapshot
 
 
@@ -258,6 +387,8 @@ It intentionally excludes probe serial/USB identity, username/hostname, SSH iden
 source/AXF paths, firmware bytes, environment variables, and raw command logs.
 
 support.json contains normalized runtime, target, protection, metadata and Application Health evidence.
+When supplied by the caller, it can also contain bounded operational versions, loopback
+tunnel state, AXF basename/fingerprint, process identifiers, and timeline event codes.
 No file in this bundle is executable.
 """
 

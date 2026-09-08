@@ -24,6 +24,8 @@ class GatewayEditDialog(QDialog):
         self.name_input = QLineEdit(profile.name if profile else "")
         self.host_input = QLineEdit(profile.endpoint.host if profile else "")
         self.user_input = QLineEdit(profile.endpoint.user if profile else "")
+        self.cli_path_input = QLineEdit(profile.endpoint.cli_path if profile and profile.endpoint.cli_path else "")
+        self.cli_path_input.setPlaceholderText("/opt/b300/b300-stlink (tùy chọn)")
         self.port_input = QSpinBox()
         self.port_input.setRange(1, 65535)
         self.port_input.setValue(profile.endpoint.port if profile else 22)
@@ -31,8 +33,9 @@ class GatewayEditDialog(QDialog):
         form.addRow("Địa chỉ IP / Host", self.host_input)
         form.addRow("Tài khoản SSH", self.user_input)
         form.addRow("Cổng SSH", self.port_input)
+        form.addRow("Đường dẫn B300 CLI", self.cli_path_input)
         layout.addLayout(form)
-        note = QLabel("Chỉ lưu Tên/Host/User/Port. Mật khẩu không được lưu trong profile.")
+        note = QLabel("Chỉ lưu Tên/Host/User/Port và đường dẫn CLI tùy chọn. Mật khẩu không được lưu trong profile.")
         note.setWordWrap(True)
         layout.addWidget(note)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
@@ -46,6 +49,7 @@ class GatewayEditDialog(QDialog):
         return GatewayProfile.create(
             self.name_input.text().strip(), self.host_input.text().strip(), self.user_input.text().strip(),
             self.port_input.value(), profile_id=(self._profile.profile_id if self._profile else None),
+            cli_path=(self.cli_path_input.text().strip() or None),
         )
 
 

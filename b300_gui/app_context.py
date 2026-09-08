@@ -5,6 +5,7 @@ from PySide6.QtCore import QObject, Signal
 from b300_core.gateway_profiles import GatewayProfile
 from b300_core.models import TargetInfo
 from b300_core.project_profiles import ProjectProfile
+from b300_core.device_state import DeviceStateStore
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,7 @@ class ConnectionChoice:
 
 class AppContext(QObject):
     changed = Signal()
+    device_changed = Signal(object)
 
     def __init__(self, gateway_sessions=None, parent=None):
         super().__init__(parent)
@@ -35,6 +37,31 @@ class AppContext(QObject):
         self.connections = (self.selected_connection,)
         self.probes = ()
         self._profiles_loaded = False
+        self._device_state = DeviceStateStore()
+
+    @property
+    def device_snapshot(self):
+        return self._device_state.snapshot
+
+    def apply_device_state(self, **updates):
+        """Qt adapter for core device evidence; views consume one snapshot."""
+        if not self._device_state.reduce(**updates):
+            return False
+        snapshot = self._device_state.snapshot
+        connection = next((item for item in self.connections
+                           if item.connection_id == snapshot.connection_id), None)
+        if connection is not None:
+            self.selected_connection = connection
+        self.selected_probe = snapshot.probe_serial
+        self.device_changed.emit(snapshot)
+        self.changed.emit()
+        return True
+
+    def _sync_device_state(self, **updates):
+        changed = self._device_state.reduce(**updates)
+        if changed:
+            self.device_changed.emit(self._device_state.snapshot)
+        return changed
 
     def set_profiles(self, projects, gateways, default_project_id=None, default_gateway_id=None):
         if self.hardware_busy:
@@ -56,6 +83,8 @@ class AppContext(QObject):
             self.gateway_warning = ""
         self.project_profiles, self.connections = projects, connections
         self.selected_project, self.selected_connection = project, connection
+        self._sync_device_state(connection_id=connection.connection_id,
+                                probe_serial=self.selected_probe)
         self._profiles_loaded = True
         self.changed.emit()
 
@@ -83,6 +112,7 @@ class AppContext(QObject):
             self.target_info = None
             self.gateway_snapshot = None
             self.gateway_warning = ""
+            self._sync_device_state(connection_id=selected.connection_id, probe_serial=None)
             self.changed.emit()
         return True
 
@@ -94,6 +124,7 @@ class AppContext(QObject):
         if serial != self.selected_probe:
             self.selected_probe = serial
             self.target_info = None
+            self._sync_device_state(probe_serial=serial)
             self.changed.emit()
         return True
 
@@ -104,11 +135,15 @@ class AppContext(QObject):
             self.target_info = None
         self.probes = probes
         self.selected_probe = serial
+        self._sync_device_state(probe_serial=serial)
         self.changed.emit()
 
     def set_target_info(self, info):
         if info != self.target_info:
             self.target_info = info
+            # TargetInfo contains UI-only evidence; device records retain only
+            # support-safe target lifecycle strings supplied by debug/monitor.
+            self._sync_device_state(target_state=None)
             self.changed.emit()
 
     def set_hardware_busy(self, busy):

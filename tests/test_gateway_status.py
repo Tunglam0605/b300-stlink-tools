@@ -50,6 +50,26 @@ class GatewayStatusTests(unittest.TestCase):
         self.assertTrue(tracker.accept(restarted))
         self.assertEqual(tracker.snapshot.instance_id, "gateway-b")
 
+    def test_gdb_activity_fields_are_optional_for_older_gateway_records(self) -> None:
+        legacy = ready_snapshot()
+        self.assertIsNone(legacy.gdb_connection_count)
+        self.assertFalse(legacy.has_gdb_activity_evidence)
+
+        current = ready_snapshot(
+            gdb_connection_count=2, gdb_activity_generation=7, gdb_ever_attached=True,
+        )
+        self.assertTrue(current.has_gdb_activity_evidence)
+        self.assertEqual(current.gdb_connection_count, 2)
+
+    def test_activity_evidence_rejects_non_json_types(self) -> None:
+        for changes in (
+            {"gdb_connection_count": "0", "gdb_activity_generation": 1, "gdb_ever_attached": False},
+            {"gdb_connection_count": 0, "gdb_activity_generation": True, "gdb_ever_attached": False},
+            {"gdb_connection_count": 0, "gdb_activity_generation": 1, "gdb_ever_attached": "false"},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                ready_snapshot(**changes)
+
 
 if __name__ == "__main__":
     unittest.main()

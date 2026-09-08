@@ -77,6 +77,8 @@ jobs:
         shell: pwsh
         run: |
           Expand-Archive release\B300-STLink-GUI-Windows-x64.zip release\windows-gui-bundle -Force
+          .\release\windows-gui-bundle\b300-stlink.exe --version --json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           choco install innosetup --no-progress -y
           $version = python -c "from b300_version import __version__; print(__version__)"
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
@@ -173,6 +175,7 @@ jobs:
         run: |
           mkdir -p release/linux-gui-bundle release/gui
           tar -xzf "release/${{ matrix.gui }}" -C release/linux-gui-bundle
+          ./release/linux-gui-bundle/b300-stlink --version --json
           gdb_dir=release/linux-gui-bundle/vendor/gdb/bin
           "$gdb_dir/arm-none-eabi-gdb" --version
           curl -fL --retry 3 -o "release/${{ matrix.appimagetool }}" \
@@ -187,6 +190,14 @@ jobs:
             --version "$version" \
             --appimagetool "release/${{ matrix.appimagetool }}" \
             --build-deb
+      - name: Smoke-test packaged Linux GUI companion CLI
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          "release/gui/${{ matrix.appimage }}" --cli --version --json
+          rm -rf release/deb-payload
+          dpkg-deb --extract "release/gui/${{ matrix.deb }}" release/deb-payload
+          release/deb-payload/opt/b300-stlink/b300-stlink --version --json
       - name: Enforce Linux GUI size budgets
         run: |
           python3 scripts/release/check_size_budget.py "release/gui/${{ matrix.appimage }}" --max-mib 220

@@ -47,6 +47,9 @@ class GatewaySnapshot:
     tcl_endpoint: Optional[str]
     cpu_state: str
     evidence_age_ms: Optional[int]
+    gdb_connection_count: Optional[int] = None
+    gdb_activity_generation: Optional[int] = None
+    gdb_ever_attached: Optional[bool] = None
 
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> "GatewaySnapshot":
@@ -78,6 +81,25 @@ class GatewaySnapshot:
         evidence_age_ms = None if raw_age is None else int(raw_age)
         if evidence_age_ms is not None and evidence_age_ms < 0:
             raise ValueError("Gateway evidence age must be non-negative.")
+        raw_count = record.get("gdb_connection_count")
+        raw_activity = record.get("gdb_activity_generation")
+        raw_ever_attached = record.get("gdb_ever_attached")
+        if raw_count is not None and (not isinstance(raw_count, int) or isinstance(raw_count, bool)):
+            raise ValueError("Gateway GDB connection count must be an integer.")
+        if raw_activity is not None and (not isinstance(raw_activity, int) or isinstance(raw_activity, bool)):
+            raise ValueError("Gateway GDB activity generation must be an integer.")
+        gdb_connection_count = raw_count
+        gdb_activity_generation = raw_activity
+        if raw_ever_attached is not None and not isinstance(raw_ever_attached, bool):
+            raise ValueError("Gateway GDB ever-attached evidence must be boolean.")
+        gdb_ever_attached = raw_ever_attached
+        if gdb_connection_count is not None and gdb_connection_count < 0:
+            raise ValueError("Gateway GDB connection count must be non-negative.")
+        if gdb_activity_generation is not None and gdb_activity_generation < 0:
+            raise ValueError("Gateway GDB activity generation must be non-negative.")
+        supplied_activity = (raw_count is not None, raw_activity is not None, raw_ever_attached is not None)
+        if any(supplied_activity) and not all(supplied_activity):
+            raise ValueError("Gateway GDB activity evidence must be complete when supplied.")
         if state == "READY":
             if selected_probe is None:
                 raise ValueError("READY Gateway snapshot requires a selected probe.")
@@ -90,11 +112,20 @@ class GatewaySnapshot:
         return cls(
             schema_version, instance_id, generation, sequence, state, reason_code,
             selected_probe, gdb_endpoint, tcl_endpoint, cpu_state, evidence_age_ms,
+            gdb_connection_count, gdb_activity_generation, gdb_ever_attached,
         )
 
     @property
     def attach_ready(self) -> bool:
         return self.state == "READY"
+
+    @property
+    def has_gdb_activity_evidence(self) -> bool:
+        return (
+            self.gdb_connection_count is not None
+            and self.gdb_activity_generation is not None
+            and self.gdb_ever_attached is not None
+        )
 
     def to_record(self) -> dict:
         return {
@@ -109,6 +140,9 @@ class GatewaySnapshot:
             "tcl_endpoint": self.tcl_endpoint,
             "cpu_state": self.cpu_state,
             "evidence_age_ms": self.evidence_age_ms,
+            "gdb_connection_count": self.gdb_connection_count,
+            "gdb_activity_generation": self.gdb_activity_generation,
+            "gdb_ever_attached": self.gdb_ever_attached,
         }
 
 

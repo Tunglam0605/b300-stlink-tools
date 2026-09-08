@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -1063,6 +1064,9 @@ class _GatewayRuntimePublisher:
             "tcl_endpoint": "127.0.0.1:%d" % self.tcl_port if ready else None,
             "cpu_state": cpu_state if ready else "unknown",
             "evidence_age_ms": 0 if ready else None,
+            "gdb_connection_count": 0,
+            "gdb_activity_generation": 0,
+            "gdb_ever_attached": False,
         })
         self.store.write(snapshot, owner_pid=os.getpid())
         self.last_state = state
@@ -1127,6 +1131,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                 service=service,
                 probe_discovery=list_probes,
                 probe_serial=args.probe_serial,
+                operational_evidence={
+                    "versions": {"core": __version__, "cli": __version__},
+                    "process": {"owner": "b300-stlink-tools", "pid": os.getpid()},
+                    "timeline": [{
+                        "at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                        "event": "SUPPORT_BUNDLE_REQUESTED", "code": "CLI",
+                    }],
+                },
             )
             bundle = write_support_bundle(args.output, snapshot, force=args.force)
             health = snapshot.get("application_health") or {}

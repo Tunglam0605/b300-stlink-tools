@@ -13,6 +13,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -424,7 +426,12 @@ class VsCodeDebugBridge:
 
     def __init__(self, debug_service: Optional[DebugService] = None,
                  *, tcl_factory: TclFactory = SafeTclClient,
-                 guard_factory: GuardFactory = RemoteDebugGuard) -> None:
+                 guard_factory: GuardFactory = RemoteDebugGuard,
+                 client_reclaim_delay_seconds: float = 0.25,
+                 client_reclaim_scheduler=None,
+                 clock: Callable[[], float] = time.monotonic) -> None:
+        if client_reclaim_delay_seconds < 0:
+            raise ValueError("Client reclaim delay must not be negative.")
         self.debug_service = debug_service or DebugService()
         self._tcl_factory = tcl_factory
         self._guard_factory = guard_factory
@@ -435,9 +442,36 @@ class VsCodeDebugBridge:
         self._guard: Optional[RemoteDebugGuard] = None
         self._binding: Optional[GatewayEndpointBinding] = None
         self._last_detail = ""
+        self._last_client_detached_handler = None
+        self._lifecycle_lock = threading.RLock()
+        self._lifecycle_generation = 0
+        self._client_reclaim_delay_seconds = float(client_reclaim_delay_seconds)
+        self._client_reclaim_scheduler = client_reclaim_scheduler or self._schedule_client_reclaim
+        self._clock = clock
+        self._client_observed_attach = False
+        self._client_reclaim_candidate = 0
+        self._client_activity_identity = None
+        self._client_activity_generation = None
+        self._client_activity_count = None
+        self._client_activity_sequence = None
+
+    @staticmethod
+    def _schedule_client_reclaim(delay_seconds: float, callback: Callable[[], None]) -> None:
+        timer = threading.Timer(delay_seconds, callback)
+        timer.daemon = True
+        timer.start()
+
+    def set_last_client_detached_handler(self, handler) -> None:
+        """Set the B300 lifecycle callback for the final external GDB detach."""
+        with self._lifecycle_lock:
+            self._last_client_detached_handler = handler
 
     @property
     def state(self) -> VsCodeBridgeState:
+        with self._lifecycle_lock:
+            return self._state_unlocked()
+
+    def _state_unlocked(self) -> VsCodeBridgeState:
         if self._role in (DebugRole.LOCAL, DebugRole.GATEWAY):
             openocd = self.debug_service.poll()
             if openocd in (DebugState.READY, DebugState.CONNECTED):
@@ -541,6 +575,14 @@ class VsCodeDebugBridge:
 
     def _start_server(self, role: DebugRole, probe: ProbeRef, *, gdb_port: int,
                       tcl_port: int, event_sink=None) -> VsCodeBridgeState:
+        with self._lifecycle_lock:
+            self._lifecycle_generation += 1
+            return self._start_server_locked(
+                role, probe, gdb_port=gdb_port, tcl_port=tcl_port, event_sink=event_sink,
+            )
+
+    def _start_server_locked(self, role: DebugRole, probe: ProbeRef, *, gdb_port: int,
+                             tcl_port: int, event_sink=None) -> VsCodeBridgeState:
         if role not in (DebugRole.LOCAL, DebugRole.GATEWAY):
             raise ValueError("Only LOCAL/GATEWAY roles may start local OpenOCD.")
         self._require_stopped()
@@ -554,13 +596,20 @@ class VsCodeDebugBridge:
         )
         config.validate()
         self._server_config = config
+        lifecycle_generation = self._lifecycle_generation
         try:
             self.debug_service.start(
                 config,
                 event_sink=lambda line: self._openocd_event(line, event_sink),
             )
             tcl = self._tcl_factory(TclEndpoint("127.0.0.1", config.tcl_port))
-            guard = self._guard_factory(tcl, event_sink=self._guard_event)
+            guard = self._guard_factory(
+                tcl,
+                event_sink=self._guard_event,
+                last_client_detached_sink=lambda _snapshot: self._notify_last_client_detached(
+                    lifecycle_generation
+                ),
+            )
             guard.capture_initial_state()
             self._guard = guard
         except Exception:
@@ -579,10 +628,29 @@ class VsCodeDebugBridge:
         )
         return self.state
 
+    def _notify_last_client_detached(self, lifecycle_generation: int) -> None:
+        with self._lifecycle_lock:
+            if (lifecycle_generation != self._lifecycle_generation
+                    or self._role not in (DebugRole.LOCAL, DebugRole.GATEWAY)):
+                return
+            handler = self._last_client_detached_handler
+        if handler is not None:
+            handler(lifecycle_generation)
+
     def start_client(self, session: RemoteSession, *, remote_gdb_port: int = 3333,
                      local_gdb_port: int = 0, snapshot=None,
                      profile_id: Optional[str] = None) -> VsCodeBridgeState:
+        with self._lifecycle_lock:
+            return self._start_client_locked(
+                session, remote_gdb_port=remote_gdb_port, local_gdb_port=local_gdb_port,
+                snapshot=snapshot, profile_id=profile_id,
+            )
+
+    def _start_client_locked(self, session: RemoteSession, *, remote_gdb_port: int = 3333,
+                             local_gdb_port: int = 0, snapshot=None,
+                             profile_id: Optional[str] = None) -> VsCodeBridgeState:
         self._require_stopped()
+        self._lifecycle_generation += 1
         remote_endpoint = "127.0.0.1:%d" % int(remote_gdb_port)
         if snapshot is not None:
             remote_endpoint, remote_gdb_port = _snapshot_endpoint(snapshot)
@@ -607,6 +675,12 @@ class VsCodeDebugBridge:
         self._role = DebugRole.CLIENT
         self._remote_session = session
         self._remote_forward = forward
+        self._client_observed_attach = False
+        self._client_reclaim_candidate = 0
+        self._client_activity_identity = None
+        self._client_activity_generation = None
+        self._client_activity_count = None
+        self._client_activity_sequence = None
         if snapshot is not None:
             selected_profile = str(profile_id or "").strip()
             if not selected_profile:
@@ -624,11 +698,93 @@ class VsCodeDebugBridge:
                 local_endpoint="127.0.0.1:%d" % forward.local_port,
                 session_generation=session_generation,
             )
+            self._client_activity_identity = (str(snapshot.instance_id), int(snapshot.generation))
+            if getattr(snapshot, "has_gdb_activity_evidence", False):
+                self._client_activity_generation = int(snapshot.gdb_activity_generation)
+                self._client_activity_count = int(snapshot.gdb_connection_count)
+                self._client_activity_sequence = int(snapshot.sequence)
+                self._client_observed_attach = self._client_activity_count > 0
         self._last_detail = "VS Code GDB is forwarded through the authenticated SSH session."
         return self.state
 
+    def observe_gateway_snapshot(self, snapshot: GatewaySnapshot) -> bool:
+        """Observe compatible Gateway GDB activity for this CLIENT-owned forward only."""
+        with self._lifecycle_lock:
+            binding = self._binding
+            if self._role != DebugRole.CLIENT or binding is None:
+                return False
+            identity = (str(snapshot.instance_id), int(snapshot.generation))
+            expected = (binding.instance_id, binding.generation)
+            if identity != expected:
+                self._client_reclaim_candidate = 0
+                return False
+            if not getattr(snapshot, "has_gdb_activity_evidence", False):
+                return False
+            sequence = int(snapshot.sequence)
+            if (self._client_activity_sequence is not None
+                    and sequence <= self._client_activity_sequence):
+                return False
+            count = int(snapshot.gdb_connection_count)
+            activity_generation = int(snapshot.gdb_activity_generation)
+            previous_activity_generation = self._client_activity_generation
+            self._client_activity_identity = identity
+            self._client_activity_generation = activity_generation
+            self._client_activity_count = count
+            self._client_activity_sequence = sequence
+            if count > 0:
+                self._client_observed_attach = True
+                self._client_reclaim_candidate = 0
+                return True
+            if not (self._client_observed_attach and snapshot.gdb_ever_attached):
+                return False
+            if (self._client_reclaim_candidate
+                    and previous_activity_generation == activity_generation):
+                return True
+            self._client_reclaim_candidate += 1
+            lifecycle_generation = self._lifecycle_generation
+            candidate = self._client_reclaim_candidate
+            deadline = self._clock() + self._client_reclaim_delay_seconds
+        self._client_reclaim_scheduler(
+            self._client_reclaim_delay_seconds,
+            lambda: self._reclaim_client_if_quiescent(
+                lifecycle_generation, identity, activity_generation, candidate, deadline,
+            ),
+        )
+        return True
+
+    def _reclaim_client_if_quiescent(self, lifecycle_generation: int, identity, activity_generation: int,
+                                     candidate: int, deadline: float) -> None:
+        with self._lifecycle_lock:
+            if (self._role != DebugRole.CLIENT
+                    or lifecycle_generation != self._lifecycle_generation
+                    or self._client_reclaim_candidate != candidate
+                    or self._client_activity_identity != identity
+                    or self._client_activity_generation != activity_generation
+                    or self._client_activity_count != 0):
+                return
+            remaining = deadline - self._clock()
+            if remaining > 0:
+                self._client_reclaim_scheduler(
+                    remaining,
+                    lambda: self._reclaim_client_if_quiescent(
+                        lifecycle_generation, identity, activity_generation, candidate, deadline,
+                    ),
+                )
+                return
+            self._client_reclaim_candidate = 0
+            handler = self._last_client_detached_handler
+        if handler is not None:
+            handler(lifecycle_generation)
+
     def sync_client(self, session: RemoteSession, *, snapshot, profile_id: str,
                     local_gdb_port: int = 0) -> VsCodeBridgeState:
+        with self._lifecycle_lock:
+            return self._sync_client_locked(
+                session, snapshot=snapshot, profile_id=profile_id, local_gdb_port=local_gdb_port,
+            )
+
+    def _sync_client_locked(self, session: RemoteSession, *, snapshot, profile_id: str,
+                            local_gdb_port: int = 0) -> VsCodeBridgeState:
         """Replace a stale Gateway binding without reusing an existing GDB channel."""
         remote_endpoint, remote_port = _snapshot_endpoint(snapshot)
         selected_profile = str(profile_id or "").strip()
@@ -670,6 +826,19 @@ class VsCodeDebugBridge:
         return self.state
 
     def stop(self) -> VsCodeBridgeState:
+        with self._lifecycle_lock:
+            self._lifecycle_generation += 1
+            return self._stop_locked()
+
+    def stop_if_generation(self, lifecycle_generation: int) -> VsCodeBridgeState:
+        """Stop only the same local OpenOCD lifecycle that requested reclaim."""
+        with self._lifecycle_lock:
+            if lifecycle_generation != self._lifecycle_generation:
+                return self.state
+            self._lifecycle_generation += 1
+            return self._stop_locked()
+
+    def _stop_locked(self) -> VsCodeBridgeState:
         role = self._role
         cleanup_detail = ""
         try:
@@ -695,6 +864,12 @@ class VsCodeDebugBridge:
             self._server_config = None
             self._guard = None
             self._binding = None
+            self._client_observed_attach = False
+            self._client_reclaim_candidate = 0
+            self._client_activity_identity = None
+            self._client_activity_generation = None
+            self._client_activity_count = None
+            self._client_activity_sequence = None
             self._last_detail = cleanup_detail
         return self.state
 

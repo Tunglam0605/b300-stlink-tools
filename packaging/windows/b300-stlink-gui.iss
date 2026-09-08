@@ -132,6 +132,8 @@ begin
     end;
     if Listed.IndexOf('b300-stlink-gui.exe') < 0 then
       RaiseException('B300 runtime executable is unlisted');
+    if Listed.IndexOf('b300-stlink.exe') < 0 then
+      RaiseException('B300 companion CLI executable is unlisted');
     if ExactCoverage then B300CheckCoverage(Root, '', Listed);
   finally
     Listed.Free;
@@ -169,6 +171,7 @@ begin
   OwnedPaths.Add('vendor');
   OwnedPaths.Add('resources\firmware');
   OwnedPaths.Add('b300-stlink-gui.exe');
+  OwnedPaths.Add('b300-stlink.exe');
   OwnedPaths.Add('LICENSE');
   OwnedPaths.Add('BUNDLE-METADATA.txt');
   OwnedPaths.Add('B300-RUNTIME.sha256');

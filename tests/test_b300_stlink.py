@@ -466,6 +466,11 @@ class B300StlinkTests(unittest.TestCase):
         self.assertEqual(record["application_lifecycle"], "BOOTABLE")
         self.assertEqual(record["sha256"], "A" * 64)
         collect.assert_called_once()
+        evidence = collect.call_args.kwargs["operational_evidence"]
+        self.assertEqual(evidence["versions"], {
+            "core": module.__version__, "cli": module.__version__,
+        })
+        self.assertEqual(evidence["process"]["owner"], "b300-stlink-tools")
         write.assert_called_once()
         self.assertEqual(write.call_args.args[0], Path("support.zip"))
         self.assertFalse(write.call_args.kwargs["force"])

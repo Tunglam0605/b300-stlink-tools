@@ -287,6 +287,9 @@ class GatewaySupervisor:
         self._evidence_at: Optional[float] = None
         self._hardware_error = False
         self._manual_stop = False
+        self._gdb_connection_count = 0
+        self._gdb_activity_generation = 0
+        self._gdb_ever_attached = False
         self._lock = threading.RLock()
         self._snapshot = GatewaySnapshot.from_record({
             "schema_version": SUPPORTED_SCHEMA_VERSION,
@@ -432,6 +435,23 @@ class GatewaySupervisor:
 
     def _on_openocd_line(self, line: str) -> None:
         lowered = str(line).lower()
+        with self._lock:
+            activity_changed = False
+            if "accepting 'gdb' connection" in lowered:
+                self._gdb_connection_count += 1
+                self._gdb_activity_generation += 1
+                self._gdb_ever_attached = True
+                activity_changed = True
+            elif "dropped 'gdb' connection" in lowered and self._gdb_connection_count > 0:
+                self._gdb_connection_count -= 1
+                self._gdb_activity_generation += 1
+                activity_changed = True
+            if activity_changed:
+                current = self._snapshot
+                self._publish(
+                    current.state, current.reason_code,
+                    cpu_state=current.cpu_state if current.state == "READY" else "unknown",
+                )
         guard = self._remote_guard
         if guard is not None:
             guard.handle_openocd_line(line)
@@ -490,6 +510,9 @@ class GatewaySupervisor:
             "tcl_endpoint": "127.0.0.1:%d" % self._tcl_port if ready else None,
             "cpu_state": cpu_state if ready else "unknown",
             "evidence_age_ms": evidence_age,
+            "gdb_connection_count": self._gdb_connection_count,
+            "gdb_activity_generation": self._gdb_activity_generation,
+            "gdb_ever_attached": self._gdb_ever_attached,
         })
         if self._sink is not None:
             self._sink(self._snapshot)

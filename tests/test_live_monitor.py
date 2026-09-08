@@ -63,6 +63,38 @@ class FakeClock:
 
 
 class LiveMonitorTests(unittest.TestCase):
+    def test_adaptive_interval_recommendation_uses_ewma_and_margin_without_mutating_requested_interval(self):
+        from b300_core.live_monitor import AdaptiveIntervalAdvisor
+        advisor = AdaptiveIntervalAdvisor(requested_interval_seconds=0.1, margin_seconds=0.02)
+        advisor.observe(0.08)
+        advisor.observe(0.12)
+        recommendation = advisor.recommendation()
+        self.assertEqual(recommendation.requested_interval_seconds, 0.1)
+        self.assertAlmostEqual(recommendation.effective_interval_seconds, 0.12)
+        self.assertEqual(recommendation.overruns, 1)
+        self.assertEqual(recommendation.dropped_frames, 1)
+
+    def test_scheduler_adapts_next_monotonic_deadline_after_slow_read(self):
+        class TimedTcl(AutoFakeTcl):
+            def __init__(self, clock):
+                super().__init__()
+                self.clock = clock
+            def read_word_addresses(self, addresses):
+                self.clock.now += .2
+                return super().read_word_addresses(addresses)
+
+        clock = FakeClock()
+        samples = []
+        summary = run_live_monitor(
+            TimedTcl(clock), FakeSymbols(), interval_seconds=.1, sample_limit=3,
+            clock=clock, wait=clock.wait, on_sample=samples.append,
+        )
+
+        self.assertEqual([sample.scheduled_elapsed_seconds for sample in samples], [0.0, .22, .44])
+        self.assertEqual(summary.requested_interval_seconds, .1)
+        self.assertAlmostEqual(summary.effective_interval_seconds, .22)
+        self.assertEqual(summary.overruns, 3)
+        self.assertEqual(summary.dropped_frames, 3)
     def test_zero_halt_monitor_anchors_cadence_and_decodes_ram_watch(self):
         symbols = FakeSymbols()
         # PCSR then aligned word at xTickCount.

@@ -22,6 +22,7 @@ class GatewayProtocolTests(unittest.TestCase):
         self.assertEqual(capabilities["protocol_version"], 1)
         self.assertIn("gateway-status", capabilities["capabilities"])
         self.assertIn("gateway-ensure", capabilities["capabilities"])
+        self.assertIn("gateway-gdb-activity-v1", capabilities["capabilities"])
 
     def test_remote_commands_are_fixed_per_user_cli_commands(self) -> None:
         self.assertEqual(GATEWAY_STATUS_COMMAND, "b300-stlink debug gateway-status --json")
@@ -49,6 +50,7 @@ class GatewayProtocolTests(unittest.TestCase):
         record = json.loads(output.getvalue())
         self.assertEqual(record["state"], "READY")
         self.assertIn("gateway-ensure", record["capabilities"])
+        self.assertIn("gateway-gdb-activity-v1", record["capabilities"])
 
     def test_gateway_ensure_cli_spawns_explicit_loopback_child(self) -> None:
         manager = mock.Mock()

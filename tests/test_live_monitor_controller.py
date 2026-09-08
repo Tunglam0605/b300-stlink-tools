@@ -138,6 +138,191 @@ class _Session:
 
 
 class LiveMonitorControllerTests(unittest.TestCase):
+    def _restart_fixture(self, directory, *, worker_wait=True):
+        class ControlledWorker(_InlineWorker):
+            def __init__(self, operation, parent=None):
+                super().__init__(operation, parent); self.running = False; self.wait_result = worker_wait
+            def start(self):
+                self.running = True
+                self.result = self.operation(self.log.emit, self.phase.emit, self.cancel_event)
+            def isRunning(self): return self.running
+            def wait(self, _milliseconds):
+                if self.wait_result: self.running = False
+                return self.wait_result
+        class ControlledSession(_Session):
+            def __init__(self): super().__init__(()); self.cancel_calls = 0
+            def cancel(self): self.cancel_calls += 1
+            def start_client(self, config, remote_session=None):
+                self.remote_session = remote_session
+                return self.start_local(config)
+        sessions, workers = [], []
+        def make_session(**_kwargs):
+            item = ControlledSession(); sessions.append(item); return item
+        def make_worker(operation, parent=None):
+            item = ControlledWorker(operation, parent); workers.append(item); return item
+        symbols = Path(directory) / "application.axf"; symbols.write_bytes(b"ELF")
+        remote = SimpleNamespace(gateway_status=lambda: None)
+        binding = SimpleNamespace(tcl_endpoint="127.0.0.1:42001")
+        coordinator = SimpleNamespace(binding=binding, close=lambda: None)
+        controller = LiveMonitorController(
+            _Panel(), remote_session_provider=lambda _request: remote,
+            session_factory=make_session, worker_factory=make_worker,
+        )
+        old = ControlledWorker(lambda *_args: None); old.running = True
+        old_session = ControlledSession()
+        controller._active = True; controller._worker = old; controller._live_session = old_session
+        controller._gateway_coordinator = coordinator; controller._gateway_binding = object()
+        controller._last_request = live_monitor_controller.LiveMonitorRequest.client(
+            symbols, host="gateway.local", user="operator", profile_id="lab",
+        )
+        controller._last_symbols_revision = (symbols.stat().st_size, symbols.stat().st_mtime_ns)
+        controller._last_symbols_digest = controller._sha256(symbols)
+        return controller, coordinator, binding, old, old_session, sessions, workers, symbols
+
+    def test_changed_ready_binding_restarts_one_client_worker_on_same_ssh(self):
+        with tempfile.TemporaryDirectory() as directory:
+            controller, coordinator, binding, old, old_session, sessions, workers, _symbols = self._restart_fixture(directory)
+            state = SimpleNamespace(state="READY", binding=binding)
+            controller._restart_client_binding(coordinator, state)
+            self.assertTrue(old.cancelled); self.assertTrue(old.deleted)
+            self.assertEqual(old_session.cancel_calls, 1)
+            self.assertEqual((len(sessions), len(workers)), (1, 1))
+            self.assertTrue(controller.active)
+            self.assertEqual(sessions[0].started_config.bound_tcl_endpoint, "127.0.0.1:42001")
+            self.assertIs(controller._gateway_coordinator, coordinator)
+            self.assertFalse(old.isRunning())
+            self.assertTrue(workers[0].isRunning())
+
+    def test_restart_timeout_stays_stale_without_second_worker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            controller, coordinator, binding, _old, _old_session, sessions, workers, _symbols = self._restart_fixture(directory, worker_wait=False)
+            controller._restart_client_binding(coordinator, SimpleNamespace(state="READY", binding=binding))
+            self.assertEqual((sessions, workers), ([], []))
+            self.assertIn("MONITOR_RESTART_TIMEOUT", controller._invalidated_reason)
+
+    def test_restart_refuses_changed_axf_without_second_worker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            controller, coordinator, binding, _old, _old_session, sessions, workers, symbols = self._restart_fixture(directory)
+            symbols.write_bytes(b"ELF changed")
+            controller._restart_client_binding(coordinator, SimpleNamespace(state="READY", binding=binding))
+            self.assertEqual((sessions, workers), ([], []))
+            self.assertIn("MONITOR_RESTART_AXF_CHANGED", controller._invalidated_reason)
+
+    def test_old_epoch_finished_failed_and_sample_cannot_overwrite_restarted_owner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            controller, coordinator, binding, _old, _old_session, _sessions, workers, _symbols = self._restart_fixture(directory)
+            old_epoch = controller._epoch
+            controller._restart_client_binding(coordinator, SimpleNamespace(state="READY", binding=binding))
+            controller._worker_finished_for_epoch(old_epoch)
+            controller._failed_for_epoch(old_epoch, SimpleNamespace(message="old failure"))
+            sample = LiveSample(1, .1, .1, .01, False, 0x08010000,
+                                SourceLocation(0x08010000, "main", "main.c", 1), ())
+            controller._sample_received((sample, old_epoch, object()))
+            self.assertTrue(controller.active)
+            self.assertIs(controller._worker, workers[0])
+    def test_late_sample_from_superseded_gateway_binding_is_rejected(self) -> None:
+        panel = _Panel()
+        controller = LiveMonitorController(panel)
+        controller._active = True
+        accepted = []
+        controller._gateway_coordinator = SimpleNamespace(accept_sample=lambda binding: accepted.append(binding) or False)
+        controller._gateway_binding = object()
+        sample = LiveSample(
+            cycle=1, scheduled_elapsed_seconds=.1, captured_elapsed_seconds=.1,
+            read_duration_seconds=.01, overrun=False, pc=0x08010000,
+            source=SourceLocation(0x08010000, "main", "main.c", 1), values=(),
+        )
+        controller._sample_received((sample, object()))
+        self.assertEqual(len(accepted), 1)
+        self.assertEqual(panel.samples, [])
+
+    def test_changed_gateway_binding_invalidates_active_monitor_with_actionable_reason(self) -> None:
+        panel = _Panel()
+        panel.mark_stale = lambda reason: panel.failures.append(reason)
+        controller = LiveMonitorController(panel)
+        controller._active = True
+        controller._gateway_binding = object()
+        controller._gateway_coordinator = SimpleNamespace(
+            health=lambda: SimpleNamespace(state="STALE", binding=None,
+                                           reason_code="GATEWAY_RECOVERY_EXHAUSTED",
+                                           next_action="Reconnect then retry."),
+        )
+        state = controller.check_gateway_health()
+        self.assertEqual(state.reason_code, "GATEWAY_RECOVERY_EXHAUSTED")
+        self.assertIn("GATEWAY_RECOVERY_EXHAUSTED", controller._invalidated_reason)
+        self.assertIn("Reconnect then retry", panel.failures[-1])
+
+    def test_old_worker_completion_is_ignored_after_epoch_advance(self) -> None:
+        panel = _Panel()
+        controller = LiveMonitorController(panel)
+        controller._epoch = 2
+        controller._active = True
+        controller._completed_for_epoch(1, SimpleNamespace(
+            samples=1, overruns=0, final_target_state="running", cancelled=False,
+        ))
+        self.assertTrue(controller.active)
+        self.assertEqual(panel.completed, [])
+
+    def test_gateway_snapshot_queues_recovery_without_inline_ssh_and_late_result_is_ignored(self):
+        workers = []
+        class Deferred:
+            def __init__(self, operation, _parent=None):
+                self.operation = operation; self.completed = _Signal(); self.failed = _Signal(); self.finished = _Signal(); self.started = False; self.deleted = False
+            def start(self): self.started = True
+            def cancel(self): pass
+            def deleteLater(self): self.deleted = True
+        panel = _Panel(); panel.mark_stopping = lambda: None
+        controller = LiveMonitorController(panel, recovery_worker_factory=lambda op, parent: workers.append(Deferred(op, parent)) or workers[-1])
+        calls = []
+        coordinator = SimpleNamespace(
+            accept_health_snapshot=lambda _snapshot: SimpleNamespace(state="STALE", binding=None),
+            health=lambda: calls.append("ssh") or SimpleNamespace(state="STALE", binding=None, reason_code="X", next_action="retry"),
+        )
+        controller._active = True; controller._epoch = 4; controller._gateway_coordinator = coordinator; controller._gateway_binding = object()
+        controller.accept_gateway_health_snapshot(object())
+        self.assertEqual(calls, [])
+        self.assertEqual(len(workers), 1)
+        state = workers[0].operation(None, None, None)
+        controller.stop()
+        workers[0].completed.emit(state)
+        self.assertTrue(controller._active)
+
+    def test_new_health_snapshot_during_recovery_is_coalesced_into_a_followup(self):
+        workers = []
+        class Deferred:
+            def __init__(self, operation, _parent=None):
+                self.operation = operation; self.completed = _Signal(); self.failed = _Signal(); self.finished = _Signal(); self.deleted = False
+            def start(self): pass
+            def cancel(self): pass
+            def deleteLater(self): self.deleted = True
+        panel = _Panel()
+        controller = LiveMonitorController(
+            panel, recovery_worker_factory=lambda op, parent: workers.append(Deferred(op, parent)) or workers[-1],
+        )
+        coordinator = SimpleNamespace(
+            accept_health_snapshot=lambda _snapshot: SimpleNamespace(state="STALE", binding=None),
+            health=lambda: SimpleNamespace(state="STALE", binding=None, reason_code="RETRY", next_action="retry"),
+        )
+        controller._active = True; controller._epoch = 7
+        controller._gateway_coordinator = coordinator; controller._gateway_binding = object()
+        controller.accept_gateway_health_snapshot(object())
+        controller.accept_gateway_health_snapshot(object())
+        self.assertEqual(len(workers), 1)
+        first = workers[0]
+        first.completed.emit(first.operation(None, None, None))
+        first.finished.emit()
+        self.assertEqual(len(workers), 2)
+
+    def test_stop_intent_rejects_health_snapshot_recovery_before_worker_drains(self):
+        workers = []
+        panel = _Panel(); panel.mark_stopping = lambda: None
+        controller = LiveMonitorController(panel, recovery_worker_factory=lambda op, parent: workers.append(op) or _InlineWorker(op, parent))
+        coordinator = SimpleNamespace(accept_health_snapshot=lambda _value: (_ for _ in ()).throw(AssertionError("must not inspect after stop")))
+        controller._active = True; controller._gateway_coordinator = coordinator
+        controller.stop()
+        controller.accept_gateway_health_snapshot(object())
+        self.assertEqual(workers, [])
+
     def test_large_typed_batches_are_coalesced_before_rendering(self) -> None:
         """A fast 168-variable stream must not flood Qt with one render per batch."""
         from b300_gui.production_live_panel import ProductionLivePanel
@@ -258,6 +443,36 @@ class LiveMonitorControllerTests(unittest.TestCase):
         self.assertEqual(received, [authenticated])
         self.assertTrue(session.closed)
 
+    def test_monitor_start_publishes_shared_monitor_owner(self) -> None:
+        from b300_gui.app_context import AppContext
+        context = AppContext()
+        panel = _Panel()
+        session = _Session(())
+        class DeferredWorker(_InlineWorker):
+            def start(self) -> None:
+                return
+        with tempfile.TemporaryDirectory() as directory:
+            symbols = Path(directory) / "application.axf"
+            symbols.write_bytes(b"ELF")
+            controller = LiveMonitorController(
+                panel, context=context, selected_probe=lambda: ProbeRef("probe"),
+                session_factory=lambda **_kwargs: session, worker_factory=DeferredWorker,
+            )
+            controller.start(live_monitor_controller.LiveMonitorRequest.local(symbols))
+        self.assertEqual(context.device_snapshot.owner_kind, "MONITORING")
+
+    def test_monitor_completion_clears_live_target_evidence(self) -> None:
+        from b300_gui.app_context import AppContext
+        context = AppContext()
+        context.apply_device_state(owner_kind="MONITORING", target_state="running")
+        controller = LiveMonitorController(_Panel(), context=context)
+        controller._active = True
+        controller._finish_operation(history_enabled=True)
+        state = context.device_snapshot
+        self.assertIsNone(state.target_state)
+        self.assertIsNone(state.checked_monotonic)
+        self.assertEqual(state.liveness, "STALE")
+
     def test_client_asks_gateway_for_live_tcl_port_and_starts_it_before_monitoring(self) -> None:
         class GatewaySession:
             def __init__(self):
@@ -291,6 +506,43 @@ class LiveMonitorControllerTests(unittest.TestCase):
         self.assertEqual(gateway.ensure_calls, 1)
         self.assertEqual(session.started_config.gateway_tcl_port, 7666)
         self.assertIs(session.remote_session, gateway)
+
+    def test_client_uses_coordinator_binding_without_opening_a_second_tcl_forward(self) -> None:
+        binding = SimpleNamespace(tcl_endpoint="127.0.0.1:42001")
+        coordinated = []
+
+        class Coordinator:
+            def __init__(self, remote, profile_id):
+                self.remote, self.profile_id = remote, profile_id
+                self.ensure_calls = 0
+            def ensure_ready(self):
+                self.ensure_calls += 1
+                return SimpleNamespace(state="READY", binding=binding, reason_code="")
+            def close(self):
+                pass
+
+        class ClientSession(_Session):
+            def start_client(self, config, remote_session=None):
+                self.started_config = config
+                self.remote_session = remote_session
+                return self.start_local(config)
+
+        remote = SimpleNamespace(gateway_status=lambda: None)
+        session = ClientSession(())
+        with tempfile.TemporaryDirectory() as directory:
+            symbols = Path(directory) / "application.axf"
+            symbols.write_bytes(b"ELF")
+            controller = LiveMonitorController(
+                _Panel(), remote_session_provider=lambda _request: remote,
+                coordinator_factory=lambda source, profile: coordinated.append(Coordinator(source, profile)) or coordinated[-1],
+                session_factory=lambda **_kwargs: session, worker_factory=_InlineWorker,
+            )
+            controller.start(live_monitor_controller.LiveMonitorRequest.client(
+                symbols, host="gateway.local", user="operator", profile_id="lab",
+            ))
+        self.assertEqual(coordinated[0].ensure_calls, 1)
+        self.assertEqual(session.started_config.bound_tcl_endpoint, "127.0.0.1:42001")
+        self.assertIs(session.remote_session, remote)
 
     def test_cancelled_client_login_does_not_create_transport(self) -> None:
         sessions = []
@@ -365,6 +617,22 @@ class LiveMonitorControllerTests(unittest.TestCase):
 
         self.assertEqual(session.started_config.watch_specs, ())
         self.assertEqual(session.started_config.compiled_watches, (typed,))
+
+    def test_controller_forwards_selected_project_watch_policies_to_session(self) -> None:
+        from b300_core.watch_profiles import WatchPolicy
+        panel = _Panel()
+        policy = WatchPolicy("speed", display_format="float", unit="rpm", group="Drive")
+        panel.watch_policies = lambda: (policy,)
+        session = _Session(())
+        with tempfile.TemporaryDirectory() as directory:
+            symbols = Path(directory) / "application.axf"
+            symbols.write_bytes(b"ELF")
+            controller = LiveMonitorController(
+                panel, selected_probe=lambda: ProbeRef("ABC"),
+                session_factory=lambda **_kwargs: session, worker_factory=_InlineWorker,
+            )
+            controller.start(live_monitor_controller.LiveMonitorRequest.local(symbols))
+        self.assertEqual(session.started_config.watch_policies, (policy,))
 
     def test_client_request_uses_tcl_only_loopback_transport(self) -> None:
         class ClientSession(_Session):
@@ -671,6 +939,9 @@ class LiveMonitorViewTests(unittest.TestCase):
                 symbols.write_bytes(b"ELF")
                 project = ProjectProfile("robot", "Robot", Path(directory), symbols)
                 context.set_profiles((project,), (), default_project_id="robot")
+                view.variable_tree_panel.set_catalog(SimpleNamespace(fingerprint="ready", roots=lambda *_args: ()))
+                view._typed_revision = (*view._revision(symbols)[:2], "ready")
+                panel.start_button.setEnabled(True)
                 self.assertIs(view.context, context)
                 panel.start_button.click()
             self.assertEqual(session.started_config.symbols, symbols.resolve())
@@ -718,6 +989,9 @@ class LiveMonitorViewTests(unittest.TestCase):
                 gateway = GatewayProfile("gateway", "Robot Gateway", profile)
                 context.set_profiles((project,), (gateway,), default_project_id="robot",
                                      default_gateway_id="gateway")
+                view.variable_tree_panel.set_catalog(SimpleNamespace(fingerprint="ready", roots=lambda *_args: ()))
+                view._typed_revision = (*view._revision(symbols)[:2], "ready")
+                panel.start_button.setEnabled(True)
                 panel.start_button.click()
 
             self.assertEqual(session.started_config.host, "gateway.local")

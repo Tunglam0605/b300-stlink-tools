@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
-from b300_core.live_monitor import LiveSample, LiveValue
+from b300_core.live_monitor import LiveSample, LiveValue, LiveWatch
 from b300_core.offline_symbols import SourceLocation
 from b300_core.typed_symbols import VariableNode
+from b300_core.watch_profiles import WatchPolicy, save_watch_policies
 from b300_gui.production_live_panel import ProductionLivePanel
 from b300_gui.views.monitor_view import MonitorView
 from tests.test_typed_symbols import _build_keil_fixture
@@ -238,11 +242,209 @@ class MonitorVariableTreeTests(unittest.TestCase):
             self.assertTrue(workers[0].started)
             self.assertIsNone(view.variable_tree_panel.catalog)
             self.assertIn("Đang đọc", view.variable_tree_panel.status.text())
+            self.assertFalse(view.live_panel.start_button.isEnabled())
 
             workers[0].run()
 
             self.assertIsNotNone(view.variable_tree_panel.catalog)
             self.assertIn("Đã nạp", view.variable_tree_panel.status.text())
+            self.assertTrue(view.live_panel.start_button.isEnabled())
+        finally:
+            view.close()
+
+    def test_changed_axf_is_detected_and_reloaded_off_gui_thread(self):
+        workers = []
+
+        def factory(operation, parent=None):
+            worker = _DeferredCatalogWorker(operation, parent)
+            workers.append(worker)
+            return worker
+
+        with tempfile.TemporaryDirectory() as directory:
+            image = os.path.join(directory, "firmware.axf")
+            shutil.copy2(self.image, image)
+            view = MonitorView(
+                live_panel=ProductionLivePanel(), catalog_worker_factory=factory,
+            )
+            try:
+                view.begin_typed_symbol_load(image)
+                workers[0].run()
+                first_fingerprint = view.variable_tree_panel.catalog.fingerprint
+                with open(image, "ab") as stream:
+                    stream.write(b"\0")
+
+                poll = getattr(view, "_poll_typed_source", None)
+                self.assertIsNotNone(poll, "AXF/ELF change polling is missing")
+                poll()
+
+                self.assertEqual(len(workers), 2)
+                self.assertTrue(workers[1].started)
+                self.assertEqual(
+                    view.variable_tree_panel.catalog.fingerprint, first_fingerprint,
+                    "old catalog must remain usable while the new AXF parses",
+                )
+                workers[1].run()
+                self.assertNotEqual(
+                    view.variable_tree_panel.catalog.fingerprint, first_fingerprint,
+                )
+            finally:
+                view.close()
+
+    def test_stale_catalog_completion_does_not_reenable_start(self):
+        workers = []
+
+        def factory(operation, parent=None):
+            worker = _DeferredCatalogWorker(operation, parent)
+            workers.append(worker)
+            return worker
+
+        view = MonitorView(live_panel=ProductionLivePanel(), catalog_worker_factory=factory)
+        try:
+            view.begin_typed_symbol_load(self.image)
+            view.begin_typed_symbol_load(self.image)
+            self.assertEqual(len(workers), 2)
+            self.assertFalse(view.live_panel.start_button.isEnabled())
+
+            workers[0].run()
+
+            self.assertFalse(view.live_panel.start_button.isEnabled())
+            self.assertIsNone(view.variable_tree_panel.catalog)
+            workers[1].run()
+            self.assertTrue(view.live_panel.start_button.isEnabled())
+        finally:
+            view.close()
+
+    def test_same_size_restored_mtime_axf_change_is_detected_by_background_digest(self):
+        workers = []
+        def factory(operation, parent=None):
+            worker = _DeferredCatalogWorker(operation, parent); workers.append(worker); return worker
+        with tempfile.TemporaryDirectory() as directory:
+            image = os.path.join(directory, "firmware.axf"); shutil.copy2(self.image, image)
+            view = MonitorView(live_panel=ProductionLivePanel(), catalog_worker_factory=factory)
+            try:
+                view.begin_typed_symbol_load(image); workers[0].run()
+                before = os.stat(image)
+                with open(image, "rb") as stream: data = bytearray(stream.read())
+                data[-1] ^= 1
+                with open(image, "wb") as stream: stream.write(data)
+                os.utime(image, ns=(before.st_atime_ns, before.st_mtime_ns))
+                view._poll_typed_source()
+                workers[1].run()
+                self.assertFalse(view.live_panel.start_button.isEnabled())
+                self.assertEqual(len(workers), 3)
+            finally: view.close()
+
+    def test_background_digest_blocks_start_until_the_check_finishes(self):
+        workers = []
+        def factory(operation, parent=None):
+            worker = _DeferredCatalogWorker(operation, parent); workers.append(worker); return worker
+        view = MonitorView(live_panel=ProductionLivePanel(), catalog_worker_factory=factory)
+        try:
+            view.begin_typed_symbol_load(self.image); workers[0].run()
+            self.assertTrue(view.live_panel.start_button.isEnabled())
+            view._poll_typed_source()
+            self.assertTrue(view._digest_check_pending)
+            self.assertFalse(view.live_panel.start_button.isEnabled())
+            starts = []
+            view.controller.start = starts.append
+            view._start_requested()
+            self.assertEqual(starts, [])
+            workers[1].run()
+            self.assertFalse(view._digest_check_pending)
+            self.assertTrue(view.live_panel.start_button.isEnabled())
+        finally:
+            view.close()
+
+    def test_malformed_project_policy_clears_previous_values_and_cannot_be_overwritten(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project_a = SimpleNamespace(workspace=root / "a")
+            project_b = SimpleNamespace(workspace=root / "b")
+            project_a.workspace.mkdir(); project_b.workspace.mkdir()
+            policy_a = WatchPolicy("motor.speed", unit="rpm")
+            save_watch_policies(project_a.workspace / ".b300-watch-policies.json", (policy_a,))
+            malformed = project_b.workspace / ".b300-watch-policies.json"
+            malformed.write_text('{"schema_version": 1, "policies": [', encoding="utf-8")
+            original = malformed.read_bytes()
+            view = MonitorView(live_panel=ProductionLivePanel())
+            try:
+                view._load_project_watch_policies(project_a)
+                self.assertEqual(view.live_panel.watch_policies(), (policy_a,))
+                view._load_project_watch_policies(project_b)
+                self.assertEqual(view.live_panel.watch_policies(), ())
+                view._save_project_watch_policies((WatchPolicy("other"),))
+                self.assertEqual(malformed.read_bytes(), original)
+                self.assertIn("không thể lưu", view.live_panel.status.text().casefold())
+            finally:
+                view.close()
+
+    def test_failed_axf_reload_revokes_old_watch_addresses_and_blocks_start(self):
+        workers = []
+
+        def factory(operation, parent=None):
+            worker = _DeferredCatalogWorker(operation, parent)
+            workers.append(worker)
+            return worker
+
+        with tempfile.TemporaryDirectory() as directory:
+            image = os.path.join(directory, "firmware.axf")
+            shutil.copy2(self.image, image)
+            panel = ProductionLivePanel()
+            view = MonitorView(live_panel=panel, catalog_worker_factory=factory)
+            try:
+                view.set_symbols(image)
+                panel.add_compiled_watch(LiveWatch(
+                    "speed", "u32", 0x20000000, 4, node_id="old:speed",
+                ))
+                with open(image, "wb") as stream:
+                    stream.write(b"not an ELF")
+
+                view._poll_typed_source()
+
+                self.assertEqual(panel.compiled_watches(), ())
+                self.assertFalse(panel.start_button.isEnabled())
+                self.assertIn("STALE", panel.table.item(panel.rows["speed"], 9).text())
+                workers[0].run()
+                self.assertFalse(panel.start_button.isEnabled())
+                self.assertIn("chọn bản build ổn định", view.variable_tree_panel.status.text())
+                view._start_requested()
+                self.assertFalse(view.controller.active)
+                self.assertIn("AXF/ELF", panel.status.text())
+            finally:
+                view.close()
+
+    def test_axf_changing_during_parse_is_not_published_or_rebound(self):
+        workers = []
+
+        def factory(operation, parent=None):
+            worker = _DeferredCatalogWorker(operation, parent)
+            workers.append(worker)
+            return worker
+
+        panel = ProductionLivePanel()
+        view = MonitorView(live_panel=panel, catalog_worker_factory=factory)
+        try:
+            view.set_symbols(self.image)
+            old_catalog = view.variable_tree_panel.catalog
+            panel.add_compiled_watch(LiveWatch(
+                "speed", "u32", 0x20000000, 4, node_id="old:speed",
+            ))
+            base = view._revision(self.image)
+            revisions = iter((
+                (base[0] + 1, base[1] + 1, None),
+                (base[0] + 1, base[1] + 1, None),
+                (base[0] + 2, base[1] + 2, None),
+            ))
+            view._revision = lambda *_args, **_kwargs: next(revisions)
+
+            view._poll_typed_source()
+            workers[0].run()
+
+            self.assertIs(view.variable_tree_panel.catalog, old_catalog)
+            self.assertIsNone(view._typed_revision)
+            self.assertEqual(panel.compiled_watches(), ())
+            self.assertFalse(panel.start_button.isEnabled())
+            self.assertIn("tiếp tục thay đổi", view.variable_tree_panel.status.text())
         finally:
             view.close()
 
@@ -275,6 +477,28 @@ class MonitorVariableTreeTests(unittest.TestCase):
         self.assertEqual(tree.model.data(tree.model.index(x.row(), 2, position)), "-7")
         self.assertEqual(tree.model.data(tree.model.index(x.row(), 4, position)), "Nhất quán")
         view.close()
+
+    def test_hot_reload_updates_moved_watch_and_keeps_removed_watch_stale(self):
+        panel = ProductionLivePanel()
+        try:
+            panel.add_compiled_watch(LiveWatch("speed", "u32", 0x20000000, 4, node_id="old:speed"))
+            panel.add_compiled_watch(LiveWatch("mode", "u16", 0x20000004, 2, node_id="old:mode"))
+            apply_rebound = getattr(panel, "apply_rebound_watches", None)
+            self.assertIsNotNone(apply_rebound, "hot reload panel reconciliation is missing")
+
+            apply_rebound(
+                (LiveWatch("speed", "f32", 0x20000100, 4, node_id="new:speed"),),
+                ("mode",),
+            )
+
+            self.assertEqual(
+                [(watch.name, watch.value_type, watch.address) for watch in panel.compiled_watches()],
+                [("speed", "f32", 0x20000100)],
+            )
+            self.assertEqual(panel.table.item(panel.rows["speed"], 3).text(), "0x20000100")
+            self.assertIn("STALE", panel.table.item(panel.rows["mode"], 9).text())
+        finally:
+            panel.close()
 
 
 if __name__ == "__main__":

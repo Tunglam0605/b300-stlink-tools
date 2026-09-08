@@ -120,6 +120,12 @@ class NativeBundleTargetTests(unittest.TestCase):
         self.assertIsNone(linux.application_root)
         self.assertEqual(linux.executable, Path("b300-stlink"))
 
+    def test_gui_bundle_receives_the_same_build_cli_as_a_companion(self) -> None:
+        source = SOURCE.read_text(encoding="utf-8")
+        self.assertIn('"--companion-cli"', source)
+        self.assertIn('"--companion-application-root"', source)
+        self.assertIn("str(args.output_dir / cli_plan.executable)", source)
+
 
     def test_native_builder_includes_trusted_bootloader_resources_for_every_bundle(self) -> None:
         module = builder()

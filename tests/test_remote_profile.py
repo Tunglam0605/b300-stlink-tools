@@ -51,6 +51,25 @@ class RemoteGatewayProfileTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             RemoteGatewayProfile("gateway.local", "user;whoami", 22).validate()
 
+    def test_custom_cli_path_is_optional_and_rejects_shell_syntax(self):
+        profile = RemoteGatewayProfile(
+            "gateway.local", "automation", 22, "/opt/b300/bin/b300-stlink"
+        ).validate()
+        self.assertEqual(profile.cli_path, "/opt/b300/bin/b300-stlink")
+        with self.assertRaises(ValueError):
+            RemoteGatewayProfile("gateway.local", "automation", 22, "/opt/b300;id").validate()
+
+    def test_custom_cli_path_round_trips_without_changing_old_profile_schema(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "profile.json"
+            profile = RemoteGatewayProfile(
+                "gateway.local", "automation", 22, "/srv/b300/b300-stlink"
+            )
+            save_remote_profile(profile, target)
+            raw = json.loads(target.read_text(encoding="utf-8"))
+            self.assertEqual(raw["cli_path"], "/srv/b300/b300-stlink")
+            self.assertEqual(load_remote_profile(target), profile)
+
 
 class RemoteConnectivityTests(unittest.TestCase):
     def test_connectivity_argv_supports_key_or_password_and_public_ports_are_not_used(self):

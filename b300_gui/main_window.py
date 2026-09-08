@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Optional
@@ -132,6 +133,8 @@ class MainWindow(QMainWindow):
         self._probe_selection_required = False
         self._probes = ()
         self._threads = []
+        self._support_timeline = []
+        self._support_timeline_lock = threading.RLock()
         self._cancellable_worker = None
         self._close_after_active_operation = False
         self._update_workers = []
@@ -505,6 +508,8 @@ class MainWindow(QMainWindow):
                 return
             force = True
         probe_serial = self.probe_combo.currentData() if hasattr(self, "probe_combo") else None
+        self._record_support_event("SUPPORT_BUNDLE_REQUESTED", code="GUI")
+        operational_evidence = self._support_operational_evidence()
         self.busy = True
         self._set_status("Đang thu thập support bundle read-only…", "busy")
         self._update_controls()
@@ -516,6 +521,7 @@ class MainWindow(QMainWindow):
                 service=self.service,
                 probe_discovery=self.probe_loader,
                 probe_serial=probe_serial,
+                operational_evidence=operational_evidence,
             )
             return write_support_bundle(destination, snapshot, force=force)
 
@@ -523,6 +529,56 @@ class MainWindow(QMainWindow):
             operation, self._support_bundle_finished, cancellable=False,
             phase_handler=lambda _event: None,
         )
+
+    def _record_support_event(self, event: str, *, state: Optional[str] = None,
+                              code: Optional[str] = None) -> None:
+        """Keep a tiny code-only journal; support exports never reuse the UI log."""
+        entry = {
+            "at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "event": event,
+        }
+        if state is not None:
+            entry["state"] = state
+        if code is not None:
+            entry["code"] = code
+        with self._support_timeline_lock:
+            self._support_timeline.append(entry)
+            del self._support_timeline[:-32]
+
+    def _support_operational_evidence(self) -> dict:
+        evidence = {
+            "versions": {"gui": __version__, "core": CORE_VERSION, "cli": CORE_VERSION},
+            "process": {"owner": "b300-stlink-tools", "pid": os.getpid()},
+        }
+        with self._support_timeline_lock:
+            evidence["timeline"] = list(self._support_timeline)
+        context = getattr(self, "app_context", None)
+        device = getattr(context, "device_snapshot", None)
+        gateway = getattr(context, "gateway_snapshot", None)
+        if gateway is not None:
+            evidence["gateway"] = {
+                "protocol_version": getattr(gateway, "schema_version", None),
+                "session_state": str(getattr(gateway, "state", "")).lower(),
+                "generation": getattr(gateway, "generation", None),
+                "sequence": getattr(gateway, "sequence", None),
+                "reason_code": getattr(gateway, "reason_code", None),
+            }
+        tunnels = []
+        for name, local, remote in (
+                ("gdb", getattr(device, "gdb_endpoint", None), getattr(gateway, "gdb_endpoint", None)),
+                ("tcl", getattr(device, "tcl_endpoint", None), getattr(gateway, "tcl_endpoint", None))):
+            if local is not None and remote is not None:
+                tunnels.append({"name": name, "local_endpoint": local, "gateway_endpoint": remote})
+        if tunnels:
+            evidence["tunnels"] = tunnels
+        basename = getattr(device, "axf_basename", None)
+        fingerprint = getattr(device, "axf_fingerprint", None)
+        if basename is not None and fingerprint is not None:
+            evidence["axf"] = {
+                "basename": str(basename).replace("\\", "/").rstrip("/").rsplit("/", 1)[-1],
+                "sha256": fingerprint,
+            }
+        return evidence
 
     def _support_bundle_finished(self, result) -> None:
         self.busy = False

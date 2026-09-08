@@ -56,6 +56,7 @@ def verify(installer: Path, evidence: Path) -> None:
     def smoke() -> None:
         validate_runtime(installed, __version__)
         run([str(installed / "b300-stlink-gui.exe"), "--smoke-test"], timeout=60)
+        run([str(installed / "b300-stlink.exe"), "--version", "--json"], timeout=60)
 
     try:
         setup("fresh")

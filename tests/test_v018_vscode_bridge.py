@@ -10,6 +10,8 @@ from unittest.mock import patch
 from b300_core.debug_service import DebugState
 from b300_core.models import ProbeRef
 from b300_core.remote_session import RemoteForward, RemoteForwardError
+from b300_core.remote_debug_guard import RemoteDebugGuard
+from b300_core.gateway_status import GatewaySnapshot
 from b300_core.vscode_bridge import (
     BridgeState,
     DebugRole,
@@ -101,12 +103,27 @@ class FakeRemoteSession:
 
 
 class V018VsCodeBridgeTests(unittest.TestCase):
-    def make_server_bridge(self, debug=None, *, initial_state="running"):
+    @staticmethod
+    def gateway_snapshot(*, sequence, count=None, activity=None, ever=None,
+                         instance="gateway", generation=1):
+        record = {
+            "schema_version": 1, "instance_id": instance, "generation": generation,
+            "sequence": sequence, "state": "READY", "reason_code": "TARGET_VERIFIED",
+            "selected_probe": {"serial": "STLINK123"},
+            "gdb_endpoint": "127.0.0.1:3333", "tcl_endpoint": "127.0.0.1:6666",
+            "cpu_state": "running", "evidence_age_ms": 0,
+        }
+        if count is not None:
+            record.update(gdb_connection_count=count, gdb_activity_generation=activity,
+                          gdb_ever_attached=ever)
+        return GatewaySnapshot.from_record(record)
+    def make_server_bridge(self, debug=None, *, initial_state="running", guard_factory=RemoteDebugGuard):
         selected_debug = debug or FakeDebugService()
         tcl = FakeTclClient(initial_state)
         bridge = VsCodeDebugBridge(
             debug_service=selected_debug,
             tcl_factory=lambda _endpoint: tcl,
+            guard_factory=guard_factory,
         )
         return bridge, selected_debug, tcl
 
@@ -166,6 +183,112 @@ class V018VsCodeBridgeTests(unittest.TestCase):
         self.assertEqual(tcl.state, "running")
         self.assertEqual(tcl.resume_count, 1)
         self.assertIn("restored", bridge.state.detail.lower())
+
+    def test_last_gdb_disconnect_can_stop_the_b300_owned_bridge(self) -> None:
+        scheduled = []
+        def guard_factory(tcl, **kwargs):
+            return RemoteDebugGuard(tcl, reclaim_delay_seconds=0.0,
+                                    reclaim_scheduler=lambda _delay, callback: scheduled.append(callback),
+                                    **kwargs)
+        bridge, debug, _tcl = self.make_server_bridge(guard_factory=guard_factory)
+        bridge.set_last_client_detached_handler(bridge.stop_if_generation)
+        bridge.start_gateway(ProbeRef("STLINK123"))
+
+        debug.emit("Info : accepting 'gdb' connection on tcp/3333")
+        debug.emit("Info : dropped 'gdb' connection")
+        self.assertEqual(debug.stops, 0)
+        scheduled.pop()()
+
+        self.assertEqual(debug.stops, 1)
+        self.assertEqual(bridge.state.state, BridgeState.STOPPED)
+
+    def test_stale_reclaim_cannot_stop_a_restarted_bridge_generation(self) -> None:
+        scheduled = []
+        def guard_factory(tcl, **kwargs):
+            return RemoteDebugGuard(tcl, reclaim_delay_seconds=0.0,
+                                    reclaim_scheduler=lambda _delay, callback: scheduled.append(callback),
+                                    **kwargs)
+        bridge, debug, _tcl = self.make_server_bridge(guard_factory=guard_factory)
+        bridge.set_last_client_detached_handler(bridge.stop_if_generation)
+        bridge.start_gateway(ProbeRef("STLINK123"))
+        debug.emit("Info : accepting 'gdb' connection on tcp/3333")
+        debug.emit("Info : dropped 'gdb' connection")
+        bridge.stop()
+        bridge.start_gateway(ProbeRef("STLINK123"))
+
+        scheduled.pop(0)()
+
+        self.assertEqual(debug.stops, 1)
+        self.assertEqual(bridge.state.state, BridgeState.READY)
+
+    def test_client_reclaims_only_its_forward_after_observed_two_to_zero(self) -> None:
+        scheduled = []
+        session = FakeRemoteSession()
+        bridge = VsCodeDebugBridge(
+            debug_service=FakeDebugService(), client_reclaim_delay_seconds=0.0,
+            client_reclaim_scheduler=lambda _delay, callback: scheduled.append(callback),
+        )
+        bridge.set_last_client_detached_handler(bridge.stop_if_generation)
+        first = self.gateway_snapshot(sequence=1, count=2, activity=1, ever=True)
+        bridge.start_client(session, snapshot=first, profile_id="lab")
+
+        bridge.observe_gateway_snapshot(self.gateway_snapshot(sequence=2, count=1, activity=2, ever=True))
+        self.assertEqual(scheduled, [])
+        bridge.observe_gateway_snapshot(self.gateway_snapshot(sequence=3, count=0, activity=3, ever=True))
+        self.assertEqual(session.closed, [])
+        scheduled.pop()()
+
+        self.assertEqual(session.closed, ["vscode_gdb"])
+        self.assertEqual(bridge.state.state, BridgeState.STOPPED)
+
+    def test_newer_zero_activity_rebases_client_reclaim_candidate(self) -> None:
+        scheduled = []
+        session = FakeRemoteSession()
+        bridge = VsCodeDebugBridge(
+            debug_service=FakeDebugService(), client_reclaim_delay_seconds=0.0,
+            client_reclaim_scheduler=lambda _delay, callback: scheduled.append(callback),
+        )
+        bridge.set_last_client_detached_handler(bridge.stop_if_generation)
+        bridge.start_client(
+            session,
+            snapshot=self.gateway_snapshot(sequence=1, count=1, activity=1, ever=True),
+            profile_id="lab",
+        )
+
+        bridge.observe_gateway_snapshot(self.gateway_snapshot(sequence=2, count=0, activity=2, ever=True))
+        bridge.observe_gateway_snapshot(self.gateway_snapshot(sequence=3, count=0, activity=4, ever=True))
+        self.assertEqual(len(scheduled), 2)
+
+        scheduled.pop(0)()
+        self.assertEqual(session.closed, [])
+        scheduled.pop(0)()
+        self.assertEqual(session.closed, ["vscode_gdb"])
+
+    def test_client_reattach_and_old_gateway_zero_do_not_reclaim_forward(self) -> None:
+        scheduled = []
+        session = FakeRemoteSession()
+        bridge = VsCodeDebugBridge(
+            debug_service=FakeDebugService(), client_reclaim_delay_seconds=0.0,
+            client_reclaim_scheduler=lambda _delay, callback: scheduled.append(callback),
+        )
+        bridge.set_last_client_detached_handler(bridge.stop_if_generation)
+        bridge.start_client(session, snapshot=self.gateway_snapshot(sequence=1, count=1, activity=1, ever=True), profile_id="lab")
+        bridge.observe_gateway_snapshot(self.gateway_snapshot(sequence=2, count=0, activity=2, ever=True))
+        bridge.observe_gateway_snapshot(self.gateway_snapshot(sequence=3, count=1, activity=3, ever=True))
+        scheduled.pop()()
+        self.assertEqual(session.closed, [])
+
+        self.assertFalse(bridge.observe_gateway_snapshot(
+            self.gateway_snapshot(sequence=4, count=0, activity=4, ever=True, generation=2)
+        ))
+        self.assertEqual(session.closed, [])
+
+    def test_client_missing_activity_capability_never_reclaims_forward(self) -> None:
+        session = FakeRemoteSession()
+        bridge = VsCodeDebugBridge(debug_service=FakeDebugService())
+        bridge.start_client(session, snapshot=self.gateway_snapshot(sequence=1), profile_id="lab")
+        self.assertFalse(bridge.observe_gateway_snapshot(self.gateway_snapshot(sequence=2)))
+        self.assertEqual(session.closed, [])
 
     def test_bridge_stop_restores_target_if_debugger_left_it_halted(self) -> None:
         bridge, _debug, tcl = self.make_server_bridge(initial_state="running")

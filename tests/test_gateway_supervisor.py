@@ -84,6 +84,30 @@ class GatewaySupervisorTests(unittest.TestCase):
         service.emit("Info : dropped 'gdb' connection")
         self.assertEqual((tcl.state, tcl.resume_calls), ("running", 1))
 
+    def test_gdb_activity_events_publish_count_without_stopping_gateway(self) -> None:
+        service = FakeService()
+        snapshots = []
+        supervisor = GatewaySupervisor(
+            service_factory=lambda: service,
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=lambda _config: "running",
+            snapshot_sink=snapshots.append,
+            remote_guard_factory=lambda _config: RemoteDebugGuard(FakeTcl("running")),
+        )
+        supervisor.ensure()
+        base_sequence = supervisor.snapshot.sequence
+
+        service.emit("Info : accepting 'gdb' connection on tcp/3333")
+        attached = supervisor.snapshot
+        service.emit("Info : dropped 'gdb' connection")
+        detached = supervisor.snapshot
+
+        self.assertEqual((attached.gdb_connection_count, attached.gdb_activity_generation), (1, 1))
+        self.assertTrue(attached.gdb_ever_attached)
+        self.assertEqual((detached.gdb_connection_count, detached.gdb_activity_generation), (0, 2))
+        self.assertGreater(detached.sequence, base_sequence)
+        self.assertEqual(service.stop_calls, 0)
+
     def test_managed_owner_shutdown_restores_a_previously_running_target(self) -> None:
         service = FakeService()
         tcl = FakeTcl("running")

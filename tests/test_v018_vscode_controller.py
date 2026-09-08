@@ -106,6 +106,89 @@ class V018VsCodeControllerTests(unittest.TestCase):
                 )
             bridge.stop.assert_called_once()
 
+    def test_stop_releases_shared_debug_owner(self) -> None:
+        from b300_gui.app_context import AppContext
+        context = AppContext()
+        controller = VsCodeDebugController(context=context)
+        context.apply_device_state(owner_kind="DEBUGGING", target_state="running")
+        controller.stop()
+        self.assertIsNone(context.device_snapshot.owner_kind)
+
+    def test_last_client_detached_stops_the_owned_bridge(self) -> None:
+        controller = VsCodeDebugController()
+        bridge = mock.Mock()
+        controller.bridge = bridge
+
+        controller._on_last_client_detached(7)
+
+        bridge.stop_if_generation.assert_called_once_with(7)
+
+    def test_client_reclaim_uses_injected_gui_dispatcher_before_mutating_context(self) -> None:
+        from b300_gui.app_context import AppContext
+        context = AppContext()
+        queued = []
+        dispatcher = mock.Mock()
+        dispatcher.submit.side_effect = queued.append
+        controller = VsCodeDebugController(context=context, ui_dispatcher=dispatcher)
+        bridge = mock.Mock()
+        bridge.stop_if_generation.return_value = VsCodeBridgeState(None, BridgeState.STOPPED, None)
+        controller.bridge = bridge
+        context.apply_device_state(owner_kind="DEBUGGING", target_state="running")
+        controller._on_last_client_detached(3)
+        self.assertEqual(context.device_snapshot.owner_kind, "DEBUGGING")
+        queued.pop()()
+        self.assertIsNone(context.device_snapshot.owner_kind)
+
+    def test_gateway_snapshot_is_forwarded_to_client_lifecycle_observer(self) -> None:
+        controller = VsCodeDebugController()
+        bridge = mock.Mock()
+        bridge.observe_gateway_snapshot.return_value = True
+        controller.bridge = bridge
+        snapshot = mock.Mock()
+
+        self.assertTrue(controller.observe_gateway_snapshot(snapshot))
+
+        bridge.observe_gateway_snapshot.assert_called_once_with(snapshot)
+
+    def test_confirmed_client_reclaim_is_reported_on_the_next_health_snapshot(self) -> None:
+        controller = VsCodeDebugController()
+        bridge = mock.Mock()
+        bridge.stop_if_generation.return_value = VsCodeBridgeState(
+            role=None, state=BridgeState.STOPPED, gdb_target=None,
+        )
+        bridge.observe_gateway_snapshot.return_value = False
+        controller.bridge = bridge
+
+        controller._on_last_client_detached(7)
+
+        self.assertTrue(controller.observe_gateway_snapshot(mock.Mock()))
+
+    def test_gateway_start_hands_off_an_active_monitor_before_starting_bridge(self) -> None:
+        controller = VsCodeDebugController()
+        bridge = mock.Mock()
+        bridge.start_gateway.return_value = VsCodeBridgeState(
+            role=DebugRole.GATEWAY, state=BridgeState.READY, gdb_target="127.0.0.1:3333",
+        )
+        controller.bridge = bridge
+        handoff = mock.Mock(return_value=True)
+        controller.set_monitor_handoff(handoff)
+
+        controller.start_gateway(probe=ProbeRef("probe"))
+
+        handoff.assert_called_once()
+        bridge.start_gateway.assert_called_once_with(ProbeRef("probe"))
+
+    def test_gateway_start_fails_closed_when_monitor_handoff_does_not_become_idle(self) -> None:
+        controller = VsCodeDebugController()
+        bridge = mock.Mock()
+        controller.bridge = bridge
+        controller.set_monitor_handoff(lambda: False)
+
+        with self.assertRaisesRegex(RuntimeError, "Monitor.*idle"):
+            controller.start_gateway(probe=ProbeRef("probe"))
+
+        bridge.start_gateway.assert_not_called()
+
     def test_symbols_must_stay_inside_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

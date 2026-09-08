@@ -5,6 +5,7 @@ import unittest
 from dataclasses import replace
 
 from b300_core.live_monitor import _decode_watch
+from b300_core import variable_watch
 from b300_core.typed_symbols import TypedSymbolCatalog, VariableNode
 from b300_core.variable_watch import WatchCompileError, compile_watch, compile_watches
 from tests.test_typed_symbols import _build_keil_fixture
@@ -18,6 +19,13 @@ class _Catalog:
         if node_id not in self.nodes:
             raise ValueError("stale")
         return self.nodes[node_id]
+
+    def roots(self, query="", offset=0, limit=100):
+        rows = tuple(self.nodes.values())
+        return rows[offset:offset + limit]
+
+    def children(self, node_id, offset=0, limit=100):
+        return ()
 
 
 def _node(node_id, address, value_type="u32", size=4, *, availability="watchable"):
@@ -119,6 +127,24 @@ class VariableWatchTests(unittest.TestCase):
         with self.assertRaises(WatchCompileError) as duplicate:
             compile_watches(_Catalog((first, second)), (first.node_id, second.node_id))
         self.assertEqual(duplicate.exception.reason_code, "duplicate_watch")
+
+    def test_hot_reload_rebinds_moved_watch_and_reports_removed_watch(self):
+        rebind = getattr(variable_watch, "rebind_watches", None)
+        self.assertIsNotNone(rebind, "AXF hot reload watch rebinding is missing")
+        old_speed = _node("old:speed", 0x20000000)
+        old_mode = _node("old:mode", 0x20000004, "u16", 2)
+        selected = compile_watches(
+            _Catalog((old_speed, old_mode)), (old_speed.node_id, old_mode.node_id),
+        )
+        new_speed = replace(
+            _node("new:speed", 0x20000100), name="old:speed", path="old:speed",
+        )
+
+        rebound, removed = rebind(_Catalog((new_speed,)), selected)
+
+        self.assertEqual(len(rebound), 1)
+        self.assertEqual((rebound[0].name, rebound[0].address), ("old:speed", 0x20000100))
+        self.assertEqual(removed, ("old:mode",))
 
 
 if __name__ == "__main__":

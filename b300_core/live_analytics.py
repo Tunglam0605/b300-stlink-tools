@@ -9,11 +9,15 @@ from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
 from .live_monitor import LiveSample, LiveValue
+from .watch_profiles import WatchPolicy
 
 
 MIN_HISTORY_CAPACITY = 100
 MAX_HISTORY_CAPACITY = 100000
 DEFAULT_HISTORY_CAPACITY = 5000
+DEFAULT_THRESHOLD_EVENT_CAPACITY = 1000
+MAX_THRESHOLD_EVENT_CAPACITY = 100000
+DEFAULT_MAX_RATE_GAP_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -38,6 +42,18 @@ class LiveVariableStat:
     minimum: Optional[float]
     maximum: Optional[float]
     mean: Optional[float]
+    delta: Optional[float] = None
+    rate_per_second: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class LiveThresholdEvent:
+    path: str
+    timestamp_seconds: float
+    value: float
+    direction: str
+    threshold: float
+    capture: bool
 
 
 @dataclass(frozen=True)
@@ -80,6 +96,7 @@ class LiveAnalyticsSnapshot:
     functions: Tuple[LiveFunctionStat, ...]
     variables: Tuple[LiveVariableStat, ...]
     latest_sample: Optional[LiveSample]
+    threshold_events: Tuple[LiveThresholdEvent, ...] = ()
 
 
 @dataclass
@@ -94,8 +111,13 @@ class _VariableAccumulator:
     minimum: Optional[float] = None
     maximum: Optional[float] = None
     latest_value: object = None
+    delta: Optional[float] = None
+    rate_per_second: Optional[float] = None
+    _previous_numeric: Optional[float] = None
+    _previous_timestamp: Optional[float] = None
+    _previous_cycle: Optional[int] = None
 
-    def add(self, value: LiveValue) -> None:
+    def add(self, value: LiveValue, timestamp: float, cycle: int, max_rate_gap_seconds: float) -> None:
         self.samples += 1
         self.latest_value = value.value
         if value.coherent:
@@ -104,11 +126,30 @@ class _VariableAccumulator:
             self.incoherent_samples += 1
         numeric = _numeric(value.value) if value.coherent else None
         if numeric is None:
+            self.delta = None
+            self.rate_per_second = None
+            self._previous_numeric = None
+            self._previous_timestamp = None
+            self._previous_cycle = None
             return
         self.numeric_samples += 1
         self.numeric_sum += numeric
         self.minimum = numeric if self.minimum is None else min(self.minimum, numeric)
         self.maximum = numeric if self.maximum is None else max(self.maximum, numeric)
+        valid_previous = (
+            self._previous_numeric is not None and self._previous_timestamp is not None
+            and self._previous_cycle is not None and cycle > self._previous_cycle
+        )
+        elapsed = timestamp - self._previous_timestamp if valid_previous else 0.0
+        if valid_previous and 0.0 < elapsed <= max_rate_gap_seconds:
+            self.delta = numeric - self._previous_numeric
+            self.rate_per_second = self.delta / elapsed
+        else:
+            self.delta = None
+            self.rate_per_second = None
+        self._previous_numeric = numeric
+        self._previous_timestamp = timestamp
+        self._previous_cycle = cycle
 
     def snapshot(self, name: str) -> LiveVariableStat:
         mean = self.numeric_sum / self.numeric_samples if self.numeric_samples else None
@@ -117,6 +158,7 @@ class _VariableAccumulator:
             coherent_samples=self.coherent_samples, incoherent_samples=self.incoherent_samples,
             numeric_samples=self.numeric_samples, latest_value=self.latest_value,
             minimum=self.minimum, maximum=self.maximum, mean=mean,
+            delta=self.delta, rate_per_second=self.rate_per_second,
         )
 
 
@@ -137,16 +179,31 @@ def _source_key(sample: LiveSample):
 class LiveMonitorStore:
     """Bounded sample history plus whole-run statistics safe for GUI cross-thread reads."""
 
-    def __init__(self, capacity: int = DEFAULT_HISTORY_CAPACITY) -> None:
+    def __init__(self, capacity: int = DEFAULT_HISTORY_CAPACITY, *,
+                 watch_policies: Tuple[WatchPolicy, ...] = (),
+                 threshold_event_capacity: int = DEFAULT_THRESHOLD_EVENT_CAPACITY,
+                 max_rate_gap_seconds: float = DEFAULT_MAX_RATE_GAP_SECONDS) -> None:
         if not MIN_HISTORY_CAPACITY <= int(capacity) <= MAX_HISTORY_CAPACITY:
             raise ValueError(
                 "Live Monitor history capacity must be in range %d..%d." %
                 (MIN_HISTORY_CAPACITY, MAX_HISTORY_CAPACITY)
             )
         self.capacity = int(capacity)
+        if not 1 <= int(threshold_event_capacity) <= MAX_THRESHOLD_EVENT_CAPACITY:
+            raise ValueError("Threshold event capacity must be in range 1..%d." % MAX_THRESHOLD_EVENT_CAPACITY)
+        if not isinstance(max_rate_gap_seconds, (int, float)) or isinstance(max_rate_gap_seconds, bool) or float(max_rate_gap_seconds) <= 0:
+            raise ValueError("Maximum rate gap must be positive.")
+        policies = tuple(watch_policies)
+        if any(not isinstance(policy, WatchPolicy) for policy in policies):
+            raise ValueError("Watch policies must be WatchPolicy values.")
+        if len({policy.path for policy in policies}) != len(policies):
+            raise ValueError("Watch policy paths must be unique.")
+        self._policies = {policy.path: policy for policy in policies}
+        self._max_rate_gap_seconds = float(max_rate_gap_seconds)
         self._lock = threading.RLock()
         self._samples = deque(maxlen=self.capacity)
         self._transitions = deque(maxlen=self.capacity)
+        self._threshold_events = deque(maxlen=int(threshold_event_capacity))
         self._reset_totals()
 
     def _reset_totals(self) -> None:
@@ -162,6 +219,7 @@ class LiveMonitorStore:
         self._function_lines: Dict[tuple, Counter] = {}
         self._variables: Dict[str, _VariableAccumulator] = {}
         self._next_transition_index = 0
+        self._threshold_state: Dict[str, str] = {}
 
     def append(self, sample: LiveSample) -> None:
         if not isinstance(sample, LiveSample):
@@ -198,11 +256,35 @@ class LiveMonitorStore:
                     raise ValueError(
                         "Live variable identity changed during one session: %s." % value.name
                     )
-                current.add(value)
+                current.add(value, float(sample.captured_elapsed_seconds), int(sample.cycle), self._max_rate_gap_seconds)
                 if not value.coherent:
                     self._incoherent_values += 1
+                self._append_threshold_event(value, sample)
 
             self._append_transition(sample)
+
+    def _append_threshold_event(self, value: LiveValue, sample: LiveSample) -> None:
+        policy = self._policies.get(value.node_id) if value.node_id else None
+        policy = policy or self._policies.get(value.name)
+        numeric = _numeric(value.value) if value.coherent else None
+        if policy is None or numeric is None:
+            return
+        engineering = policy.engineering_value(numeric)
+        if not isinstance(engineering, (int, float)) or not math.isfinite(float(engineering)):
+            return
+        state = "inside"
+        threshold = None
+        if policy.minimum is not None and engineering < policy.minimum:
+            state, threshold = "below_minimum", policy.minimum
+        elif policy.maximum is not None and engineering > policy.maximum:
+            state, threshold = "above_maximum", policy.maximum
+        previous = self._threshold_state.get(policy.path)
+        self._threshold_state[policy.path] = state
+        if state != "inside" and state != previous:
+            self._threshold_events.append(LiveThresholdEvent(
+                path=policy.path, timestamp_seconds=float(sample.captured_elapsed_seconds),
+                value=float(engineering), direction=state, threshold=float(threshold), capture=policy.capture,
+            ))
 
     def _append_transition(self, sample: LiveSample) -> None:
         key = _source_key(sample)
@@ -229,6 +311,7 @@ class LiveMonitorStore:
         with self._lock:
             self._samples.clear()
             self._transitions.clear()
+            self._threshold_events.clear()
             self._reset_totals()
 
     def samples(self, limit: Optional[int] = None) -> Tuple[LiveSample, ...]:
@@ -238,6 +321,10 @@ class LiveMonitorStore:
     def transitions(self, limit: Optional[int] = None) -> Tuple[LiveExecutionTransition, ...]:
         with self._lock:
             return _bounded_tail(tuple(self._transitions), limit)
+
+    def threshold_events(self, limit: Optional[int] = None) -> Tuple[LiveThresholdEvent, ...]:
+        with self._lock:
+            return _bounded_tail(tuple(self._threshold_events), limit)
 
     def variable_series(self, name: str, limit: Optional[int] = None) -> Tuple[LiveSeriesPoint, ...]:
         selected = str(name).strip()
@@ -292,7 +379,7 @@ class LiveMonitorStore:
                 self._variables[name].snapshot(name) for name in sorted(self._variables)
             )
             latest = self._samples[-1] if self._samples else None
-            return LiveAnalyticsSnapshot(timing, functions, variables, latest)
+            return LiveAnalyticsSnapshot(timing, functions, variables, latest, tuple(self._threshold_events))
 
     def __len__(self) -> int:
         with self._lock:

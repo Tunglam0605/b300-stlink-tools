@@ -5,6 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Optional
+from types import SimpleNamespace
+import time
+import uuid
+import hashlib
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
@@ -12,6 +16,7 @@ from b300_core.live_monitor import LiveSample
 from b300_core.live_session import (
     ClientLiveMonitorConfig, LiveMonitorSession, LocalLiveMonitorConfig,
 )
+from b300_core.gateway_client import GatewayClientCoordinator
 from b300_core.models import ProbeRef
 from .debug_live_panel import DebugLivePanel
 from .workers import FunctionWorker
@@ -27,6 +32,7 @@ class LiveMonitorRequest:
     user: str = ""
     ssh_port: int = 22
     symbol_roots: tuple[Path, ...] = ()
+    profile_id: str = ""
 
     @classmethod
     def local(cls, symbols: Path) -> "LiveMonitorRequest":
@@ -41,10 +47,11 @@ class LiveMonitorRequest:
         user: str,
         ssh_port: int = 22,
         symbol_roots: tuple[Path, ...] = (),
+        profile_id: str = "",
     ) -> "LiveMonitorRequest":
         selected = Path(symbols).expanduser().resolve() if symbols is not None else None
         roots = tuple(Path(root).expanduser().resolve() for root in symbol_roots)
-        return cls("CLIENT", selected, host.strip(), user.strip(), int(ssh_port), roots)
+        return cls("CLIENT", selected, host.strip(), user.strip(), int(ssh_port), roots, str(profile_id).strip())
 
 
 class LiveMonitorController(QObject):
@@ -65,6 +72,9 @@ class LiveMonitorController(QObject):
         hardware_busy: Optional[Callable[[], bool]] = None,
         session_factory=LiveMonitorSession,
         worker_factory=FunctionWorker,
+        recovery_worker_factory=FunctionWorker,
+        coordinator_factory=GatewayClientCoordinator,
+        context=None,
     ) -> None:
         super().__init__(parent)
         self.panel = panel
@@ -74,20 +84,60 @@ class LiveMonitorController(QObject):
         self._hardware_busy = hardware_busy
         self._session_factory = session_factory
         self._worker_factory = worker_factory
+        self._recovery_worker_factory = recovery_worker_factory
+        self._coordinator_factory = coordinator_factory
+        self._gateway_coordinator = None
+        self._gateway_binding = None
+        self._epoch = 0
+        self._last_request = None
+        self._last_symbols_revision = None
+        self._last_symbols_digest = None
         self._active = False
+        self._stopping = False
         self._live_session = None
         self._worker = None
         self._invalidated_reason = ""
+        self._stopping = False
         self._pending_samples = []
         self._render_timer = QTimer(self)
         self._render_timer.setSingleShot(True)
         self._render_timer.timeout.connect(self._flush_pending_samples)
+        self._context = context
+        self._lease_token = None
+        self._recovery_worker = None
+        self._recovery_token = 0
+        self._recovery_dirty = False
+
+    def set_context(self, context) -> None:
+        self._context = context
+
+    def _publish_monitor(self, *, live: bool = False) -> None:
+        apply = getattr(self._context, "apply_device_state", None)
+        if callable(apply):
+            if self._lease_token is None:
+                self._lease_token = uuid.uuid4().hex
+            updates = {"owner_kind": "MONITORING", "lease_token": self._lease_token,
+                       "reason": "Live Monitor active"}
+            if live:
+                updates["target_state"] = "running"
+            apply(**updates)
+
+    def _release_monitor(self, reason: str, *, stale: bool = True) -> None:
+        apply = getattr(self._context, "apply_device_state", None)
+        if callable(apply):
+            updates = {"owner_kind": None, "reason": reason}
+            if self._lease_token is not None:
+                updates["lease_token"] = self._lease_token
+            if stale:
+                updates.update(target_state=None, gdb_endpoint=None, tcl_endpoint=None)
+            apply(**updates)
+        self._lease_token = None
 
     @property
     def active(self) -> bool:
         return self._active
 
-    def start(self, request: LiveMonitorRequest) -> None:
+    def start(self, request: LiveMonitorRequest, *, _coordinator=None, _binding=None) -> None:
         if self._active or self._worker is not None:
             raise RuntimeError("Live Monitor is already active.")
         if self._hardware_busy is not None and self._hardware_busy():
@@ -96,6 +146,13 @@ class LiveMonitorController(QObject):
             raise ValueError("Live Monitor request role must be LOCAL or CLIENT.")
 
         self._invalidated_reason = ""
+        self._epoch += 1
+        epoch = self._epoch
+        self._last_request = request
+        if request.symbols is not None:
+            info = Path(request.symbols).stat()
+            self._last_symbols_revision = (int(info.st_size), int(info.st_mtime_ns))
+            self._last_symbols_digest = self._sha256(request.symbols)
         self._pending_samples.clear()
         self._render_timer.stop()
         watch_specs = self.panel.watch_specs()
@@ -103,11 +160,16 @@ class LiveMonitorController(QObject):
             tuple(self.panel.compiled_watches())
             if hasattr(self.panel, "compiled_watches") else ()
         )
+        watch_policies = (
+            tuple(self.panel.watch_policies())
+            if hasattr(self.panel, "watch_policies") else ()
+        )
         common = {
             "interval_seconds": float(self.panel.interval.value()),
             "sample_limit": self.panel.sample_limit(),
             "watch_specs": tuple(watch_specs),
             "compiled_watches": compiled_watches,
+            "watch_policies": watch_policies,
         }
         if request.role == "LOCAL":
             if self._selected_probe is None:
@@ -125,38 +187,60 @@ class LiveMonitorController(QObject):
             )
         config.validate()
         remote_session = None
+        coordinator = _coordinator
         if request.role == "CLIENT" and self._remote_session_provider is not None:
             remote_session = self._remote_session_provider(request)
             if remote_session is None:
                 raise RuntimeError("Client Live Monitor requires an authenticated session.")
+            if coordinator is not None:
+                if _binding is None:
+                    raise RuntimeError("Gateway restart requires a fresh binding.")
+                config = replace(config, bound_tcl_endpoint=_binding.tcl_endpoint)
+            elif callable(getattr(remote_session, "gateway_status", None)):
+                coordinator = self._coordinator_factory(
+                    remote_session, request.profile_id or request.host,
+                )
+                coordinated = coordinator.ensure_ready()
+                if getattr(coordinated, "state", None) != "READY" or getattr(coordinated, "binding", None) is None:
+                    raise RuntimeError("Gateway %s; %s" % (
+                        getattr(coordinated, "reason_code", "GATEWAY_NOT_READY"),
+                        getattr(coordinated, "next_action", "retry when it is ready."),
+                    ))
+                config = replace(config, bound_tcl_endpoint=coordinated.binding.tcl_endpoint)
         live = self._session_factory(openocd_executable=self._openocd_executable)
         self._live_session = live
+        self._gateway_coordinator = coordinator
+        self._gateway_binding = (_binding if _binding is not None else coordinated.binding) if coordinator is not None else None
         self.panel.reset_for_sampling()
         self.panel.set_control_state(
             start_enabled=False, stop_enabled=True, history_enabled=False,
         )
         self._active = True
+        self._publish_monitor()
         self.operation_state_changed.emit(True)
 
         def execute(log, phase, cancel_event):
             try:
                 selected_config = config
                 if request.role == "CLIENT" and remote_session is not None:
-                    ensure_ready = getattr(remote_session, "ensure_gateway_ready", None)
-                    if not callable(ensure_ready):
-                        raise RuntimeError(
-                            "Remote SSH session cannot verify or start the Gateway."
+                    if coordinator is not None:
+                        selected_config = config
+                    else:
+                        ensure_ready = getattr(remote_session, "ensure_gateway_ready", None)
+                        if not callable(ensure_ready):
+                            raise RuntimeError(
+                                "Remote SSH session cannot verify or start the Gateway."
+                            )
+                        snapshot = ensure_ready()
+                        endpoint = getattr(snapshot, "tcl_endpoint", None)
+                        if not getattr(snapshot, "attach_ready", False) or not endpoint:
+                            raise RuntimeError("Gateway did not provide a READY TCL endpoint.")
+                        _host, separator, port_text = str(endpoint).rpartition(":")
+                        if not separator:
+                            raise RuntimeError("Gateway returned an invalid TCL endpoint.")
+                        selected_config = replace(
+                            config, gateway_tcl_port=int(port_text),
                         )
-                    snapshot = ensure_ready()
-                    endpoint = getattr(snapshot, "tcl_endpoint", None)
-                    if not getattr(snapshot, "attach_ready", False) or not endpoint:
-                        raise RuntimeError("Gateway did not provide a READY TCL endpoint.")
-                    _host, separator, port_text = str(endpoint).rpartition(":")
-                    if not separator:
-                        raise RuntimeError("Gateway returned an invalid TCL endpoint.")
-                    selected_config = replace(
-                        config, gateway_tcl_port=int(port_text),
-                    )
                 if request.role == "LOCAL":
                     info = live.start_local(selected_config)
                 elif remote_session is not None:
@@ -171,7 +255,9 @@ class LiveMonitorController(QObject):
                 # while connecting via the worker's durable cancellation event.
                 if cancel_event.is_set():
                     live.cancel()
-                summary = live.run(phase)
+                def emit_sample(sample):
+                    phase((sample, epoch, self._gateway_binding))
+                summary = live.run(emit_sample)
                 return summary, live.analytics_snapshot(), info
             finally:
                 live.close()
@@ -180,9 +266,9 @@ class LiveMonitorController(QObject):
         self._worker = worker
         worker.log.connect(self.log.emit)
         worker.phase.connect(self._sample_received)
-        worker.completed.connect(self._completed)
-        worker.failed.connect(self._failed)
-        worker.finished.connect(self._worker_finished)
+        worker.completed.connect(lambda result, value=epoch: self._completed_for_epoch(value, result))
+        worker.failed.connect(lambda failure, value=epoch: self._failed_for_epoch(value, failure))
+        worker.finished.connect(lambda value=epoch: self._worker_finished_for_epoch(value))
         try:
             worker.start()
         except BaseException:
@@ -195,8 +281,19 @@ class LiveMonitorController(QObject):
     def _sample_received(self, sample) -> None:
         if self._invalidated_reason:
             return
+        binding = None
+        if isinstance(sample, tuple) and len(sample) == 3:
+            sample, epoch, binding = sample
+            if epoch != self._epoch:
+                return
+        elif isinstance(sample, tuple) and len(sample) == 2:
+            sample, binding = sample
+        coordinator = self._gateway_coordinator
+        if coordinator is not None and not getattr(coordinator, "accept_sample", lambda _binding: False)(binding):
+            return
         if not isinstance(sample, LiveSample) and not hasattr(sample, "cycle"):
             return
+        self._publish_monitor(live=True)
         append_many = getattr(self.panel, "append_live_samples", None)
         if callable(append_many):
             self._pending_samples.append(sample)
@@ -223,7 +320,11 @@ class LiveMonitorController(QObject):
             return
         append_many = getattr(self.panel, "append_live_samples", None)
         if callable(append_many):
+            started = time.monotonic()
             append_many(pending)
+            rendered = getattr(self.panel, "set_render_duration", None)
+            if callable(rendered):
+                rendered(time.monotonic() - started)
         else:
             for sample in pending:
                 self.panel.append_live_sample(sample)
@@ -241,11 +342,18 @@ class LiveMonitorController(QObject):
         except (AttributeError, RuntimeError, TypeError, ValueError) as error:
             self.log.emit("Live Monitor analytics view unavailable: %s" % error)
         self.panel.mark_live_completed(summary)
+        scheduler_metrics = getattr(self.panel, "set_scheduler_metrics", None)
+        if callable(scheduler_metrics):
+            scheduler_metrics(summary)
         self.log.emit(
             "Live Monitor completed: role=%s samples=%d target=%s" %
             (info.role, summary.samples, summary.final_target_state.upper())
         )
         self._finish_operation(history_enabled=True)
+
+    def _completed_for_epoch(self, epoch, result) -> None:
+        if epoch == self._epoch:
+            self._completed(result)
 
     def _failed(self, failure) -> None:
         self._flush_pending_samples()
@@ -258,15 +366,27 @@ class LiveMonitorController(QObject):
         self.log.emit("Live Monitor failed: %s" % message)
         self._finish_operation(history_enabled=False)
 
+    def _failed_for_epoch(self, epoch, failure) -> None:
+        if epoch == self._epoch:
+            self._failed(failure)
+
     def _finish_operation(self, *, history_enabled: bool) -> None:
         was_active = self._active
         self._active = False
+        self._stopping = False
         self._live_session = None
+        coordinator, self._gateway_coordinator = self._gateway_coordinator, None
+        self._gateway_binding = None
+        if coordinator is not None:
+            closer = getattr(coordinator, "close", None)
+            if callable(closer):
+                closer()
         self.panel.set_control_state(
             start_enabled=True, stop_enabled=False,
             history_enabled=history_enabled,
         )
         if was_active:
+            self._release_monitor("Live Monitor stopped")
             self.operation_state_changed.emit(False)
 
     def _worker_finished(self) -> None:
@@ -277,21 +397,32 @@ class LiveMonitorController(QObject):
         if self._active:
             self._finish_operation(history_enabled=False)
 
+    def _worker_finished_for_epoch(self, epoch) -> None:
+        if epoch == self._epoch:
+            self._worker_finished()
+
     def stop(self) -> None:
         """Request bounded cooperative shutdown without changing target state."""
         if not self._active:
             return
+        self._stopping = True
+        self._recovery_dirty = False
+        self._recovery_token += 1
+        if self._recovery_worker is not None:
+            self._recovery_worker.cancel()
         self.panel.mark_stopping()
         if self._live_session is not None:
             self._live_session.cancel()
         if self._worker is not None:
             self._worker.cancel()
+        self._release_monitor("Live Monitor stop requested", stale=True)
 
     def invalidate(self, reason: str) -> None:
         """Fail closed on lost Gateway evidence and reject late worker samples."""
         selected = str(reason or "Gateway không còn cung cấp bằng chứng mới.").strip()
         self._flush_pending_samples()
         self._invalidated_reason = selected
+        self._release_monitor(selected, stale=True)
         marker = getattr(self.panel, "mark_stale", None)
         if callable(marker):
             marker(selected)
@@ -300,6 +431,118 @@ class LiveMonitorController(QObject):
                 self._live_session.cancel()
             if self._worker is not None:
                 self._worker.cancel()
+
+    def check_gateway_health(self):
+        """Fail closed when the coordinator no longer owns the active binding."""
+        coordinator = self._gateway_coordinator
+        if coordinator is None or not self._active:
+            return None
+        state = coordinator.health()
+        if getattr(state, "state", None) == "READY" and getattr(state, "binding", None) != self._gateway_binding:
+            return self._restart_client_binding(coordinator, state)
+        if getattr(state, "state", None) != "READY":
+            self.invalidate("Gateway %s · %s" % (
+                getattr(state, "reason_code", "GATEWAY_BINDING_CHANGED"),
+                getattr(state, "next_action", "retry Monitor when it is ready."),
+            ))
+        return state
+
+    def accept_gateway_health_snapshot(self, snapshot):
+        """GUI-safe health input; it never performs an SSH status request."""
+        coordinator = self._gateway_coordinator
+        if coordinator is None or not self._active or self._stopping:
+            return None
+        accept = getattr(coordinator, "accept_health_snapshot", None)
+        if not callable(accept):
+            return None
+        state = accept(snapshot)
+        if getattr(state, "state", None) != "READY" or getattr(state, "binding", None) != self._gateway_binding:
+            self._queue_gateway_recovery(coordinator)
+        return state
+
+    def _queue_gateway_recovery(self, coordinator):
+        """Queue one SSH recovery; callers stay on the Qt GUI thread."""
+        if self._recovery_worker is not None:
+            # accept_health_snapshot already stored the newest evidence in the
+            # coordinator. Coalesce another recovery after this I/O completes.
+            self._recovery_dirty = True
+            return
+        self._recovery_dirty = False
+        self._recovery_token += 1
+        token, epoch = self._recovery_token, self._epoch
+        def recover(_log, _phase, _cancel):
+            return coordinator.health()
+        worker = self._recovery_worker_factory(recover, self)
+        self._recovery_worker = worker
+        def completed(state):
+            if (token != self._recovery_token or epoch != self._epoch or not self._active
+                    or coordinator is not self._gateway_coordinator):
+                return
+            if getattr(state, "state", None) == "READY" and getattr(state, "binding", None) != self._gateway_binding:
+                self._restart_client_binding(coordinator, state)
+            elif getattr(state, "state", None) != "READY":
+                self.invalidate("Gateway %s · %s" % (getattr(state, "reason_code", "GATEWAY_RECOVERY_EXHAUSTED"), getattr(state, "next_action", "retry Monitor when it is ready.")))
+        def finished():
+            if self._recovery_worker is worker:
+                self._recovery_worker = None
+            worker.deleteLater()
+            if (self._recovery_dirty and self._active and not self._stopping
+                    and coordinator is self._gateway_coordinator):
+                self._queue_gateway_recovery(coordinator)
+        worker.completed.connect(completed)
+        worker.failed.connect(lambda failure: completed(SimpleNamespace(state="STALE", binding=None, reason_code="GATEWAY_RECOVERY_FAILED", next_action=str(failure))))
+        worker.finished.connect(finished)
+        worker.start()
+
+    def _restart_client_binding(self, coordinator, state):
+        """Replace a stopped Client worker only after a fresh coordinator rebind."""
+        request = self._last_request
+        worker = self._worker
+        if request is None or request.role != "CLIENT" or worker is None:
+            self.invalidate("Gateway GATEWAY_BINDING_CHANGED · restart Monitor manually.")
+            return state
+        if request.symbols is not None:
+            info = Path(request.symbols).stat()
+            if ((int(info.st_size), int(info.st_mtime_ns)) != self._last_symbols_revision
+                    or self._sha256(request.symbols) != self._last_symbols_digest):
+                self.invalidate("Gateway MONITOR_RESTART_AXF_CHANGED · nạp lại AXF/ELF rồi bắt đầu Monitor.")
+                return state
+        self._flush_pending_samples()
+        if self._live_session is not None:
+            self._live_session.cancel()
+        worker.cancel()
+        if worker.isRunning() and not worker.wait(3000):
+            self.invalidate("Gateway MONITOR_RESTART_TIMEOUT · worker cũ chưa dừng; hãy thử lại.")
+            return state
+        worker.deleteLater()
+        live = self._live_session
+        if live is not None:
+            live.close()
+        self._worker = None
+        self._live_session = None
+        self._active = False
+        self._gateway_coordinator = coordinator
+        self._gateway_binding = state.binding
+        try:
+            self.start(request, _coordinator=coordinator, _binding=state.binding)
+        except (OSError, RuntimeError, ValueError) as error:
+            self._invalidated_reason = "Gateway MONITOR_RESTART_FAILED · %s" % error
+            marker = getattr(self.panel, "mark_stale", None)
+            if callable(marker):
+                marker(self._invalidated_reason)
+            self._worker = None
+            self._live_session = None
+            self._active = True
+            self._finish_operation(history_enabled=True)
+        return state
+
+    @staticmethod
+    def _sha256(path):
+        digest = hashlib.sha256()
+        with Path(path).open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(block)
+        return digest.hexdigest()
 
     def clear(self) -> None:
         if self._active:

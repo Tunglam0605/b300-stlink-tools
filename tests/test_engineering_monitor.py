@@ -60,6 +60,57 @@ class EngineeringMonitorTests(unittest.TestCase):
         self.assertEqual(panel.buffer.snapshot()[-1].raw_value, "<incoherent>")
         self.assertNotIn(99, [point[1] for point in panel.trend.points("speed")])
 
+    def test_policy_group_editor_formats_selected_watch_without_manual_json(self):
+        from b300_core.live_monitor import LiveWatch
+        from b300_core.watch_profiles import WatchPolicy
+        panel = self.panel()
+        panel.add_compiled_watch(LiveWatch("speed", "u32", 0x20000020, 4))
+        panel.table.setCurrentCell(panel.rows["speed"], 0)
+        panel.set_watch_policies((WatchPolicy("speed", group="Drive", unit="rpm", scale=.5),))
+        self.assertEqual(panel.policy_group.currentText(), "Drive")
+        panel.append_live_sample(sample(value=20))
+        self.assertEqual(panel.table.item(panel.rows["speed"], 1).text(), "10 rpm")
+        panel.policy_group.setCurrentText("General")
+        panel.policy_format.setCurrentText("hex")
+        panel.save_selected_policy()
+        self.assertEqual(panel.watch_policies()[0].group, "General")
+        self.assertEqual(panel.watch_policies()[0].display_format, "hex")
+
+    def test_policy_editor_persists_project_sidecar(self):
+        from b300_core.live_monitor import LiveWatch
+        from b300_core.watch_profiles import load_watch_policies
+        context = Context()
+        with tempfile.TemporaryDirectory() as directory:
+            context.selected_project = SimpleNamespace(symbols=None, workspace=Path(directory))
+            view = MonitorView(context=context)
+            self.addCleanup(view.deleteLater)
+            panel = view.live_panel
+            panel.add_compiled_watch(LiveWatch("speed", "u32", 0x20000020, 4))
+            panel.table.setCurrentCell(panel.rows["speed"], 0)
+            panel.policy_group.setCurrentText("Drive")
+            panel.policy_unit.setText("rpm")
+            panel.save_selected_policy()
+            saved = load_watch_policies(Path(directory) / ".b300-watch-policies.json")
+            self.assertEqual(saved[0].group, "Drive")
+            self.assertEqual(saved[0].unit, "rpm")
+
+    def test_analytics_renders_delta_rate_and_policy_threshold_state(self):
+        from b300_core.live_analytics import LiveMonitorStore
+        from b300_core.live_monitor import LiveWatch
+        from b300_core.watch_profiles import WatchPolicy
+        panel = self.panel()
+        panel.add_compiled_watch(LiveWatch("speed", "f32", 0x20000020, 4))
+        policy = WatchPolicy("speed", maximum=10)
+        panel.set_watch_policies((policy,))
+        store = LiveMonitorStore(watch_policies=(policy,))
+        store.append(sample(cycle=0, value=5))
+        store.append(sample(cycle=1, value=15))
+        panel.apply_analytics(store.snapshot())
+        row = panel.rows["speed"]
+        self.assertEqual(panel.table.item(row, 12).text(), "10")
+        self.assertEqual(panel.table.item(row, 13).text(), "20")
+        self.assertEqual(panel.table.item(row, 9).text(), "Vượt ngưỡng")
+
     def test_partial_batch_keeps_other_rows_and_displays_batch_progress(self):
         panel = self.panel()
         panel.add_compiled_watch(LiveWatch(
@@ -143,6 +194,10 @@ class EngineeringMonitorTests(unittest.TestCase):
             symbols = Path(directory) / "firmware.axf"
             symbols.write_bytes(b"ELF")
             context.selected_project = SimpleNamespace(symbols=symbols, workspace=Path(directory))
+            view.variable_tree_panel.set_catalog(SimpleNamespace(fingerprint="ready", roots=lambda *_args: ()))
+            view._typed_source = symbols.resolve()
+            view._typed_revision = (*view._revision(symbols)[:2], "ready")
+            view.live_panel.start_button.setEnabled(True)
             view.live_panel.start_button.click()
             self.assertTrue(view.controller.active)
             view.live_panel.stop_button.click()
@@ -176,6 +231,9 @@ class EngineeringMonitorTests(unittest.TestCase):
             context.selected_project = SimpleNamespace(symbols=symbols, workspace=Path(directory))
             context.selected_connection = SimpleNamespace(is_local=True, gateway=None)
             context.changed.emit()
+            view.variable_tree_panel.set_catalog(SimpleNamespace(fingerprint="ready", roots=lambda *_args: ()))
+            view._typed_revision = (*view._revision(symbols)[:2], "ready")
+            view.live_panel.start_button.setEnabled(True)
             with mock.patch.object(view.controller, "start") as start:
                 view.live_panel.start_button.click()
                 self.assertEqual(start.call_args.args[0].role, "LOCAL")

@@ -483,12 +483,12 @@ def main(argv=None) -> int:
 
         subprocess.check_call([sys.executable, "-m", "pip", "install", "--user",
                                "-r", str(ROOT / "requirements-build.txt")])
-        cli_plan = None
-        if args.flavor in {"all", "cli"}:
-            cli_plan = cli_pyinstaller_plan(
-                platform_name, args.output_dir, temp / "pyinstaller-cli",
-            )
-            subprocess.check_call(list(cli_plan.command))
+        # Every GUI bundle carries the CLI built from the same source/version so
+        # installing or upgrading the GUI cannot leave an older command behind.
+        cli_plan = cli_pyinstaller_plan(
+            platform_name, args.output_dir, temp / "pyinstaller-cli",
+        )
+        subprocess.check_call(list(cli_plan.command))
         gui_executable = "b300-stlink-gui.exe" if platform_name == "windows-x64" else "b300-stlink-gui"
         gui_application_root = None
         if args.flavor in {"all", "gui"}:
@@ -505,7 +505,9 @@ def main(argv=None) -> int:
                 gui_executable = str(Path("b300-stlink-gui") / "b300-stlink-gui.exe")
         gui_name, cli_name = release_names(platform_name)
 
-        def package(flavor_name, selected_executable, output_name, resources, application_root=None):
+        def package(flavor_name, selected_executable, output_name, resources,
+                    application_root=None, companion_cli=None,
+                    companion_application_root=None):
             command = [
                 sys.executable, str(ROOT / "package_internal.py"),
                 "--flavor", flavor_name,
@@ -524,6 +526,12 @@ def main(argv=None) -> int:
             ]
             if application_root is not None:
                 command.extend(["--application-root", str(application_root)])
+            if companion_cli is not None:
+                command.extend(["--companion-cli", str(companion_cli)])
+            if companion_application_root is not None:
+                command.extend([
+                    "--companion-application-root", str(companion_application_root),
+                ])
             for resource in resources:
                 command.extend(["--resource", str(resource)])
             subprocess.check_call(command)
@@ -540,6 +548,11 @@ def main(argv=None) -> int:
                 "gui", gui_executable, gui_name,
                 gui_resources(platform_name) + runtime_resources(platform_name),
                 application_root=gui_application_root,
+                companion_cli=(
+                    str(args.output_dir / cli_plan.executable)
+                    if cli_plan.application_root is None else None
+                ),
+                companion_application_root=cli_plan.application_root,
             )
     return 0
 

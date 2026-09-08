@@ -116,6 +116,8 @@ jobs:
           if ($null -eq $pythonDll) { throw "Packaged Python DLL missing from onedir runtime" }
           if ($null -eq $vcRuntime) { throw "Packaged VC runtime missing from onedir runtime" }
           if (-not (Test-Path $gdb)) { throw "Packaged GUI is missing managed ARM GDB" }
+          & "$root\b300-stlink.exe" --version --json
+          if ($LASTEXITCODE -ne 0) { throw "Packaged GUI companion CLI cannot execute" }
           & $gdb --version
           if ($LASTEXITCODE -ne 0) { throw "Packaged GUI managed ARM GDB cannot execute" }
           $process = Start-Process -FilePath "$root\b300-stlink-gui.exe" `
@@ -202,6 +204,7 @@ jobs:
         run: |
           mkdir -p release/linux-gui-bundle
           tar -xzf release/B300-STLink-GUI-Linux-x64.tar.gz -C release/linux-gui-bundle
+          ./release/linux-gui-bundle/b300-stlink --version --json
           gdb_dir=release/linux-gui-bundle/vendor/gdb/bin
           "$gdb_dir/arm-none-eabi-gdb" --version
       - name: Smoke-test Linux GUI on X11
@@ -224,6 +227,14 @@ jobs:
             --version "${{ needs.prepare-release.outputs.version }}" \
             --appimagetool release/appimagetool-x86_64.AppImage \
             --build-deb
+      - name: Smoke-test packaged Linux x64 GUI companion CLI
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          release/gui/B300-STLink-GUI-Ubuntu-x64.AppImage --cli --version --json
+          rm -rf release/deb-payload
+          dpkg-deb --extract release/gui/b300-stlink-gui_amd64.deb release/deb-payload
+          release/deb-payload/opt/b300-stlink/b300-stlink --version --json
       - name: Enforce Linux x64 GUI size budgets
         run: |
           python3 scripts/release/check_size_budget.py release/gui/B300-STLink-GUI-Ubuntu-x64.AppImage --max-mib 220
@@ -279,6 +290,7 @@ jobs:
         run: |
           mkdir -p release/linux-gui-bundle
           tar -xzf release/B300-STLink-GUI-Linux-arm64.tar.gz -C release/linux-gui-bundle
+          ./release/linux-gui-bundle/b300-stlink --version --json
           gdb_dir=release/linux-gui-bundle/vendor/gdb/bin
           "$gdb_dir/arm-none-eabi-gdb" --version
       - name: Smoke-test Linux GUI on X11
@@ -301,6 +313,14 @@ jobs:
             --version "${{ needs.prepare-release.outputs.version }}" \
             --appimagetool release/appimagetool-aarch64.AppImage \
             --build-deb
+      - name: Smoke-test packaged Linux ARM64 GUI companion CLI
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          release/gui/B300-STLink-GUI-Ubuntu-arm64.AppImage --cli --version --json
+          rm -rf release/deb-payload
+          dpkg-deb --extract release/gui/b300-stlink-gui_arm64.deb release/deb-payload
+          release/deb-payload/opt/b300-stlink/b300-stlink --version --json
       - name: Enforce Linux ARM64 GUI size budgets
         run: |
           python3 scripts/release/check_size_budget.py release/gui/B300-STLink-GUI-Ubuntu-arm64.AppImage --max-mib 220

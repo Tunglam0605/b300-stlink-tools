@@ -189,6 +189,18 @@ class RemoteSessionTests(unittest.TestCase):
         self.assertNotIn("super-secret", str(captured.exception))
         self.assertEqual(session.state.error_code, "SSH_AUTH_FAILED")
 
+    def test_tunnel_failure_exposes_structured_next_action(self):
+        client = FakeClient()
+        client.transport.channel_error = OSError("refused")
+        session = RemoteSession(self.profile, credential_store=MemoryStore(), ssh_client_factory=lambda: client)
+        session.connect("secret")
+        with self.assertRaises(RemoteForwardError) as captured:
+            session.require_remote_listener(remote_port=3333)
+        self.assertEqual(captured.exception.reason_code, "TUNNEL_FAILED")
+        self.assertEqual(captured.exception.phase, "ssh_tunnel")
+        self.assertTrue(captured.exception.next_action)
+        self.assertTrue(captured.exception.retriable)
+
     def test_bad_remembered_password_is_removed_so_gui_can_prompt_again(self):
         store = MemoryStore("stale-secret")
         session = RemoteSession(

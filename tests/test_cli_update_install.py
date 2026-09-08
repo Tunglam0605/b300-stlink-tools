@@ -58,6 +58,12 @@ def _write_tar(path: Path, *, entries=None) -> None:
             archive.addfile(info, io.BytesIO(data))
 
 
+def _write_installed_metadata(root: Path, platform: str, flavor: str) -> None:
+    (root / "BUNDLE-METADATA.txt").write_text(
+        "platform=%s\nflavor=%s\n" % (platform, flavor), encoding="utf-8",
+    )
+
+
 class SafeCliArchiveTests(unittest.TestCase):
     def test_zip_rejects_traversal_and_symlinks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -526,6 +532,7 @@ class ManagedCliInstallTests(unittest.TestCase):
                 "windows-x64-cli", environ={"LOCALAPPDATA": str(local)}, home=root / "home",
             )
             paths.root.mkdir(parents=True)
+            _write_installed_metadata(paths.root, "windows-x64", "cli")
             running = paths.root / "b300-stlink.exe"
             running.write_bytes(b"old")
             package = root / "B300-STLink-CLI-Windows-x64.zip"
@@ -547,6 +554,73 @@ class ManagedCliInstallTests(unittest.TestCase):
             self.assertIn("777", argv)
             self.assertFalse(kwargs["shell"])
             self.assertNotEqual(handoff.staged.root, paths.root)
+
+    def test_linux_cli_metadata_identity_accepts_matching_platform(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = cli_update_install.managed_install_paths(
+                "linux-x64-cli", environ={}, home=root / "home",
+            )
+            paths.root.mkdir(parents=True)
+            _write_installed_metadata(paths.root, "linux-x64", "cli")
+            paths.executable.write_bytes(b"old")
+            package = root / "B300-STLink-CLI-Linux-x64.tar.gz"
+            _write_tar(package)
+            calls = []
+
+            handoff = cli_update_install.launch_managed_cli_install(
+                package, _asset(package, "linux-x64-cli"), "linux-x64-cli",
+                environ={}, home=root / "home", current_executable=paths.executable,
+                frozen=True, parent_pid=777,
+                spawner=lambda argv, **kwargs: calls.append((argv, kwargs)),
+            )
+
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(Path(calls[0][0][0]), handoff.staged.executable)
+
+    def test_gui_or_unidentified_managed_root_is_denied_before_staging_or_spawn(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = root / "home" / "AppData" / "Local"
+            paths = cli_update_install.managed_install_paths(
+                "windows-x64-cli", environ={"LOCALAPPDATA": str(local)}, home=root / "home",
+            )
+            package = root / "B300-STLink-CLI-Windows-x64.zip"
+            _write_zip(package)
+            for metadata in (
+                    "platform=windows-x64\nflavor=gui\n",
+                    "platform=windows-x64\nflavor=cli\nmalformed",
+                    None,
+                    "platform=windows-x64\nflavor=portable\n",
+                    "platform=linux-x64\nflavor=cli\n"):
+                with self.subTest(metadata=metadata):
+                    paths.root.mkdir(parents=True, exist_ok=True)
+                    profile = paths.root / "profiles" / "user.json"
+                    profile.parent.mkdir(parents=True, exist_ok=True)
+                    profile.write_text("preserve me", encoding="utf-8")
+                    metadata_path = paths.root / "BUNDLE-METADATA.txt"
+                    if metadata is None:
+                        metadata_path.unlink(missing_ok=True)
+                    else:
+                        metadata_path.write_text(metadata, encoding="utf-8")
+                    before = {
+                        item.relative_to(paths.root): item.read_bytes()
+                        for item in paths.root.rglob("*") if item.is_file()
+                    }
+                    stage = mock.Mock(side_effect=lambda *_args, **_kwargs: self.fail("must not stage"))
+                    with mock.patch.object(cli_update_install, "stage_verified_cli_bundle", stage), \
+                            self.assertRaises(cli_update_install.ManagedInstallUnsupported):
+                        cli_update_install.launch_managed_cli_install(
+                            package, _asset(package, "windows-x64-cli"), "windows-x64-cli",
+                            environ={"LOCALAPPDATA": str(local)}, home=root / "home",
+                            current_executable=paths.executable, frozen=True,
+                            spawner=lambda *_args, **_kwargs: self.fail("must not spawn"),
+                        )
+                    self.assertFalse(stage.called)
+                    self.assertEqual({
+                        item.relative_to(paths.root): item.read_bytes()
+                        for item in paths.root.rglob("*") if item.is_file()
+                    }, before)
 
     def test_source_or_portable_execution_is_stably_unsupported(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

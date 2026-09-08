@@ -47,6 +47,7 @@ def write_executable(path: Path, content: str) -> None:
 def validate_bundle(bundle: Path) -> None:
     required = (
         bundle / "b300-stlink-gui",
+        bundle / "b300-stlink",
         bundle / "vendor" / "openocd" / "bin" / "openocd",
     )
     missing = [str(path) for path in required if not path.is_file()]
@@ -57,6 +58,7 @@ def validate_bundle(bundle: Path) -> None:
 def ensure_runtime_executables(tool_root: Path) -> None:
     for relative in (
             Path("b300-stlink-gui"),
+            Path("b300-stlink"),
             Path("vendor") / "openocd" / "bin" / "openocd"):
         path = Path(tool_root) / relative
         if not path.is_file():
@@ -78,6 +80,10 @@ def stage_linux_appdir(bundle: Path, output: Path, architecture: str) -> Path:
 set -eu
 appdir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 export B300_APP_ROOT="$appdir/usr/lib/b300-stlink"
+if [ "${1-}" = "--cli" ]; then
+    shift
+    exec "$B300_APP_ROOT/b300-stlink" "$@"
+fi
 exec "$B300_APP_ROOT/b300-stlink-gui" "$@"
 """)
     write_executable(appdir / "usr" / "bin" / "b300-stlink-gui", """#!/bin/sh
@@ -85,6 +91,12 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../lib/b300-stlink" && pwd)
 export B300_APP_ROOT="$root"
 exec "$B300_APP_ROOT/b300-stlink-gui" "$@"
+""")
+    write_executable(appdir / "usr" / "bin" / "b300-stlink", """#!/bin/sh
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../lib/b300-stlink" && pwd)
+export B300_APP_ROOT="$root"
+exec "$B300_APP_ROOT/b300-stlink" "$@"
 """)
     shutil.copy2(DESKTOP_SOURCE, appdir / "b300-stlink-gui.desktop")
     shutil.copy2(ICON_SOURCE, appdir / "b300-stlink-gui.png")
@@ -145,6 +157,11 @@ exit 0
 set -eu
 export B300_APP_ROOT=/opt/b300-stlink
 exec "$B300_APP_ROOT/b300-stlink-gui" "$@"
+""")
+    write_executable(debroot / "usr" / "local" / "bin" / "b300-stlink", """#!/bin/sh
+set -eu
+export B300_APP_ROOT=/opt/b300-stlink
+exec "$B300_APP_ROOT/b300-stlink" "$@"
 """)
     desktop_dir = debroot / "usr" / "share" / "applications"
     icon_dir = debroot / "usr" / "share" / "icons" / "hicolor" / "512x512" / "apps"

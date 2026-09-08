@@ -46,8 +46,11 @@ class GatewayProfile:
 
     def record(self) -> dict:
         item = self.validate()
-        return {"id": item.profile_id, "name": item.name, "host": item.endpoint.host,
-                "user": item.endpoint.user, "port": item.endpoint.port}
+        record = {"id": item.profile_id, "name": item.name, "host": item.endpoint.host,
+                  "user": item.endpoint.user, "port": item.endpoint.port}
+        if item.endpoint.cli_path is not None:
+            record["cli_path"] = item.endpoint.cli_path
+        return record
 
     @property
     def display_endpoint(self) -> str:
@@ -56,8 +59,8 @@ class GatewayProfile:
 
     @classmethod
     def create(cls, name: str, host: str, user: str, port: int = 22,
-               *, profile_id: Optional[str] = None) -> "GatewayProfile":
-        endpoint = RemoteGatewayProfile(host, user, port).validate()
+               *, profile_id: Optional[str] = None, cli_path: Optional[str] = None) -> "GatewayProfile":
+        endpoint = RemoteGatewayProfile(host, user, port, cli_path).validate()
         return cls(profile_id or _profile_id_for(endpoint), name, endpoint).validate()
 
 
@@ -77,7 +80,10 @@ class GatewayProfileStore:
             legacy = load_remote_profile(self.legacy_path)
             if legacy is None:
                 return self._empty()
-            migrated = GatewayProfile.create("Default Gateway", legacy.host, legacy.user, legacy.port)
+            migrated = GatewayProfile.create(
+                "Default Gateway", legacy.host, legacy.user, legacy.port,
+                cli_path=legacy.cli_path,
+            )
             payload = {"schema_version": 1, "default_id": migrated.profile_id, "profiles": [migrated.record()]}
             self._write_raw(payload)
             return payload
@@ -95,11 +101,16 @@ class GatewayProfileStore:
         items = []
         seen = set()
         for record in raw["profiles"]:
-            if not isinstance(record, dict) or set(record) != {"id", "name", "host", "user", "port"}:
+            allowed = {"id", "name", "host", "user", "port", "cli_path"}
+            if (not isinstance(record, dict)
+                    or not {"id", "name", "host", "user", "port"} <= set(record) <= allowed):
                 raise RuntimeError("B300 Gateway profile entry schema is invalid.")
             try:
                 item = GatewayProfile(str(record["id"]), str(record["name"]),
-                    RemoteGatewayProfile(str(record["host"]), str(record["user"]), int(record["port"]))).validate()
+                    RemoteGatewayProfile(
+                        str(record["host"]), str(record["user"]), int(record["port"]),
+                        record.get("cli_path"),
+                    )).validate()
             except (TypeError, ValueError) as error:
                 raise RuntimeError("B300 Gateway profile entry contains invalid values.") from error
             if item.profile_id in seen:

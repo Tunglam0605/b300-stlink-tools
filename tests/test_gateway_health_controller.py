@@ -96,6 +96,54 @@ class GatewayHealthControllerTests(unittest.TestCase):
 
         self.assertEqual(recovered, [changed])
 
+    def test_activity_evidence_reaches_snapshot_observers_unchanged(self):
+        received = []
+        self.controller.snapshot_changed.connect(received.append)
+        active = GatewaySnapshot.from_record({
+            **snapshot().to_record(),
+            "gdb_connection_count": 2,
+            "gdb_activity_generation": 5,
+            "gdb_ever_attached": True,
+        })
+
+        self.controller.accept_snapshot(active)
+
+        self.assertEqual(received[-1].gdb_connection_count, 2)
+        self.assertEqual(received[-1].gdb_activity_generation, 5)
+
+    def test_gateway_snapshot_publishes_shared_device_evidence(self):
+        from b300_gui.app_context import AppContext
+        context = AppContext()
+        controller = GatewayHealthController(FakeManager(), context=context, worker_factory=None)
+        self.assertTrue(controller.accept_snapshot(snapshot(generation=2, sequence=7, gdb_port=4333)))
+        state = context.device_snapshot
+        self.assertEqual(state.gateway_instance_id, "gw-a")
+        self.assertEqual(state.gateway_generation, 2)
+        self.assertEqual(state.sequence, 7)
+
+    def test_late_worker_completion_is_rejected_after_rebind(self):
+        old_token = self.controller._bind_token
+        self.controller.bind(RemoteGatewayProfile("new-ipc", "operator", 22))
+        self.controller._poll_completed(snapshot(), old_token)
+        self.assertIsNone(self.controller.snapshot)
+
+    def test_probe_removed_clears_gateway_snapshot_and_legacy_probe_list(self):
+        from b300_gui.app_context import AppContext
+        from b300_core.gateway_profiles import GatewayProfile
+        context = AppContext()
+        gateway = GatewayProfile.create("Lab", "lab.example", "operator", profile_id="lab")
+        context.set_profiles((), (gateway,), default_gateway_id="lab")
+        controller = GatewayHealthController(FakeManager(), context=context, worker_factory=None)
+        self.assertTrue(controller.accept_snapshot(snapshot(sequence=1)))
+        self.assertEqual(context.selected_probe, "ABC")
+        self.assertEqual(tuple(item.serial for item in context.probes), ("ABC",))
+        self.assertTrue(controller.accept_snapshot(snapshot(
+            "DISCONNECTED", sequence=2, reason="PROBE_REMOVED",
+        )))
+        self.assertIsNone(context.device_snapshot.probe_serial)
+        self.assertEqual(context.probes, ())
+        self.assertIsNone(context.selected_probe)
+
 
 if __name__ == "__main__":
     unittest.main()

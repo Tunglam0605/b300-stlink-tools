@@ -143,6 +143,104 @@ class SupportBundleTests(unittest.TestCase):
         self.assertEqual(snapshot["application_health_error"], "RuntimeError")
         self.assertNotIn("raw-openocd", json.dumps(snapshot))
 
+    def test_optional_operational_evidence_is_bounded_and_redacted(self) -> None:
+        selected_report = report()
+
+        class FakeDiagnostics:
+            def __init__(self, **_kwargs): pass
+            def run(self, _probe_serial=None): return selected_report
+
+        with mock.patch("b300_core.support_bundle.DiagnosticsService", FakeDiagnostics):
+            snapshot = collect_support_snapshot(
+                version="0.9.0", openocd_version="test", service=FakeService(health()),
+                probe_discovery=lambda: (),
+                gdb_info=lambda: GdbRuntimeInfo.from_path(None, platform_name="windows", reason="none"),
+                operational_evidence={
+                    "versions": {"gui": "0.9.0", "core": "0.9.0", "cli": "0.9.0"},
+                    "gateway": {"protocol_version": 1, "session_state": "connected"},
+                    "process": {"owner": "b300-stlink-tools", "pid": 4210, "parent_pid": 4100},
+                    "tunnels": [{"name": "gdb", "local_endpoint": "127.0.0.1:43123",
+                                 "gateway_endpoint": "::1:3333"}],
+                    "axf": {"path": r"C:\\Users\\Admin\\private\\Main_V2_F407.axf",
+                            "sha256": "a" * 64},
+                    "timeline": [
+                        {"at_utc": "2026-08-30T01:02:03Z", "event": "SESSION_STARTED",
+                         "state": "connected", "code": "OK", "detail": "Admin@gateway.example"},
+                    ] * 40,
+                },
+            )
+
+        evidence = snapshot["operational_evidence"]
+        self.assertEqual(evidence["versions"], {"gui": "0.9.0", "core": "0.9.0", "cli": "0.9.0"})
+        self.assertEqual(evidence["gateway"], {"protocol_version": 1, "session_state": "connected"})
+        self.assertEqual(evidence["process"], {"owner": "b300-stlink-tools", "pid": 4210, "parent_pid": 4100})
+        self.assertEqual(evidence["tunnels"], [{"name": "gdb", "local_endpoint": "127.0.0.1:43123",
+                                                  "gateway_endpoint": "::1:3333"}])
+        self.assertEqual(evidence["axf"], {"basename": "Main_V2_F407.axf", "sha256": "a" * 64})
+        self.assertEqual(len(evidence["timeline"]), 32)
+        self.assertEqual(evidence["timeline"][0]["event"], "SESSION_STARTED")
+        self.assertNotIn("detail", evidence["timeline"][0])
+        encoded = json.dumps(evidence, sort_keys=True)
+        self.assertNotIn("Admin", encoded)
+        self.assertNotIn("gateway.example", encoded)
+        self.assertNotIn(r"C:\\Users\\Admin", encoded)
+
+    def test_operational_evidence_is_omitted_by_default_and_rejects_nonloopback_tunnels(self) -> None:
+        selected_report = report()
+
+        class FakeDiagnostics:
+            def __init__(self, **_kwargs): pass
+            def run(self, _probe_serial=None): return selected_report
+
+        with mock.patch("b300_core.support_bundle.DiagnosticsService", FakeDiagnostics):
+            default_snapshot = collect_support_snapshot(
+                version="0.9.0", openocd_version="test", service=FakeService(health()),
+                probe_discovery=lambda: (),
+                gdb_info=lambda: GdbRuntimeInfo.from_path(None, platform_name="windows", reason="none"),
+            )
+            unsafe_snapshot = collect_support_snapshot(
+                version="0.9.0", openocd_version="test", service=FakeService(health()),
+                probe_discovery=lambda: (),
+                gdb_info=lambda: GdbRuntimeInfo.from_path(None, platform_name="windows", reason="none"),
+                operational_evidence={"tunnels": [{"name": "gdb", "local_endpoint": "10.1.200.208:3333",
+                                                     "gateway_endpoint": "127.0.0.1:3333"}],
+                                      "versions": {"gui": "Admin"},
+                                      "gateway": {"session_state": "gateway.example"},
+                                      "process": {"owner": "Admin"},
+                                      "timeline": [{"at_utc": "2026-08-30T01:02:03Z",
+                                                    "event": "gateway.example"}]},
+            )
+
+        self.assertNotIn("operational_evidence", default_snapshot)
+        self.assertEqual(unsafe_snapshot["operational_evidence"]["tunnels"], [])
+        self.assertNotIn("versions", unsafe_snapshot["operational_evidence"])
+        self.assertNotIn("session_state", unsafe_snapshot["operational_evidence"].get("gateway", {}))
+        self.assertNotIn("owner", unsafe_snapshot["operational_evidence"].get("process", {}))
+        self.assertEqual(unsafe_snapshot["operational_evidence"]["timeline"], [])
+
+    def test_operational_timeline_is_emitted_in_chronological_order(self) -> None:
+        selected_report = report()
+
+        class FakeDiagnostics:
+            def __init__(self, **_kwargs): pass
+            def run(self, _probe_serial=None): return selected_report
+
+        with mock.patch("b300_core.support_bundle.DiagnosticsService", FakeDiagnostics):
+            snapshot = collect_support_snapshot(
+                version="0.9.0", openocd_version="test", service=FakeService(health()),
+                probe_discovery=lambda: (),
+                gdb_info=lambda: GdbRuntimeInfo.from_path(None, platform_name="windows", reason="none"),
+                operational_evidence={"timeline": [
+                    {"at_utc": "2026-08-30T01:02:05Z", "event": "TUNNEL_OPENED"},
+                    {"at_utc": "2026-08-30T01:02:03Z", "event": "SESSION_STARTED"},
+                ]},
+            )
+
+        self.assertEqual(
+            [item["event"] for item in snapshot["operational_evidence"]["timeline"]],
+            ["SESSION_STARTED", "TUNNEL_OPENED"],
+        )
+
     def test_writer_creates_exact_bounded_zip_and_obeys_force_policy(self) -> None:
         snapshot = {
             "schema_version": 1,

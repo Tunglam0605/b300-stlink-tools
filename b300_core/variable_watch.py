@@ -105,6 +105,63 @@ def compile_watches(catalog, node_ids: Iterable[str]) -> Tuple[LiveWatch, ...]:
     return watches
 
 
+def rebind_watches(catalog, watches: Iterable[LiveWatch]) -> Tuple[Tuple[LiveWatch, ...], Tuple[str, ...]]:
+    """Recompile typed watches by DWARF display path after an AXF/ELF replacement.
+
+    A path must resolve to exactly one watchable scalar in the new catalog.
+    Missing or ambiguous paths are returned as stale instead of guessing an
+    address or retaining an address from the previous firmware image.
+    """
+    previous = tuple(watches)
+    wanted = {watch.name for watch in previous}
+    matches = {name: [] for name in wanted}
+    visited = set()
+
+    def relevant(path: str) -> bool:
+        return any(
+            name == path or name.startswith(path + ".") or name.startswith(path + "[")
+            for name in wanted
+        )
+
+    def visit(node) -> None:
+        if node.node_id in visited or not relevant(node.path):
+            return
+        visited.add(node.node_id)
+        if node.path in matches and node.watchable:
+            matches[node.path].append(node.node_id)
+        if not node.has_children:
+            return
+        offset = 0
+        while True:
+            children = tuple(catalog.children(node.node_id, offset, 100))
+            for child in children:
+                visit(child)
+            offset += len(children)
+            if len(children) < 100:
+                break
+
+    offset = 0
+    while True:
+        roots = tuple(catalog.roots("", offset, 100))
+        for root in roots:
+            visit(root)
+        offset += len(roots)
+        if len(roots) < 100:
+            break
+
+    selected_ids = []
+    stale = []
+    for watch in previous:
+        candidates = matches.get(watch.name, ())
+        if len(candidates) == 1:
+            selected_ids.append(candidates[0])
+        else:
+            stale.append(watch.name)
+    rebound = compile_watches(catalog, selected_ids) if selected_ids else ()
+    return rebound, tuple(stale)
+
+
 __all__ = [
     "WatchCompileError", "collect_watchable_node_ids", "compile_watch", "compile_watches",
+    "rebind_watches",
 ]

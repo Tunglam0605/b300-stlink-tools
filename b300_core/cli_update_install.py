@@ -85,6 +85,24 @@ def _platform_value(platform_name) -> str:
     return value
 
 
+def _installed_cli_identity(platform_name: str) -> tuple[str, str]:
+    return platform_name.removesuffix("-cli"), "cli"
+
+
+def _managed_root_has_cli_identity(root: Path, platform_name: str) -> bool:
+    """Require the installed publisher metadata to identify this CLI root."""
+    try:
+        values = {}
+        for line in (Path(root) / "BUNDLE-METADATA.txt").read_text(encoding="utf-8").splitlines():
+            key, separator, value = line.partition("=")
+            if not separator or not key.strip() or not value.strip() or key.strip() in values:
+                return False
+            values[key.strip()] = value.strip()
+    except (OSError, UnicodeError):
+        return False
+    return (values.get("platform"), values.get("flavor")) == _installed_cli_identity(platform_name)
+
+
 def _hash_file(path: Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as stream:
@@ -631,6 +649,10 @@ def launch_managed_cli_install(
         raise ManagedInstallUnsupported(
             "Managed self-update is available only from the standard per-user installation; "
             "download the signed CLI archive and run its install bootstrap manually."
+        )
+    if not _managed_root_has_cli_identity(paths.root, selected):
+        raise ManagedInstallUnsupported(
+            "Managed self-update requires an installed CLI bundle with matching publisher metadata."
         )
     staged = stage_verified_cli_bundle(
         package, asset, selected, staging_base=paths.staging_base,

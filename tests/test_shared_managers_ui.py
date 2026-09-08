@@ -15,7 +15,7 @@ from b300_core.project_profiles import ProjectProfile, ProjectProfileStore
 from b300_gui.app_context import AppContext
 from b300_gui.widgets.shared_context_bar import SharedContextBar
 from b300_gui.gateway_login_dialog import GatewayLoginDialog
-from b300_gui.gateway_manager_dialog import GatewayManagerDialog
+from b300_gui.gateway_manager_dialog import GatewayEditDialog, GatewayManagerDialog
 from b300_gui.project_manager_dialog import ProjectManagerDialog
 from b300_gui.views.debug_vscode_view import DebugVsCodeView
 from b300_gui.views.monitor_view import MonitorView
@@ -41,6 +41,28 @@ class SharedManagersUiTests(unittest.TestCase):
                 self.assertIn("Robot Lab", [dialog.table.item(i, 0).text() for i in range(2)])
                 self.assertEqual(dialog.table.item(0, 2).text(), "Chưa kết nối")
                 self.assertEqual(dialog.btn_connect.text(), "Kết nối")
+            finally:
+                dialog.deleteLater(); self.app.processEvents()
+
+    def test_gateway_editor_prefills_and_preserves_custom_cli_path_on_save(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = GatewayProfileStore(root / "gateways.json", legacy_path=root / "legacy.json")
+            original = GatewayProfile.create(
+                "Robot Lab", "192.168.1.158", "aubot", 22,
+                cli_path="/opt/b300/b300-stlink",
+            )
+            dialog = GatewayEditDialog(original)
+            try:
+                self.assertEqual(dialog.cli_path_input.text(), "/opt/b300/b300-stlink")
+                dialog.name_input.setText("Updated Lab")
+                store.upsert(dialog.profile())
+                saved = store.get(original.profile_id)
+                self.assertEqual(saved.name, "Updated Lab")
+                self.assertEqual(saved.endpoint.cli_path, "/opt/b300/b300-stlink")
+                dialog.cli_path_input.setText("/opt/b300;id")
+                with self.assertRaises(ValueError):
+                    dialog.profile()
             finally:
                 dialog.deleteLater(); self.app.processEvents()
 

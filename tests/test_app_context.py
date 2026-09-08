@@ -1,4 +1,5 @@
 import os
+import json
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 import unittest
 from pathlib import Path
@@ -103,3 +104,19 @@ class AppContextTests(unittest.TestCase):
         self.assertTrue(self.ctx.select_connection('gateway:local'))
         self.assertEqual(self.ctx.selected_connection.gateway,gateway)
         self.assertFalse(self.ctx.selected_connection.is_local)
+
+    def test_device_snapshot_is_shared_and_emits_context_change(self):
+        seen = []
+        self.ctx.changed.connect(lambda: seen.append(self.ctx.device_snapshot))
+        self.ctx.apply_device_state(probe_serial="A", target_state="running",
+                                    gdb_endpoint="127.0.0.1:3333", tcl_endpoint="127.0.0.1:6666")
+        self.assertEqual(len(seen), 1)
+        self.assertIs(seen[0], self.ctx.device_snapshot)
+        self.assertEqual(self.ctx.selected_probe, "A")
+
+    def test_target_info_stays_legacy_while_device_record_is_json_safe(self):
+        target = TargetInfo(0x413, 512, 3.3, "unknown")
+        self.ctx.set_target_info(target)
+        self.assertIs(self.ctx.target_info, target)
+        self.assertIsNone(self.ctx.device_snapshot.target_state)
+        json.dumps(self.ctx.device_snapshot.to_record())

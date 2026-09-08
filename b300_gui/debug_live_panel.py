@@ -533,6 +533,18 @@ class DebugLivePanel(QFrame):
             self.table.setItem(row, 6, QTableWidgetItem(self._format_stat_value(stat.minimum)))
             self.table.setItem(row, 7, QTableWidgetItem(self._format_stat_value(stat.maximum)))
             self.table.setItem(row, 8, QTableWidgetItem(self._format_stat_value(stat.mean)))
+            if self.table.columnCount() > 13:
+                self.table.setItem(row, 12, QTableWidgetItem(self._format_stat_value(stat.delta)))
+                self.table.setItem(row, 13, QTableWidgetItem(self._format_stat_value(stat.rate_per_second)))
+                policy_for = getattr(self, "_policy_for", None)
+                if callable(policy_for):
+                    policy = policy_for(stat.name)
+                    numeric = policy.engineering_value(stat.latest_value)
+                    if isinstance(numeric, (int, float)) and not isinstance(numeric, bool):
+                        if policy.minimum is not None and numeric < policy.minimum:
+                            self.table.setItem(row, 9, QTableWidgetItem("Dưới ngưỡng"))
+                        elif policy.maximum is not None and numeric > policy.maximum:
+                            self.table.setItem(row, 9, QTableWidgetItem("Vượt ngưỡng"))
 
     def reset_analytics(self) -> None:
         self.stats_samples.setText("Mẫu: 0")

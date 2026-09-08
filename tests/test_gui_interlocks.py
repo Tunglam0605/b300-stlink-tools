@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import tempfile
 import time
 import unittest
@@ -17,7 +18,7 @@ from b300_core.hardware_session import HardwareSessionManager
 from b300_core.metadata import decode_ota_metadata
 from b300_core.models import BootVerification, CommandResult, TargetInfo
 from b300_core.service import FlashResult
-from b300_gui.main_window import MainWindow
+from b300_gui.main_window import MainWindow, __version__ as GUI_VERSION
 from tests.test_core_hex_policy import APPLICATION_VECTOR, write_hex
 from tests.test_core_probe_memory_metadata import make_metadata
 from tests.test_gui_smoke import FakeService
@@ -176,6 +177,17 @@ class GuiHardwareInterlockTests(unittest.TestCase):
             "diagnostics": {"conclusion": "READY_FOR_APPLICATION_FLASH"},
             "application_health": {"lifecycle": "BOOTABLE"},
         }
+        window.app_context = SimpleNamespace(
+            device_snapshot=SimpleNamespace(
+                gdb_endpoint="127.0.0.1:43123", tcl_endpoint=None,
+                axf_basename=r"C:\\Users\\Admin\\private\\Main_V2_F407.axf",
+                axf_fingerprint="a" * 64,
+            ),
+            gateway_snapshot=SimpleNamespace(
+                schema_version=1, state="READY", generation=8, sequence=14,
+                reason_code="GATEWAY_RECOVERED", gdb_endpoint="127.0.0.1:3333", tcl_endpoint=None,
+            ),
+        )
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "support.zip"
             result = SimpleNamespace(
@@ -205,6 +217,13 @@ class GuiHardwareInterlockTests(unittest.TestCase):
         self.assertTrue(window.memory_tab.read_button.isEnabled())
         self.assertIn("Support bundle đã tạo", window.status_banner.text())
         collect.assert_called_once()
+        evidence = collect.call_args.kwargs["operational_evidence"]
+        self.assertEqual(evidence["versions"]["gui"], GUI_VERSION)
+        self.assertEqual(evidence["process"]["owner"], "b300-stlink-tools")
+        self.assertEqual(evidence["axf"]["basename"], "Main_V2_F407.axf")
+        self.assertEqual(evidence["gateway"]["generation"], 8)
+        self.assertNotIn("Admin", json.dumps(evidence))
+        self.assertNotIn("private", json.dumps(evidence))
         write.assert_called_once()
         self.assertEqual(write.call_args.args[0], destination)
         self.assertFalse(write.call_args.kwargs["force"])

@@ -108,6 +108,7 @@ class GuiPackagingTests(unittest.TestCase):
                 bundle / "b300-stlink-icon.ico",
             )
             (bundle / "b300-stlink-gui.exe").write_bytes(b"fixture-gui")
+            (bundle / "b300-stlink.exe").write_bytes(b"fixture-cli")
             (bundle / "_internal" / "python39.dll").write_bytes(b"fixture-python")
             (bundle / "vendor" / "openocd.exe").write_bytes(b"fixture-openocd")
             _fixture_manifest(bundle)
@@ -173,6 +174,7 @@ class GuiPackagingTests(unittest.TestCase):
             # A late error must undo overwritten executable bytes as well as
             # deleted stale files. Recompile a genuinely different candidate.
             (bundle / "b300-stlink-gui.exe").write_bytes(b"new-fixture-gui")
+            (bundle / "b300-stlink.exe").write_bytes(b"new-fixture-cli")
             (bundle / "_internal" / "python39.dll").write_bytes(b"new-python")
             _fixture_manifest(bundle)
             subprocess.run(compile_result.args, check=True, capture_output=True, timeout=60)
@@ -189,6 +191,7 @@ class GuiPackagingTests(unittest.TestCase):
             self.assertEqual(upgraded.returncode, 0)
             self.assertFalse(stale.exists())
             self.assertEqual((install_root / "b300-stlink-gui.exe").read_bytes(), b"new-fixture-gui")
+            self.assertEqual((install_root / "b300-stlink.exe").read_bytes(), b"new-fixture-cli")
             self.assertEqual((install_root / "_internal" / "python39.dll").read_bytes(), b"new-python")
             self.assertEqual((install_root / "user-notes.txt").read_bytes(), b"user-owned")
             # Embedded payload can be intact while its publisher manifest is
@@ -339,6 +342,17 @@ class GuiPackagingTests(unittest.TestCase):
         self.assertIn("vendor\\openocd\\bin\\openocd.exe", workflow)
         self.assertIn("VCRUNTIME140*.dll", workflow)
 
+    def test_windows_installer_owns_and_smoke_tests_companion_cli(self) -> None:
+        installer = (ROOT / "packaging" / "windows" / "b300-stlink-gui.iss").read_text(
+            encoding="utf-8"
+        )
+        verifier = (ROOT / "scripts" / "release" / "verify_windows_installer.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("OwnedPaths.Add('b300-stlink.exe')", installer)
+        self.assertIn('installed / "b300-stlink.exe"', verifier)
+        self.assertIn('"--version", "--json"', verifier)
+
     def test_application_root_packaging_preserves_windows_onedir_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -411,7 +425,18 @@ class GuiPackagingTests(unittest.TestCase):
                     bundle, root / "output", "amd64", "0.1.0"
                 )
 
-    def test_internal_gui_zip_excludes_cli_and_contains_openocd_metadata(self) -> None:
+    def test_linux_staging_rejects_bundle_without_companion_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bundle = root / "bundle"
+            (bundle / "vendor" / "openocd" / "bin").mkdir(parents=True)
+            (bundle / "b300-stlink-gui").write_bytes(b"gui")
+            (bundle / "vendor" / "openocd" / "bin" / "openocd").write_bytes(b"openocd")
+
+            with self.assertRaisesRegex(ValueError, "b300-stlink"):
+                gui_builder().validate_bundle(bundle)
+
+    def test_internal_gui_zip_includes_same_release_cli_and_openocd_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             cli = root / "b300-stlink.exe"
@@ -425,6 +450,10 @@ class GuiPackagingTests(unittest.TestCase):
             for path in (cli, gui, bootstrap, openocd / "bin" / "openocd.exe"):
                 path.write_bytes(b"test")
             (gdb / "bin" / "arm-none-eabi-gdb.exe").write_bytes(b"gdb")
+            cli_root = root / "cli-runtime"
+            (cli_root / "_internal").mkdir(parents=True)
+            (cli_root / "b300-stlink.exe").write_bytes(b"cli")
+            (cli_root / "_internal" / "cli-only.dll").write_bytes(b"cli runtime")
             xpack.write_bytes(b"trusted archive")
             firmware = root / "resources" / "firmware"
             firmware.mkdir(parents=True)
@@ -448,6 +477,7 @@ class GuiPackagingTests(unittest.TestCase):
                 result = package_internal.main([
                     "--flavor", "gui",
                     "--executable", str(gui),
+                    "--companion-application-root", str(cli_root),
                     "--openocd-root", str(openocd),
                     "--gdb-root", str(gdb), "--gdb-archive", "xpack-gdb.zip",
                     "--gdb-sha256", "B" * 64,
@@ -469,7 +499,8 @@ class GuiPackagingTests(unittest.TestCase):
                 ).decode("utf-8")
         self.assertEqual(result, 0)
         self.assertIn("b300-stlink-gui.exe", names)
-        self.assertNotIn("b300-stlink.exe", names)
+        self.assertIn("b300-stlink.exe", names)
+        self.assertIn("_internal/cli-only.dll", names)
         self.assertIn("vendor/openocd/bin/openocd.exe", names)
         self.assertIn("BUNDLE-METADATA.txt", names)
         self.assertIn("vendor/openocd/OPENOCD-MANIFEST.sha256", names)
@@ -815,7 +846,7 @@ class GuiPackagingTests(unittest.TestCase):
             root = Path(directory)
             bundle = root / "bundle"
             (bundle / "vendor" / "openocd" / "bin").mkdir(parents=True)
-            for relative in ("b300-stlink-gui", "vendor/openocd/bin/openocd"):
+            for relative in ("b300-stlink", "b300-stlink-gui", "vendor/openocd/bin/openocd"):
                 path = bundle / relative
                 path.write_bytes(b"binary")
             output = root / "output"
@@ -826,9 +857,12 @@ class GuiPackagingTests(unittest.TestCase):
             self.assertTrue((appdir / "b300-stlink-gui.desktop").is_file())
             self.assertTrue((appdir / "b300-stlink-gui.png").is_file())
             self.assertTrue((appdir / "usr" / "bin" / "b300-stlink-gui").is_file())
+            self.assertTrue((appdir / "usr" / "lib" / "b300-stlink" /
+                             "b300-stlink").is_file())
             self.assertTrue((appdir / "usr" / "share" / "b300-stlink" / "udev" /
                              "49-b300-stlink.rules").is_file())
-            self.assertFalse((appdir / "usr" / "bin" / "b300-stlink").exists())
+            app_cli_launcher = appdir / "usr" / "bin" / "b300-stlink"
+            self.assertTrue(app_cli_launcher.is_file())
             self.assertTrue((debroot / "DEBIAN" / "control").is_file())
             self.assertTrue((debroot / "DEBIAN" / "postinst").is_file())
             control_text = (debroot / "DEBIAN" / "control").read_text(encoding="utf-8")
@@ -841,6 +875,11 @@ class GuiPackagingTests(unittest.TestCase):
             self.assertIn("B300_APP_ROOT=/opt/b300-stlink", deb_launcher)
             app_run = (appdir / "AppRun").read_text(encoding="utf-8")
             self.assertIn("B300_APP_ROOT", app_run)
+            self.assertIn('"${1-}" = "--cli"', app_run)
+            self.assertIn('exec "$B300_APP_ROOT/b300-stlink" "$@"', app_run)
+            self.assertIn('exec "$B300_APP_ROOT/b300-stlink-gui" "$@"', app_run)
+            app_cli = app_cli_launcher.read_text(encoding="utf-8")
+            self.assertIn('exec "$B300_APP_ROOT/b300-stlink" "$@"', app_cli)
             udev_rule = (debroot / "usr" / "lib" / "udev" / "rules.d" /
                          "49-b300-stlink.rules")
             self.assertTrue(udev_rule.is_file())
@@ -850,8 +889,14 @@ class GuiPackagingTests(unittest.TestCase):
                              "512x512" / "apps" / "b300-stlink-gui.png").is_file())
             self.assertTrue((debroot / "usr" / "local" / "bin" /
                              "b300-stlink-gui").is_file())
-            self.assertFalse((debroot / "usr" / "local" / "bin" /
-                              "b300-stlink").exists())
+            self.assertTrue((debroot / "opt" / "b300-stlink" /
+                             "b300-stlink").is_file())
+            deb_cli_launcher = debroot / "usr" / "local" / "bin" / "b300-stlink"
+            self.assertTrue(deb_cli_launcher.is_file())
+            self.assertIn(
+                'exec "$B300_APP_ROOT/b300-stlink" "$@"',
+                deb_cli_launcher.read_text(encoding="utf-8"),
+            )
 
 
 if __name__ == "__main__":

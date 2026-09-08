@@ -24,7 +24,8 @@ from b300_core.offline_setup import (
 )
 
 
-def stage_file(stage: Path, source: Path, name: str, *, executable_file=False) -> None:
+def stage_file(stage: Path, source: Path, name: str, *, executable_file=False,
+               prefer_existing=False) -> None:
     """Copy one regular input into a clean tree without archive path escapes."""
     from b300_core.runtime_integrity import _relative_name, _safe_path
 
@@ -38,6 +39,8 @@ def stage_file(stage: Path, source: Path, name: str, *, executable_file=False) -
         # Resources already present in an onedir tree may be supplied again.
         # Only identical duplicates are safe; a different payload is ambiguous.
         from b300_core.runtime_integrity import _digest
+        if prefer_existing:
+            return
         if _digest(target) != _digest(source):
             raise RuntimeIntegrityError("Conflicting bundle path: " + name)
         return
@@ -46,13 +49,15 @@ def stage_file(stage: Path, source: Path, name: str, *, executable_file=False) -
         target.chmod(target.stat().st_mode | 0o755)
 
 
-def stage_tree(stage: Path, source: Path, prefix: str = "", *, openocd=False) -> None:
+def stage_tree(stage: Path, source: Path, prefix: str = "", *, openocd=False,
+               prefer_existing=False) -> None:
     for path in runtime_files(source):
         relative = path.relative_to(source).as_posix()
         if openocd and relative == TREE_MANIFEST_NAME:
             continue
         stage_file(stage, path, prefix + relative,
-                   executable_file=path.name in ("openocd", "arm-none-eabi-gdb"))
+                   executable_file=path.name in ("openocd", "arm-none-eabi-gdb"),
+                   prefer_existing=prefer_existing)
 
 
 def resource_archive_name(resource: Path) -> str:
@@ -72,6 +77,8 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--flavor", required=True, choices=("gui", "cli"))
     parser.add_argument("--executable", required=True, type=Path)
+    parser.add_argument("--companion-cli", type=Path)
+    parser.add_argument("--companion-application-root", type=Path)
     parser.add_argument("--resource", action="append", default=[], type=Path)
     parser.add_argument("--application-root", type=Path)
     parser.add_argument("--openocd-root", required=True, type=Path)
@@ -102,7 +109,26 @@ def main(argv=None) -> int:
             parser.error("Windows CLI artifacts require --application-root for the onedir runtime.")
         if not (args.application_root / "_internal").is_dir():
             parser.error("Windows CLI --application-root is missing the _internal runtime.")
+    if args.companion_cli is not None and args.companion_application_root is not None:
+        parser.error("Choose one companion CLI input form.")
+    if args.companion_cli is not None:
+        if args.flavor != "gui":
+            parser.error("--companion-cli is only valid for GUI bundles.")
+        expected_cli = "b300-stlink.exe" if args.platform == "windows-x64" else "b300-stlink"
+        if args.companion_cli.name != expected_cli:
+            parser.error("--companion-cli has an unexpected platform filename.")
+    if args.companion_application_root is not None:
+        if args.flavor != "gui" or args.platform != "windows-x64":
+            parser.error("--companion-application-root is only valid for Windows GUI bundles.")
+        if not (args.companion_application_root / "b300-stlink.exe").is_file():
+            parser.error("Windows companion CLI root is missing b300-stlink.exe.")
+        if not (args.companion_application_root / "_internal").is_dir():
+            parser.error("Windows companion CLI root is missing its _internal runtime.")
     required = [args.executable, args.openocd_root, args.bootstrap, args.openocd_package]
+    if args.companion_cli is not None:
+        required.append(args.companion_cli)
+    if args.companion_application_root is not None:
+        required.append(args.companion_application_root)
     if args.gdb_root is not None:
         required.append(args.gdb_root)
     if args.application_root is not None:
@@ -143,6 +169,17 @@ def main(argv=None) -> int:
             stage_tree(stage, args.application_root)
         else:
             stage_file(stage, args.executable, args.executable.name, executable_file=True)
+        if args.companion_cli is not None:
+            stage_file(
+                stage, args.companion_cli, args.companion_cli.name,
+                executable_file=True,
+            )
+        if args.companion_application_root is not None:
+            # GUI and CLI are built from the same source but PyInstaller may
+            # produce different shared runtime bytes (base_library/OpenSSL).
+            # Keep the GUI runtime already staged and add CLI-only files; the
+            # CLI smoke test below validates that the shared runtime works.
+            stage_tree(stage, args.companion_application_root, prefer_existing=True)
         for resource in args.resource:
             stage_file(stage, resource, resource_archive_name(resource))
         stage_file(stage, args.bootstrap, args.bootstrap.name, executable_file=True)

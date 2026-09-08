@@ -22,6 +22,7 @@ from .remote_session import RemoteSession
 from .ssh_debug_tunnel import find_available_loopback_port
 from .ssh_live_tunnel import SshLiveTunnel, SshLiveTunnelConfig
 from .tcl_client import SafeTclClient, TclEndpoint
+from .watch_profiles import WatchPolicy
 
 
 @dataclass(frozen=True)
@@ -33,12 +34,14 @@ class LocalLiveMonitorConfig:
     watch_specs: Tuple[str, ...] = ()
     tcl_port: int = 6666
     compiled_watches: Tuple[LiveWatch, ...] = ()
+    watch_policies: Tuple[WatchPolicy, ...] = ()
 
     def validate(self) -> None:
         _validate_symbol_file(self.symbols)
         _validate_monitor_request(
             self.interval_seconds, self.sample_limit, self.watch_specs, self.compiled_watches,
         )
+        _validate_watch_policies(self.watch_policies)
         if not 1 <= int(self.tcl_port) <= 65535:
             raise ValueError("Live Monitor TCL port must be in range 1..65535.")
 
@@ -58,6 +61,8 @@ class ClientLiveMonitorConfig:
     symbol_max_files: int = 128
     show_console: bool = False
     compiled_watches: Tuple[LiveWatch, ...] = ()
+    watch_policies: Tuple[WatchPolicy, ...] = ()
+    bound_tcl_endpoint: Optional[str] = None
 
     def validate(self) -> None:
         if self.symbols is not None:
@@ -72,6 +77,11 @@ class ClientLiveMonitorConfig:
         _validate_monitor_request(
             self.interval_seconds, self.sample_limit, self.watch_specs, self.compiled_watches,
         )
+        _validate_watch_policies(self.watch_policies)
+        if self.bound_tcl_endpoint is not None:
+            host, separator, port_text = str(self.bound_tcl_endpoint).rpartition(":")
+            if host != "127.0.0.1" or not separator or not port_text.isdigit() or not 1 <= int(port_text) <= 65535:
+                raise ValueError("Coordinated Live Monitor TCL endpoint must be loopback HOST:PORT.")
         SshLiveTunnelConfig(
             host=self.host, user=self.user, ssh_port=self.ssh_port,
             local_tcl_port=self.preferred_local_tcl_port, gateway_tcl_port=self.gateway_tcl_port,
@@ -111,6 +121,15 @@ def _validate_monitor_request(interval_seconds: float, sample_limit: Optional[in
         raise ValueError("At most %d live watches are allowed." % MAX_LIVE_WATCHES)
 
 
+def _validate_watch_policies(policies: Tuple[WatchPolicy, ...]) -> Tuple[WatchPolicy, ...]:
+    selected = tuple(policies)
+    if any(not isinstance(policy, WatchPolicy) for policy in selected):
+        raise ValueError("Live Monitor watch policies must be WatchPolicy values.")
+    if len({policy.path for policy in selected}) != len(selected):
+        raise ValueError("Live Monitor watch policy path is duplicated.")
+    return selected
+
+
 class LiveMonitorSession:
     """Own Live Monitor symbols/transports and expose cooperative cancellation.
 
@@ -129,6 +148,7 @@ class LiveMonitorSession:
         self._tcl_factory = tcl_factory
         self._symbol_table_factory = symbol_table_factory
         self._port_allocator = port_allocator
+        self._history_capacity = history_capacity
         self._store = LiveMonitorStore(history_capacity)
         self._cancel = threading.Event()
         self._lock = threading.RLock()
@@ -196,7 +216,7 @@ class LiveMonitorSession:
             service.stop()
             raise
         with self._lock:
-            self._store.clear()
+            self._store = LiveMonitorStore(self._history_capacity, watch_policies=config.watch_policies)
             self._cancel.clear()
             self._role = "local"
             self._config = config
@@ -218,7 +238,13 @@ class LiveMonitorSession:
                             if config.symbols is not None else None)
         tunnel = None
         shared_remote = None
-        if remote_session is not None:
+        if config.bound_tcl_endpoint is not None:
+            host, separator, port_text = str(config.bound_tcl_endpoint).rpartition(":")
+            if host != "127.0.0.1" or not separator or not port_text.isdigit() or not 1 <= int(port_text) <= 65535:
+                raise ValueError("Coordinated Live Monitor TCL endpoint must be loopback HOST:PORT.")
+            local_tcl = int(port_text)
+            transport_name = "gateway-client-coordinated-tcl-forward"
+        elif remote_session is not None:
             profile = remote_session.profile
             if (profile.host, profile.user, profile.port) != (config.host, config.user, config.ssh_port):
                 raise ValueError("Client Live Monitor endpoint does not match the authenticated RemoteSession.")
@@ -257,7 +283,7 @@ class LiveMonitorSession:
                 shared_remote.close_forward(self._remote_forward_name)
             raise
         with self._lock:
-            self._store.clear()
+            self._store = LiveMonitorStore(self._history_capacity, watch_policies=config.watch_policies)
             self._cancel.clear()
             self._role = "client"
             self._config = config

@@ -16,23 +16,72 @@ from cryptography.fernet import Fernet, InvalidToken
 from .remote_profile import RemoteGatewayProfile, default_remote_profile_path
 from .gateway_status import GatewaySnapshot
 from .gateway_protocol import (
-    GATEWAY_ENSURE_COMMAND, GATEWAY_RESCAN_COMMAND, GATEWAY_STATUS_COMMAND,
+    GATEWAY_ENSURE_COMMAND, GATEWAY_PROTOCOL_VERSION, GATEWAY_RESCAN_COMMAND,
+    GATEWAY_STATUS_COMMAND,
+)
+from .versioning import SemVer
+from b300_version import __version__
+
+
+def _remote_cli_resolver(cli_path: Optional[str]) -> str:
+    configured = (
+        'if [ -x "{path}" ]; then b300_cli="{path}"; elif '.format(path=cli_path)
+        if cli_path else 'if '
+    )
+    return configured + (
+    '[ -n "${B300_CLI_PATH:-}" ] && [ -x "$B300_CLI_PATH" ]; then '
+    'b300_cli="$B300_CLI_PATH"; '
+    'elif [ -x "$HOME/.local/share/b300-stlink/b300-stlink" ]; then '
+    'b300_cli="$HOME/.local/share/b300-stlink/b300-stlink"; '
+    'elif [ -x "$HOME/.local/bin/b300-stlink" ]; then '
+    'b300_cli="$HOME/.local/bin/b300-stlink"; '
+    'else b300_cli="$(command -v b300-stlink 2>/dev/null)" || exit 127; fi; '
+    '[ -n "$b300_cli" ] || exit 127; exec "$b300_cli" '
 )
 
 
-_REMOTE_USER_CLI_ENV = 'env PATH="$HOME/.local/bin:$PATH" '
+def _remote_gateway_command(command: str, *, cli_path: Optional[str] = None) -> str:
+    """Resolve the per-user native CLI without relying on an SSH login shell."""
+    allowed = {GATEWAY_STATUS_COMMAND, GATEWAY_ENSURE_COMMAND, GATEWAY_RESCAN_COMMAND}
+    if command not in allowed:
+        raise ValueError("Unsupported remote Gateway CLI command.")
+    arguments = command.split()[1:]
+    return _remote_cli_resolver(cli_path) + " ".join(arguments)
 
 
 class RemoteSessionError(RuntimeError):
     """Base class for reusable remote-session failures."""
 
+    def __init__(self, message: str, *, reason_code: str = "SSH_FAILED",
+                 phase: str = "ssh_connect", next_action: str = "Check the SSH Gateway and retry.",
+                 retriable: bool = True) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+        self.phase = phase
+        self.next_action = next_action
+        self.retriable = bool(retriable)
+
 
 class RemoteAuthenticationError(RemoteSessionError):
     """The Gateway rejected the supplied account credentials."""
 
+    def __init__(self, message: str, **details) -> None:
+        details.setdefault("reason_code", "AUTH_FAILED")
+        details.setdefault("phase", "ssh_auth")
+        details.setdefault("next_action", "Check the SSH username and password, then reconnect.")
+        details.setdefault("retriable", False)
+        super().__init__(message, **details)
+
 
 class RemoteForwardError(RemoteSessionError):
     """A requested local SSH forwarding endpoint could not be opened."""
+
+    def __init__(self, message: str, **details) -> None:
+        details.setdefault("reason_code", "TUNNEL_FAILED")
+        details.setdefault("phase", "ssh_tunnel")
+        details.setdefault("next_action", "Check the Gateway loopback listener and SSH tunnel, then retry.")
+        details.setdefault("retriable", True)
+        super().__init__(message, **details)
 
 
 @dataclass(frozen=True)
@@ -529,22 +578,30 @@ class RemoteSession:
                 raise RemoteSessionError("SSH session is not connected.")
             client = self._client
         try:
-            # Paramiko exec channels are non-interactive and commonly omit
-            # ~/.local/bin even though that is where the B300 CLI installer
-            # places the per-user executable on Linux IPCs.
-            remote_command = _REMOTE_USER_CLI_ENV + command
+            # Paramiko exec channels are non-interactive and commonly omit the
+            # managed per-user launcher from PATH. Resolve only fixed safe
+            # candidates, with an explicit per-user override taking priority.
+            remote_command = _remote_gateway_command(command, cli_path=self.profile.cli_path)
             _stdin, stdout, stderr = client.exec_command(
                 remote_command, timeout=float(timeout_seconds)
             )
             output = stdout.read(256 * 1024 + 1)
             error_output = stderr.read(16 * 1024 + 1)
             if len(output) > 256 * 1024 or len(error_output) > 16 * 1024:
-                raise RemoteSessionError("Gateway CLI response exceeded the supported size.")
+                raise RemoteSessionError(
+                    "Gateway CLI response exceeded the supported size.",
+                    reason_code="CLI_RESPONSE_TOO_LARGE", phase="gateway_cli",
+                    next_action="Check the Gateway CLI output and retry.", retriable=False,
+                )
             exit_status = stdout.channel.recv_exit_status()
         except RemoteSessionError:
             raise
         except Exception as error:
-            raise RemoteSessionError("Gateway CLI could not be executed over SSH.") from error
+            raise RemoteSessionError(
+                "Gateway CLI could not be executed over SSH.",
+                reason_code="CLI_EXECUTION_FAILED", phase="gateway_cli",
+                next_action="Check the Gateway CLI installation and SSH session, then retry.", retriable=True,
+            ) from error
         text = output.decode("utf-8", "replace") if isinstance(output, bytes) else str(output)
         records = []
         for line in text.splitlines():
@@ -559,24 +616,78 @@ class RemoteSession:
             lowered = detail.casefold()
             if exit_status == 127 or "command not found" in lowered or "not recognized" in lowered:
                 raise RemoteSessionError(
-                    "B300 CLI is not installed for the SSH user on the Gateway; install the CLI and retry."
+                    "B300 CLI is not installed for the SSH user on the Gateway; install the CLI and retry.",
+                    reason_code="CLI_NOT_FOUND", phase="gateway_cli",
+                    next_action="Install B300 CLI for the SSH user on the Gateway, then retry.", retriable=False,
                 )
             if any(marker in lowered for marker in (
                     "invalid choice", "unrecognized argument", "unknown command")):
                 raise RemoteSessionError(
                     "CLI B300 trên Gateway chưa hỗ trợ trạng thái Gateway; "
-                    "hãy cập nhật (update) CLI trên máy Gateway rồi thử lại."
+                    "hãy cập nhật (update) CLI trên máy Gateway rồi thử lại.",
+                    reason_code="CLI_TOO_OLD", phase="gateway_cli",
+                    next_action="Update B300 CLI on the Gateway, then retry.", retriable=False,
                 )
             raise RemoteSessionError(
                 "Gateway CLI did not return a supported status snapshot%s." %
-                (" (exit %d)" % exit_status if exit_status else "")
+                (" (exit %d)" % exit_status if exit_status else ""),
+                reason_code="CLI_RESPONSE_INVALID", phase="gateway_cli",
+                next_action="Check the Gateway CLI output and retry.", retriable=True,
             ) from (RuntimeError(detail.strip()) if detail.strip() else None)
+        record = records[-1]
+        protocol_version = record.get("protocol_version")
+        if type(protocol_version) is not int:
+            raise RemoteSessionError(
+                "Gateway CLI returned an invalid protocol version; update the remote CLI.",
+                reason_code="PROTOCOL_MISMATCH", phase="gateway_protocol",
+                next_action="Update B300 CLI on the Gateway, then retry.", retriable=False,
+            )
+        if protocol_version != GATEWAY_PROTOCOL_VERSION:
+            raise RemoteSessionError(
+                "Gateway CLI protocol version %s is incompatible with Client protocol %s; "
+                "update the remote CLI." % (protocol_version, GATEWAY_PROTOCOL_VERSION),
+                reason_code="PROTOCOL_MISMATCH", phase="gateway_protocol",
+                next_action="Update B300 CLI on the Gateway, then retry.", retriable=False,
+            )
+        capabilities = record.get("capabilities")
+        required_capability = command.split()[2]
+        if (not isinstance(capabilities, list)
+                or required_capability not in capabilities):
+            raise RemoteSessionError(
+                "Gateway CLI does not advertise the required %s capability; "
+                "update the remote CLI." % required_capability,
+                reason_code="CLI_TOO_OLD", phase="gateway_cli",
+                next_action="Update B300 CLI on the Gateway, then retry.", retriable=False,
+            )
         try:
-            snapshot = GatewaySnapshot.from_record(records[-1])
+            remote_version = SemVer.parse(str(record.get("tool_version") or "").strip())
+        except ValueError:
+            raise RemoteSessionError(
+                "Gateway CLI did not report its tool version; update the remote CLI.",
+                reason_code="CLI_TOO_OLD", phase="gateway_cli",
+                next_action="Update B300 CLI on the Gateway, then retry.", retriable=False,
+            )
+        if remote_version < SemVer.parse(__version__):
+            raise RemoteSessionError(
+                "Gateway CLI version %s is older than Client version %s; update the remote CLI."
+                % (remote_version, __version__),
+                reason_code="CLI_TOO_OLD", phase="gateway_cli",
+                next_action="Update B300 CLI on the Gateway, then retry.", retriable=False,
+            )
+        try:
+            snapshot = GatewaySnapshot.from_record(record)
         except (TypeError, ValueError) as error:
-            raise RemoteSessionError("Gateway CLI returned an invalid status snapshot.") from error
+            raise RemoteSessionError(
+                "Gateway CLI returned an invalid status snapshot.",
+                reason_code="GATEWAY_RESPONSE_INVALID", phase="gateway_protocol",
+                next_action="Update or repair B300 CLI on the Gateway, then retry.", retriable=False,
+            ) from error
         if exit_status and snapshot.state == "READY":
-            raise RemoteSessionError("Gateway CLI exited with status %d despite reporting READY." % exit_status)
+            raise RemoteSessionError(
+                "Gateway CLI exited with status %d despite reporting READY." % exit_status,
+                reason_code="GATEWAY_COMMAND_FAILED", phase="gateway_cli",
+                next_action="Check the Gateway CLI error output and retry.", retriable=True,
+            )
         return snapshot
 
     def gateway_status(self, *, timeout_seconds: float = 5.0) -> GatewaySnapshot:
@@ -601,7 +712,9 @@ class RemoteSession:
         )
         if not result.attach_ready:
             raise RemoteSessionError(
-                "Gateway is not ready: %s (%s)." % (result.state, result.reason_code)
+                "Gateway is not ready: %s (%s)." % (result.state, result.reason_code),
+                reason_code="GATEWAY_NOT_READY", phase="gateway_ready",
+                next_action="Resolve the Gateway status shown above, then retry.", retriable=True,
             )
         return result
 

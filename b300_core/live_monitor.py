@@ -105,6 +105,9 @@ class LiveSummary:
     overruns: int
     cancelled: bool
     final_target_state: str
+    requested_interval_seconds: Optional[float] = None
+    effective_interval_seconds: Optional[float] = None
+    dropped_frames: int = 0
 
     def to_record(self) -> dict:
         return {
@@ -114,7 +117,55 @@ class LiveSummary:
             "overruns": self.overruns,
             "cancelled": self.cancelled,
             "final_target_state": self.final_target_state,
+            "requested_interval_seconds": self.requested_interval_seconds,
+            "effective_interval_seconds": self.effective_interval_seconds,
+            "dropped_frames": self.dropped_frames,
         }
+
+
+@dataclass(frozen=True)
+class AdaptiveIntervalRecommendation:
+    requested_interval_seconds: float
+    effective_interval_seconds: float
+    ewma_read_duration_seconds: float
+    overruns: int
+    dropped_frames: int
+
+
+class AdaptiveIntervalAdvisor:
+    """Reports a safe cadence recommendation; it never changes monitor reads."""
+
+    def __init__(self, requested_interval_seconds: float, *, margin_seconds: float = 0.02,
+                 ewma_alpha: float = 0.5) -> None:
+        validate_live_request(requested_interval_seconds, None, ())
+        if not 0.0 <= float(margin_seconds) <= MAX_LIVE_INTERVAL_SECONDS:
+            raise ValueError("Adaptive interval margin must be in range 0.0..60.0 seconds.")
+        if not 0.0 < float(ewma_alpha) <= 1.0:
+            raise ValueError("Adaptive interval EWMA alpha must be in range (0.0, 1.0].")
+        self.requested_interval_seconds = float(requested_interval_seconds)
+        self.margin_seconds = float(margin_seconds)
+        self.ewma_alpha = float(ewma_alpha)
+        self._ewma = None
+        self._overruns = 0
+        self._dropped_frames = 0
+
+    def observe(self, read_duration_seconds: float) -> None:
+        duration = max(0.0, float(read_duration_seconds))
+        self._ewma = duration if self._ewma is None else (
+            self.ewma_alpha * duration + (1.0 - self.ewma_alpha) * self._ewma
+        )
+        if duration > self.requested_interval_seconds:
+            self._overruns += 1
+            ratio = duration / self.requested_interval_seconds
+            self._dropped_frames += max(1, int(math.ceil(ratio - 1e-9)) - 1)
+
+    def recommendation(self) -> AdaptiveIntervalRecommendation:
+        ewma = 0.0 if self._ewma is None else self._ewma
+        return AdaptiveIntervalRecommendation(
+            requested_interval_seconds=self.requested_interval_seconds,
+            effective_interval_seconds=max(self.requested_interval_seconds, ewma + self.margin_seconds),
+            ewma_read_duration_seconds=ewma, overruns=self._overruns, dropped_frames=self._dropped_frames,
+        )
 
 
 def validate_live_watch_specs(specs: Iterable[str]) -> Tuple[Tuple[str, str], ...]:
@@ -336,14 +387,14 @@ def run_live_monitor(
         raise RuntimeError("Realtime Live Monitor requires a RUNNING target and will not resume it automatically.")
     start = clock()
     cycle = 0
-    overruns = 0
+    advisor = AdaptiveIntervalAdvisor(float(interval_seconds))
+    scheduled = 0.0
     was_cancelled = False
     try:
         while sample_limit is None or cycle < sample_limit:
             if cancelled():
                 was_cancelled = True
                 break
-            scheduled = cycle * float(interval_seconds)
             remaining = start + scheduled - clock()
             if remaining > 0 and wait(remaining):
                 was_cancelled = True
@@ -369,9 +420,9 @@ def run_live_monitor(
                 for watch in batch
             )
             duration = read_finished - read_started
+            advisor.observe(duration)
+            recommendation = advisor.recommendation()
             overrun = duration > float(interval_seconds)
-            if overrun:
-                overruns += 1
             sample = LiveSample(
                 cycle=cycle, scheduled_elapsed_seconds=scheduled,
                 captured_elapsed_seconds=read_finished - start,
@@ -382,6 +433,9 @@ def run_live_monitor(
             if on_sample is not None:
                 on_sample(sample)
             cycle += 1
+            # Keep deadlines monotonic and advance using the latest sustainable
+            # cadence.  A slow SWD read never creates a queue of missed reads.
+            scheduled += recommendation.effective_interval_seconds
             if state_check_every > 0 and cycle % state_check_every == 0:
                 state = tcl.wait_target_state()
                 if state != "running":
@@ -390,7 +444,11 @@ def run_live_monitor(
         final_state = tcl.wait_target_state()
     if final_state != "running":
         raise RuntimeError("Realtime Live Monitor ended with target state %s; refusing to hide it." % final_state)
-    return LiveSummary(cycle, float(interval_seconds), clock() - start, overruns, was_cancelled, final_state)
+    recommendation = advisor.recommendation()
+    return LiveSummary(cycle, float(interval_seconds), clock() - start, recommendation.overruns, was_cancelled, final_state,
+                       requested_interval_seconds=recommendation.requested_interval_seconds,
+                       effective_interval_seconds=recommendation.effective_interval_seconds,
+                       dropped_frames=recommendation.dropped_frames)
 
 
 def save_watch_preset(

@@ -5,6 +5,14 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-09-08
+
+- Added coordinated SSH Gateway/CLI discovery and bounded automatic Gateway recovery for remote Live Monitor and VS Code debug sessions, including protocol/tool-version validation and stale binding protection.
+- Added shared device ownership state and VS Code handoff recovery so Monitor and Cortex-Debug cannot silently use conflicting GDB/TCL bindings after detach, restart or reconnect.
+- Added live AXF/ELF fingerprint polling, background DWARF reload, address revocation, typed variable-tree watches, groups, display formats, units, engineering scale/offset, delta/rate/threshold history and adaptive sampling diagnostics.
+- Added redacted support-bundle evidence for Gateway, tunnels, processes, ports, AXF revisions and lifecycle timeline events.
+- Bundled the same-version CLI with GUI installers and added managed-runtime identity checks so GUI and CLI updates cannot overwrite the wrong application tree.
+
 ## [0.21.10] - 2026-09-07
 
 - Prevented the Windows GUI from becoming unresponsive when a large DWARF structure expands to hundreds of Live Monitor variables. Worker samples are now queued cheaply and rendered in bounded 250 ms batches; accepted samples, per-batch timestamps, stale evidence and bounded export history remain intact.

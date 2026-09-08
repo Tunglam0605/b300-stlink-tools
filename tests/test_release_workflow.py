@@ -314,6 +314,15 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 self.assertIn("linux-cli-bundle/vendor/openocd/bin/openocd --version", text)
                 self.assertNotIn("sudo b300-stlink", text)
 
+    def test_gui_companion_cli_is_smoked_before_and_after_linux_packaging(self) -> None:
+        for name in ("release.yml", "release-dry-run.yml"):
+            with self.subTest(workflow=name):
+                text = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+                self.assertIn("linux-gui-bundle/b300-stlink --version --json", text)
+                self.assertIn("--cli --version --json", text)
+                self.assertIn("dpkg-deb --extract", text)
+                self.assertIn("opt/b300-stlink/b300-stlink --version --json", text)
+
 
 
 if __name__ == "__main__":

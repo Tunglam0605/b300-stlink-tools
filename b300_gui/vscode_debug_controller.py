@@ -8,7 +8,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+import threading
+import uuid
+from typing import Callable, Optional
+from PySide6.QtCore import QObject, Signal
 
 from b300_core.models import ProbeRef
 from b300_core.remote_session import RemoteSession
@@ -30,12 +33,59 @@ class DebugLaunchResult:
     symbols: Path
 
 
+class GuiDispatcher(QObject):
+    """Queue callbacks onto the Qt object affinity that created this helper."""
+    dispatched = Signal(object)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.dispatched.connect(lambda callback: callback())
+
+    def submit(self, callback: Callable[[], None]) -> None:
+        self.dispatched.emit(callback)
+
+
 class VsCodeDebugController:
     """Small orchestration facade used by ``MainWindowV18``."""
 
-    def __init__(self, *, debug_service=None) -> None:
+    def __init__(self, *, debug_service=None, context=None, ui_dispatcher=None) -> None:
         self.bridge = VsCodeDebugBridge(debug_service=debug_service)
+        self.bridge.set_last_client_detached_handler(self._on_last_client_detached)
         self._environment: Optional[VsCodeEnvironmentStatus] = None
+        self._monitor_handoff: Optional[Callable[[], bool]] = None
+        self._client_reclaim_lock = threading.Lock()
+        self._client_reclaimed = False
+        self._context = context
+        self._ui_dispatcher = ui_dispatcher
+        self._lease_token = None
+
+    def set_ui_dispatcher(self, dispatcher) -> None:
+        self._ui_dispatcher = dispatcher
+
+    def set_context(self, context) -> None:
+        self._context = context
+
+    def _publish_debug(self, state: VsCodeBridgeState) -> None:
+        if self._context is None or state.state != BridgeState.READY:
+            return
+        if self._lease_token is None:
+            self._lease_token = uuid.uuid4().hex
+        updates = dict(
+            owner_kind="DEBUGGING", lease_token=self._lease_token, gdb_endpoint=state.gdb_target,
+            reason=state.detail,
+        )
+        if state.binding is not None:
+            updates["ssh_generation"] = state.binding.session_generation
+        self._context.apply_device_state(**updates)
+
+    def _release_debug(self, reason: str) -> None:
+        if self._context is not None:
+            updates = dict(owner_kind=None, target_state=None, gdb_endpoint=None,
+                           tcl_endpoint=None, reason=reason)
+            if self._lease_token is not None:
+                updates["lease_token"] = self._lease_token
+            self._context.apply_device_state(**updates)
+        self._lease_token = None
 
     @property
     def state(self) -> VsCodeBridgeState:
@@ -48,6 +98,35 @@ class VsCodeDebugController:
     def inspect_environment(self) -> VsCodeEnvironmentStatus:
         self._environment = inspect_vscode_environment()
         return self._environment
+
+    def set_monitor_handoff(self, handoff: Callable[[], bool]) -> None:
+        """Register the bounded Monitor shutdown used before local OpenOCD starts."""
+        self._monitor_handoff = handoff
+
+    def _handoff_monitor(self) -> None:
+        handoff = self._monitor_handoff
+        if handoff is not None and not handoff():
+            raise RuntimeError("Monitor did not become idle before VS Code debug started.")
+
+    def _on_last_client_detached(self, lifecycle_generation: int) -> None:
+        """Release only the B300 bridge after its final observed GDB client leaves."""
+        state = self.bridge.stop_if_generation(lifecycle_generation)
+        if state.state == BridgeState.STOPPED:
+            with self._client_reclaim_lock:
+                self._client_reclaimed = True
+            release = lambda: self._release_debug("VS Code client released debug ownership")
+            dispatcher = self._ui_dispatcher
+            if dispatcher is None:
+                release()
+            else:
+                dispatcher.submit(release)
+
+    def observe_gateway_snapshot(self, snapshot) -> bool:
+        observed = bool(self.bridge.observe_gateway_snapshot(snapshot))
+        with self._client_reclaim_lock:
+            reclaimed = self._client_reclaimed
+            self._client_reclaimed = False
+        return observed or reclaimed
 
     def _require_environment(self) -> VsCodeEnvironmentStatus:
         status = self._environment or self.inspect_environment()
@@ -90,6 +169,7 @@ class VsCodeDebugController:
         launch_revision = VsCodeExternalProfile.launch_revision(root)
         started = False
         try:
+            self._handoff_monitor()
             state = self.bridge.start_local(probe)
             started = True
             if state.state != BridgeState.READY:
@@ -100,19 +180,24 @@ class VsCodeDebugController:
             )
             state = self._require_live_listener(state)
             launch_vscode(root, executable=status.vscode_path)
+            self._publish_debug(state)
             return DebugLaunchResult(state, launch, root, image)
         except Exception:
             if started:
                 self.bridge.stop()
+            self._release_debug("VS Code debug launch failed")
             raise
 
     def start_gateway(self, *, probe: ProbeRef) -> VsCodeBridgeState:
+        self._handoff_monitor()
         state = self.bridge.start_gateway(probe)
         if state.state != BridgeState.READY:
             try:
                 self.bridge.stop()
+                self._release_debug("Gateway debug start failed")
             finally:
                 raise RuntimeError("B300 Gateway did not become READY.")
+        self._publish_debug(state)
         return state
 
     def start_client(self, *, session: RemoteSession, workspace: Path, symbols: Path,
@@ -147,10 +232,12 @@ class VsCodeDebugController:
             )
             state = self._require_live_listener(state)
             launch_vscode(root, executable=status.vscode_path)
+            self._publish_debug(state)
             return DebugLaunchResult(state, launch, root, image)
         except Exception:
             if started:
                 self.bridge.stop()
+            self._release_debug("VS Code remote debug launch failed")
             raise
 
     def synchronize_client(self, *, session: RemoteSession, workspace: Path,
@@ -173,13 +260,17 @@ class VsCodeDebugController:
                 root, force=force_launch_json, expected_revision=launch_revision
             )
             state = self._require_live_listener(state)
+            self._publish_debug(state)
             return DebugLaunchResult(state, launch, root, image)
         except Exception:
             self.bridge.stop()
+            self._release_debug("Gateway debug synchronization failed")
             raise
 
     def stop(self) -> VsCodeBridgeState:
-        return self.bridge.stop()
+        state = self.bridge.stop()
+        self._release_debug("VS Code debug stopped")
+        return state
 
 
-__all__ = ["DebugLaunchResult", "VsCodeDebugController"]
+__all__ = ["DebugLaunchResult", "GuiDispatcher", "VsCodeDebugController"]

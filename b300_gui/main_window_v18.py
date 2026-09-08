@@ -30,7 +30,7 @@ from .gateway_login_dialog import GatewayLoginDialog
 from .gateway_health_controller import GatewayHealthController
 from .gateway_manager_dialog import GatewayManagerDialog
 from .project_manager_dialog import ProjectManagerDialog
-from .vscode_debug_controller import VsCodeDebugController
+from .vscode_debug_controller import GuiDispatcher, VsCodeDebugController
 from .views.debug_vscode_view import DebugVsCodeView
 from .views.device_view import DeviceView
 from .views.monitor_view import MonitorView
@@ -68,7 +68,12 @@ class MainWindowV18(MainWindow):
         self._context_controller = EngineeringContextController(self)
         self.app_context = self._context_controller.context
         self.shared_context_bar = self._context_controller.bar
-        self._gateway_health = GatewayHealthController(self._gateway_sessions, self)
+        self._vscode_dispatcher = GuiDispatcher(self)
+        self._gateway_health = GatewayHealthController(
+            self._gateway_sessions, self, context=self.app_context,
+        )
+        self._vscode_controller.set_context(self.app_context)
+        self._vscode_controller.set_ui_dispatcher(self._vscode_dispatcher)
         self._gateway_health.snapshot_changed.connect(self._on_gateway_snapshot)
         self._gateway_health.warning_changed.connect(self._on_gateway_warning)
         self._gateway_health.recovered.connect(self._on_gateway_recovered)
@@ -240,6 +245,7 @@ class MainWindowV18(MainWindow):
         self.monitor_view.operation_state_changed.connect(self._hardware_activity_changed)
         self.monitor_view.manage_gateways_requested.connect(self._open_gateway_manager)
         self.monitor_view.manage_projects_requested.connect(self._open_project_manager)
+        self._vscode_controller.set_monitor_handoff(self.monitor_view.controller.prepare_shutdown)
         self.v18_stack.addWidget(self.monitor_view)
 
         self.debug_vscode_view = DebugVsCodeView(self, context=self.app_context)
@@ -253,6 +259,7 @@ class MainWindowV18(MainWindow):
         self.v18_stack.addWidget(self.debug_vscode_view)
 
         self.device_view = DeviceView(self)
+        self.app_context.device_changed.connect(self._render_device_snapshot)
         self.device_view.refresh_requested.connect(self.refresh_probes)
         self.device_view.doctor_requested.connect(self.inspect_target)
         self.device_view.btn_refresh.hide()
@@ -420,6 +427,20 @@ class MainWindowV18(MainWindow):
         if hasattr(self, "device_info_panel"):
             self.device_info_panel.set_probes(self.app_context.probes, self.app_context.selected_probe)
             self._refresh_reference_palette()
+
+    def _render_device_snapshot(self, snapshot) -> None:
+        """Refresh all shared status consumers from one immutable evidence object."""
+        if hasattr(self, "device_view"):
+            source = "gateway" if not self.app_context.selected_connection.is_local else "local"
+            self.device_view.set_probes(
+                self.app_context.probes, snapshot.probe_serial, source=source,
+                unavailable_reason=snapshot.reason if snapshot.liveness != "LIVE" else "",
+            )
+            self.device_view.set_target_info(self.app_context.target_info)
+        if hasattr(self, "debug_vscode_view"):
+            self.debug_vscode_view._render_context()
+        if hasattr(self, "monitor_view"):
+            self.monitor_view._render_context()
 
     def _update_clock(self) -> None:
         if hasattr(self, "clock_label"):
@@ -890,14 +911,22 @@ class MainWindowV18(MainWindow):
 
     def _on_gateway_snapshot(self, snapshot) -> None:
         self.app_context.set_gateway_health(snapshot, self._gateway_health.warning)
+        observe_monitor = getattr(self.monitor_view, "observe_gateway_health", None)
+        if callable(observe_monitor):
+            observe_monitor(snapshot)
+        observer = getattr(self._vscode_controller, "observe_gateway_snapshot", None)
+        if callable(observer) and observer(snapshot):
+            self._render_bridge_state()
 
     def _on_gateway_warning(self, warning: str) -> None:
         self.app_context.set_gateway_health(self._gateway_health.snapshot, warning)
         if warning and not self.app_context.selected_connection.is_local:
+            self._record_support_event("MONITOR_STALE", code="GATEWAY_WARNING")
             self.monitor_view.mark_gateway_stale(warning)
 
     def _on_gateway_recovered(self, snapshot) -> None:
         """Rebind the existing Client bridge and refresh only B300's launch entry."""
+        self._record_support_event("GATEWAY_RECOVERED", state="READY")
         self._on_gateway_snapshot(snapshot)
         state = self._vscode_controller.state
         if (state.role != DebugRole.CLIENT
