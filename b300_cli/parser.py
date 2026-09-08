@@ -185,8 +185,10 @@ def build_parser() -> argparse.ArgumentParser:
     debug.add_argument("--dry-run", action="store_true")
     debug.add_argument("--managed-child", action="store_true", help=argparse.SUPPRESS)
     debug.add_argument("--lease-mode", choices=("LIVE_WATCH", "VSCODE_DEBUG"))
-    debug.add_argument("--client-id")
-    debug.add_argument("--client-label")
+    debug.add_argument("--mode", dest="lease_mode", choices=("LIVE_WATCH", "VSCODE_DEBUG"),
+                       help="Alias for --lease-mode when acquiring a Gateway lease.")
+    debug.add_argument("--client-id", default="b300-cli")
+    debug.add_argument("--client-label", default="B300-CLI")
     debug.add_argument("--request-id")
     debug.add_argument("--lease-id")
     debug.add_argument("--lease-token", help=argparse.SUPPRESS)

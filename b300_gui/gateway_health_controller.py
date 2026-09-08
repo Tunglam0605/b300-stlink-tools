@@ -81,6 +81,10 @@ class GatewayHealthController(QObject):
             updates["ssh_generation"] = ssh_generation
         context.apply_device_state(**updates)
         context.set_gateway_health(value, self._warning)
+        # Remote session adapters may attach the authenticated public lease
+        # snapshot to the health result; publish only that bounded object.
+        context.set_gateway_agent_status(getattr(value, "agent_status", None))
+        context.set_gateway_lease_snapshot(getattr(value, "lease_snapshot", None))
         if value.selected_probe is not None:
             serial = str(probe.get("serial") or "") or None
             if serial is not None and not any(item.serial == serial for item in context.probes):

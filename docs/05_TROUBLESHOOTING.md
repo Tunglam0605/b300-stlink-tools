@@ -27,3 +27,25 @@ Lưu log dạng JSON khi cần báo lỗi:
 ```text
 b300-stlink flash <file.hex> --json > b300-flash.log
 ```
+
+Gateway Agent/lease reason codes:
+
+| Lỗi | Làm gì |
+|---|---|
+| `GATEWAY_BUSY` | Một Client khác đang giữ lease; dùng Stop ở Client đó hoặc chờ lease hết hạn rồi thử lại. |
+| `GATEWAY_AGENT_NOT_RUNNING` | Chạy `b300-stlink debug gateway-agent-ensure --json`, rồi kiểm tra lại status. |
+| `GATEWAY_AGENT_START_TIMEOUT` | Agent không khởi động kịp; kiểm tra `gateway-agent-status --json`, xem log và thử lại. |
+| `LEASE_EXPIRED` | Client mất heartbeat hoặc crash; kiểm tra status, đợi Agent dọn tài nguyên rồi acquire lại. |
+| `GATEWAY_HEARTBEAT_STALE` | Gateway không còn phản hồi; chạy status/ensure và thử lại sau khi Agent sẵn sàng. |
+| `GATEWAY_START_FAILED` | OpenOCD không khởi động được; kiểm tra probe/port, giữ nguyên lease và thử lại sau khi xử lý nguyên nhân. |
+| `LEASE_INVALID` | Lease/token đã cũ hoặc không hợp lệ; dừng phiên hiện tại và acquire lease mới qua GUI. |
+| `GATEWAY_NOT_READY` | Gateway chưa sẵn sàng; chạy status/ensure và chờ trạng thái READY. |
+| `GATEWAY_PROCESS_NOT_RUNNING` | Tiến trình Gateway đã dừng; chạy `b300-stlink debug gateway-ensure --json`, rồi thử lại. |
+
+Các lệnh khôi phục an toàn:
+
+```text
+b300-stlink debug gateway-agent-status --json
+b300-stlink debug gateway-agent-ensure --json
+b300-stlink debug gateway-release --json
+```

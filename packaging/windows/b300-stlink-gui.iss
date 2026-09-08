@@ -55,6 +55,8 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 [Run]
 Filename: "{app}\b300-stlink-gui.exe"; Parameters: "--first-run-setup"; Description: "Mở B300 ST-Link Tools và tự chuẩn bị máy"; Flags: nowait postinstall skipifsilent
 
+Filename: "{app}\b300-stlink.exe"; Parameters: "debug gateway-agent-ensure --json"; Description: "Khởi động B300 Gateway Agent"; Flags: nowait postinstall skipifsilent
+
 [Code]
 var
   OwnedPaths, MovedPaths: TStringList;

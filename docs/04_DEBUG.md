@@ -335,3 +335,10 @@ b300-stlink gateway status
 ```
 
 Sau khi saved profile đã sẵn sàng, `debug client` và `debug vscode` có thể bỏ `--ssh-host/--ssh-user`. `gateway status` chỉ phản ánh local setup; `gateway connect-check` mở OpenSSH tương tác và mới xác minh SSH thật. GDB/TCL vẫn chỉ loopback ở Gateway và chỉ đi qua SSH forwarding; không NAT/expose `3333`/`6666`. Chi tiết đầy đủ: [Gateway Setup & Remote Workflow](19_GATEWAY_SETUP_WIZARD_V0.12.0.md).
+### Gateway Agent và lease độc quyền
+
+Thiết lập Gateway một lần bằng `b300-stlink gateway quickstart --confirm-system-change`. Agent tự thức dậy khi Client cần; kiểm tra trạng thái bằng `b300-stlink debug gateway-agent-status --json`.
+
+Tools trong GUI tự quản lý lease. Người dùng không cần sao chép token hay chạy acquire/release thủ công. Lệnh chẩn đoán tương ứng là `b300-stlink debug gateway-acquire --mode VSCODE_DEBUG --json` và `b300-stlink debug gateway-release --json`.
+
+Khi Gateway bận, chờ chủ sở hữu hiện tại giải phóng lease hoặc dùng Stop trong GUI. Sau khi Client crash, Agent tự hết hạn lease theo heartbeat; kiểm tra lại status rồi thử thao tác lại.

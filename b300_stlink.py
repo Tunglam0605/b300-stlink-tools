@@ -41,7 +41,7 @@ from b300_core.gateway_agent import (
     GatewayAgentStatusStore,
 )
 from b300_core.gateway_agent_protocol import GatewayRequest, GatewayRequestStore
-from b300_core.gateway_lease import GatewayLeaseStore
+from b300_core.gateway_lease import GatewayLeasePublicSnapshot, GatewayLeaseStore
 from b300_core.gateway_lease_coordinator import GatewayLeaseCoordinator
 from b300_core.gateway_protocol import gateway_capabilities
 from b300_core.gateway_supervisor import (
@@ -1213,6 +1213,21 @@ def main(argv: Optional[List[str]] = None) -> int:
                 )
                 return 1
             service = B300Service(executable=args.openocd)
+            agent_status = GatewayAgentProcessManager().status()
+            agent_evidence = {}
+            if agent_status is not None:
+                agent_evidence = {
+                    "state": getattr(agent_status, "state", None),
+                    "reason_code": getattr(agent_status, "reason_code", None),
+                    "instance_id": getattr(agent_status, "instance_id", None),
+                    "pid": getattr(agent_status, "pid", None),
+                }
+            lease = GatewayLeaseStore().read()
+            lease_evidence = {}
+            if lease is not None:
+                lease_evidence = GatewayLeasePublicSnapshot.from_lease(
+                    lease, time.monotonic()
+                ).to_record()
             snapshot = collect_support_snapshot(
                 version=__version__,
                 openocd_version=OPENOCD_VERSION,
@@ -1222,6 +1237,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 operational_evidence={
                     "versions": {"core": __version__, "cli": __version__},
                     "process": {"owner": "b300-stlink-tools", "pid": os.getpid()},
+                    "gateway_agent": agent_evidence,
+                    "gateway_lease": lease_evidence,
                     "timeline": [{
                         "at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                         "event": "SUPPORT_BUNDLE_REQUESTED", "code": "CLI",

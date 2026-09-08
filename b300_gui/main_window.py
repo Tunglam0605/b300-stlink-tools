@@ -555,6 +555,28 @@ class MainWindow(QMainWindow):
         context = getattr(self, "app_context", None)
         device = getattr(context, "device_snapshot", None)
         gateway = getattr(context, "gateway_snapshot", None)
+        agent = getattr(context, "gateway_agent_snapshot", None)
+        lease = getattr(context, "gateway_lease_snapshot", None)
+        if agent is not None:
+            evidence["gateway_agent"] = {
+                "state": getattr(agent, "state", None),
+                "reason_code": getattr(agent, "reason_code", None),
+                "instance_id": getattr(agent, "instance_id", None),
+                "pid": getattr(agent, "pid", None),
+            }
+        if lease is not None:
+            evidence["gateway_lease"] = {
+                "active": getattr(lease, "active", None),
+                "client_label": getattr(lease, "client_label", None),
+                "mode": getattr(lease, "mode", None),
+                "state": getattr(lease, "state", None),
+                "reason_code": getattr(lease, "reason_code", None),
+                "acquired_at": getattr(lease, "acquired_at", None),
+                "generation": getattr(lease, "generation", None),
+                "gateway_generation": getattr(lease, "gateway_generation", None),
+                "gateway_instance_id": getattr(lease, "gateway_instance_id", None),
+                "heartbeat_age_seconds": getattr(lease, "heartbeat_age_seconds", None),
+            }
         if gateway is not None:
             evidence["gateway"] = {
                 "protocol_version": getattr(gateway, "schema_version", None),

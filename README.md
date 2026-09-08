@@ -302,3 +302,9 @@ bất kỳ lệnh nào liên quan đến ST-Link.
 - Báo cáo vấn đề an toàn theo [SECURITY.md](SECURITY.md).
 - Lịch sử thay đổi được ghi tại [CHANGELOG.md](CHANGELOG.md).
 - Dự án phát hành theo giấy phép [MIT](LICENSE).
+b300-stlink gateway quickstart --confirm-system-change
+b300-stlink debug gateway-agent-status --json
+b300-stlink debug gateway-acquire --mode VSCODE_DEBUG --json
+b300-stlink debug gateway-release --json
+
+Gateway Agent được thiết lập một lần và tự thức dậy khi cần. GUI tự quản lý lease; người dùng không cần sao chép token. Khi Client dừng hoặc crash, lease được giải phóng sau thời gian heartbeat giới hạn.

@@ -8,6 +8,8 @@ from b300_core.gateway_profiles import GatewayProfile
 from b300_core.gateway_sessions import GatewaySessionManager
 from b300_core.models import ProbeInfo, TargetInfo
 from b300_core.project_profiles import ProjectProfile
+from b300_core.gateway_agent import GatewayAgentStatus
+from b300_core.gateway_lease import GatewayLeasePublicSnapshot
 
 class AppContextTests(unittest.TestCase):
     @classmethod
@@ -48,6 +50,20 @@ class AppContextTests(unittest.TestCase):
         self.assertEqual(self.ctx.probes, ())
         self.assertIs(self.ctx.gateway_sessions,self.sessions)
         self.assertEqual(self.sessions._sessions, {})
+
+    def test_connection_change_clears_current_agent_and_lease_evidence(self):
+        agent = GatewayAgentStatus("agent-01", 123, 1.0, "READY", "IDLE")
+        lease = GatewayLeasePublicSnapshot(
+            True, "private-id", 1, "ENG-LAPTOP-02", "VSCODE_DEBUG", "ACTIVE",
+            "2026-09-08T01:02:03Z", 0, "agent-01", 1, "private-probe", "GATEWAY_BUSY",
+        )
+        self.ctx.set_gateway_agent_status(agent)
+        self.ctx.set_gateway_lease_snapshot(lease)
+        self.assertIs(self.ctx.gateway_agent_snapshot, agent)
+        self.assertIs(self.ctx.gateway_lease_snapshot, lease)
+        self.ctx.select_connection('lab')
+        self.assertIsNone(self.ctx.gateway_agent_snapshot)
+        self.assertIsNone(self.ctx.gateway_lease_snapshot)
 
     def test_profiles_keep_selection_and_apply_defaults_on_first_load(self):
         from b300_gui.app_context import AppContext

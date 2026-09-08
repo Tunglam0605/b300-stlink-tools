@@ -143,7 +143,9 @@ def main(argv=None) -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     metadata = (
         "platform=%s\nflavor=%s\nversion=%s\nopenocd=0.12.0-7\n"
-        "openocd_archive=%s\nopenocd_sha256=%s\n" % (
+        "openocd_archive=%s\nopenocd_sha256=%s\n"
+        "gateway_agent_command=debug gateway-agent --managed-child --json\n"
+        "gateway_agent_status=debug gateway-agent-status --json\n" % (
             args.platform,
             args.flavor,
             args.version,

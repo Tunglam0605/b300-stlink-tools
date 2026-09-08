@@ -159,6 +159,9 @@ def cli_pyinstaller_plan(
     ]
     for resource in runtime_resources(platform_name):
         command.extend(["--add-data", pyinstaller_data_argument(resource)])
+    # Keep the managed Gateway Agent entry point explicit in frozen builds;
+    # this also protects it from future import graph pruning.
+    command.extend(["--hidden-import", "b300_core.gateway_agent"])
     command.append(str(ROOT / "b300_stlink.py"))
     if platform_name == "windows-x64":
         return CliPyinstallerPlan(

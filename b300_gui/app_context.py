@@ -6,6 +6,8 @@ from b300_core.gateway_profiles import GatewayProfile
 from b300_core.models import TargetInfo
 from b300_core.project_profiles import ProjectProfile
 from b300_core.device_state import DeviceStateStore
+from b300_core.gateway_agent import GatewayAgentStatus
+from b300_core.gateway_lease import GatewayLeasePublicSnapshot
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,8 @@ class AppContext(QObject):
         self.target_info: Optional[TargetInfo] = None
         self.hardware_busy = False
         self.gateway_snapshot = None
+        self.gateway_agent_snapshot = None
+        self.gateway_lease_snapshot = None
         self.gateway_warning = ""
         self.project_profiles = ()
         self.connections = (self.selected_connection,)
@@ -80,6 +84,8 @@ class AppContext(QObject):
             self.probes = ()
             self.target_info = None
             self.gateway_snapshot = None
+            self.gateway_agent_snapshot = None
+            self.gateway_lease_snapshot = None
             self.gateway_warning = ""
         self.project_profiles, self.connections = projects, connections
         self.selected_project, self.selected_connection = project, connection
@@ -111,6 +117,8 @@ class AppContext(QObject):
             self.probes = ()
             self.target_info = None
             self.gateway_snapshot = None
+            self.gateway_agent_snapshot = None
+            self.gateway_lease_snapshot = None
             self.gateway_warning = ""
             self._sync_device_state(connection_id=selected.connection_id, probe_serial=None)
             self.changed.emit()
@@ -159,4 +167,18 @@ class AppContext(QObject):
         if snapshot != self.gateway_snapshot or warning != self.gateway_warning:
             self.gateway_snapshot = snapshot
             self.gateway_warning = warning
+            self.changed.emit()
+
+    def set_gateway_agent_status(self, status: Optional[GatewayAgentStatus]):
+        if status is not None and not isinstance(status, GatewayAgentStatus):
+            raise TypeError("Gateway Agent status must be GatewayAgentStatus or None.")
+        if status != self.gateway_agent_snapshot:
+            self.gateway_agent_snapshot = status
+            self.changed.emit()
+
+    def set_gateway_lease_snapshot(self, snapshot: Optional[GatewayLeasePublicSnapshot]):
+        if snapshot is not None and not isinstance(snapshot, GatewayLeasePublicSnapshot):
+            raise TypeError("Gateway lease snapshot must be GatewayLeasePublicSnapshot or None.")
+        if snapshot != self.gateway_lease_snapshot:
+            self.gateway_lease_snapshot = snapshot
             self.changed.emit()

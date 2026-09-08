@@ -57,6 +57,13 @@ class GatewayProtocolTests(unittest.TestCase):
                 args = parse_args(["debug", mode, "--json"])
                 self.assertEqual(args.debug_mode, mode)
 
+    def test_gateway_acquire_accepts_documented_mode_alias(self) -> None:
+        args = parse_args([
+            "debug", "gateway-acquire", "--mode", "VSCODE_DEBUG",
+            "--client-id", "client-1", "--client-label", "ENG-LAPTOP-02", "--json",
+        ])
+        self.assertEqual(args.lease_mode, "VSCODE_DEBUG")
+
     def test_gateway_status_cli_emits_runtime_snapshot_and_capabilities(self) -> None:
         ready = self._ready()
         manager = mock.Mock()

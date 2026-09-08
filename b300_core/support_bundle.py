@@ -116,6 +116,59 @@ def _operational_evidence_record(evidence: Optional[Mapping[str, object]]) -> Op
             selected["reason_code"] = reason_code
         if selected:
             record["gateway"] = selected
+    gateway_agent = evidence.get("gateway_agent")
+    if isinstance(gateway_agent, Mapping):
+        selected = {}
+        for name in ("state", "reason_code"):
+            token = _evidence_token(gateway_agent.get(name))
+            if token is not None and token == token.upper():
+                selected[name] = token
+        instance_id = _evidence_token(gateway_agent.get("instance_id"))
+        if instance_id is not None:
+            selected["instance_id"] = instance_id
+        try:
+            pid = int(gateway_agent.get("pid"))
+        except (TypeError, ValueError):
+            pid = -1
+        if 0 < pid <= 2 ** 31 - 1:
+            selected["pid"] = pid
+        if selected:
+            record["gateway_agent"] = selected
+    gateway_lease = evidence.get("gateway_lease")
+    if isinstance(gateway_lease, Mapping):
+        selected = {}
+        if type(gateway_lease.get("active")) is bool:
+            selected["active"] = gateway_lease["active"]
+        for name in ("client_label", "mode", "state", "reason_code", "gateway_instance_id"):
+            token = _evidence_token(gateway_lease.get(name))
+            if token is None:
+                continue
+            if name in {"mode", "state", "reason_code"} and token != token.upper():
+                continue
+            if name == "mode" and token not in {"LIVE_WATCH", "VSCODE_DEBUG"}:
+                continue
+            selected[name] = token
+        acquired_at = str(gateway_lease.get("acquired_at") or "").strip()
+        if acquired_at.endswith("Z"):
+            try:
+                datetime.fromisoformat(acquired_at.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+            else:
+                selected["acquired_at"] = acquired_at
+        for name in ("generation", "gateway_generation", "heartbeat_age_seconds"):
+            try:
+                value = int(gateway_lease.get(name))
+            except (TypeError, ValueError):
+                continue
+            upper = 86400 if name == "heartbeat_age_seconds" else 2 ** 31 - 1
+            if 0 <= value <= upper:
+                selected[name] = value
+        # Deliberately omit lease_id, token and probe_serial even when supplied.
+        # Keep a stable public shape when the supplied lease record contains
+        # no safe fields; callers can distinguish "present but redacted" from
+        # an omitted diagnostic source without exposing private material.
+        record["gateway_lease"] = selected
     process = evidence.get("process")
     if isinstance(process, Mapping):
         selected = {}
