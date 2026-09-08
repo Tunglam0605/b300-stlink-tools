@@ -66,7 +66,7 @@ class GatewayLeaseClientTests(unittest.TestCase):
         with self.assertRaises(GatewayBusyError):
             client.renew_once()
         client.close()
-        self.assertEqual([item[0] if isinstance(item, tuple) else item for item in session.calls], ["agent-ensure", "acquire", "renew"])
+        self.assertEqual([item[0] if isinstance(item, tuple) else item for item in session.calls], ["agent-ensure", "acquire", "renew", "release"])
 
 
 if __name__ == "__main__":

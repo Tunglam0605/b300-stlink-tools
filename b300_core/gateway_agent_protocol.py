@@ -139,6 +139,12 @@ class GatewayRequestStore:
         while self._clock() < deadline:
             response = self.read_response(request.request_id)
             if response is not None:
+                # The submitting client has consumed the response; remove it
+                # immediately so completed artifacts cannot accumulate.
+                try:
+                    self.response_path(request.request_id).unlink()
+                except OSError:
+                    pass
                 return response
             self._sleep(min(0.05, max(0.0, deadline - self._clock())))
         return self._error(request.request_id, "AGENT_RESPONSE_TIMEOUT")
@@ -206,6 +212,8 @@ class GatewayRequestStore:
 
     def complete(self, request_id: str) -> None:
         try: self.request_path(_id(request_id)).unlink()
+        except FileNotFoundError: pass
+        try: self.response_path(_id(request_id)).unlink()
         except FileNotFoundError: pass
 
     def request_path(self, request_id: str) -> Path:
