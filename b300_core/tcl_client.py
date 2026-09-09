@@ -106,6 +106,10 @@ class SafeTclClient:
     def poll(self) -> str:
         return self._request("poll")
 
+    def shutdown(self) -> str:
+        """Request OpenOCD's documented server shutdown over private loopback TCL."""
+        return self._request("shutdown")
+
     def resume_target(self) -> str:
         """Resume only the selected target; no raw TCL or Flash-mutating command is exposed."""
         current = self.wait_target_state()

@@ -139,6 +139,9 @@ class GatewayLeaseCoordinator:
             try:
                 starting = replace(lease, state="STARTING", reason_code="START_REQUESTED")
                 self._persist_locked(starting)
+                prepare_owner = getattr(self.supervisor, "prepare_lease_owner", None)
+                if callable(prepare_owner):
+                    prepare_owner(lease_id, token, lease.generation)
                 gateway = self.supervisor.ensure()
             except Exception:
                 return self._cleanup_locked("GATEWAY_START_FAILED")
@@ -152,6 +155,9 @@ class GatewayLeaseCoordinator:
                 gateway_generation=gateway.generation,
                 reason_code="LEASE_ACTIVE",
             )
+            owner_record = getattr(self.supervisor, "has_lease_owner_record", None)
+            if callable(owner_record) and not owner_record(active):
+                return self._cleanup_locked("GATEWAY_OWNER_RECORD_UNAVAILABLE")
             self._restart_attempted_generation = None
             self._persist_locked(active)
             self._gateway_endpoints = (getattr(gateway, "gdb_endpoint", None),
@@ -340,6 +346,14 @@ class GatewayLeaseCoordinator:
             self._persist_locked(failed)
             return self._public_locked(failed, self._clock())
         self.store.clear_if_generation(cleaning.generation)
+        forget_owner = getattr(self.supervisor, "forget_lease_owner", None)
+        if callable(forget_owner):
+            try:
+                forget_owner(cleaning)
+            except Exception:
+                # Lease cleanup already succeeded. Private evidence must not
+                # turn a released hardware lease back into an active claim.
+                pass
         self._lease = None
         self._recovery_required = False
         self._gateway_endpoints = (None, None)

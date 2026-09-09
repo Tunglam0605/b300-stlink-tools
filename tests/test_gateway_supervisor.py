@@ -11,6 +11,7 @@ from b300_core.debug_service import DebugState
 from b300_core.gateway_supervisor import (
     GatewayProcessManager, GatewayStatusStore, GatewaySupervisor,
 )
+from b300_core.gateway_lease import token_digest
 from b300_core.gateway_status import GatewaySnapshot
 from b300_core.models import ProbeInfo
 from b300_core.remote_debug_guard import RemoteDebugGuard
@@ -63,7 +64,148 @@ class StartupHardwareErrorService(FakeService):
         event_sink("Error: libusb_bulk_transfer failed")
 
 
+class OwnedFakeService(FakeService):
+    executable = "/trusted/openocd"
+
+    class Process:
+        pid = 4242
+
+    def __init__(self):
+        super().__init__()
+        self._process = self.Process()
+
+    @property
+    def process(self):
+        return self._process
+
+
+class RestartLease:
+    lease_id = "lease-1"
+    generation = 7
+    token_digest = token_digest("private-token")
+    gateway_instance_id = "gateway-restart"
+    gateway_generation = 1
+
+
 class GatewaySupervisorTests(unittest.TestCase):
+    def _restart_owner(self, directory, *, identity=None, shutdown=None,
+                       endpoints_closed=None, timeout=0.05):
+        identity = identity or {
+            "pid": 4242, "start_identity": "start-a",
+            "executable": "/trusted/openocd", "boot_identity": "boot-a",
+        }
+        service = OwnedFakeService()
+        supervisor = GatewaySupervisor(
+            service_factory=lambda: service,
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=lambda _config: "running",
+            owner_record_path=Path(directory) / "openocd-owner.json",
+            process_identity=lambda _pid: identity,
+            shutdown_openocd=shutdown or (lambda _endpoint: None),
+            endpoints_closed=endpoints_closed or (lambda _gdb, _tcl: True),
+            recovery_timeout_seconds=timeout,
+        )
+        supervisor._instance_id = "gateway-restart"
+        supervisor.prepare_lease_owner(RestartLease.lease_id, "private-token", RestartLease.generation)
+        self.assertEqual(supervisor.ensure().state, "READY")
+        return supervisor
+
+    def test_restart_recovery_stops_only_matching_persisted_b300_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            stopped = []
+            owner = self._restart_owner(directory, shutdown=stopped.append)
+            record = owner._owner_store.read()
+            self.assertEqual(
+                (record["lease_generation"], record["gateway_instance_id"],
+                 record["gateway_generation"], record["gdb_endpoint"], record["tcl_endpoint"]),
+                (7, "gateway-restart", 1, "127.0.0.1:3333", "127.0.0.1:6666"),
+            )
+            self.assertEqual(record["lease_token"], "private-token")
+            current = [{"pid": 4242, "start_identity": "start-a",
+                        "executable": "/trusted/openocd", "boot_identity": "boot-a"}]
+            def shutdown(endpoint):
+                stopped.append(endpoint)
+                current[0] = None
+            fresh = GatewaySupervisor(
+                owner_record_path=Path(directory) / "openocd-owner.json",
+                process_identity=lambda _pid: current[0],
+                shutdown_openocd=shutdown,
+                endpoints_closed=lambda _gdb, _tcl: current[0] is None,
+            )
+            self.assertTrue(fresh.reconcile_lease_owner(RestartLease()))
+            self.assertEqual(stopped, ["127.0.0.1:6666"])
+            self.assertFalse((Path(directory) / "openocd-owner.json").exists())
+            self.assertEqual(owner._service.stop_calls, 0)
+
+    def test_restart_recovery_rejects_pid_reuse_start_identity_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self._restart_owner(directory)
+            fresh = GatewaySupervisor(
+                owner_record_path=Path(directory) / "openocd-owner.json",
+                process_identity=lambda _pid: {"pid": 4242, "start_identity": "reused",
+                                                "executable": "/trusted/openocd", "boot_identity": "boot-a"},
+                shutdown_openocd=lambda _endpoint: self.fail("must not stop reused PID"),
+            )
+            self.assertFalse(fresh.reconcile_lease_owner(RestartLease()))
+
+    def test_restart_recovery_rejects_executable_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self._restart_owner(directory)
+            fresh = GatewaySupervisor(
+                owner_record_path=Path(directory) / "openocd-owner.json",
+                process_identity=lambda _pid: {"pid": 4242, "start_identity": "start-a",
+                                                "executable": "/untrusted/openocd", "boot_identity": "boot-a"},
+                shutdown_openocd=lambda _endpoint: self.fail("must not stop foreign executable"),
+            )
+            self.assertFalse(fresh.reconcile_lease_owner(RestartLease()))
+
+    def test_restart_recovery_rejects_missing_or_corrupt_owner_record(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "openocd-owner.json"
+            fresh = GatewaySupervisor(owner_record_path=path)
+            self.assertFalse(fresh.reconcile_lease_owner(RestartLease()))
+            path.write_text("{broken", encoding="utf-8")
+            self.assertFalse(fresh.reconcile_lease_owner(RestartLease()))
+
+    def test_restart_recovery_requires_dead_identity_and_closed_endpoints_after_shutdown(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            current = [{"pid": 4242, "start_identity": "start-a",
+                        "executable": "/trusted/openocd", "boot_identity": "boot-a"}]
+            def shutdown(_endpoint): current[0] = None
+            self._restart_owner(directory, identity=current[0], shutdown=lambda _endpoint: None)
+            fresh = GatewaySupervisor(
+                owner_record_path=Path(directory) / "openocd-owner.json",
+                process_identity=lambda _pid: current[0], shutdown_openocd=shutdown,
+                endpoints_closed=lambda _gdb, _tcl: current[0] is None,
+            )
+            self.assertTrue(fresh.reconcile_lease_owner(RestartLease()))
+
+    def test_restart_recovery_rejects_occupied_endpoint_after_shutdown(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            current = [{"pid": 4242, "start_identity": "start-a",
+                        "executable": "/trusted/openocd", "boot_identity": "boot-a"}]
+            self._restart_owner(directory, identity=current[0])
+            fresh = GatewaySupervisor(
+                owner_record_path=Path(directory) / "openocd-owner.json",
+                process_identity=lambda _pid: current[0],
+                shutdown_openocd=lambda _endpoint: current.__setitem__(0, None),
+                endpoints_closed=lambda _gdb, _tcl: False,
+            )
+            self.assertFalse(fresh.reconcile_lease_owner(RestartLease()))
+
+    def test_restart_recovery_fails_closed_when_allowlisted_shutdown_fails_or_times_out(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self._restart_owner(directory)
+            blocked = threading.Event()
+            fresh = GatewaySupervisor(
+                owner_record_path=Path(directory) / "openocd-owner.json",
+                process_identity=lambda _pid: {"pid": 4242, "start_identity": "start-a",
+                                                "executable": "/trusted/openocd", "boot_identity": "boot-a"},
+                shutdown_openocd=lambda _endpoint: blocked.wait(),
+                recovery_timeout_seconds=0.01,
+            )
+            self.addCleanup(blocked.set)
+            self.assertFalse(fresh.reconcile_lease_owner(RestartLease()))
     def test_managed_owner_restores_running_only_after_last_gdb_disconnect(self) -> None:
         service = FakeService()
         tcl = FakeTcl("running")

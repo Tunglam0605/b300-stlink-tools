@@ -43,6 +43,11 @@ class SafeTclClientTests(unittest.TestCase):
         self.assertEqual(calls[0][0], ("127.0.0.1", 6666))
         self.assertTrue(sock.closed)
 
+    def test_shutdown_uses_only_the_allowlisted_openocd_command(self) -> None:
+        client, sock, _calls = self.make_client(b"\x1a")
+        self.assertEqual(client.shutdown(), "")
+        self.assertEqual(sock.sent, [b"shutdown\x1a"])
+
     def test_target_state_parses_selected_target_from_real_openocd_shape(self) -> None:
         response = (
             b"TargetName         Type       Endian TapName            State       \

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import threading
 import time
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Callable, Optional, Sequence
+from typing import Callable, Mapping, Optional, Sequence
 
 from .debug_service import DebugConfig, DebugService, DebugState
 from .gateway_status import GatewaySnapshot, SUPPORTED_SCHEMA_VERSION
@@ -109,6 +110,148 @@ def _process_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def _canonical_executable(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("OpenOCD executable identity is missing.")
+    return os.path.normcase(os.path.realpath(os.path.abspath(text)))
+
+
+def _process_identity(pid: int):
+    """Return immutable OS evidence for one process, or ``None`` when unavailable."""
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return None
+    if os.name != "nt":
+        try:
+            fields = (Path("/proc") / str(pid) / "stat").read_text(encoding="utf-8").rsplit(") ", 1)[1].split()
+            start = fields[19]
+            executable = _canonical_executable(os.readlink(str(Path("/proc") / str(pid) / "exe")))
+            boot = (Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip())
+            if not boot:
+                return None
+            return {"pid": pid, "start_identity": start, "executable": executable, "boot_identity": boot}
+        except (OSError, IndexError, ValueError, UnicodeError):
+            return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel.CloseHandle.restype = wintypes.BOOL
+        kernel.GetProcessTimes.argtypes = (
+            wintypes.HANDLE, ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME),
+            ctypes.POINTER(wintypes.FILETIME), ctypes.POINTER(wintypes.FILETIME),
+        )
+        kernel.GetProcessTimes.restype = wintypes.BOOL
+        kernel.QueryFullProcessImageNameW.argtypes = (
+            wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD),
+        )
+        kernel.QueryFullProcessImageNameW.restype = wintypes.BOOL
+        handle = kernel.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return None
+        try:
+            created = wintypes.FILETIME(); exited = wintypes.FILETIME()
+            kernel_time = wintypes.FILETIME(); user_time = wintypes.FILETIME()
+            if not kernel.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exited),
+                                          ctypes.byref(kernel_time), ctypes.byref(user_time)):
+                return None
+            size = wintypes.DWORD(32768)
+            buffer = ctypes.create_unicode_buffer(size.value)
+            if not kernel.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+                return None
+            # WMI's boot timestamp is stable for this boot and avoids treating a
+            # machine reboot plus PID reuse as the old B300 owner.
+            command = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                       "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o')"]
+            boot = subprocess.check_output(command, stderr=subprocess.DEVNULL, text=True, timeout=2).strip()
+            if not boot:
+                return None
+            started = (int(created.dwHighDateTime) << 32) | int(created.dwLowDateTime)
+            return {"pid": pid, "start_identity": str(started),
+                    "executable": _canonical_executable(buffer.value), "boot_identity": boot}
+        finally:
+            kernel.CloseHandle(handle)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def _closed_endpoints(gdb_endpoint: str, tcl_endpoint: str) -> bool:
+    for endpoint in (gdb_endpoint, tcl_endpoint):
+        host, _separator, port_text = endpoint.rpartition(":")
+        try:
+            connection = socket.create_connection((host, int(port_text)), timeout=0.15)
+        except OSError:
+            continue
+        else:
+            connection.close()
+            return False
+    return True
+
+
+class _GatewayOpenOcdOwnerStore:
+    """Private, atomic recovery evidence. This record is never a public snapshot."""
+
+    _FIELDS = frozenset({
+        "schema_version", "pid", "start_identity", "executable", "boot_identity",
+        "gateway_instance_id", "gateway_generation", "lease_id", "lease_generation",
+        "lease_token", "gdb_endpoint", "tcl_endpoint",
+    })
+
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+
+    def write(self, record: Mapping[str, object]) -> None:
+        validated = self._validate(record)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix="openocd-owner.", suffix=".tmp", dir=str(self.path.parent))
+        try:
+            os.chmod(temporary, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+                json.dump(validated, handle, sort_keys=True)
+                handle.write("\n")
+                handle.flush(); os.fsync(handle.fileno())
+            os.replace(temporary, self.path)
+        finally:
+            try: Path(temporary).unlink()
+            except OSError: pass
+
+    def read(self):
+        try:
+            return self._validate(json.loads(self.path.read_text(encoding="utf-8")))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return None
+
+    def clear(self) -> None:
+        try: self.path.unlink()
+        except FileNotFoundError: pass
+        except OSError: pass
+
+    @classmethod
+    def _validate(cls, record: Mapping[str, object]) -> dict:
+        if not isinstance(record, Mapping) or set(record) != cls._FIELDS or record.get("schema_version") != 1:
+            raise ValueError("Gateway OpenOCD owner record is invalid.")
+        pid = record["pid"]
+        generation = record["gateway_generation"]
+        lease_generation = record["lease_generation"]
+        if (not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0
+                or not isinstance(generation, int) or isinstance(generation, bool) or generation < 1
+                or not isinstance(lease_generation, int) or isinstance(lease_generation, bool) or lease_generation < 1):
+            raise ValueError("Gateway OpenOCD owner record has invalid numeric identity.")
+        result = dict(record)
+        for field in cls._FIELDS - {"schema_version", "pid", "gateway_generation", "lease_generation"}:
+            if not isinstance(result[field], str) or not result[field].strip() or len(result[field]) > 4096:
+                raise ValueError("Gateway OpenOCD owner record has invalid identity.")
+        result["executable"] = _canonical_executable(result["executable"])
+        for endpoint in ("gdb_endpoint", "tcl_endpoint"):
+            host, separator, port = result[endpoint].rpartition(":")
+            if host != "127.0.0.1" or not separator or not 1 <= int(port) <= 65535:
+                raise ValueError("Gateway OpenOCD owner endpoints must be loopback.")
+        return result
 
 
 class GatewayProcessManager:
@@ -263,11 +406,18 @@ class GatewaySupervisor:
                  snapshot_sink: Optional[Callable[[GatewaySnapshot], None]] = None,
                  clock: Callable[[], float] = time.monotonic,
                  gdb_port: int = 3333, tcl_port: int = 6666,
-                 requested_serial: Optional[str] = None) -> None:
+                 requested_serial: Optional[str] = None,
+                 owner_record_path: Optional[Path] = None,
+                 process_identity: Callable[[int], object] = _process_identity,
+                 shutdown_openocd: Optional[Callable[[str], None]] = None,
+                 endpoints_closed: Callable[[str, str], bool] = _closed_endpoints,
+                 recovery_timeout_seconds: float = 2.0) -> None:
         if not 1 <= int(gdb_port) <= 65535 or not 1 <= int(tcl_port) <= 65535:
             raise ValueError("Gateway ports must be in range 1..65535.")
         if int(gdb_port) == int(tcl_port):
             raise ValueError("Gateway GDB and TCL ports must be distinct.")
+        if not 0.01 <= float(recovery_timeout_seconds) <= 10.0:
+            raise ValueError("Gateway recovery timeout must be in [0.01, 10].")
         self._service_factory = service_factory
         self._probe_discovery = probe_discovery
         self._target_state_probe = target_state_probe or self._probe_target_state
@@ -277,6 +427,14 @@ class GatewaySupervisor:
         self._gdb_port = int(gdb_port)
         self._tcl_port = int(tcl_port)
         self._requested_serial = requested_serial
+        self._owner_store = _GatewayOpenOcdOwnerStore(
+            owner_record_path or (gateway_runtime_root() / "openocd-owner.json")
+        )
+        self._process_identity = process_identity
+        self._shutdown_openocd = shutdown_openocd or self._safe_shutdown_openocd
+        self._endpoints_closed = endpoints_closed
+        self._recovery_timeout = float(recovery_timeout_seconds)
+        self._lease_owner_context = None
         self._instance_id = uuid.uuid4().hex
         self._sequence = 0
         self._generation = 0
@@ -365,7 +523,9 @@ class GatewaySupervisor:
                 return self._publish("DISCONNECTED", "OPENOCD_HARDWARE_ERROR")
             self._arm_remote_guard(config, cpu_state)
             self._evidence_at = self._clock()
-            return self._publish("READY", "TARGET_VERIFIED", cpu_state=cpu_state)
+            ready = self._publish("READY", "TARGET_VERIFIED", cpu_state=cpu_state)
+            self._persist_lease_owner_locked(ready, service)
+            return ready
 
     def observe(self) -> GatewaySnapshot:
         with self._lock:
@@ -426,18 +586,53 @@ class GatewaySupervisor:
             return self.ensure()
 
     def reconcile_lease_owner(self, lease: object) -> bool:
-        """Prove that this supervisor still owns a restarted lease's Gateway.
-
-        This intentionally makes no process lookup or stop attempt.  A fresh
-        Agent cannot establish ownership of an inherited OpenOCD process, so
-        it must leave that process untouched and report recovery instead.
-        """
+        """Reclaim only the exact persisted B300 OpenOCD owner after restart."""
         with self._lock:
-            return bool(
-                self._service is not None
-                and getattr(lease, "gateway_instance_id", None) == self._snapshot.instance_id
-                and getattr(lease, "gateway_generation", None) == self._snapshot.generation
+            record = self._owner_store.read()
+            if record is None or not self._record_matches_lease(record, lease):
+                return False
+            if not self._record_matches_live_process(record):
+                return False
+            failure = []
+            worker = threading.Thread(
+                target=lambda: self._shutdown_owner(record, failure),
+                name="b300-openocd-recovery-shutdown", daemon=True,
             )
+            worker.start(); worker.join(timeout=self._recovery_timeout)
+            if worker.is_alive() or failure:
+                return False
+            # PID reuse after shutdown is harmless only after the old immutable
+            # identity vanished and both former loopback listeners are closed.
+            if self._record_matches_live_process(record):
+                return False
+            try:
+                closed = self._endpoints_closed(record["gdb_endpoint"], record["tcl_endpoint"])
+            except Exception:
+                return False
+            if not closed:
+                return False
+            self._owner_store.clear()
+            return True
+
+    def prepare_lease_owner(self, lease_id: str, lease_token: str, lease_generation: int) -> None:
+        """Bind the next locally created OpenOCD process to one private lease."""
+        if (not isinstance(lease_id, str) or not lease_id or not isinstance(lease_token, str)
+                or not lease_token or not isinstance(lease_generation, int) or isinstance(lease_generation, bool)
+                or lease_generation < 1):
+            raise ValueError("Gateway lease owner identity is invalid.")
+        with self._lock:
+            self._lease_owner_context = (lease_id, lease_token, lease_generation)
+
+    def has_lease_owner_record(self, lease: object) -> bool:
+        with self._lock:
+            record = self._owner_store.read()
+            return bool(record is not None and self._record_matches_lease(record, lease))
+
+    def forget_lease_owner(self, _lease: object = None) -> None:
+        """Clear private evidence only after coordinator cleanup succeeded."""
+        with self._lock:
+            self._owner_store.clear()
+            self._lease_owner_context = None
 
     def stop(self) -> GatewaySnapshot:
         with self._lock:
@@ -446,6 +641,82 @@ class GatewaySupervisor:
                 self._stop_service("server_shutdown")
             self._hardware_error = False
             return self._publish("STOPPED", "USER_STOPPED")
+
+    def _persist_lease_owner_locked(self, snapshot: GatewaySnapshot, service: object) -> None:
+        context = self._lease_owner_context
+        process = getattr(service, "process", None)
+        pid = getattr(process, "pid", None)
+        if context is None or not isinstance(pid, int) or isinstance(pid, bool):
+            return
+        try:
+            identity = self._validated_identity(self._process_identity(pid), pid)
+            executable = _canonical_executable(getattr(service, "executable", identity["executable"]))
+            if identity["executable"] != executable:
+                return
+            lease_id, lease_token, lease_generation = context
+            self._owner_store.write({
+                "schema_version": 1, "pid": pid,
+                "start_identity": identity["start_identity"], "executable": executable,
+                "boot_identity": identity["boot_identity"],
+                "gateway_instance_id": snapshot.instance_id,
+                "gateway_generation": snapshot.generation,
+                "lease_id": lease_id, "lease_generation": lease_generation,
+                "lease_token": lease_token,
+                "gdb_endpoint": snapshot.gdb_endpoint, "tcl_endpoint": snapshot.tcl_endpoint,
+            })
+        except (OSError, ValueError, TypeError):
+            # The coordinator checks the record before it grants the lease.
+            # Never publish this private evidence or fall back to PID-only proof.
+            return
+
+    @staticmethod
+    def _validated_identity(value: object, expected_pid: int) -> dict:
+        if not isinstance(value, Mapping):
+            raise ValueError("OpenOCD process identity is unavailable.")
+        fields = {"pid", "start_identity", "executable", "boot_identity"}
+        if set(value) != fields or value.get("pid") != expected_pid:
+            raise ValueError("OpenOCD process identity is invalid.")
+        result = dict(value)
+        for field in ("start_identity", "boot_identity"):
+            if not isinstance(result[field], str) or not result[field]:
+                raise ValueError("OpenOCD process identity is invalid.")
+        result["executable"] = _canonical_executable(result["executable"])
+        return result
+
+    def _record_matches_lease(self, record: Mapping[str, object], lease: object) -> bool:
+        try:
+            from .gateway_lease import token_digest
+            return bool(
+                record["lease_id"] == getattr(lease, "lease_id", None)
+                and record["lease_generation"] == getattr(lease, "generation", None)
+                and token_digest(record["lease_token"]) == getattr(lease, "token_digest", None)
+                and record["gateway_instance_id"] == getattr(lease, "gateway_instance_id", None)
+                and record["gateway_generation"] == getattr(lease, "gateway_generation", None)
+            )
+        except (TypeError, ValueError):
+            return False
+
+    def _record_matches_live_process(self, record: Mapping[str, object]) -> bool:
+        try:
+            identity = self._validated_identity(self._process_identity(record["pid"]), record["pid"])
+            return all(identity[field] == record[field] for field in (
+                "start_identity", "executable", "boot_identity",
+            ))
+        except (TypeError, ValueError):
+            return False
+
+    def _shutdown_owner(self, record: Mapping[str, object], failures: list) -> None:
+        try:
+            self._shutdown_openocd(record["tcl_endpoint"])
+        except Exception as error:
+            failures.append(error)
+
+    @staticmethod
+    def _safe_shutdown_openocd(endpoint: str) -> None:
+        host, separator, port_text = str(endpoint).rpartition(":")
+        if host != "127.0.0.1" or not separator:
+            raise ValueError("Gateway recovery endpoint is invalid.")
+        SafeTclClient(TclEndpoint(host, int(port_text)), timeout_seconds=1.0).shutdown()
 
     def _on_openocd_line(self, line: str) -> None:
         lowered = str(line).lower()
