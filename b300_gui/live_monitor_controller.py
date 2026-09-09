@@ -159,6 +159,50 @@ class LiveMonitorController(QObject):
     def active(self) -> bool:
         return self._active
 
+    def _rollback_failed_startup(self) -> None:
+        """Release resources created before a Monitor start becomes active."""
+        worker, self._worker = self._worker, None
+        if worker is not None:
+            try:
+                worker.deleteLater()
+            except Exception:
+                pass
+        live, self._live_session = self._live_session, None
+        if live is not None:
+            try:
+                live.close()
+            except Exception:
+                pass
+        coordinator, self._gateway_coordinator = self._gateway_coordinator, None
+        self._gateway_binding = None
+        if coordinator is not None:
+            try:
+                closer = getattr(coordinator, "close", None)
+                if callable(closer):
+                    closer()
+            except Exception:
+                pass
+        lease_client, self._gateway_lease_client = self._gateway_lease_client, None
+        if lease_client is not None:
+            try:
+                lease_client.close()
+            except Exception:
+                pass
+        was_active = self._active
+        self._active = False
+        self._stopping = False
+        self._pending_samples.clear()
+        self._render_timer.stop()
+        try:
+            self.panel.set_control_state(
+                start_enabled=True, stop_enabled=False, history_enabled=False,
+            )
+        except Exception:
+            pass
+        if was_active:
+            self._release_monitor("Live Monitor startup failed")
+            self.operation_state_changed.emit(False)
+
     def start(self, request: LiveMonitorRequest, *, _coordinator=None, _binding=None) -> None:
         if self._active or self._worker is not None:
             raise RuntimeError("Live Monitor is already active.")
@@ -229,13 +273,16 @@ class LiveMonitorController(QObject):
                         remote_session, client_id=request.profile_id or request.host,
                         client_label=request.user or request.host,
                     )
-                lease_client.start("LIVE_WATCH", probe_serial=None)
                 self._gateway_lease_client = lease_client
-                grant = lease_client.grant
-                if grant is None or not grant.public.get("tcl_endpoint"):
-                    lease_client.close()
-                    raise RuntimeError("Gateway lease did not provide a valid TCL endpoint.")
-                config = replace(config, bound_tcl_endpoint=grant.public["tcl_endpoint"])
+                try:
+                    lease_client.start("LIVE_WATCH", probe_serial=None)
+                    grant = lease_client.grant
+                    if grant is None or not grant.public.get("tcl_endpoint"):
+                        raise RuntimeError("Gateway lease did not provide a valid TCL endpoint.")
+                    config = replace(config, bound_tcl_endpoint=grant.public["tcl_endpoint"])
+                except BaseException:
+                    self._rollback_failed_startup()
+                    raise
             if coordinator is not None:
                 if _binding is None:
                     raise RuntimeError("Gateway restart requires a fresh binding.")
@@ -252,69 +299,66 @@ class LiveMonitorController(QObject):
                         getattr(coordinated, "next_action", "retry when it is ready."),
                     ))
                 config = replace(config, bound_tcl_endpoint=coordinated.binding.tcl_endpoint)
-        live = self._session_factory(openocd_executable=self._openocd_executable)
-        self._live_session = live
-        self._gateway_coordinator = coordinator
-        self._gateway_binding = (_binding if _binding is not None else coordinated.binding) if coordinator is not None else (
-            self._gateway_lease_client.grant.public if self._gateway_lease_client and self._gateway_lease_client.grant else None)
-        self.panel.reset_for_sampling()
-        self.panel.set_control_state(
-            start_enabled=False, stop_enabled=True, history_enabled=False,
-        )
-        self._active = True
-        self._publish_monitor()
-        self.operation_state_changed.emit(True)
-
-        def execute(log, phase, cancel_event):
-            try:
-                selected_config = config
-                if request.role == "CLIENT" and remote_session is not None:
-                    if coordinator is not None or self._gateway_lease_client is not None:
-                        selected_config = config
-                    else:
-                        ensure_ready = getattr(remote_session, "ensure_gateway_ready", None)
-                        if not callable(ensure_ready):
-                            raise RuntimeError("Gateway lease binding is missing.")
-                        snapshot = ensure_ready()
-                        endpoint = getattr(snapshot, "tcl_endpoint", None)
-                        if not getattr(snapshot, "attach_ready", False) or not endpoint:
-                            raise RuntimeError("Gateway did not provide a READY TCL endpoint.")
-                        selected_config = replace(config, gateway_tcl_port=int(str(endpoint).rpartition(":")[2]))
-                if request.role == "LOCAL":
-                    info = live.start_local(selected_config)
-                elif remote_session is not None:
-                    info = live.start_client(selected_config, remote_session=remote_session)
-                else:
-                    info = live.start_client(selected_config)
-                log(
-                    "LIVE MONITOR CONNECTED: role=%s transport=%s target=%s" %
-                    (info.role, info.transport, info.initial_target_state.upper())
-                )
-                # Session startup resets its own event; retain Stop requested
-                # while connecting via the worker's durable cancellation event.
-                if cancel_event.is_set():
-                    live.cancel()
-                def emit_sample(sample):
-                    phase((sample, epoch, self._gateway_binding))
-                summary = live.run(emit_sample)
-                return summary, live.analytics_snapshot(), info
-            finally:
-                live.close()
-
-        worker = self._worker_factory(execute, self)
-        self._worker = worker
-        worker.log.connect(self.log.emit)
-        worker.phase.connect(self._sample_received)
-        worker.completed.connect(lambda result, value=epoch: self._completed_for_epoch(value, result))
-        worker.failed.connect(lambda failure, value=epoch: self._failed_for_epoch(value, failure))
-        worker.finished.connect(lambda value=epoch: self._worker_finished_for_epoch(value))
         try:
+            live = self._session_factory(openocd_executable=self._openocd_executable)
+            self._live_session = live
+            self._gateway_coordinator = coordinator
+            self._gateway_binding = (_binding if _binding is not None else coordinated.binding) if coordinator is not None else (
+                self._gateway_lease_client.grant.public if self._gateway_lease_client and self._gateway_lease_client.grant else None)
+            self.panel.reset_for_sampling()
+            self.panel.set_control_state(
+                start_enabled=False, stop_enabled=True, history_enabled=False,
+            )
+            self._active = True
+            self._publish_monitor()
+            self.operation_state_changed.emit(True)
+
+            def execute(log, phase, cancel_event):
+                try:
+                    selected_config = config
+                    if request.role == "CLIENT" and remote_session is not None:
+                        if coordinator is not None or self._gateway_lease_client is not None:
+                            selected_config = config
+                        else:
+                            ensure_ready = getattr(remote_session, "ensure_gateway_ready", None)
+                            if not callable(ensure_ready):
+                                raise RuntimeError("Gateway lease binding is missing.")
+                            snapshot = ensure_ready()
+                            endpoint = getattr(snapshot, "tcl_endpoint", None)
+                            if not getattr(snapshot, "attach_ready", False) or not endpoint:
+                                raise RuntimeError("Gateway did not provide a READY TCL endpoint.")
+                            selected_config = replace(config, gateway_tcl_port=int(str(endpoint).rpartition(":")[2]))
+                    if request.role == "LOCAL":
+                        info = live.start_local(selected_config)
+                    elif remote_session is not None:
+                        info = live.start_client(selected_config, remote_session=remote_session)
+                    else:
+                        info = live.start_client(selected_config)
+                    log(
+                        "LIVE MONITOR CONNECTED: role=%s transport=%s target=%s" %
+                        (info.role, info.transport, info.initial_target_state.upper())
+                    )
+                    # Session startup resets its own event; retain Stop requested
+                    # while connecting via the worker's durable cancellation event.
+                    if cancel_event.is_set():
+                        live.cancel()
+                    def emit_sample(sample):
+                        phase((sample, epoch, self._gateway_binding))
+                    summary = live.run(emit_sample)
+                    return summary, live.analytics_snapshot(), info
+                finally:
+                    live.close()
+
+            worker = self._worker_factory(execute, self)
+            self._worker = worker
+            worker.log.connect(self.log.emit)
+            worker.phase.connect(self._sample_received)
+            worker.completed.connect(lambda result, value=epoch: self._completed_for_epoch(value, result))
+            worker.failed.connect(lambda failure, value=epoch: self._failed_for_epoch(value, failure))
+            worker.finished.connect(lambda value=epoch: self._worker_finished_for_epoch(value))
             worker.start()
         except BaseException:
-            live.close()
-            worker.deleteLater()
-            self._worker = None
-            self._finish_operation(history_enabled=False)
+            self._rollback_failed_startup()
             raise
 
     def _sample_received(self, sample) -> None:

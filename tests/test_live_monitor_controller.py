@@ -544,6 +544,48 @@ class LiveMonitorControllerTests(unittest.TestCase):
         self.assertEqual(session.started_config.bound_tcl_endpoint, "127.0.0.1:42001")
         self.assertIs(session.remote_session, remote)
 
+    def test_session_factory_failure_after_lease_acquisition_releases_gateway_lease(self) -> None:
+        """A post-acquire construction failure must not strand a live Gateway lease."""
+        class LeaseClient:
+            def __init__(self, *_args, **_kwargs):
+                self.grant = None
+                self.closed = False
+
+            def start(self, _mode, *, probe_serial=None):
+                self.grant = SimpleNamespace(public={"tcl_endpoint": "127.0.0.1:42001"})
+
+            def close(self):
+                self.closed = True
+
+        leases = []
+        remote = SimpleNamespace(
+            supports_gateway_leases=True,
+            ensure_gateway_agent=lambda: None,
+            acquire_gateway=lambda: None,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            symbols = Path(directory) / "application.axf"
+            symbols.write_bytes(b"ELF")
+            controller = LiveMonitorController(
+                _Panel(), remote_session_provider=lambda _request: remote,
+                lease_client_factory=lambda *args, **kwargs: leases.append(LeaseClient(*args, **kwargs)) or leases[-1],
+                session_factory=lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("session construction failed")),
+                worker_factory=_InlineWorker,
+            )
+            with self.assertRaisesRegex(RuntimeError, "session construction failed"):
+                controller.start(live_monitor_controller.LiveMonitorRequest.client(
+                    symbols, host="gateway.local", user="operator", profile_id="lab",
+                ))
+
+        self.assertEqual(len(leases), 1)
+        self.assertTrue(leases[0].closed)
+        self.assertFalse(controller.active)
+        self.assertIsNone(controller._gateway_lease_client)
+        self.assertIsNone(controller._gateway_coordinator)
+        self.assertIsNone(controller._gateway_binding)
+        self.assertIsNone(controller._live_session)
+        self.assertIsNone(controller._worker)
+
     def test_cancelled_client_login_does_not_create_transport(self) -> None:
         sessions = []
         def cancelled(request):
