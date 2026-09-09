@@ -35,6 +35,31 @@ def builder():
 
 
 class NativeBundleTargetTests(unittest.TestCase):
+    def test_fetch_uses_a_bounded_socket_timeout(self) -> None:
+        module = builder()
+        calls = []
+
+        class Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                self.close()
+
+        def open_url(url, timeout=None):
+            calls.append((url, timeout))
+            return Response(b"archive")
+
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "archive.zip"
+            with mock.patch.object(module.urllib.request, "urlopen", side_effect=open_url):
+                module.fetch("https://example.invalid/archive.zip", destination)
+
+            self.assertEqual(destination.read_bytes(), b"archive")
+        self.assertEqual(calls[0][0], "https://example.invalid/archive.zip")
+        self.assertIsNotNone(calls[0][1])
+        self.assertGreater(calls[0][1], 0)
+
     def test_windows_x64_uses_python_platform_when_machine_is_empty(self) -> None:
         selected = builder().target_for("windows", "", "win-amd64")
         self.assertEqual(selected[0], "windows-x64")

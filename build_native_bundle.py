@@ -55,6 +55,7 @@ MAX_GDB_FILE_BYTES = 512 * 1024 * 1024
 MAX_GDB_ENTRIES = 20_000
 MAX_GDB_COMPRESSION_RATIO = 500
 MAX_GDB_CENTRAL_DIRECTORY_BYTES = 64 * 1024 * 1024
+DOWNLOAD_TIMEOUT_SECONDS = 60.0
 
 
 def target_for(system: str, machine: str, python_platform: str):
@@ -173,7 +174,7 @@ def cli_pyinstaller_plan(
 
 
 def fetch(url: str, output: Path) -> None:
-    with urllib.request.urlopen(url) as source, output.open("wb") as destination:
+    with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT_SECONDS) as source, output.open("wb") as destination:
         shutil.copyfileobj(source, destination)
 
 
