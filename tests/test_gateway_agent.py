@@ -158,6 +158,18 @@ class GatewayAgentTests(unittest.TestCase):
         reclaimed.release()
         self.assertFalse(path.exists())
 
+    def test_owner_lock_treats_same_process_pid_as_live(self):
+        path = Path(self.temp.name) / "same-process.lock"
+        first = GatewayAgentOwnerLock(path, pid=os.getpid(), process_alive=lambda _pid: False)
+        first.acquire()
+        try:
+            with self.assertRaisesRegex(RuntimeError, "ALREADY_RUNNING"):
+                GatewayAgentOwnerLock(
+                    path, pid=os.getpid(), process_alive=lambda _pid: False,
+                ).acquire()
+        finally:
+            first.release()
+
     def test_corrupt_owner_lock_fails_closed(self):
         path = Path(self.temp.name) / "owner.lock"
         path.write_text("not-a-pid", encoding="ascii")

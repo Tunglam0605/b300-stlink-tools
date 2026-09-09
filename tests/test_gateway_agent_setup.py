@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from b300_core.gateway_agent_setup import (
     GatewayAgentSetupReport,
@@ -26,6 +27,17 @@ class GatewayAgentSetupTests(unittest.TestCase):
         self.assertIn("ONLOGON", rendered)
         self.assertNotIn("/RP", rendered.upper())
         self.assertNotIn("password", rendered.lower())
+
+    def test_plan_preserves_cli_path_spelling_without_resolving_it(self):
+        report = GatewayAgentSetupReport(
+            platform="windows", supported=True, installed=False, running=False,
+            version=None, autostart_enabled=False, reason_code="AGENT_MISSING",
+        )
+        cli = Path("C:/Tools/B300-STLink.exe")
+        with mock.patch.object(Path, "resolve", side_effect=AssertionError("must preserve path")):
+            plan = build_gateway_agent_setup_plan(report, cli_path=cli, system_name="Windows")
+
+        self.assertIn(str(cli), plan.commands[0][-2])
 
     def test_linux_plan_is_user_scoped_and_never_uses_sudo_or_linger(self):
         report = GatewayAgentSetupReport(

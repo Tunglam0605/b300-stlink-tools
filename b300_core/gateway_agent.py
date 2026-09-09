@@ -139,7 +139,10 @@ class GatewayAgentOwnerLock:
                     except OSError:
                         transient = True
                     raise RuntimeError("ALREADY_RUNNING" if transient else "LOCK_CORRUPT")
-                if existing > 0 and self._process_alive(existing):
+                # An owner record for this process is necessarily live even
+                # when a caller supplies a process probe scoped to child PIDs.
+                # This also serializes concurrent managers in the same process.
+                if existing > 0 and (existing == self.pid or self._process_alive(existing)):
                     raise RuntimeError("ALREADY_RUNNING")
                 try:
                     self.path.unlink()

@@ -94,7 +94,10 @@ def build_gateway_agent_setup_plan(report: GatewayAgentSetupReport, *, cli_path:
     system = _system(system_name or report.platform)
     if not report.supported:
         return GatewayAgentSetupPlan(system, (), False, False)
-    cli = str(Path(cli_path).expanduser().resolve())
+    # Preserve the caller's path spelling. Windows resolves existing path
+    # components with filesystem casing, which breaks the exact task command
+    # contract even though lookup itself is case-insensitive.
+    cli = str(Path(cli_path).expanduser())
     if system == "windows":
         command = (
             "schtasks", "/Create", "/TN", TASK_NAME, "/SC", "ONLOGON",
