@@ -37,8 +37,8 @@ from b300_cli.live_commands import run_live_client, run_live_local, validate_liv
 from b300_core.diagnostics import DiagnosticsService
 from b300_core.gateway_readiness import inspect_gateway_readiness
 from b300_core.gateway_agent import (
-    GatewayAgent, GatewayAgentProcessManager, GatewayAgentStatus,
-    GatewayAgentStatusStore,
+    GatewayAgent, GatewayAgentOwnerLock, GatewayAgentProcessManager,
+    GatewayAgentStatus, GatewayAgentStatusStore,
 )
 from b300_core.gateway_agent_protocol import GatewayRequest, GatewayRequestStore
 from b300_core.gateway_lease import GatewayLeasePublicSnapshot, GatewayLeaseStore

@@ -5,6 +5,12 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.23.1] - 2026-09-09
+
+- Fixed the packaged `debug gateway-agent` entry point so Windows and Linux Gateway Agent services acquire their single-owner lock and remain running instead of exiting with a missing runtime symbol.
+- Made managed Linux CLI self-update install the bundled per-user systemd unit, allowing upgrades from releases predating the Gateway Agent to complete `gateway quickstart --confirm-system-change` without a manual file copy.
+- Added source and packaged-runtime regression coverage for Gateway Agent startup. Debug endpoints remain loopback-only, and no flash, erase, RDP, WRP or Option Byte behavior changed.
+
 ## [0.23.0] - 2026-09-09
 
 - Added an idle, same-user Gateway Agent that grants one generation-bound remote lease at a time for Live Monitor or VS Code debugging. Lease acquisition, renewal, expiry, explicit release and restart recovery now coordinate the single owned OpenOCD instance.

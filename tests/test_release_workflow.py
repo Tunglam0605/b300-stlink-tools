@@ -254,6 +254,20 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertIn("Objects/F407/Main_V2_F407.axf", workflow)
             self.assertIn(".vscode", workflow)
 
+    def test_packaged_cli_smoke_starts_the_managed_gateway_agent_entrypoint(self) -> None:
+        release = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
+        development = (
+            ROOT / ".github" / "workflows" / "release-dry-run.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertGreaterEqual(release.count("debug gateway-agent --managed-child --json"), 2)
+        self.assertGreaterEqual(development.count("debug gateway-agent --managed-child --json"), 1)
+        for workflow in (release, development):
+            self.assertIn("Packaged Gateway Agent exited during startup", workflow)
+            self.assertIn('if [ "$agent_code" -ne 124 ]', workflow)
+
     def test_packaged_remote_smokes_require_only_openssh_client(self) -> None:
         for name in ("release.yml", "release-dry-run.yml"):
             workflow = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")

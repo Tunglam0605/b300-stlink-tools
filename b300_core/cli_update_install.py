@@ -593,6 +593,20 @@ def apply_staged_cli_install(
                     paths.launcher, _launcher_bytes(selected),
                     mode=0o755 if selected != "windows-x64-cli" else 0o600,
                 )
+                if selected.startswith("linux-"):
+                    unit_source = (
+                        paths.root / "packaging" / "linux" /
+                        "b300-stlink-gateway-agent.service"
+                    )
+                    if unit_source.is_file():
+                        unit_target = (
+                            selected_home / ".config" / "systemd" / "user" /
+                            "b300-stlink-gateway-agent.service"
+                        )
+                        _validate_launcher_path(unit_target, selected_home)
+                        unit_target.parent.mkdir(parents=True, exist_ok=True)
+                        _validate_launcher_path(unit_target, selected_home)
+                        _atomic_write(unit_target, unit_source.read_bytes(), mode=0o644)
                 _write_result(paths, selected, "ok", "Managed CLI update installed.")
             except BaseException:
                 if published and paths.root.exists():

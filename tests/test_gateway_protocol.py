@@ -57,6 +57,31 @@ class GatewayProtocolTests(unittest.TestCase):
                 args = parse_args(["debug", mode, "--json"])
                 self.assertEqual(args.debug_mode, mode)
 
+    def test_gateway_agent_entrypoint_acquires_owner_lock_and_runs_agent(self) -> None:
+        args = parse_args(["debug", "gateway-agent", "--managed-child", "--json"])
+        store = mock.Mock(start_lock_path=mock.sentinel.owner_lock_path)
+        owner_lock = mock.Mock()
+        agent = mock.Mock()
+        agent.run.return_value = 0
+
+        with mock.patch.object(
+                b300_stlink, "GatewayAgentStatusStore", return_value=store,
+        ), mock.patch.object(
+                b300_stlink, "GatewayAgentOwnerLock", return_value=owner_lock,
+        ), mock.patch.object(
+                b300_stlink, "GatewaySupervisor",
+        ), mock.patch.object(
+                b300_stlink, "GatewayLeaseCoordinator",
+        ), mock.patch.object(
+                b300_stlink, "GatewayAgent", return_value=agent,
+        ):
+            result = b300_stlink.run_gateway_agent_command(args)
+
+        self.assertEqual(result, 0)
+        owner_lock.acquire.assert_called_once_with()
+        owner_lock.release.assert_called_once_with()
+        agent.run.assert_called_once_with()
+
     def test_gateway_acquire_accepts_documented_mode_alias(self) -> None:
         args = parse_args([
             "debug", "gateway-acquire", "--mode", "VSCODE_DEBUG",

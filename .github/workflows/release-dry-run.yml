@@ -51,6 +51,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\release\windows-cli-bundle\b300-stlink.exe --version --json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $agentOut = "release\windows-gateway-agent-smoke.out"
+          $agentErr = "release\windows-gateway-agent-smoke.err"
+          $agent = Start-Process -FilePath .\release\windows-cli-bundle\b300-stlink.exe `
+            -ArgumentList @("debug", "gateway-agent", "--managed-child", "--json") `
+            -RedirectStandardOutput $agentOut -RedirectStandardError $agentErr `
+            -PassThru -WindowStyle Hidden
+          Start-Sleep -Seconds 2
+          if ($agent.HasExited) {
+            Get-Content $agentOut, $agentErr -ErrorAction SilentlyContinue
+            throw "Packaged Gateway Agent exited during startup"
+          }
+          Stop-Process -Id $agent.Id -Force
+          $agent.WaitForExit()
           Set-Content -LiteralPath release\selftest-smoke.axf -Value "ELF" -NoNewline
           .\release\windows-cli-bundle\b300-stlink.exe debug selftest --symbols release\selftest-smoke.axf --dry-run --json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -156,6 +169,9 @@ jobs:
           tar -xzf "release/${{ matrix.cli }}" -C release/linux-cli-bundle
           ./release/linux-cli-bundle/b300-stlink --help
           ./release/linux-cli-bundle/b300-stlink --version --json
+          agent_code=0
+          timeout 2 ./release/linux-cli-bundle/b300-stlink debug gateway-agent --managed-child --json || agent_code=$?
+          if [ "$agent_code" -ne 124 ]; then exit "$agent_code"; fi
           printf 'ELF' > release/selftest-smoke.axf
           ./release/linux-cli-bundle/b300-stlink debug selftest --symbols release/selftest-smoke.axf --dry-run --json
           printf 'ELF' > release/linux-cli-bundle/selftest-smoke.axf

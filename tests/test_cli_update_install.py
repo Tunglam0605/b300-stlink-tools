@@ -452,6 +452,9 @@ class ManagedCliInstallTests(unittest.TestCase):
             (staged / "vendor" / "openocd" / "bin" / "openocd").write_text(
                 "openocd", encoding="utf-8"
             )
+            unit = staged / "packaging" / "linux" / "b300-stlink-gateway-agent.service"
+            unit.parent.mkdir(parents=True)
+            unit.write_text("[Service]\nExecStart=%h/.local/bin/b300-stlink\n", encoding="utf-8")
             waited = []
 
             result = cli_update_install.apply_staged_cli_install(
@@ -465,6 +468,11 @@ class ManagedCliInstallTests(unittest.TestCase):
             launcher = paths.launcher.read_text(encoding="utf-8")
             self.assertIn("../share/b300-stlink", launcher)
             self.assertNotIn("python", launcher.lower())
+            installed_unit = (
+                home / ".config" / "systemd" / "user" /
+                "b300-stlink-gateway-agent.service"
+            )
+            self.assertEqual(installed_unit.read_text(encoding="utf-8"), unit.read_text(encoding="utf-8"))
             record = json.loads(paths.result_log.read_text(encoding="utf-8"))
             self.assertEqual(record["status"], "ok")
             self.assertEqual(record["platform"], "linux-x64-cli")
