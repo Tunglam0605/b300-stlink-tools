@@ -345,6 +345,27 @@ class GatewayLeaseCoordinator:
             )
             self._persist_locked(failed)
             return self._public_locked(failed, self._clock())
+        confirmer = getattr(self.supervisor, "confirm_lease_owner_stopped", None)
+        if callable(confirmer):
+            verified = []
+            proof_error = []
+            def confirm_stop() -> None:
+                try:
+                    verified.append(confirmer(cleaning, self.policy.cleanup_timeout_seconds) is True)
+                except Exception as exc:
+                    proof_error.append(exc)
+            proof_worker = threading.Thread(
+                target=confirm_stop, name="b300-gateway-cleanup-proof", daemon=True,
+            )
+            proof_worker.start()
+            proof_worker.join(timeout=self.policy.cleanup_timeout_seconds)
+            if proof_worker.is_alive() or proof_error or not verified or not verified[0]:
+                failed = replace(
+                    cleaning, state="RECOVERY_REQUIRED",
+                    reason_code="CLEANUP_UNVERIFIED",
+                )
+                self._persist_locked(failed)
+                return self._public_locked(failed, self._clock())
         self.store.clear_if_generation(cleaning.generation)
         forget_owner = getattr(self.supervisor, "forget_lease_owner", None)
         if callable(forget_owner):

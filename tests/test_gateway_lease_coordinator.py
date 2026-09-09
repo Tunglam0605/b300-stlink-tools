@@ -58,6 +58,7 @@ class FakeSupervisor:
         self.stop_blocker = None
         self.recovery_owner = False
         self.reconcile_calls = 0
+        self.stop_confirmed = True
 
     def ensure(self):
         self.ensure_calls += 1
@@ -81,6 +82,9 @@ class FakeSupervisor:
     def reconcile_lease_owner(self, _lease):
         self.reconcile_calls += 1
         return self.recovery_owner
+
+    def confirm_lease_owner_stopped(self, _lease, timeout_seconds):
+        return self.stop_confirmed and timeout_seconds > 0
 
 
 def request(client_id="client-a", mode="VSCODE_DEBUG"):
@@ -216,6 +220,15 @@ class GatewayLeaseCoordinatorTests(unittest.TestCase):
         self.assertEqual((failed.active, failed.state), (True, "RECOVERY_REQUIRED"))
         busy = self.coordinator.acquire(request("client-b", "LIVE_WATCH"))
         self.assertIsInstance(busy, GatewayLeaseBusy)
+        self.assertEqual(self.coordinator.store.read().state, "RECOVERY_REQUIRED")
+
+    def test_release_requires_process_and_endpoint_shutdown_proof(self):
+        grant = self.coordinator.acquire(request())
+        self.supervisor.stop_confirmed = False
+
+        result = self.coordinator.release(grant.lease_id, grant.token, grant.generation)
+
+        self.assertEqual((result.active, result.state), (True, "RECOVERY_REQUIRED"))
         self.assertEqual(self.coordinator.store.read().state, "RECOVERY_REQUIRED")
 
     def test_probe_loss_enters_grace_and_reconnect_can_recover_same_owner(self):

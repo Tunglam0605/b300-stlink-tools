@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hmac
 import os
 import socket
 import subprocess
@@ -199,7 +200,7 @@ class _GatewayOpenOcdOwnerStore:
     _FIELDS = frozenset({
         "schema_version", "pid", "start_identity", "executable", "boot_identity",
         "gateway_instance_id", "gateway_generation", "lease_id", "lease_generation",
-        "lease_token", "gdb_endpoint", "tcl_endpoint",
+        "lease_token_digest", "gdb_endpoint", "tcl_endpoint",
     })
 
     def __init__(self, path: Path) -> None:
@@ -411,7 +412,7 @@ class GatewaySupervisor:
                  process_identity: Callable[[int], object] = _process_identity,
                  shutdown_openocd: Optional[Callable[[str], None]] = None,
                  endpoints_closed: Callable[[str, str], bool] = _closed_endpoints,
-                 recovery_timeout_seconds: float = 2.0) -> None:
+                 recovery_timeout_seconds: float = 1.0) -> None:
         if not 1 <= int(gdb_port) <= 65535 or not 1 <= int(tcl_port) <= 65535:
             raise ValueError("Gateway ports must be in range 1..65535.")
         if int(gdb_port) == int(tcl_port):
@@ -589,30 +590,20 @@ class GatewaySupervisor:
         """Reclaim only the exact persisted B300 OpenOCD owner after restart."""
         with self._lock:
             record = self._owner_store.read()
-            if record is None or not self._record_matches_lease(record, lease):
-                return False
-            if not self._record_matches_live_process(record):
+            if (record is None or not self._record_matches_lease(record, lease)
+                    or not self._record_matches_config(record)):
                 return False
             failure = []
+            outcome = []
+            deadline = time.monotonic() + self._recovery_timeout
             worker = threading.Thread(
-                target=lambda: self._shutdown_owner(record, failure),
+                target=lambda: outcome.append(self._reconcile_owner_worker(record, failure, deadline)),
                 name="b300-openocd-recovery-shutdown", daemon=True,
             )
-            worker.start(); worker.join(timeout=self._recovery_timeout)
-            if worker.is_alive() or failure:
+            worker.start(); worker.join(timeout=max(0.0, deadline - time.monotonic()))
+            if worker.is_alive() or failure or not outcome:
                 return False
-            # PID reuse after shutdown is harmless only after the old immutable
-            # identity vanished and both former loopback listeners are closed.
-            if self._record_matches_live_process(record):
-                return False
-            try:
-                closed = self._endpoints_closed(record["gdb_endpoint"], record["tcl_endpoint"])
-            except Exception:
-                return False
-            if not closed:
-                return False
-            self._owner_store.clear()
-            return True
+            return outcome[0] is True
 
     def prepare_lease_owner(self, lease_id: str, lease_token: str, lease_generation: int) -> None:
         """Bind the next locally created OpenOCD process to one private lease."""
@@ -621,7 +612,8 @@ class GatewaySupervisor:
                 or lease_generation < 1):
             raise ValueError("Gateway lease owner identity is invalid.")
         with self._lock:
-            self._lease_owner_context = (lease_id, lease_token, lease_generation)
+            from .gateway_lease import token_digest
+            self._lease_owner_context = (lease_id, token_digest(lease_token), lease_generation)
 
     def has_lease_owner_record(self, lease: object) -> bool:
         with self._lock:
@@ -633,6 +625,24 @@ class GatewaySupervisor:
         with self._lock:
             self._owner_store.clear()
             self._lease_owner_context = None
+
+    def confirm_lease_owner_stopped(self, lease: object, timeout_seconds: float) -> bool:
+        """Prove normal release removed the recorded process and listeners."""
+        if not 0 < float(timeout_seconds) <= 10.0:
+            return False
+        deadline = time.monotonic() + float(timeout_seconds)
+        with self._lock:
+            record = self._owner_store.read()
+            if record is None or not self._record_matches_lease(record, lease):
+                return False
+        while time.monotonic() < deadline:
+            if not self._record_matches_live_process(record):
+                try:
+                    return bool(self._endpoints_closed(record["gdb_endpoint"], record["tcl_endpoint"]))
+                except Exception:
+                    return False
+            time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+        return False
 
     def stop(self) -> GatewaySnapshot:
         with self._lock:
@@ -650,10 +660,10 @@ class GatewaySupervisor:
             return
         try:
             identity = self._validated_identity(self._process_identity(pid), pid)
-            executable = _canonical_executable(getattr(service, "executable", identity["executable"]))
-            if identity["executable"] != executable:
-                return
-            lease_id, lease_token, lease_generation = context
+            # The executable reported by the live PID is authoritative. The
+            # configured command may be a bare PATH name such as ``openocd``.
+            executable = identity["executable"]
+            lease_id, lease_token_digest, lease_generation = context
             self._owner_store.write({
                 "schema_version": 1, "pid": pid,
                 "start_identity": identity["start_identity"], "executable": executable,
@@ -661,7 +671,7 @@ class GatewaySupervisor:
                 "gateway_instance_id": snapshot.instance_id,
                 "gateway_generation": snapshot.generation,
                 "lease_id": lease_id, "lease_generation": lease_generation,
-                "lease_token": lease_token,
+                "lease_token_digest": lease_token_digest,
                 "gdb_endpoint": snapshot.gdb_endpoint, "tcl_endpoint": snapshot.tcl_endpoint,
             })
         except (OSError, ValueError, TypeError):
@@ -685,11 +695,12 @@ class GatewaySupervisor:
 
     def _record_matches_lease(self, record: Mapping[str, object], lease: object) -> bool:
         try:
-            from .gateway_lease import token_digest
             return bool(
                 record["lease_id"] == getattr(lease, "lease_id", None)
                 and record["lease_generation"] == getattr(lease, "generation", None)
-                and token_digest(record["lease_token"]) == getattr(lease, "token_digest", None)
+                and isinstance(record["lease_token_digest"], str)
+                and isinstance(getattr(lease, "token_digest", None), str)
+                and hmac.compare_digest(record["lease_token_digest"], getattr(lease, "token_digest"))
                 and record["gateway_instance_id"] == getattr(lease, "gateway_instance_id", None)
                 and record["gateway_generation"] == getattr(lease, "gateway_generation", None)
             )
@@ -705,11 +716,33 @@ class GatewaySupervisor:
         except (TypeError, ValueError):
             return False
 
-    def _shutdown_owner(self, record: Mapping[str, object], failures: list) -> None:
+    def _record_matches_config(self, record: Mapping[str, object]) -> bool:
+        return bool(
+            record["gdb_endpoint"] == "127.0.0.1:%d" % self._gdb_port
+            and record["tcl_endpoint"] == "127.0.0.1:%d" % self._tcl_port
+        )
+
+    def _reconcile_owner_worker(self, record: Mapping[str, object], failures: list,
+                                deadline: float) -> bool:
+        if time.monotonic() >= deadline or not self._record_matches_live_process(record):
+            return False
         try:
             self._shutdown_openocd(record["tcl_endpoint"])
         except Exception as error:
             failures.append(error)
+            return False
+        # A late shutdown may still complete after the caller gave up; it must
+        # never clear recovery evidence after that deadline.
+        if time.monotonic() >= deadline or self._record_matches_live_process(record):
+            return False
+        try:
+            closed = self._endpoints_closed(record["gdb_endpoint"], record["tcl_endpoint"])
+        except Exception:
+            return False
+        if time.monotonic() >= deadline or not closed:
+            return False
+        self._owner_store.clear()
+        return True
 
     @staticmethod
     def _safe_shutdown_openocd(endpoint: str) -> None:
