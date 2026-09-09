@@ -16,6 +16,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from .remote_profile import RemoteGatewayProfile, default_remote_profile_path
 from .gateway_status import GatewaySnapshot
+from .gateway_lease import GatewayLeasePublicSnapshot
 from .gateway_protocol import (
     GATEWAY_AGENT_ENSURE_COMMAND, GATEWAY_AGENT_STATUS_COMMAND,
     GATEWAY_ENSURE_COMMAND, GATEWAY_PROTOCOL_VERSION, GATEWAY_RESCAN_COMMAND,
@@ -804,9 +805,17 @@ class RemoteSession:
             + (("--probe-serial", request["probe_serial"]) if request.get("probe_serial") else ()),
             timeout_seconds=timeout_seconds,
         )
+        public_fields = GatewayLeasePublicSnapshot.from_record({
+            key: result[key] for key in (
+                "active", "lease_id", "generation", "client_label", "mode", "state",
+                "acquired_at", "heartbeat_age_seconds", "gateway_instance_id",
+                "gateway_generation", "probe_serial", "reason_code", "gdb_endpoint",
+                "tcl_endpoint",
+            )
+        })
         return RemoteLeaseGrant(
             lease_id=str(result["lease_id"]), token=str(result["lease_token"]),
-            generation=int(result["lease_generation"]), public=result,
+            generation=int(result["lease_generation"]), public=public_fields.to_record(),
         )
 
     def renew_gateway(self, grant, *, timeout_seconds: float = 5.0) -> dict:

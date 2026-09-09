@@ -14,6 +14,7 @@ from typing import Callable, Optional
 from PySide6.QtCore import QObject, Signal
 
 from b300_core.models import ProbeRef
+from b300_core.gateway_lease import GatewayLeasePublicSnapshot
 from b300_core.remote_session import RemoteSession
 from b300_core.gateway_lease_client import GatewayLeaseClient
 from b300_core.gateway_status import GatewaySnapshot
@@ -249,7 +250,13 @@ class VsCodeDebugController:
                 snapshot = None
             if snapshot is None:
                 grant = self._gateway_lease_client.grant if self._gateway_lease_client else None
-                if grant is None or not grant.public.get("gdb_endpoint"):
+                lease_public = None
+                if grant is not None:
+                    try:
+                        lease_public = GatewayLeasePublicSnapshot.from_record(grant.public)
+                    except (TypeError, ValueError) as error:
+                        raise RuntimeError("Gateway lease binding is invalid.") from error
+                if lease_public is None or not lease_public.gdb_endpoint:
                     if (self._gateway_lease_client is None
                             and getattr(session, "supports_gateway_leases", False) is not True):
                         ensure_ready = getattr(session, "ensure_gateway_ready", None)
@@ -261,17 +268,16 @@ class VsCodeDebugController:
                 if snapshot is not None:
                     pass
                 else:
-                    public = grant.public
                     snapshot = GatewaySnapshot.from_record({
                         "schema_version": 1,
-                        "instance_id": public.gateway_instance_id,
-                        "generation": public.gateway_generation,
+                        "instance_id": lease_public.gateway_instance_id,
+                        "generation": lease_public.gateway_generation,
                         "sequence": 0,
                         "state": "READY",
-                        "reason_code": public.reason_code,
-                        "selected_probe": {"serial": public.probe_serial or "unknown"},
-                        "gdb_endpoint": public.gdb_endpoint,
-                        "tcl_endpoint": public.tcl_endpoint,
+                        "reason_code": lease_public.reason_code,
+                        "selected_probe": {"serial": lease_public.probe_serial or "unknown"},
+                        "gdb_endpoint": lease_public.gdb_endpoint,
+                        "tcl_endpoint": lease_public.tcl_endpoint,
                         "cpu_state": "halted",
                         "evidence_age_ms": 0,
                     })

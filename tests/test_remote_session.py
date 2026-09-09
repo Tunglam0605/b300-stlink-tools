@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from b300_core.remote_profile import RemoteGatewayProfile
 from b300_core.remote_session import (
@@ -295,6 +296,26 @@ class RemoteSessionTests(unittest.TestCase):
             self.assertNotIn(b"local-only-secret", store.data_path.read_bytes())
             self.assertTrue(store.clear(self.profile))
             self.assertIsNone(store.load(self.profile))
+
+    def test_acquire_gateway_exposes_only_strict_public_lease_record(self):
+        session = RemoteSession(self.profile, credential_store=MemoryStore())
+        payload = {
+            "active": True, "lease_id": "lease-1", "lease_token": "secret-token",
+            "lease_generation": 7, "generation": 7, "client_label": "lab",
+            "mode": "VSCODE_DEBUG", "state": "ACTIVE",
+            "acquired_at": "2026-09-09T00:00:00Z", "heartbeat_age_seconds": 0,
+            "gateway_instance_id": "gateway-1", "gateway_generation": 3,
+            "probe_serial": "SAFE123", "reason_code": "LEASE_ACTIVE",
+            "gdb_endpoint": "127.0.0.1:3333", "tcl_endpoint": "127.0.0.1:6666",
+        }
+        with mock.patch.object(session, "_run_gateway_control", return_value=payload):
+            grant = session.acquire_gateway({
+                "request_id": "request-1", "client_id": "lab", "client_label": "lab",
+                "mode": "VSCODE_DEBUG", "probe_serial": "SAFE123",
+            })
+        self.assertEqual(grant.public["gdb_endpoint"], "127.0.0.1:3333")
+        self.assertNotIn("lease_token", grant.public)
+        self.assertNotIn("lease_generation", grant.public)
 
 
 if __name__ == "__main__":

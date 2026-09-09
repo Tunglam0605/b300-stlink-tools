@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 from b300_core.models import ProbeRef
+from b300_core.gateway_lease_client import RemoteLeaseGrant
 from b300_core.vscode_bridge import BridgeState, DebugRole, VsCodeBridgeState, VsCodeExternalProfile
 from b300_core.vscode_environment import VsCodeEnvironmentStatus
 from b300_gui.vscode_debug_controller import VsCodeDebugController
@@ -236,6 +237,55 @@ class V018VsCodeControllerTests(unittest.TestCase):
                 session, local_gdb_port=0, snapshot=snapshot, profile_id="lab"
             )
             self.assertEqual(result.state.gdb_target, "127.0.0.1:45123")
+
+    def test_lease_capable_client_parses_remote_dict_grant_without_legacy_ensure(self) -> None:
+        """The SSH protocol returns grant.public as JSON, never a dataclass."""
+        class LeaseClient:
+            def __init__(self, *_args, **_kwargs):
+                self.grant = RemoteLeaseGrant(
+                    "lease-1", "private-token", 7, {
+                        "active": True, "lease_id": "lease-1", "generation": 7,
+                        "client_label": "lab", "mode": "VSCODE_DEBUG", "state": "ACTIVE",
+                        "acquired_at": "2026-09-09T00:00:00Z", "heartbeat_age_seconds": 0,
+                        "gateway_instance_id": "gateway-1", "gateway_generation": 3,
+                        "probe_serial": "SAFE123", "reason_code": "LEASE_ACTIVE",
+                        "gdb_endpoint": "127.0.0.1:3333", "tcl_endpoint": "127.0.0.1:6666",
+                    },
+                )
+
+            def start(self, _mode):
+                return self.grant
+
+            def close(self):
+                pass
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace, symbols = self._workspace(Path(directory))
+            controller = VsCodeDebugController(lease_client_factory=LeaseClient)
+            controller._environment = READY_ENV
+            bridge = mock.Mock()
+            bridge.start_client.return_value = VsCodeBridgeState(
+                role=DebugRole.CLIENT, state=BridgeState.READY,
+                gdb_target="127.0.0.1:45123", tunnel_name="vscode_gdb",
+            )
+            bridge.profile.return_value = VsCodeExternalProfile(
+                "B300 remote", "${workspaceFolder}/build/application.elf",
+                "127.0.0.1:45123", gdb_path=READY_ENV.gdb_path or "arm-none-eabi-gdb",
+            )
+            controller.bridge = bridge
+            session = mock.Mock(supports_gateway_leases=True)
+            session.ensure_gateway_agent = mock.Mock()
+            session.ensure_gateway_ready = mock.Mock()
+            with mock.patch("b300_gui.vscode_debug_controller.launch_vscode"):
+                controller.start_client(
+                    session=session, workspace=workspace, symbols=symbols, profile_id="lab",
+                )
+            snapshot = bridge.start_client.call_args.kwargs["snapshot"]
+            self.assertEqual((snapshot.state, snapshot.instance_id, snapshot.generation),
+                             ("READY", "gateway-1", 3))
+            self.assertEqual((snapshot.gdb_endpoint, snapshot.tcl_endpoint),
+                             ("127.0.0.1:3333", "127.0.0.1:6666"))
+            session.ensure_gateway_ready.assert_not_called()
 
     def test_client_gateway_not_ready_never_writes_launch_or_opens_vscode(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

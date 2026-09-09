@@ -55,6 +55,9 @@ class FakeSupervisor:
         self.maintain_result = self.ensure_result
         self.snapshot = snapshot("STOPPED", "USER_STOPPED", 0)
         self.stop_error = None
+        self.stop_blocker = None
+        self.recovery_owner = False
+        self.reconcile_calls = 0
 
     def ensure(self):
         self.ensure_calls += 1
@@ -68,10 +71,16 @@ class FakeSupervisor:
 
     def stop(self):
         self.stop_calls += 1
+        if self.stop_blocker is not None:
+            self.stop_blocker.wait()
         if self.stop_error is not None:
             raise self.stop_error
         self.snapshot = snapshot("STOPPED", "USER_STOPPED", self.snapshot.generation)
         return self.snapshot
+
+    def reconcile_lease_owner(self, _lease):
+        self.reconcile_calls += 1
+        return self.recovery_owner
 
 
 def request(client_id="client-a", mode="VSCODE_DEBUG"):
@@ -238,6 +247,70 @@ class GatewayLeaseCoordinatorTests(unittest.TestCase):
         self.assertEqual(self.supervisor.ensure_calls, 0)
         self.assertEqual(self.supervisor.maintain_calls, 0)
         self.assertEqual(self.supervisor.stop_calls, 0)
+
+    def test_restart_tick_cleans_only_a_proven_b300_owned_gateway(self):
+        self.coordinator.acquire(request())
+        self.supervisor.recovery_owner = True
+        restarted = GatewayLeaseCoordinator(
+            self.supervisor, store=self.coordinator.store, policy=self.coordinator.policy,
+            clock=self.clock,
+        )
+
+        recovered = restarted.tick()
+
+        self.assertFalse(recovered.active)
+        self.assertEqual(recovered.reason_code, "RECOVERY_RECONCILED")
+        self.assertEqual((self.supervisor.reconcile_calls, self.supervisor.stop_calls), (1, 1))
+        self.assertIsNone(restarted.store.read())
+
+    def test_restart_tick_keeps_unknown_gateway_in_actionable_recovery(self):
+        self.coordinator.acquire(request())
+        restarted = GatewayLeaseCoordinator(
+            self.supervisor, store=self.coordinator.store, policy=self.coordinator.policy,
+            clock=self.clock,
+        )
+
+        status = restarted.tick()
+
+        self.assertEqual((status.active, status.state, status.reason_code),
+                         (True, "RECOVERY_REQUIRED", "RECOVERY_OWNER_UNPROVEN"))
+        self.assertEqual((self.supervisor.reconcile_calls, self.supervisor.stop_calls), (1, 0))
+
+    def test_restart_tick_keeps_recovery_required_when_proven_cleanup_fails(self):
+        self.coordinator.acquire(request())
+        self.supervisor.recovery_owner = True
+        self.supervisor.stop_error = RuntimeError("owned process did not stop")
+        restarted = GatewayLeaseCoordinator(
+            self.supervisor, store=self.coordinator.store, policy=self.coordinator.policy,
+            clock=self.clock,
+        )
+
+        status = restarted.tick()
+
+        self.assertEqual((status.active, status.state), (True, "RECOVERY_REQUIRED"))
+        self.assertEqual(status.reason_code, "CLEANUP_IN_PROGRESS")
+        self.assertEqual((self.supervisor.reconcile_calls, self.supervisor.stop_calls), (1, 1))
+
+    def test_restart_tick_bounds_proven_cleanup_timeout(self):
+        self.coordinator.acquire(request())
+        self.supervisor.recovery_owner = True
+        release_stop = threading.Event()
+        self.supervisor.stop_blocker = release_stop
+        self.addCleanup(release_stop.set)
+        restarted = GatewayLeaseCoordinator(
+            self.supervisor, store=self.coordinator.store,
+            policy=GatewayLeasePolicy(
+                heartbeat_interval_seconds=1, lease_ttl_seconds=5,
+                reconnect_grace_seconds=3, cleanup_timeout_seconds=0.01,
+            ),
+            clock=self.clock,
+        )
+
+        status = restarted.tick()
+
+        self.assertEqual((status.active, status.state, status.reason_code),
+                         (True, "RECOVERY_REQUIRED", "CLEANUP_IN_PROGRESS"))
+        self.assertEqual((self.supervisor.reconcile_calls, self.supervisor.stop_calls), (1, 1))
 
 
 if __name__ == "__main__":

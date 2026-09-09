@@ -425,6 +425,20 @@ class GatewaySupervisor:
                 return self.observe()
             return self.ensure()
 
+    def reconcile_lease_owner(self, lease: object) -> bool:
+        """Prove that this supervisor still owns a restarted lease's Gateway.
+
+        This intentionally makes no process lookup or stop attempt.  A fresh
+        Agent cannot establish ownership of an inherited OpenOCD process, so
+        it must leave that process untouched and report recovery instead.
+        """
+        with self._lock:
+            return bool(
+                self._service is not None
+                and getattr(lease, "gateway_instance_id", None) == self._snapshot.instance_id
+                and getattr(lease, "gateway_generation", None) == self._snapshot.generation
+            )
+
     def stop(self) -> GatewaySnapshot:
         with self._lock:
             self._manual_stop = True

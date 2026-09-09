@@ -189,6 +189,8 @@ class GatewayLeaseCoordinator:
     def tick(self) -> GatewayLeasePublicSnapshot:
         with self._lock:
             now = self._clock()
+            if self._recovery_required:
+                return self._reconcile_recovery_locked(now)
             if self._lease is None:
                 return _inactive("GATEWAY_IDLE")
             expired = self._advance_expiry_locked(now)
@@ -241,6 +243,8 @@ class GatewayLeaseCoordinator:
     def public_snapshot(self) -> GatewayLeasePublicSnapshot:
         with self._lock:
             if self._recovery_required:
+                if self._lease is not None:
+                    return self._public_locked(self._lease, self._clock())
                 return _inactive("RECOVERY_REQUIRED")
             if self._lease is None:
                 return _inactive("GATEWAY_IDLE")
@@ -334,9 +338,51 @@ class GatewayLeaseCoordinator:
             return self._public_locked(failed, self._clock())
         self.store.clear_if_generation(cleaning.generation)
         self._lease = None
+        self._recovery_required = False
         self._gateway_endpoints = (None, None)
         self._restart_attempted_generation = None
         return _inactive(final_reason)
+
+    def _reconcile_recovery_locked(self, now: float) -> GatewayLeasePublicSnapshot:
+        """Clear a restarted lease only after its former B300 owner is proven.
+
+        A new Agent has no authority over a process merely because it owns the
+        persisted lease file.  The supervisor must positively identify its own
+        live Gateway before cleanup is requested; missing or slow evidence is
+        retained as a fail-closed, operator-visible recovery state.
+        """
+        lease = self._lease
+        if lease is None:
+            return _inactive("RECOVERY_REQUIRED")
+        checker = getattr(self.supervisor, "reconcile_lease_owner", None)
+        if not callable(checker):
+            return self._mark_recovery_locked(lease, "RECOVERY_OWNER_UNPROVEN", now)
+
+        outcome = []
+        error = []
+
+        def check_owner() -> None:
+            try:
+                outcome.append(checker(lease) is True)
+            except Exception as exc:
+                error.append(exc)
+
+        worker = threading.Thread(
+            target=check_owner, name="b300-gateway-recovery-check", daemon=True,
+        )
+        worker.start()
+        worker.join(timeout=self.policy.cleanup_timeout_seconds)
+        if worker.is_alive():
+            return self._mark_recovery_locked(lease, "RECOVERY_RECONCILE_TIMEOUT", now)
+        if error or not outcome or not outcome[0]:
+            return self._mark_recovery_locked(lease, "RECOVERY_OWNER_UNPROVEN", now)
+        return self._cleanup_locked("RECOVERY_RECONCILED")
+
+    def _mark_recovery_locked(self, lease: GatewayLease, reason_code: str,
+                              now: float) -> GatewayLeasePublicSnapshot:
+        recovered = replace(lease, state="RECOVERY_REQUIRED", reason_code=reason_code)
+        self._persist_locked(recovered)
+        return self._public_locked(recovered, now)
 
     def _persist_locked(self, lease: GatewayLease) -> None:
         self.store.write(lease)
