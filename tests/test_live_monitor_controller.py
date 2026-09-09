@@ -635,6 +635,72 @@ class LiveMonitorControllerTests(unittest.TestCase):
         self.assertIsNone(controller._live_session)
         self.assertIsNone(controller._worker)
 
+    def test_new_start_ignores_old_lease_loss_after_startup_rollback(self) -> None:
+        """A failed lease attempt cannot poison its successor or stop it late."""
+        class LeaseClient:
+            def __init__(self, _remote, *, on_lost=None, **_kwargs):
+                self.grant = None
+                self.closed = False
+                self.on_lost = on_lost
+
+            def start(self, _mode, *, probe_serial=None):
+                self.grant = SimpleNamespace(public={"tcl_endpoint": "127.0.0.1:42001"})
+
+            def lose_heartbeat(self):
+                self.grant = None
+                self.on_lost()
+
+            def close(self):
+                self.closed = True
+
+        class DeferredWorker(_InlineWorker):
+            def start(self):
+                self.started = True
+
+            def isRunning(self):
+                return True
+
+        leases, workers = [], []
+        remote = SimpleNamespace(
+            supports_gateway_leases=True,
+            ensure_gateway_agent=lambda: None,
+            acquire_gateway=lambda: None,
+        )
+        first, second = _Session(()), _Session(())
+        calls = []
+        def make_session(**_kwargs):
+            calls.append(None)
+            if len(calls) == 1:
+                leases[0].lose_heartbeat()
+                return first
+            return second
+
+        with tempfile.TemporaryDirectory() as directory:
+            symbols = Path(directory) / "application.axf"
+            symbols.write_bytes(b"ELF")
+            controller = LiveMonitorController(
+                _Panel(), selected_probe=lambda: ProbeRef("probe"),
+                remote_session_provider=lambda _request: remote,
+                lease_client_factory=lambda *args, **kwargs: leases.append(LeaseClient(*args, **kwargs)) or leases[-1],
+                session_factory=make_session,
+                worker_factory=lambda *args: workers.append(DeferredWorker(*args)) or workers[-1],
+            )
+            with self.assertRaisesRegex(RuntimeError, "Gateway lease lost during Monitor startup"):
+                controller.start(live_monitor_controller.LiveMonitorRequest.client(
+                    symbols, host="gateway.local", user="operator", profile_id="lab",
+                ))
+
+            controller.start(live_monitor_controller.LiveMonitorRequest.local(symbols))
+            active_worker = controller._worker
+            leases[0].on_lost()
+
+        self.assertTrue(leases[0].closed)
+        self.assertTrue(first.closed)
+        self.assertTrue(active_worker.started)
+        self.assertTrue(controller.active)
+        self.assertIs(controller._worker, active_worker)
+        self.assertIs(controller._live_session, second)
+
     def test_cancelled_client_login_does_not_create_transport(self) -> None:
         sessions = []
         def cancelled(request):

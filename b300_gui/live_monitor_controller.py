@@ -233,6 +233,9 @@ class LiveMonitorController(QObject):
         self._invalidated_reason = ""
         self._epoch += 1
         epoch = self._epoch
+        with self._startup_lock:
+            self._starting = False
+            self._startup_lease_lost = False
         self._last_request = request
         if request.symbols is not None:
             info = Path(request.symbols).stat()
