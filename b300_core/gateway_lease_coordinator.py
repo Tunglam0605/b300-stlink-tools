@@ -182,8 +182,11 @@ class GatewayLeaseCoordinator:
     def release(self, lease_id: str, token: str,
                 generation: int) -> GatewayLeasePublicSnapshot:
         with self._lock:
-            if self._owner_locked(lease_id, token, generation) is None:
+            lease = self._owner_locked(lease_id, token, generation)
+            if lease is None:
                 return _inactive("LEASE_INVALID")
+            if self._recovery_required or lease.state == "RECOVERY_REQUIRED":
+                return self._reconcile_recovery_locked(self._clock())
             return self._cleanup_locked("CLIENT_RELEASED")
 
     def tick(self) -> GatewayLeasePublicSnapshot:

@@ -312,6 +312,34 @@ class GatewayLeaseCoordinatorTests(unittest.TestCase):
                          (True, "RECOVERY_REQUIRED", "CLEANUP_IN_PROGRESS"))
         self.assertEqual((self.supervisor.reconcile_calls, self.supervisor.stop_calls), (1, 1))
 
+    def test_restart_release_with_matching_token_never_cleans_unproven_owner(self):
+        grant = self.coordinator.acquire(request())
+        restarted = GatewayLeaseCoordinator(
+            self.supervisor, store=self.coordinator.store, policy=self.coordinator.policy,
+            clock=self.clock,
+        )
+
+        status = restarted.release(grant.lease_id, grant.token, grant.generation)
+
+        self.assertEqual((status.active, status.state, status.reason_code),
+                         (True, "RECOVERY_REQUIRED", "RECOVERY_OWNER_UNPROVEN"))
+        self.assertEqual((self.supervisor.reconcile_calls, self.supervisor.stop_calls), (1, 0))
+        self.assertEqual(restarted.store.read().state, "RECOVERY_REQUIRED")
+
+    def test_restart_release_cleans_only_proven_owner(self):
+        grant = self.coordinator.acquire(request())
+        self.supervisor.recovery_owner = True
+        restarted = GatewayLeaseCoordinator(
+            self.supervisor, store=self.coordinator.store, policy=self.coordinator.policy,
+            clock=self.clock,
+        )
+
+        status = restarted.release(grant.lease_id, grant.token, grant.generation)
+
+        self.assertEqual((status.active, status.reason_code), (False, "RECOVERY_RECONCILED"))
+        self.assertEqual((self.supervisor.reconcile_calls, self.supervisor.stop_calls), (1, 1))
+        self.assertIsNone(restarted.store.read())
+
 
 if __name__ == "__main__":
     unittest.main()
