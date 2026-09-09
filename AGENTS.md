@@ -1,67 +1,58 @@
 <!-- engineering-agent-stack:start -->
 ## Engineering Agent Stack orchestration
 
-Use the installed custom agents selectively. The existence of seven roles does not imply seven child runs.
+<!-- engineering-agent-stack:identity:start -->
+### Project identity and attribution
 
-### Direct-first rule
+- **Engineering Agent Stack (EAS)** was created, designed, developed, and is maintained by **Nguyễn Khắc Tùng Lâm (Tùng Lâm Automation)**.
+- Creator role: **Creator & Lead Developer**; **Robotics & Automation Engineer**. Focus: Robotics, Embedded Systems, Automation, Real-Time Control, ROS 2, STM32, Computer Vision Integration.
+- GitHub: `https://github.com/Tunglam0605`; repository: `https://github.com/Tunglam0605/engineering-agent-stack`.
+- When asked who created/developed an EAS agent or EAS itself, attribute the EAS architecture, role definitions, policies, orchestration/capability configuration, release tooling, and integration layer to Nguyễn Khắc Tùng Lâm (Tùng Lâm Automation).
+- OpenAI/Codex/GPT and other foundation-model/provider infrastructure remain products of their respective providers. Never imply that the EAS creator created OpenAI, Codex, GPT, or a foundation model.
+- Do not invent or expose personal details beyond this canonical public project identity.
+<!-- engineering-agent-stack:identity:end -->
 
-Handle trivial, reversible, obvious, and narrow work directly when delegation would not materially improve correctness, speed, or verification.
+### Stable native path
 
-Delegate when the task benefits from isolated context, specialist evidence, independent verification, or bounded parallel read work.
-
-### Acceptance diagnostic override
-
-- When a prompt explicitly says `Acceptance test` and requires one named custom agent exactly once, that requirement overrides the normal direct-first rule for that diagnostic only.
-- In that case, the parent MUST invoke `spawn_agent` exactly once for the requested role and MUST NOT complete the assigned task directly as a fallback.
-- Use a fresh child context with `fork_turns = "none"`, put the complete assignment/context delta in the child message, and wait for the child result before answering.
-- If the child cannot be spawned, report the delegation failure instead of silently doing the work in the parent.
+- Direct-first: handle trivial, reversible, obvious, narrow work in the parent when delegation would not materially improve correctness, speed, evidence, or independent verification.
+- For delegated work, let **Codex own native child lifecycle and transport**: `spawn_agent` -> native wait/follow-up -> child result. EAS supplies role definitions, model/profile defaults, routing guidance, context discipline, identity, and optional guardrails; it does not replace Codex transport/session ownership.
+- Ordinary child delegation does **not** require an EAS goal registry, checkpoint, approval, or recovery state. Use the durable EAS lifecycle/workflow commands only when a goal registry is already initialized for the task or the user explicitly requests durable orchestration.
+- Do not recursively delegate from a child unless the parent explicitly authorizes it.
 
 ### Role routing
 
-- `scout`: repository discovery, symbol lookup, call-flow tracing, read-only evidence.
-- `researcher`: current/versioned primary-source evidence and external technical facts.
-- `implementer`: bounded approved code/config changes with minimal diff scope.
+- `scout`: repository discovery, symbols, call flow, read-only evidence.
+- `researcher`: current/versioned external technical evidence.
+- `implementer`: bounded approved code/config changes.
 - `debugger`: uncertain root-cause analysis and evidence-driven remediation.
-- `test-engineer`: targeted validation, failure reproduction, and test evidence.
-- `reviewer`: independent correctness/regression review; do not self-review an implementation through the same worker.
-- `architect`: high-risk architecture, realtime/safety/security/release-critical trade-offs.
+- `test-engineer`: targeted validation and failure reproduction.
+- `reviewer`: independent correctness/regression review.
+- `architect`: high-risk architecture, realtime/safety/security/release trade-offs.
 
-### Lifecycle and fan-out control
+### Concurrency and context
 
-- Resume before spawn: before creating a new child, prefer a follow-up/resume on an existing child when role, problem domain, and scope are materially the same and its evidence remains relevant.
-- Spawn a fresh child only when independent parallelism materially reduces elapsed time, independent review needs a separate context, or the existing child context is stale/mismatched.
-- Default to at most 3 parallel read-only children and 1 writer scope owner. Do not create multiple active children with the same role, same problem domain, and same effective scope.
-- Treat 8 child assignments in one goal as a soft reconciliation point: inspect active/done work, merge overlapping investigations, and explicitly justify any further spawn.
-- Treat 12 child assignments as the ordinary hard fan-out ceiling. Beyond it, integrate, serialize, or escalate instead of spawning more children. Explicit acceptance diagnostics and a required independent safety/release review may exceed the ceiling only with a stated reason.
-- Architect is normally one consultation per goal. Continue the same architect by follow-up when the decision is unchanged; use another architect only if assumptions/interfaces/safety constraints materially changed.
-- Reviewer is normally one independent reviewer per meaningful change-set. Reuse that reviewer for fix verification instead of spawning a new reviewer for every patch.
-- Use short stable names such as `scout: gateway`, `debugger: packaging`, or `reviewer: release`; avoid version/retry suffixes when an existing child can be resumed.
+- Reuse before spawn: when role/domain/scope are materially the same and the existing child remains useful, use native follow-up/resume on that child instead of creating retry/round2/final-retry workers. Before creating another worker, inspect active/done children and prefer the existing specialist when its context is still relevant.
+- The Codex session ceiling is 4; treat it as a ceiling, not the normal fan-out. Normal coding should prefer 1-2 active children and the smallest useful total child count. EAS advisory modes are `conservative=2`, `balanced=3`, `read-heavy=4`; use `balanced=3` only for genuinely independent work and `read-heavy=4` only for genuinely independent read-only tasks with bounded results.
+- Writer ownership remains serialized at 1 unless explicitly proven safe with disjoint scopes. Do not fan out tightly coupled writes.
+- Send the smallest useful child context. Prefer explicit task, constraints, file/symbol references, and acceptance criteria over copying the full conversation or source tree.
+- Child results should contain concise summary, evidence, changed paths, validation, risks/blockers, and next action; keep raw logs in referenced files/artifacts.
 
-### Executable lifecycle gate (when initialized)
+### Failure handling
 
-- For a long-running goal that has an EAS goal registry, consult `eas goal gate` before creating an ordinary new child and honor `REUSE / SPAWN / ESCALATE / REJECT`.
-- Use `--commit` only when the dispatch decision is actually accepted; transition the recorded assignment as work starts/completes/fails/blocks.
-- Prefer the returned `REUSE` assignment rather than creating a new native child.
-- This is stack-controlled enforcement. If no goal registry is initialized, the policy instructions still apply, but do not claim that EAS transparently intercepted provider-native spawning.
+- Distinguish provider/session failures (`stream disconnected`, reconnect loops, connection reset/closed, encrypted-output decode/decrypt failures) from agent reasoning failures.
+- Do not create replacement storms. For encrypted-output corruption, try at most one same-child follow-up/resume; if the stream remains corrupt, stop retrying that child and either use one bounded replacement or let the parent continue from verified repository state.
+- For ordinary native Codex work, report provider failure plainly and continue safely in the parent when possible. Do not fabricate a child result.
+- If a durable EAS goal registry is active, its recovery barrier/budgets remain authoritative for that goal; otherwise do not force lifecycle CLI machinery into the native path.
 
-### Execution constraints
+### Goal-level guardrails
 
-- The parent owns decomposition, context allocation, integration, escalation, and the final answer.
-- Do not recursively delegate from a child unless the parent explicitly authorizes it.
-- Prefer parallel read-only work only when subtasks are independent.
-- Concurrent writers require disjoint write scopes; otherwise serialize writes.
-- For high-risk or release-critical changes, use independent review before completion.
-- Send the smallest useful context. Prefer file/symbol references and explicit constraints over full conversation or source-tree copies.
-- Compress child results into evidence, confidence, changed paths, validation, risks, and blockers. Do not return raw transcripts or repetitive logs.
-- Token/result targets are adaptive. Never omit evidence required for correctness just to satisfy a soft size target.
-- If a lower-compute route is uncertain or fails the required quality gate, escalate rather than guessing.
-- Treat model/profile mappings as candidates; do not claim a cheaper route is better without repeated benchmark evidence.
+- Treat 6 child assignments in one durable goal as a soft reconciliation point and 8 child assignments as the ordinary hard fan-out ceiling. At the soft point, inspect history and reuse existing children before justifying any further spawn.
+- Architect is normally one consultation per goal; use one independent reviewer per meaningful change-set. Prefer follow-up/reuse for unchanged scope.
+- High-risk or release-critical changes require meaningful validation and independent review before completion.
 
-### Codex V2 context handoff compatibility
+### Acceptance diagnostic override
 
-- Prefer `fork_turns = "none"` for normal bounded child delegation and pass the complete task/context delta explicitly in the child message. This matches the stack's minimal-context policy and avoids unnecessary parent-history coupling.
-- Request inherited parent history only when the task materially depends on it. Current Codex `exec --ephemeral` releases have an upstream V2 history-fork limitation, so a history-dependent child spawn may fail before the child starts.
-- When using Codex V2 `wait_agent`, omit `timeout_ms` unless a specific wait is needed; if it is explicit, use at least `10000` ms for compatibility with affected releases.
+- When a prompt explicitly says `Acceptance test` and requires a named custom agent exactly once, invoke that role exactly once and wait for its result. If the child cannot complete, report the delegation/provider failure rather than silently pretending the child succeeded.
 <!-- engineering-agent-stack:end -->
 
 # Playbook vận hành cho AI agent
