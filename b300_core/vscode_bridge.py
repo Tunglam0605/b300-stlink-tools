@@ -400,13 +400,13 @@ def resolve_vscode(explicit: Optional[str] = None) -> str:
 def launch_vscode(workspace: Path, *, executable: Optional[str] = None,
                   process_factory: ProcessFactory = subprocess.Popen,
                   platform_name: Optional[str] = None):
-    """Open a workspace only after an explicit caller action."""
+    """Open a workspace in a new VS Code window after an explicit caller action."""
     root = Path(workspace).expanduser().resolve()
     if not root.is_dir():
         raise ValueError("VS Code workspace directory does not exist.")
     launcher = resolve_vscode(executable)
     return process_factory(
-        (launcher, "--reuse-window", str(root)),
+        (launcher, "--new-window", str(root)),
         shell=False,
         **child_process_kwargs(platform_name),
     )

@@ -17,6 +17,7 @@ from b300_core.vscode_bridge import (
     DebugRole,
     VsCodeDebugBridge,
     VsCodeExternalProfile,
+    launch_vscode,
 )
 
 
@@ -126,6 +127,38 @@ class V018VsCodeBridgeTests(unittest.TestCase):
             guard_factory=guard_factory,
         )
         return bridge, selected_debug, tcl
+
+    def test_launch_vscode_opens_a_new_window_with_separate_shell_free_argv(self) -> None:
+        """Catches a regression that reuses an existing user VS Code window."""
+        captured = {}
+
+        def process_factory(argv, **kwargs):
+            captured["argv"] = argv
+            captured["kwargs"] = kwargs
+
+        with tempfile.TemporaryDirectory(prefix="B300 Workspace ") as directory:
+            workspace = Path(directory) / "Firmware Workspace"
+            workspace.mkdir()
+            executable = Path(directory) / "VS Code" / "Code.exe"
+            executable.parent.mkdir()
+            executable.touch()
+            launch_vscode(
+                workspace,
+                executable=str(executable),
+                process_factory=process_factory,
+                platform_name="windows",
+            )
+
+        self.assertEqual(
+            captured["argv"],
+            (
+                str(executable.resolve()),
+                "--new-window",
+                str(workspace.resolve()),
+            ),
+        )
+        self.assertNotIn("--reuse-window", captured["argv"])
+        self.assertFalse(captured["kwargs"]["shell"])
 
     def test_external_profile_is_attach_only_and_loopback_only(self) -> None:
         profile = VsCodeExternalProfile(
