@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 
@@ -36,6 +37,27 @@ def run(command: list[str], timeout: int = 180, *, expect_failure: bool = False)
 def hashes(root: Path) -> dict[str, str]:
     return {p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
             for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def _retry_after_clearing_readonly(function, path, error_info) -> None:
+    """Retry only a Windows read-only deletion inside the verifier's owned tree."""
+    error = error_info[1]
+    if os.name != "nt" or not isinstance(error, PermissionError):
+        raise error
+    try:
+        os.chmod(path, stat.S_IWRITE)
+        function(path)
+    except OSError:
+        raise error
+
+
+def remove_owned_installation(evidence: Path, installed: Path) -> None:
+    """Remove the isolated verifier installation without widening its cleanup scope."""
+    evidence_root = Path(evidence).resolve()
+    owned_install = Path(installed).resolve()
+    if owned_install.parent != evidence_root:
+        raise RuntimeError("Unsafe cleanup path")
+    shutil.rmtree(owned_install, onerror=_retry_after_clearing_readonly)
 
 
 def verify(installer: Path, evidence: Path) -> None:
@@ -93,9 +115,7 @@ def verify(installer: Path, evidence: Path) -> None:
         smoke()
         verdict["successful_upgrade_and_stale_cleanup"] = "PASS"
         # Only delete the installation we created below this new evidence root.
-        if installed.resolve().parent != evidence:
-            raise RuntimeError("Unsafe cleanup path")
-        shutil.rmtree(installed)
+        remove_owned_installation(evidence, installed)
         verdict["cleanup"] = "PASS"
     except Exception as error:
         verdict["failure"] = str(error)
