@@ -27,7 +27,7 @@ class MonitorView(QWidget):
                  selected_probe: Optional[Callable[[], ProbeRef]] = None,
                  openocd_executable=None, remote_session_provider=None, hardware_busy=None,
                  remote_profile_loader=load_remote_profile,
-                 catalog_worker_factory=FunctionWorker):
+                 catalog_worker_factory=FunctionWorker, ui_dispatcher=None):
         super().__init__(parent)
         self.setObjectName("monitorViewContainer")
         self._context = None
@@ -55,12 +55,15 @@ class MonitorView(QWidget):
         self.controller = controller or LiveMonitorController(
             self.live_panel, self, selected_probe=selected_probe,
             remote_session_provider=remote_session_provider, hardware_busy=hardware_busy,
-            openocd_executable=openocd_executable)
+            openocd_executable=openocd_executable, ui_dispatcher=ui_dispatcher)
         if self.controller.panel is not self.live_panel:
             raise ValueError("Live Monitor controller must own the displayed panel.")
         set_context = getattr(self.controller, "set_context", None)
         if callable(set_context):
             set_context(context)
+        set_ui_dispatcher = getattr(self.controller, "set_ui_dispatcher", None)
+        if callable(set_ui_dispatcher) and ui_dispatcher is not None:
+            set_ui_dispatcher(ui_dispatcher)
         self._build_ui()
         self.variable_tree_panel.load_requested.connect(self._load_typed_symbols_requested)
         self.variable_tree_panel.add_watch_requested.connect(self._add_typed_watch)

@@ -240,6 +240,7 @@ class MainWindowV18(MainWindow):
             hardware_busy=lambda: self._operation_state().is_hardware_busy,
             openocd_executable=str(self.debug_service.executable),
             context=self.app_context,
+            ui_dispatcher=self._vscode_dispatcher,
         )
         self.monitor_view.log.connect(self.append_log)
         self.monitor_view.operation_state_changed.connect(self._hardware_activity_changed)

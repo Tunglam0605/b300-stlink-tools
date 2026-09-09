@@ -639,6 +639,32 @@ class V018SimplifiedUiTests(unittest.TestCase):
         finally:
             self._close(window)
 
+    def test_gateway_lease_loss_is_queued_through_main_window_dispatcher(self) -> None:
+        class QueuedDispatcher:
+            def __init__(self, parent=None) -> None:
+                self.callbacks = []
+
+            def submit(self, callback) -> None:
+                self.callbacks.append(callback)
+
+        with mock.patch("b300_gui.main_window_v18.GuiDispatcher", QueuedDispatcher):
+            window = self._make_window()
+        try:
+            controller = window.monitor_view.controller
+            dispatcher = window._vscode_dispatcher
+            stop = mock.Mock()
+            controller.stop = stop
+
+            self.assertIs(controller._ui_dispatcher, dispatcher)
+            controller._on_gateway_lease_lost()
+
+            self.assertEqual(len(dispatcher.callbacks), 1)
+            stop.assert_not_called()
+            dispatcher.callbacks.pop()()
+            stop.assert_called_once_with()
+        finally:
+            self._close(window)
+
     def test_device_defaults_are_not_optimistically_healthy(self) -> None:
         view = DeviceView()
         try:

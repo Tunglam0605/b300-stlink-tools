@@ -108,16 +108,21 @@ class GatewayLeaseClient:
         if isinstance(result, dict) and result.get("reason_code") == "LEASE_INVALID":
             self._invalidate_local()
             raise RuntimeError("Gateway lease is no longer valid.")
-        if isinstance(result, dict):
-            try:
-                generation = int(result.get("generation", grant.generation))
-            except (TypeError, ValueError):
-                self._invalidate_local()
-                raise RuntimeError("Gateway lease renewal returned malformed generation.")
-            if (result.get("lease_id", grant.lease_id) != grant.lease_id
-                    or generation != grant.generation):
-                self._invalidate_local()
-                raise RuntimeError("Gateway lease renewal belongs to a stale generation.")
+        try:
+            from .gateway_lease import GatewayLeasePublicSnapshot
+            original = GatewayLeasePublicSnapshot.from_record(grant.public)
+            renewed = GatewayLeasePublicSnapshot.from_record(result)
+        except (TypeError, ValueError):
+            self._invalidate_local()
+            raise RuntimeError("Gateway lease renewal returned a malformed public snapshot.")
+        if (renewed.lease_id != grant.lease_id
+                or renewed.generation != grant.generation
+                or (renewed.gateway_instance_id, renewed.gateway_generation,
+                    renewed.gdb_endpoint, renewed.tcl_endpoint)
+                != (original.gateway_instance_id, original.gateway_generation,
+                    original.gdb_endpoint, original.tcl_endpoint)):
+            self._invalidate_local()
+            raise RuntimeError("Gateway lease renewal returned a stale Gateway binding.")
         return result
 
     def close(self) -> None:
