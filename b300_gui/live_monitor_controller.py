@@ -114,6 +114,9 @@ class LiveMonitorController(QObject):
         self._recovery_worker = None
         self._recovery_token = 0
         self._recovery_dirty = False
+        self._startup_lock = threading.RLock()
+        self._starting = False
+        self._startup_lease_lost = False
 
     def set_context(self, context) -> None:
         self._context = context
@@ -143,10 +146,20 @@ class LiveMonitorController(QObject):
             apply(**updates)
         self._lease_token = None
 
-    def _on_gateway_lease_lost(self) -> None:
+    def _on_gateway_lease_lost(self, epoch=None) -> None:
+        with self._startup_lock:
+            if epoch is not None and epoch != self._epoch:
+                return
+            if self._starting:
+                self._startup_lease_lost = True
         def teardown():
+            if epoch is not None and epoch != self._epoch:
+                return
             try:
-                self.stop()
+                if self._starting:
+                    self._rollback_failed_startup()
+                else:
+                    self.stop()
             except Exception:
                 self._release_monitor("Gateway lease lost")
         dispatcher = getattr(self, "_ui_dispatcher", None)
@@ -191,6 +204,7 @@ class LiveMonitorController(QObject):
         was_active = self._active
         self._active = False
         self._stopping = False
+        self._starting = False
         self._pending_samples.clear()
         self._render_timer.stop()
         try:
@@ -202,6 +216,11 @@ class LiveMonitorController(QObject):
         if was_active:
             self._release_monitor("Live Monitor startup failed")
             self.operation_state_changed.emit(False)
+
+    def _require_startup_lease(self) -> None:
+        with self._startup_lock:
+            if self._startup_lease_lost:
+                raise RuntimeError("Gateway lease lost during Monitor startup.")
 
     def start(self, request: LiveMonitorRequest, *, _coordinator=None, _binding=None) -> None:
         if self._active or self._worker is not None:
@@ -262,17 +281,21 @@ class LiveMonitorController(QObject):
                     and getattr(remote_session, "supports_gateway_leases", False) is True
                     and callable(getattr(remote_session, "ensure_gateway_agent", None))
                     and callable(getattr(remote_session, "acquire_gateway", None))):
+                on_lost = lambda value=epoch: self._on_gateway_lease_lost(value)
                 try:
                     lease_client = self._lease_client_factory(
                         remote_session, client_id=request.profile_id or request.host,
                         client_label=request.user or request.host,
-                        on_lost=self._on_gateway_lease_lost,
+                        on_lost=on_lost,
                     )
                 except TypeError:
                     lease_client = self._lease_client_factory(
                         remote_session, client_id=request.profile_id or request.host,
                         client_label=request.user or request.host,
                     )
+                with self._startup_lock:
+                    self._starting = True
+                    self._startup_lease_lost = False
                 self._gateway_lease_client = lease_client
                 try:
                     lease_client.start("LIVE_WATCH", probe_serial=None)
@@ -302,6 +325,7 @@ class LiveMonitorController(QObject):
         try:
             live = self._session_factory(openocd_executable=self._openocd_executable)
             self._live_session = live
+            self._require_startup_lease()
             self._gateway_coordinator = coordinator
             self._gateway_binding = (_binding if _binding is not None else coordinated.binding) if coordinator is not None else (
                 self._gateway_lease_client.grant.public if self._gateway_lease_client and self._gateway_lease_client.grant else None)
@@ -309,6 +333,7 @@ class LiveMonitorController(QObject):
             self.panel.set_control_state(
                 start_enabled=False, stop_enabled=True, history_enabled=False,
             )
+            self._require_startup_lease()
             self._active = True
             self._publish_monitor()
             self.operation_state_changed.emit(True)
@@ -356,7 +381,10 @@ class LiveMonitorController(QObject):
             worker.completed.connect(lambda result, value=epoch: self._completed_for_epoch(value, result))
             worker.failed.connect(lambda failure, value=epoch: self._failed_for_epoch(value, failure))
             worker.finished.connect(lambda value=epoch: self._worker_finished_for_epoch(value))
-            worker.start()
+            with self._startup_lock:
+                self._require_startup_lease()
+                worker.start()
+                self._starting = False
         except BaseException:
             self._rollback_failed_startup()
             raise

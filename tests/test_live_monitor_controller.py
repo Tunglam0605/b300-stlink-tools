@@ -586,6 +586,55 @@ class LiveMonitorControllerTests(unittest.TestCase):
         self.assertIsNone(controller._live_session)
         self.assertIsNone(controller._worker)
 
+    def test_lease_loss_during_session_factory_rolls_back_before_worker_starts(self) -> None:
+        """Heartbeat loss while constructing a session cannot activate its worker."""
+        class LeaseClient:
+            def __init__(self, _remote, *, on_lost=None, **_kwargs):
+                self.grant = None
+                self.closed = False
+                self._on_lost = on_lost
+
+            def start(self, _mode, *, probe_serial=None):
+                self.grant = SimpleNamespace(public={"tcl_endpoint": "127.0.0.1:42001"})
+
+            def lose_heartbeat(self):
+                self.grant = None
+                self._on_lost()
+
+            def close(self):
+                self.closed = True
+
+        leases, workers = [], []
+        remote = SimpleNamespace(
+            supports_gateway_leases=True,
+            ensure_gateway_agent=lambda: None,
+            acquire_gateway=lambda: None,
+        )
+        session = _Session(())
+        with tempfile.TemporaryDirectory() as directory:
+            symbols = Path(directory) / "application.axf"
+            symbols.write_bytes(b"ELF")
+            controller = LiveMonitorController(
+                _Panel(), remote_session_provider=lambda _request: remote,
+                lease_client_factory=lambda *args, **kwargs: leases.append(LeaseClient(*args, **kwargs)) or leases[-1],
+                session_factory=lambda **_kwargs: leases[0].lose_heartbeat() or session,
+                worker_factory=lambda *args: workers.append(_InlineWorker(*args)) or workers[-1],
+            )
+            with self.assertRaisesRegex(RuntimeError, "Gateway lease lost during Monitor startup"):
+                controller.start(live_monitor_controller.LiveMonitorRequest.client(
+                    symbols, host="gateway.local", user="operator", profile_id="lab",
+                ))
+
+        self.assertTrue(leases[0].closed)
+        self.assertTrue(session.closed)
+        self.assertEqual(workers, [])
+        self.assertFalse(controller.active)
+        self.assertIsNone(controller._gateway_lease_client)
+        self.assertIsNone(controller._gateway_coordinator)
+        self.assertIsNone(controller._gateway_binding)
+        self.assertIsNone(controller._live_session)
+        self.assertIsNone(controller._worker)
+
     def test_cancelled_client_login_does_not_create_transport(self) -> None:
         sessions = []
         def cancelled(request):
