@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from elftools.elf.elffile import ELFFile
+
 from b300_core.typed_symbols import TypedSymbolCatalog
 
 
@@ -33,6 +35,19 @@ def _build_keil_fixture(directory: str) -> Path:
         check=True, capture_output=True, text=True, timeout=30,
     )
     return output
+
+
+def _linker_symbol_address(image: Path, name: str) -> int:
+    """Read the linker-assigned address without using the catalog under test."""
+    with image.open("rb") as stream:
+        elf = ELFFile(stream)
+        for section in elf.iter_sections():
+            if section["sh_type"] != "SHT_SYMTAB":
+                continue
+            for symbol in section.iter_symbols():
+                if symbol.name == name and symbol["st_info"]["type"] == "STT_OBJECT":
+                    return int(symbol["st_value"])
+    raise AssertionError("%s is not an object symbol in %s" % (name, image))
 
 
 class TypedSymbolCatalogTests(unittest.TestCase):
@@ -121,10 +136,14 @@ class TypedSymbolCatalogTests(unittest.TestCase):
                     if item.name == "xAgvInfor")
         children = catalog.children(root.node_id, 0, 100)
         by_name = {item.name: item for item in children}
-        self.assertEqual(root.address, 0x2000D198)
-        self.assertEqual(by_name["direction"].address, 0x2000D19A)
-        self.assertEqual(by_name["RFID"].address, 0x2000D1A0)
-        self.assertEqual(by_name["distance"].address, 0x2000D1F0)
+        root_address = _linker_symbol_address(path, "xAgvInfor")
+        self.assertEqual(root.address, root_address)
+        # These are ABI offsets of fields required by Live Watch.  The base
+        # address is linker-assigned and legitimately moves as other .bss
+        # objects change between Main_V2 firmware builds.
+        self.assertEqual(by_name["direction"].address, root_address + 0x02)
+        self.assertEqual(by_name["RFID"].address, root_address + 0x08)
+        self.assertEqual(by_name["distance"].address, root_address + 0x58)
 
 
 if __name__ == "__main__":
