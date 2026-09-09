@@ -131,6 +131,7 @@ class GatewaySupervisorTests(unittest.TestCase):
             fresh = GatewaySupervisor(
                 owner_record_path=Path(directory) / "openocd-owner.json",
                 process_identity=lambda _pid: current[0],
+                endpoint_owner_pid=lambda _endpoint: 4242,
                 shutdown_openocd=shutdown,
                 endpoints_closed=lambda _gdb, _tcl: current[0] is None,
             )
@@ -153,6 +154,43 @@ class GatewaySupervisorTests(unittest.TestCase):
                 shutdown_openocd=lambda _endpoint: self.fail("forged endpoint must not be contacted"),
             )
             self.assertFalse(fresh.reconcile_lease_owner(RestartLease()))
+
+    def test_restart_recovery_rejects_tcl_endpoint_owned_by_another_pid(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self._restart_owner(directory)
+            fresh = GatewaySupervisor(
+                owner_record_path=Path(directory) / "openocd-owner.json",
+                process_identity=lambda _pid: {"pid": 4242, "start_identity": "start-a",
+                                                "executable": "/trusted/openocd", "boot_identity": "boot-a"},
+                endpoint_owner_pid=lambda _endpoint: 9999,
+                shutdown_openocd=lambda _endpoint: self.fail("foreign listener must not receive shutdown"),
+            )
+            self.assertFalse(fresh.reconcile_lease_owner(RestartLease()))
+
+    def test_restart_recovery_rejects_tcl_endpoint_with_unknown_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self._restart_owner(directory)
+            fresh = GatewaySupervisor(
+                owner_record_path=Path(directory) / "openocd-owner.json",
+                process_identity=lambda _pid: {"pid": 4242, "start_identity": "start-a",
+                                                "executable": "/trusted/openocd", "boot_identity": "boot-a"},
+                endpoint_owner_pid=lambda _endpoint: None,
+                shutdown_openocd=lambda _endpoint: self.fail("unknown listener must not receive shutdown"),
+            )
+            self.assertFalse(fresh.reconcile_lease_owner(RestartLease()))
+
+    def test_restart_recovery_allows_only_tcl_endpoint_owned_by_recorded_pid(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            current = [{"pid": 4242, "start_identity": "start-a",
+                        "executable": "/trusted/openocd", "boot_identity": "boot-a"}]
+            self._restart_owner(directory, identity=current[0])
+            fresh = GatewaySupervisor(
+                owner_record_path=Path(directory) / "openocd-owner.json",
+                process_identity=lambda _pid: current[0], endpoint_owner_pid=lambda _endpoint: 4242,
+                shutdown_openocd=lambda _endpoint: current.__setitem__(0, None),
+                endpoints_closed=lambda _gdb, _tcl: current[0] is None,
+            )
+            self.assertTrue(fresh.reconcile_lease_owner(RestartLease()))
 
     def test_bare_service_executable_persists_verified_process_executable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -208,6 +246,7 @@ class GatewaySupervisorTests(unittest.TestCase):
             fresh = GatewaySupervisor(
                 owner_record_path=Path(directory) / "openocd-owner.json",
                 process_identity=lambda _pid: current[0], shutdown_openocd=shutdown,
+                endpoint_owner_pid=lambda _endpoint: 4242,
                 endpoints_closed=lambda _gdb, _tcl: current[0] is None,
             )
             self.assertTrue(fresh.reconcile_lease_owner(RestartLease()))
@@ -237,6 +276,7 @@ class GatewaySupervisorTests(unittest.TestCase):
             fresh = GatewaySupervisor(
                 owner_record_path=Path(directory) / "openocd-owner.json",
                 process_identity=lambda _pid: current[0],
+                endpoint_owner_pid=lambda _endpoint: 4242,
                 shutdown_openocd=delayed_shutdown,
                 recovery_timeout_seconds=0.01,
             )

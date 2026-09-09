@@ -321,7 +321,8 @@ class GatewayLeaseCoordinatorTests(unittest.TestCase):
         def shutdown(_endpoint): identity[0] = None
         fresh = GatewaySupervisor(
             owner_record_path=owner_path, process_identity=lambda _pid: identity[0],
-            shutdown_openocd=shutdown, endpoints_closed=lambda _gdb, _tcl: identity[0] is None,
+            endpoint_owner_pid=lambda _endpoint: 4242, shutdown_openocd=shutdown,
+            endpoints_closed=lambda _gdb, _tcl: identity[0] is None,
         )
         restarted = GatewayLeaseCoordinator(
             fresh, store=self.coordinator.store, policy=self.coordinator.policy, clock=self.clock,

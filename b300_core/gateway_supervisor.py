@@ -6,6 +6,7 @@ import json
 import hmac
 import os
 import socket
+import re
 import subprocess
 import threading
 import time
@@ -192,6 +193,90 @@ def _closed_endpoints(gdb_endpoint: str, tcl_endpoint: str) -> bool:
             connection.close()
             return False
     return True
+
+
+def _endpoint_owner_pid(endpoint: str):
+    """Return a sole loopback TCP listener owner, otherwise fail closed."""
+    host, separator, port_text = str(endpoint).rpartition(":")
+    if host != "127.0.0.1" or not separator:
+        return None
+    try:
+        port = int(port_text)
+    except ValueError:
+        return None
+    if not 1 <= port <= 65535:
+        return None
+    if os.name == "nt":
+        return _windows_listener_owner_pid(port)
+    return _linux_listener_owner_pid(host, port)
+
+
+def _linux_listener_owner_pid(host: str, port: int):
+    """Map a Linux loopback listener inode through /proc to one PID."""
+    try:
+        wanted_address = socket.inet_aton(host)
+        inodes = set()
+        for table_name in ("tcp",):
+            for line in (Path("/proc/net") / table_name).read_text(encoding="ascii").splitlines()[1:]:
+                fields = line.split()
+                if len(fields) < 10 or fields[3] != "0A":  # TCP_LISTEN
+                    continue
+                address_text, separator, port_hex = fields[1].partition(":")
+                if not separator or int(port_hex, 16) != port:
+                    continue
+                if int(address_text, 16).to_bytes(4, "little") != wanted_address:
+                    continue
+                inodes.add(fields[9])
+        if not inodes:
+            return None
+        owners = set()
+        for process_root in Path("/proc").iterdir():
+            if not process_root.name.isdigit():
+                continue
+            try:
+                for descriptor in (process_root / "fd").iterdir():
+                    matched = re.fullmatch(r"socket:\[([0-9]+)\]", os.readlink(str(descriptor)))
+                    if matched and matched.group(1) in inodes:
+                        owners.add(int(process_root.name))
+            except OSError:
+                continue
+        return next(iter(owners)) if len(owners) == 1 else None
+    except (OSError, ValueError, OverflowError):
+        return None
+
+
+def _windows_listener_owner_pid(port: int):
+    """Read the Windows IPv4 TCP listener table without shelling out."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        ip_helper = ctypes.WinDLL("iphlpapi", use_last_error=True)
+        get_table = ip_helper.GetExtendedTcpTable
+        get_table.argtypes = (wintypes.LPVOID, ctypes.POINTER(wintypes.DWORD), wintypes.BOOL,
+                              wintypes.ULONG, wintypes.INT, wintypes.ULONG)
+        get_table.restype = wintypes.DWORD
+        size = wintypes.DWORD(0)
+        error_more_data = 122
+        if get_table(None, ctypes.byref(size), False, 2, 3, 0) not in (0, error_more_data):
+            return None
+        buffer = ctypes.create_string_buffer(size.value)
+        if get_table(buffer, ctypes.byref(size), False, 2, 3, 0) != 0:
+            return None
+        class Row(ctypes.Structure):
+            _fields_ = [("state", wintypes.DWORD), ("local_addr", wintypes.DWORD),
+                        ("local_port", wintypes.DWORD), ("remote_addr", wintypes.DWORD),
+                        ("remote_port", wintypes.DWORD), ("pid", wintypes.DWORD)]
+        count = ctypes.cast(buffer, ctypes.POINTER(wintypes.DWORD)).contents.value
+        offset = ctypes.sizeof(wintypes.DWORD)
+        owners = set()
+        loopback = int.from_bytes(socket.inet_aton("127.0.0.1"), "little")
+        for index in range(count):
+            row = Row.from_buffer_copy(buffer, offset + index * ctypes.sizeof(Row))
+            if (row.local_addr == loopback and socket.ntohs(row.local_port & 0xFFFF) == port):
+                owners.add(int(row.pid))
+        return next(iter(owners)) if len(owners) == 1 else None
+    except (AttributeError, OSError, ValueError):
+        return None
 
 
 class _GatewayOpenOcdOwnerStore:
@@ -412,6 +497,7 @@ class GatewaySupervisor:
                  process_identity: Callable[[int], object] = _process_identity,
                  shutdown_openocd: Optional[Callable[[str], None]] = None,
                  endpoints_closed: Callable[[str, str], bool] = _closed_endpoints,
+                 endpoint_owner_pid: Callable[[str], object] = _endpoint_owner_pid,
                  recovery_timeout_seconds: float = 1.0) -> None:
         if not 1 <= int(gdb_port) <= 65535 or not 1 <= int(tcl_port) <= 65535:
             raise ValueError("Gateway ports must be in range 1..65535.")
@@ -434,6 +520,7 @@ class GatewaySupervisor:
         self._process_identity = process_identity
         self._shutdown_openocd = shutdown_openocd or self._safe_shutdown_openocd
         self._endpoints_closed = endpoints_closed
+        self._endpoint_owner_pid = endpoint_owner_pid
         self._recovery_timeout = float(recovery_timeout_seconds)
         self._lease_owner_context = None
         self._instance_id = uuid.uuid4().hex
@@ -725,6 +812,13 @@ class GatewaySupervisor:
     def _reconcile_owner_worker(self, record: Mapping[str, object], failures: list,
                                 deadline: float) -> bool:
         if time.monotonic() >= deadline or not self._record_matches_live_process(record):
+            return False
+        try:
+            if self._endpoint_owner_pid(record["tcl_endpoint"]) != record["pid"]:
+                return False
+        except Exception:
+            return False
+        if time.monotonic() >= deadline:
             return False
         try:
             self._shutdown_openocd(record["tcl_endpoint"])
