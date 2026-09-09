@@ -34,7 +34,8 @@ class V018ManagedGdbReleaseTests(unittest.TestCase):
             digest = hashlib.sha256(archive_bytes).hexdigest()
             filename = "xpack-arm-none-eabi-gcc-test-win32-x64.zip"
 
-            def fake_fetch(url: str, output: Path) -> None:
+            def fake_fetch(url: str, output: Path, maximum_bytes: int = None) -> None:
+                del maximum_bytes
                 if url.endswith(".sha"):
                     output.write_text(digest + "  " + filename + "\n", encoding="utf-8")
                 else:
@@ -73,7 +74,8 @@ class V018ManagedGdbReleaseTests(unittest.TestCase):
             filename = "runtime.zip"
             actual = hashlib.sha256(b"archive").hexdigest()
 
-            def fake_fetch(url: str, output: Path) -> None:
+            def fake_fetch(url: str, output: Path, maximum_bytes: int = None) -> None:
+                del maximum_bytes
                 if url.endswith(".sha"):
                     output.write_text("0" * 64 + "  runtime.zip\n", encoding="utf-8")
                 else:

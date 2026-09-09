@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import platform
 import shutil
+import socket
 import subprocess
 import struct
 import sys
 import sysconfig
 import tarfile
 import tempfile
+import time
 import urllib.request
 import zipfile
 from dataclasses import dataclass
@@ -55,7 +58,11 @@ MAX_GDB_FILE_BYTES = 512 * 1024 * 1024
 MAX_GDB_ENTRIES = 20_000
 MAX_GDB_COMPRESSION_RATIO = 500
 MAX_GDB_CENTRAL_DIRECTORY_BYTES = 64 * 1024 * 1024
-DOWNLOAD_TIMEOUT_SECONDS = 60.0
+DOWNLOAD_CONNECT_TIMEOUT_SECONDS = 20.0
+DOWNLOAD_NO_PROGRESS_SECONDS = 60.0
+DOWNLOAD_TOTAL_SECONDS = 60.0 * 60.0
+DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+MAX_CHECKSUM_BYTES = 64 * 1024
 
 
 def target_for(system: str, machine: str, python_platform: str):
@@ -173,9 +180,133 @@ def cli_pyinstaller_plan(
     return CliPyinstallerPlan(tuple(command), Path("b300-stlink"), None)
 
 
-def fetch(url: str, output: Path) -> None:
-    with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT_SECONDS) as source, output.open("wb") as destination:
-        shutil.copyfileobj(source, destination)
+def default_download_cache() -> Path:
+    """Return a persistent per-user cache for verified native build inputs."""
+    if platform.system().lower() == "windows":
+        root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+    else:
+        root = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    return root / "B300-STLink" / "native-download-cache"
+
+
+def download_cache_path(cache_dir: Path, url: str, digest: str) -> Path:
+    """Name cache entries by both their immutable URL and expected digest."""
+    normalized = digest.lower()
+    if len(normalized) != 64 or any(character not in "0123456789abcdef" for character in normalized):
+        raise ValueError("Native download cache requires a SHA-256 digest.")
+    key = hashlib.sha256((url + "\x00" + normalized).encode("utf-8")).hexdigest()
+    return Path(cache_dir) / (key + ".archive")
+
+
+def _temporary_download_path(output: Path) -> Path:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, name = tempfile.mkstemp(
+        prefix="." + output.name + ".", suffix=".part", dir=str(output.parent),
+    )
+    os.close(descriptor)
+    return Path(name)
+
+
+def _content_length(source, maximum_bytes: int):
+    headers = getattr(source, "headers", None)
+    value = headers.get("Content-Length") if headers is not None else None
+    if value in (None, ""):
+        return None
+    try:
+        size = int(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Native download has an invalid Content-Length header.") from error
+    if size < 0 or size > maximum_bytes:
+        raise ValueError("Native download exceeds the compressed size limit.")
+    return size
+
+
+def _set_response_read_timeout(source, timeout: float) -> None:
+    """Set the read timeout on urllib's concrete HTTPS socket when available."""
+    stream = getattr(source, "fp", None)
+    raw = getattr(stream, "raw", None)
+    selected_socket = getattr(raw, "_sock", None)
+    if selected_socket is not None:
+        selected_socket.settimeout(timeout)
+
+
+def fetch(url: str, output: Path, maximum_bytes: int = MAX_GDB_PACKAGE_BYTES) -> None:
+    """Stream one bounded download to a temporary path and publish atomically."""
+    destination = Path(output)
+    temporary = _temporary_download_path(destination)
+    started = time.monotonic()
+    last_progress = started
+    total = 0
+    try:
+        with urllib.request.urlopen(url, timeout=DOWNLOAD_CONNECT_TIMEOUT_SECONDS) as source:
+            expected_size = _content_length(source, maximum_bytes)
+            _set_response_read_timeout(source, DOWNLOAD_NO_PROGRESS_SECONDS)
+            with temporary.open("wb") as staged:
+                while True:
+                    now = time.monotonic()
+                    if now - started > DOWNLOAD_TOTAL_SECONDS:
+                        raise TimeoutError("Native download exceeded its overall deadline.")
+                    if now - last_progress > DOWNLOAD_NO_PROGRESS_SECONDS:
+                        raise TimeoutError("Native download made no progress before its deadline.")
+                    try:
+                        chunk = source.read(DOWNLOAD_CHUNK_BYTES)
+                    except socket.timeout as error:
+                        raise TimeoutError(
+                            "Native download made no progress before its read deadline."
+                        ) from error
+                    now = time.monotonic()
+                    if now - started > DOWNLOAD_TOTAL_SECONDS:
+                        raise TimeoutError("Native download exceeded its overall deadline.")
+                    if not chunk:
+                        if expected_size is not None and total != expected_size:
+                            raise ValueError("Native download ended before its advertised size.")
+                        break
+                    total += len(chunk)
+                    if total > maximum_bytes:
+                        raise ValueError("Native download exceeds the compressed size limit.")
+                    last_progress = now
+                    staged.write(chunk)
+        os.replace(str(temporary), str(destination))
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _copy_verified_archive(source: Path, destination: Path, digest: str,
+                           maximum_bytes: int) -> None:
+    temporary = _temporary_download_path(destination)
+    try:
+        shutil.copyfile(str(source), str(temporary))
+        if hash_file(temporary, maximum_bytes=maximum_bytes) != digest.lower():
+            raise RuntimeError("Verified native download cache entry changed while being copied.")
+        os.replace(str(temporary), str(destination))
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def fetch_verified_archive(url: str, output: Path, digest: str, maximum_bytes: int,
+                           cache_dir: Path) -> str:
+    """Reuse only a hash-verified cache entry, otherwise download and publish one."""
+    expected = digest.lower()
+    cache_path = download_cache_path(cache_dir, url, expected)
+    try:
+        if cache_path.is_file() and hash_file(cache_path, maximum_bytes=maximum_bytes) == expected:
+            _copy_verified_archive(cache_path, Path(output), expected, maximum_bytes)
+            return expected
+    except (OSError, ValueError):
+        pass
+
+    fetch(url, Path(output), maximum_bytes=maximum_bytes)
+    actual = hash_file(Path(output), maximum_bytes=maximum_bytes)
+    if actual != expected:
+        raise RuntimeError("Downloaded native archive checksum mismatch.")
+    try:
+        _copy_verified_archive(Path(output), cache_path, expected, maximum_bytes)
+    except OSError:
+        # Cache availability cannot weaken a verified release build.
+        pass
+    return actual
 
 
 def validate_trusted_package(platform_name: str, filename: str, digest: str) -> None:
@@ -434,20 +565,21 @@ def extract_trusted_gdb_package(package: Path, destination: Path, platform_name:
     return executable
 
 
-def prepare_managed_gdb(temp: Path, platform_name: str):
+def prepare_managed_gdb(temp: Path, platform_name: str, download_cache: Path = None):
     """Download, pin-verify, compact and smoke-test the B300-managed GDB."""
     filename, pinned_sha256 = TRUSTED_GDB_PACKAGES[platform_name]
     archive = temp / filename
     checksum = temp / (filename + ".sha")
-    fetch("%s/%s" % (GDB_BASE, filename), archive)
-    fetch("%s/%s.sha" % (GDB_BASE, filename), checksum)
+    download_cache = temp / "download-cache" if download_cache is None else Path(download_cache)
+    fetch("%s/%s.sha" % (GDB_BASE, filename), checksum, MAX_CHECKSUM_BYTES)
     upstream_sha256 = checksum.read_text(encoding="utf-8").split()[0].lower()
-    actual_sha256 = hash_file(archive)
-    if actual_sha256 != upstream_sha256:
+    if upstream_sha256 != pinned_sha256.lower():
         raise RuntimeError("GNU Arm GDB archive checksum mismatch.")
-    if actual_sha256 != pinned_sha256.lower():
-        raise RuntimeError("GNU Arm GDB archive does not match the B300 pinned SHA-256.")
-    validate_trusted_gdb_package(platform_name, filename, actual_sha256)
+    validate_trusted_gdb_package(platform_name, filename, upstream_sha256)
+    actual_sha256 = fetch_verified_archive(
+        "%s/%s" % (GDB_BASE, filename), archive, upstream_sha256,
+        MAX_GDB_PACKAGE_BYTES, download_cache,
+    )
 
     extracted = temp / "gdb-toolchain-extracted"
     extract_trusted_gdb_package(archive, extracted, platform_name)
@@ -460,6 +592,7 @@ def prepare_managed_gdb(temp: Path, platform_name: str):
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=ROOT / "release")
+    parser.add_argument("--download-cache-dir", type=Path, default=default_download_cache())
     parser.add_argument("--internal-distribution-approved", action="store_true")
     parser.add_argument("--flavor", choices=("all", "gui", "cli"), default="all")
     args = parser.parse_args(argv)
@@ -471,19 +604,22 @@ def main(argv=None) -> int:
         temp = Path(temp)
         filename = "xpack-openocd-%s-%s%s" % (VERSION, xpack_name, extension)
         archive, checksum = temp / filename, temp / (filename + ".sha")
-        fetch("%s/%s" % (BASE, filename), archive)
-        fetch("%s/%s.sha" % (BASE, filename), checksum)
+        fetch("%s/%s.sha" % (BASE, filename), checksum, MAX_CHECKSUM_BYTES)
         verified_sha256 = checksum.read_text().split()[0].lower()
-        if hash_file(archive, maximum_bytes=MAX_GDB_PACKAGE_BYTES) != verified_sha256:
-            raise RuntimeError("OpenOCD checksum mismatch.")
         validate_trusted_package(platform_name, filename, verified_sha256)
+        fetch_verified_archive(
+            "%s/%s" % (BASE, filename), archive, verified_sha256,
+            MAX_GDB_PACKAGE_BYTES, args.download_cache_dir,
+        )
         openocd_root = temp / "openocd-runtime"
         extract_trusted_openocd_package(archive, openocd_root, platform_name)
 
         # v0.18 ships a managed debugger runtime so a clean PC does not need a
         # separately installed Arm GNU toolchain.  Only GDB + host runtime files
         # are staged; GCC/linker/target libraries remain intentionally excluded.
-        gdb_archive, gdb_sha256, gdb_root = prepare_managed_gdb(temp, platform_name)
+        gdb_archive, gdb_sha256, gdb_root = prepare_managed_gdb(
+            temp, platform_name, args.download_cache_dir,
+        )
 
         subprocess.check_call([sys.executable, "-m", "pip", "install", "--user",
                                "-r", str(ROOT / "requirements-build.txt")])

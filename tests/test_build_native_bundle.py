@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import socket
 import subprocess
 import sys
 import unittest
@@ -35,6 +36,104 @@ def builder():
 
 
 class NativeBundleTargetTests(unittest.TestCase):
+    def test_fetch_removes_partial_file_after_a_connected_read_stalls(self) -> None:
+        module = builder()
+
+        class StalledResponse:
+            headers = {"Content-Length": "7"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            def read(self, size):
+                del size
+                raise socket.timeout("connected but no bytes arrived")
+
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "archive.zip"
+            with mock.patch.object(module.urllib.request, "urlopen", return_value=StalledResponse()):
+                with self.assertRaisesRegex(TimeoutError, "progress"):
+                    module.fetch("https://example.invalid/archive.zip", destination)
+            self.assertFalse(destination.exists())
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_verified_archive_replaces_a_corrupt_cache_entry(self) -> None:
+        module = builder()
+        self.assertTrue(hasattr(module, "fetch_verified_archive"))
+        payload = b"trusted archive"
+        digest = hashlib.sha256(payload).hexdigest()
+        url = "https://example.invalid/archive.zip"
+
+        class Response(io.BytesIO):
+            headers = {"Content-Length": str(len(payload))}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                self.close()
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = root / "cache"
+            destination = root / "archive.zip"
+            cache_entry = module.download_cache_path(cache, url, digest)
+            cache_entry.parent.mkdir(parents=True)
+            cache_entry.write_bytes(b"corrupt")
+            with mock.patch.object(module.urllib.request, "urlopen", return_value=Response(payload)) as opened:
+                module.fetch_verified_archive(
+                    url, destination, digest, len(payload), cache,
+                )
+            self.assertEqual(opened.call_count, 1)
+            self.assertEqual(destination.read_bytes(), payload)
+            self.assertEqual(cache_entry.read_bytes(), payload)
+
+    def test_verified_archive_reuses_a_matching_persistent_cache_entry(self) -> None:
+        module = builder()
+        payload = b"trusted archive"
+        digest = hashlib.sha256(payload).hexdigest()
+        url = "https://example.invalid/archive.zip"
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = root / "cache"
+            destination = root / "archive.zip"
+            cache_entry = module.download_cache_path(cache, url, digest)
+            cache_entry.parent.mkdir(parents=True)
+            cache_entry.write_bytes(payload)
+            with mock.patch.object(module.urllib.request, "urlopen",
+                                   side_effect=AssertionError("cache hit must not download")):
+                module.fetch_verified_archive(
+                    url, destination, digest, len(payload), cache,
+                )
+            self.assertEqual(destination.read_bytes(), payload)
+
+    def test_fetch_enforces_its_overall_deadline_between_progress_chunks(self) -> None:
+        module = builder()
+        payload = b"trusted"
+
+        class Response(io.BytesIO):
+            headers = {"Content-Length": str(len(payload))}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                self.close()
+
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "archive.zip"
+            with mock.patch.object(module.urllib.request, "urlopen", return_value=Response(payload)), \
+                 mock.patch.object(module.time, "monotonic", side_effect=(
+                     0.0, 0.0, module.DOWNLOAD_TOTAL_SECONDS + 1.0,
+                 )):
+                with self.assertRaisesRegex(TimeoutError, "overall deadline"):
+                    module.fetch("https://example.invalid/archive.zip", destination)
+            self.assertFalse(destination.exists())
+
     def test_fetch_uses_a_bounded_socket_timeout(self) -> None:
         module = builder()
         calls = []
