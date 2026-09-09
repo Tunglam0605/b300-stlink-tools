@@ -14,6 +14,9 @@ from b300_core.gateway_lease import (
 )
 from b300_core.gateway_lease_coordinator import GatewayLeaseCoordinator
 from b300_core.gateway_status import GatewaySnapshot
+from b300_core.gateway_supervisor import GatewaySupervisor
+from b300_core.debug_service import DebugState
+from b300_core.models import ProbeInfo
 
 
 def snapshot(state="READY", reason="TARGET_VERIFIED", generation=1):
@@ -85,6 +88,26 @@ class FakeSupervisor:
 
     def confirm_lease_owner_stopped(self, _lease, timeout_seconds):
         return self.stop_confirmed and timeout_seconds > 0
+
+
+class _OwnedService:
+    executable = "/trusted/openocd"
+
+    class Process:
+        pid = 4242
+
+    def __init__(self):
+        self._state = DebugState.STOPPED
+        self._process = self.Process()
+
+    @property
+    def state(self): return self._state
+
+    @property
+    def process(self): return self._process
+
+    def start(self, _config, event_sink=None): self._state = DebugState.READY
+    def stop(self): self._state = DebugState.STOPPED
 
 
 def request(client_id="client-a", mode="VSCODE_DEBUG"):
@@ -274,6 +297,41 @@ class GatewayLeaseCoordinatorTests(unittest.TestCase):
         self.assertFalse(recovered.active)
         self.assertEqual(recovered.reason_code, "RECOVERY_RECONCILED")
         self.assertEqual((self.supervisor.reconcile_calls, self.supervisor.stop_calls), (1, 1))
+        self.assertIsNone(restarted.store.read())
+
+    def test_real_restart_recovery_clears_proven_lease_and_owner_once(self):
+        identity = [{"pid": 4242, "start_identity": "start-a",
+                     "executable": "/trusted/openocd", "boot_identity": "boot-a"}]
+        owner_path = Path(self.temp.name) / "openocd-owner.json"
+        first = GatewaySupervisor(
+            service_factory=_OwnedService, probe_discovery=lambda: (
+                ProbeInfo("SAFE123", "ST-Link", "test", "usb:1"),),
+            target_state_probe=lambda _config: "running", owner_record_path=owner_path,
+            process_identity=lambda _pid: identity[0],
+            endpoints_closed=lambda _gdb, _tcl: identity[0] is None,
+        )
+        original = GatewayLeaseCoordinator(
+            first, store=self.coordinator.store, policy=self.coordinator.policy,
+            clock=self.clock, token_factory=lambda: "token-one",
+            lease_id_factory=lambda: "lease-one", acquired_at_factory=lambda: "2026-09-08T00:00:00Z",
+        )
+        grant = original.acquire(request())
+        self.assertTrue(grant.public.active)
+        self.assertTrue(owner_path.exists())
+        def shutdown(_endpoint): identity[0] = None
+        fresh = GatewaySupervisor(
+            owner_record_path=owner_path, process_identity=lambda _pid: identity[0],
+            shutdown_openocd=shutdown, endpoints_closed=lambda _gdb, _tcl: identity[0] is None,
+        )
+        restarted = GatewayLeaseCoordinator(
+            fresh, store=self.coordinator.store, policy=self.coordinator.policy, clock=self.clock,
+        )
+
+        result = restarted.tick()
+
+        self.assertEqual((result.active, result.state, result.reason_code),
+                         (False, "IDLE", "RECOVERY_RECONCILED"))
+        self.assertFalse(owner_path.exists())
         self.assertIsNone(restarted.store.read())
 
     def test_restart_tick_keeps_unknown_gateway_in_actionable_recovery(self):

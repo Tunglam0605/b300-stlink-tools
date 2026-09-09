@@ -320,7 +320,7 @@ class GatewayLeaseCoordinator:
         self._persist_locked(grace)
         return self._public_locked(grace, now)
 
-    def _cleanup_locked(self, final_reason: str) -> GatewayLeasePublicSnapshot:
+    def _cleanup_locked(self, final_reason: str, *, recovery_proven: bool = False) -> GatewayLeasePublicSnapshot:
         lease = self._lease
         if lease is None:
             return _inactive(final_reason)
@@ -346,7 +346,7 @@ class GatewayLeaseCoordinator:
             self._persist_locked(failed)
             return self._public_locked(failed, self._clock())
         confirmer = getattr(self.supervisor, "confirm_lease_owner_stopped", None)
-        if callable(confirmer):
+        if callable(confirmer) and not recovery_proven:
             verified = []
             proof_error = []
             def confirm_stop() -> None:
@@ -414,7 +414,11 @@ class GatewayLeaseCoordinator:
             return self._mark_recovery_locked(lease, "RECOVERY_RECONCILE_TIMEOUT", now)
         if error or not outcome or not outcome[0]:
             return self._mark_recovery_locked(lease, "RECOVERY_OWNER_UNPROVEN", now)
-        return self._cleanup_locked("RECOVERY_RECONCILED")
+        # ``reconcile_lease_owner`` already performed one bounded transaction:
+        # immutable identity match, allowlisted shutdown, process-gone and both
+        # ports closed. Its private record is deliberately gone before lease
+        # cleanup, so normal cleanup's independent record proof cannot repeat.
+        return self._cleanup_locked("RECOVERY_RECONCILED", recovery_proven=True)
 
     def _mark_recovery_locked(self, lease: GatewayLease, reason_code: str,
                               now: float) -> GatewayLeasePublicSnapshot:
