@@ -731,6 +731,10 @@ class GatewaySupervisor:
                         and self._service is None and self._snapshot.state == "STOPPED")
             if not self._record_matches_lease(record, lease):
                 return False
+            # An unavailable identity is not proof that the recorded process
+            # exited; retain recovery until immutable process evidence exists.
+            if self._process_identity(record["pid"]) is None:
+                return False
         while time.monotonic() < deadline:
             if not self._record_matches_live_process(record):
                 try:

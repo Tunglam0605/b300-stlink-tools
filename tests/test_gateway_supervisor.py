@@ -140,6 +140,17 @@ class GatewaySupervisorTests(unittest.TestCase):
             self.assertFalse((Path(directory) / "openocd-owner.json").exists())
             self.assertEqual(owner._service.stop_calls, 0)
 
+    def test_cleanup_does_not_treat_unknown_process_identity_as_process_gone(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            owner = self._restart_owner(directory)
+            fresh = GatewaySupervisor(
+                owner_record_path=Path(directory) / "openocd-owner.json",
+                process_identity=lambda _pid: None,
+                endpoints_closed=lambda _gdb, _tcl: True,
+            )
+
+            self.assertFalse(fresh.confirm_lease_owner_stopped(RestartLease(), 0.05))
+
     def test_forged_owner_record_cannot_redirect_allowlisted_shutdown(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             owner = self._restart_owner(directory)

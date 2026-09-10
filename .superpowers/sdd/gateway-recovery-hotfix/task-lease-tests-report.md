@@ -48,3 +48,12 @@ Final validation:
 Ran 61 tests in 16.991s
 OK
 ```
+
+Added coverage ensuring a valid owner record with unavailable process identity remains unreconciled even when endpoints appear closed. `confirm_lease_owner_stopped()` now requires a non-null immutable process identity before treating the process as gone.
+
+Final validation:
+
+```text
+Ran 62 tests in 16.842s
+OK
+```
