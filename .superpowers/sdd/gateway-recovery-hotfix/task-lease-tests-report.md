@@ -28,3 +28,14 @@ OK
 Ran 22 tests in 0.420s
 OK
 ```
+
+Restart recovery coverage was extended for persisted leases with no owner record, plus malformed owner evidence. The malformed-record test was RED before the fix because `read()` conflated missing and invalid records; the implementation now checks path existence before accepting absence proof and preserves `RECOVERY_OWNER_UNPROVEN` for malformed evidence. A missing record with a stopped, service-less supervisor reconciles to `RECOVERY_RECONCILED` and clears the lease.
+
+Final validation:
+
+```text
+Ran 3 tests in 0.099s
+OK
+Ran 24 tests in 0.478s
+OK
+```

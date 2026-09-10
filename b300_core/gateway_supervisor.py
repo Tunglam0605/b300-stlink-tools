@@ -677,7 +677,14 @@ class GatewaySupervisor:
         """Reclaim only the exact persisted B300 OpenOCD owner after restart."""
         with self._lock:
             record = self._owner_store.read()
-            if (record is None or not self._record_matches_lease(record, lease)
+            if record is None:
+                # A persisted lease may survive a failed reservation that
+                # never created an OpenOCD owner.  With no retained service
+                # and a stopped supervisor, absence of the private record is
+                # sufficient recovery evidence.
+                return (not self._owner_store.path.exists()
+                        and self._service is None and self._snapshot.state == "STOPPED")
+            if (not self._record_matches_lease(record, lease)
                     or not self._record_matches_config(record)):
                 return False
             failure = []
@@ -725,7 +732,8 @@ class GatewaySupervisor:
                 # when no probe is present).  In that case absence of the
                 # private owner record together with no retained service is
                 # positive proof that there is nothing to clean up.
-                return self._service is None and self._snapshot.state == "STOPPED"
+                return (not self._owner_store.path.exists()
+                        and self._service is None and self._snapshot.state == "STOPPED")
             if not self._record_matches_lease(record, lease):
                 return False
         while time.monotonic() < deadline:

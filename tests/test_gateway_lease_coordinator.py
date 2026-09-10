@@ -383,6 +383,42 @@ class GatewayLeaseCoordinatorTests(unittest.TestCase):
                          (True, "RECOVERY_REQUIRED", "RECOVERY_OWNER_UNPROVEN"))
         self.assertEqual((self.supervisor.reconcile_calls, self.supervisor.stop_calls), (1, 0))
 
+    def test_restart_tick_reconciles_persisted_lease_when_owner_never_existed(self):
+        self.coordinator.acquire(request())
+        owner_path = Path(self.temp.name) / "openocd-owner.json"
+        restarted_supervisor = GatewaySupervisor(
+            owner_record_path=owner_path,
+        )
+        restarted = GatewayLeaseCoordinator(
+            restarted_supervisor,
+            store=self.coordinator.store,
+            policy=self.coordinator.policy,
+            clock=self.clock,
+        )
+
+        status = restarted.tick()
+
+        self.assertEqual((status.active, status.state, status.reason_code),
+                         (False, "IDLE", "RECOVERY_RECONCILED"))
+        self.assertIsNone(restarted.store.read())
+
+    def test_restart_tick_keeps_malformed_owner_evidence_fail_closed(self):
+        self.coordinator.acquire(request())
+        owner_path = Path(self.temp.name) / "openocd-owner.json"
+        owner_path.write_text("{bad", encoding="utf-8")
+        restarted = GatewayLeaseCoordinator(
+            GatewaySupervisor(owner_record_path=owner_path),
+            store=self.coordinator.store,
+            policy=self.coordinator.policy,
+            clock=self.clock,
+        )
+
+        status = restarted.tick()
+
+        self.assertEqual((status.active, status.state, status.reason_code),
+                         (True, "RECOVERY_REQUIRED", "RECOVERY_OWNER_UNPROVEN"))
+        self.assertIsNotNone(restarted.store.read())
+
     def test_restart_tick_keeps_recovery_required_when_proven_cleanup_fails(self):
         self.coordinator.acquire(request())
         self.supervisor.recovery_owner = True
