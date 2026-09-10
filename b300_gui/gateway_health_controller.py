@@ -251,11 +251,17 @@ class GatewayHealthController(QObject):
 
     def accept_failure(self, message: str) -> None:
         self._failures += 1
+        # Authenticated Agent/lease evidence belongs to the poll that supplied
+        # it.  Drop it immediately when transport fails so a STOPPED snapshot
+        # cannot make stale ownership look current.
+        context = self._context
+        if context is not None:
+            context.set_gateway_agent_status(None)
+            context.set_gateway_lease_snapshot(None)
         if self._failures < self._failure_threshold:
             return
         self._transport_stale = True
         warning = "Mất liên lạc Gateway: %s" % (str(message).strip() or "không có phản hồi")
-        context = self._context
         if context is not None:
             context.apply_device_state(
                 owner_kind=None, target_state=None, gdb_endpoint=None,

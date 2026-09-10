@@ -104,6 +104,25 @@ class GatewayHealthControllerTests(unittest.TestCase):
         self.assertFalse(self.controller.attach_ready)
         self.assertIn("liên lạc Gateway", warnings[-1])
 
+    def test_transport_failure_drops_authenticated_evidence_immediately(self):
+        from dataclasses import replace
+        from b300_gui.app_context import AppContext
+        from b300_core.gateway_agent import GatewayAgentStatus
+        context = AppContext()
+        controller = GatewayHealthController(
+            FakeManager(), context=context, worker_factory=None,
+        )
+        controller.accept_snapshot(replace(
+            snapshot("STOPPED", reason="USER_STOPPED"),
+            agent_status=GatewayAgentStatus("agent-1", 123, 1.0, "READY", "IDLE"),
+        ))
+        self.assertIsNotNone(context.gateway_agent_snapshot)
+
+        controller.accept_failure("temporary timeout")
+
+        self.assertIsNone(context.gateway_agent_snapshot)
+        self.assertIsNone(context.gateway_lease_snapshot)
+
     def test_stale_or_reordered_snapshot_is_ignored(self):
         received = []
         self.controller.snapshot_changed.connect(received.append)

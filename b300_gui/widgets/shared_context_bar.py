@@ -71,6 +71,25 @@ class SharedContextBar(QFrame):
         combo.setToolTip(combo.currentData(Qt.ItemDataRole.ToolTipRole) or placeholder)
         del blocker
 
+    @staticmethod
+    def _gateway_agent_text(agent, lease):
+        if lease is not None:
+            if lease.state == 'RECOVERY_REQUIRED':
+                state = 'RECOVERY_REQUIRED'
+            elif lease.active:
+                state = 'BUSY'
+            else:
+                state = lease.state
+            reason = lease.reason_code
+            client = (' · %s' % lease.client_label) if lease.active else ''
+        elif agent is not None:
+            state = str(agent.reason_code or agent.state).upper()
+            reason = agent.reason_code
+            client = ''
+        else:
+            return ''
+        return 'Gateway Agent · %s · %s%s' % (state, reason, client)
+
     def render(self):
         context = self.context
         self._populate(self.project_combo, [(p.name,p.project_id,'\n'.join((str(p.workspace),str(p.symbols),str(p.application_hex or 'Chưa có tệp HEX ứng dụng')))) for p in context.project_profiles], context.selected_project.project_id if context.selected_project else None, 'Chưa chọn dự án')
@@ -93,9 +112,15 @@ class SharedContextBar(QFrame):
         self.target_label.setToolTip(self.target_label.text())
         connected = bool(connection.gateway and context.gateway_sessions and context.gateway_sessions.connected(connection.gateway.endpoint))
         snapshot = getattr(context, 'gateway_snapshot', None)
+        agent = getattr(context, 'gateway_agent_snapshot', None)
+        lease = getattr(context, 'gateway_lease_snapshot', None)
         if connection.is_local:
             text = 'Đã phát hiện ST-Link' if context.probes else 'Chưa phát hiện ST-Link'
             state = 'success' if context.probes else 'neutral'
+        elif (snapshot is not None and snapshot.state == 'STOPPED'
+              and (agent is not None or lease is not None)):
+            text = self._gateway_agent_text(agent, lease)
+            state = 'failure'
         elif warning:
             text = warning
             state = 'failure'
