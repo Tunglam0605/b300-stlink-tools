@@ -88,6 +88,11 @@ class RestartLease:
     gateway_generation = 1
 
 
+class PendingLease:
+    gateway_instance_id = "pending"
+    gateway_generation = 0
+
+
 class GatewaySupervisorTests(unittest.TestCase):
     def _restart_owner(self, directory, *, identity=None, shutdown=None,
                        endpoints_closed=None, timeout=0.05):
@@ -193,6 +198,26 @@ class GatewaySupervisorTests(unittest.TestCase):
                 self.skipTest("symlinks unavailable")
             supervisor = GatewaySupervisor(owner_record_path=path)
             self.assertFalse(supervisor.confirm_lease_owner_stopped(RestartLease(), 0.05))
+
+    def test_pending_lease_without_owner_record_requires_closed_endpoints(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            supervisor = GatewaySupervisor(
+                owner_record_path=Path(directory) / "openocd-owner.json",
+                endpoints_closed=lambda _gdb, _tcl: False,
+            )
+
+            self.assertFalse(supervisor.confirm_lease_owner_stopped(PendingLease(), 0.05))
+
+    def test_pending_lease_endpoint_probe_error_remains_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            supervisor = GatewaySupervisor(
+                owner_record_path=Path(directory) / "openocd-owner.json",
+                endpoints_closed=lambda _gdb, _tcl: (_ for _ in ()).throw(
+                    OSError("listener state unavailable")
+                ),
+            )
+
+            self.assertFalse(supervisor.confirm_lease_owner_stopped(PendingLease(), 0.05))
 
     @unittest.skipUnless(hasattr(os, "symlink"), "symlink support is unavailable")
     def test_cleanup_does_not_treat_dangling_owner_symlink_as_absent(self) -> None:

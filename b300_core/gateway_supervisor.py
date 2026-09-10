@@ -735,10 +735,21 @@ class GatewaySupervisor:
                 # when no probe is present).  In that case absence of the
                 # private owner record together with no retained service is
                 # positive proof that there is nothing to clean up.
-                return (getattr(lease, "gateway_instance_id", None) == "pending"
-                        and getattr(lease, "gateway_generation", None) == 0
-                        and not os.path.lexists(str(self._owner_store.path))
-                        and self._service is None and self._snapshot.state == "STOPPED")
+                reserved_without_owner = (
+                    getattr(lease, "gateway_instance_id", None) == "pending"
+                    and getattr(lease, "gateway_generation", None) == 0
+                    and not os.path.lexists(str(self._owner_store.path))
+                    and self._service is None and self._snapshot.state == "STOPPED"
+                )
+                if not reserved_without_owner:
+                    return False
+                try:
+                    return bool(self._endpoints_closed(
+                        "127.0.0.1:%d" % self._gdb_port,
+                        "127.0.0.1:%d" % self._tcl_port,
+                    ))
+                except Exception:
+                    return False
             if not self._record_matches_lease(record, lease):
                 return False
             # An unavailable identity is not proof that the recorded process
