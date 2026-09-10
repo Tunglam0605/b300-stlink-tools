@@ -678,12 +678,7 @@ class GatewaySupervisor:
         with self._lock:
             record = self._owner_store.read()
             if record is None:
-                # A persisted lease may survive a failed reservation that
-                # never created an OpenOCD owner.  With no retained service
-                # and a stopped supervisor, absence of the private record is
-                # sufficient recovery evidence.
-                return (not self._owner_store.path.exists()
-                        and self._service is None and self._snapshot.state == "STOPPED")
+                return False
             if (not self._record_matches_lease(record, lease)
                     or not self._record_matches_config(record)):
                 return False

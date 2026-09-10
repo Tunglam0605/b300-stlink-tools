@@ -39,3 +39,12 @@ OK
 Ran 24 tests in 0.478s
 OK
 ```
+
+Recovery review fix: `reconcile_lease_owner()` retains its original contract and returns false for missing or corrupt records. Coordinator recovery now performs a separate bounded `confirm_lease_owner_stopped()` absence proof; only confirmed absence permits `RECOVERY_RECONCILED`. Malformed/uncertain evidence remains `RECOVERY_REQUIRED`.
+
+Final validation:
+
+```text
+Ran 61 tests in 16.991s
+OK
+```

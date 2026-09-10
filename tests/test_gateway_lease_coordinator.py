@@ -372,6 +372,7 @@ class GatewayLeaseCoordinatorTests(unittest.TestCase):
 
     def test_restart_tick_keeps_unknown_gateway_in_actionable_recovery(self):
         self.coordinator.acquire(request())
+        self.supervisor.stop_confirmed = False
         restarted = GatewayLeaseCoordinator(
             self.supervisor, store=self.coordinator.store, policy=self.coordinator.policy,
             clock=self.clock,
@@ -457,6 +458,7 @@ class GatewayLeaseCoordinatorTests(unittest.TestCase):
 
     def test_restart_release_with_matching_token_never_cleans_unproven_owner(self):
         grant = self.coordinator.acquire(request())
+        self.supervisor.stop_confirmed = False
         restarted = GatewayLeaseCoordinator(
             self.supervisor, store=self.coordinator.store, policy=self.coordinator.policy,
             clock=self.clock,

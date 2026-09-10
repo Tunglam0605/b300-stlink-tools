@@ -413,6 +413,22 @@ class GatewayLeaseCoordinator:
         if worker.is_alive():
             return self._mark_recovery_locked(lease, "RECOVERY_RECONCILE_TIMEOUT", now)
         if error or not outcome or not outcome[0]:
+            confirmer = getattr(self.supervisor, "confirm_lease_owner_stopped", None)
+            if callable(confirmer):
+                absence = []
+                proof_error = []
+                def confirm_absence() -> None:
+                    try:
+                        absence.append(confirmer(lease, self.policy.cleanup_timeout_seconds) is True)
+                    except Exception as exc:
+                        proof_error.append(exc)
+                proof_worker = threading.Thread(
+                    target=confirm_absence, name="b300-gateway-recovery-absence-proof", daemon=True,
+                )
+                proof_worker.start()
+                proof_worker.join(timeout=self.policy.cleanup_timeout_seconds)
+                if not proof_worker.is_alive() and not proof_error and absence and absence[0]:
+                    return self._cleanup_locked("RECOVERY_RECONCILED", recovery_proven=True)
             return self._mark_recovery_locked(lease, "RECOVERY_OWNER_UNPROVEN", now)
         # ``reconcile_lease_owner`` already performed one bounded transaction:
         # immutable identity match, allowlisted shutdown, process-gone and both
