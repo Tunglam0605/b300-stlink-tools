@@ -17,3 +17,14 @@ Expected RED result (current production behavior): first test fails because the 
 Ran 2 tests in 0.035s
 FAILED (failures=1)
 ```
+
+GREEN implementation: `GatewaySupervisor.confirm_lease_owner_stopped()` now accepts a missing owner record as positive absence proof when no service is retained and the supervisor is stopped. Recorded or uncertain owners continue through the existing fail-closed proof path.
+
+Validation after the change:
+
+```text
+Ran 2 tests in 0.036s
+OK
+Ran 22 tests in 0.420s
+OK
+```

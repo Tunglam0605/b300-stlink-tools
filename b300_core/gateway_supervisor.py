@@ -720,7 +720,13 @@ class GatewaySupervisor:
         deadline = time.monotonic() + float(timeout_seconds)
         with self._lock:
             record = self._owner_store.read()
-            if record is None or not self._record_matches_lease(record, lease):
+            if record is None:
+                # A reservation can fail before OpenOCD starts (for example,
+                # when no probe is present).  In that case absence of the
+                # private owner record together with no retained service is
+                # positive proof that there is nothing to clean up.
+                return self._service is None and self._snapshot.state == "STOPPED"
+            if not self._record_matches_lease(record, lease):
                 return False
         while time.monotonic() < deadline:
             if not self._record_matches_live_process(record):
