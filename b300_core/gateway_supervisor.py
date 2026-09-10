@@ -109,8 +109,14 @@ def _process_alive(pid: int) -> bool:
         return False
     try:
         os.kill(pid, 0)
-    except OSError:
+    except ProcessLookupError:
         return False
+    except PermissionError:
+        # An inaccessible PID is not proof that the process is gone.
+        return True
+    except OSError:
+        # Unknown OS errors are treated conservatively as live/uncertain.
+        return True
     return True
 
 
@@ -737,7 +743,11 @@ class GatewaySupervisor:
             # exited; retain recovery until immutable process evidence exists.
             identity = self._process_identity(record["pid"])
             if identity is None:
-                if self._process_alive(record["pid"]):
+                try:
+                    alive = self._process_alive(record["pid"])
+                except Exception:
+                    return False
+                if alive:
                     return False
             else:
                 try:
@@ -750,7 +760,11 @@ class GatewaySupervisor:
         while time.monotonic() < deadline:
             identity = self._process_identity(record["pid"])
             if identity is None:
-                if self._process_alive(record["pid"]):
+                try:
+                    alive = self._process_alive(record["pid"])
+                except Exception:
+                    return False
+                if alive:
                     return False
                 try:
                     return bool(self._endpoints_closed(record["gdb_endpoint"], record["tcl_endpoint"]))

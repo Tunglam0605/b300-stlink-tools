@@ -152,6 +152,20 @@ class GatewaySupervisorTests(unittest.TestCase):
 
             self.assertFalse(fresh.confirm_lease_owner_stopped(RestartLease(), 0.05))
 
+    def test_cleanup_does_not_treat_liveness_permission_error_as_process_gone(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self._restart_owner(directory)
+            def denied(_pid):
+                raise PermissionError("access denied")
+            fresh = GatewaySupervisor(
+                owner_record_path=Path(directory) / "openocd-owner.json",
+                process_identity=lambda _pid: None,
+                process_alive=denied,
+                endpoints_closed=lambda _gdb, _tcl: True,
+            )
+
+            self.assertFalse(fresh.confirm_lease_owner_stopped(RestartLease(), 0.05))
+
     def test_cleanup_rejects_process_identity_mismatch_after_initial_check(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             owner = self._restart_owner(directory)
