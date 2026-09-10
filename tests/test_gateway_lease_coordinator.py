@@ -426,6 +426,29 @@ class GatewayLeaseCoordinatorTests(unittest.TestCase):
                          (True, "RECOVERY_REQUIRED", "RECOVERY_OWNER_UNPROVEN"))
         self.assertIsNotNone(restarted.store.read())
 
+    def test_restart_tick_keeps_pending_lease_when_gateway_ports_are_bound(self):
+        self.supervisor.ensure_result = snapshot("WAITING_PROBE", "NO_PROBE")
+        self.supervisor.stop_confirmed = False
+        failed = self.coordinator.acquire(request())
+        self.assertEqual((failed.gateway_instance_id, failed.gateway_generation),
+                         ("pending", 0))
+        owner_path = Path(self.temp.name) / "openocd-owner.json"
+        restarted = GatewayLeaseCoordinator(
+            GatewaySupervisor(
+                owner_record_path=owner_path,
+                endpoints_closed=lambda _gdb, _tcl: False,
+            ),
+            store=self.coordinator.store,
+            policy=self.coordinator.policy,
+            clock=self.clock,
+        )
+
+        status = restarted.tick()
+
+        self.assertEqual((status.active, status.state, status.reason_code),
+                         (True, "RECOVERY_REQUIRED", "RECOVERY_OWNER_UNPROVEN"))
+        self.assertIsNotNone(restarted.store.read())
+
     def test_restart_tick_keeps_malformed_owner_evidence_fail_closed(self):
         self.coordinator.acquire(request())
         owner_path = Path(self.temp.name) / "openocd-owner.json"
