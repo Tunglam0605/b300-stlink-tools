@@ -146,8 +146,52 @@ class GatewaySupervisorTests(unittest.TestCase):
             fresh = GatewaySupervisor(
                 owner_record_path=Path(directory) / "openocd-owner.json",
                 process_identity=lambda _pid: None,
+                process_alive=lambda _pid: True,
                 endpoints_closed=lambda _gdb, _tcl: True,
             )
+
+            self.assertFalse(fresh.confirm_lease_owner_stopped(RestartLease(), 0.05))
+
+    def test_cleanup_rejects_process_identity_mismatch_after_initial_check(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            owner = self._restart_owner(directory)
+            identities = iter((
+                {"pid": 4242, "start_identity": "start-a",
+                 "executable": "/trusted/openocd", "boot_identity": "boot-a"},
+                {"pid": 4242, "start_identity": "reused",
+                 "executable": "/trusted/openocd", "boot_identity": "boot-a"},
+            ))
+            fresh = GatewaySupervisor(
+                owner_record_path=Path(directory) / "openocd-owner.json",
+                process_identity=lambda _pid: next(identities),
+                endpoints_closed=lambda _gdb, _tcl: True,
+            )
+
+            self.assertFalse(fresh.confirm_lease_owner_stopped(RestartLease(), 0.05))
+
+    def test_dangling_owner_path_is_not_treated_as_absent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "openocd-owner.json"
+            target = Path(directory) / "missing-owner.json"
+            try:
+                os.symlink(str(target), str(path))
+            except (OSError, NotImplementedError):
+                self.skipTest("symlinks unavailable")
+            supervisor = GatewaySupervisor(owner_record_path=path)
+            self.assertFalse(supervisor.confirm_lease_owner_stopped(RestartLease(), 0.05))
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "symlink support is unavailable")
+    def test_cleanup_does_not_treat_dangling_owner_symlink_as_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            owner = self._restart_owner(directory)
+            owner_path = Path(directory) / "openocd-owner.json"
+            owner_path.unlink()
+            target = Path(directory) / "missing-owner.json"
+            try:
+                os.symlink(str(target), str(owner_path))
+            except (OSError, NotImplementedError):
+                self.skipTest("symlink creation is unavailable")
+            fresh = GatewaySupervisor(owner_record_path=owner_path)
 
             self.assertFalse(fresh.confirm_lease_owner_stopped(RestartLease(), 0.05))
 

@@ -5,6 +5,13 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.23.2] - 2026-09-10
+
+- Fixed Gateway lease cleanup when a no-probe reservation never created an OpenOCD owner, including recovery of persisted false-positive leases after Agent restart.
+- Preserved fail-closed recovery for malformed, unreadable, mismatched or otherwise uncertain owner evidence; only a definitively absent owner record with a stopped supervisor can be reconciled automatically.
+- Updated the remote GUI context bar to show authenticated Gateway Agent/lease state when the legacy Gateway process status is stopped, and clear that evidence immediately after transport loss.
+- Added regression coverage for no-owner cleanup, persisted recovery, malformed owner records, stale GUI evidence and legacy/Agent status presentation. Flash, erase, RDP, WRP and Option Byte behavior remain unchanged.
+
 ## [0.23.1] - 2026-09-09
 
 - Fixed the packaged `debug gateway-agent` entry point so Windows and Linux Gateway Agent services acquire their single-owner lock and remain running instead of exiting with a missing runtime symbol.

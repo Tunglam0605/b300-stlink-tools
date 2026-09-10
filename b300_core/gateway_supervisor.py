@@ -498,6 +498,7 @@ class GatewaySupervisor:
                  shutdown_openocd: Optional[Callable[[str], None]] = None,
                  endpoints_closed: Callable[[str, str], bool] = _closed_endpoints,
                  endpoint_owner_pid: Callable[[str], object] = _endpoint_owner_pid,
+                 process_alive: Callable[[int], bool] = _process_alive,
                  recovery_timeout_seconds: float = 1.0) -> None:
         if not 1 <= int(gdb_port) <= 65535 or not 1 <= int(tcl_port) <= 65535:
             raise ValueError("Gateway ports must be in range 1..65535.")
@@ -521,6 +522,7 @@ class GatewaySupervisor:
         self._shutdown_openocd = shutdown_openocd or self._safe_shutdown_openocd
         self._endpoints_closed = endpoints_closed
         self._endpoint_owner_pid = endpoint_owner_pid
+        self._process_alive = process_alive
         self._recovery_timeout = float(recovery_timeout_seconds)
         self._lease_owner_context = None
         self._instance_id = uuid.uuid4().hex
@@ -727,20 +729,40 @@ class GatewaySupervisor:
                 # when no probe is present).  In that case absence of the
                 # private owner record together with no retained service is
                 # positive proof that there is nothing to clean up.
-                return (not self._owner_store.path.exists()
+                return (not os.path.lexists(str(self._owner_store.path))
                         and self._service is None and self._snapshot.state == "STOPPED")
             if not self._record_matches_lease(record, lease):
                 return False
             # An unavailable identity is not proof that the recorded process
             # exited; retain recovery until immutable process evidence exists.
-            if self._process_identity(record["pid"]) is None:
-                return False
+            identity = self._process_identity(record["pid"])
+            if identity is None:
+                if self._process_alive(record["pid"]):
+                    return False
+            else:
+                try:
+                    validated = self._validated_identity(identity, record["pid"])
+                except (TypeError, ValueError):
+                    return False
+                if not all(validated[field] == record[field] for field in (
+                        "start_identity", "executable", "boot_identity")):
+                    return False
         while time.monotonic() < deadline:
-            if not self._record_matches_live_process(record):
+            identity = self._process_identity(record["pid"])
+            if identity is None:
+                if self._process_alive(record["pid"]):
+                    return False
                 try:
                     return bool(self._endpoints_closed(record["gdb_endpoint"], record["tcl_endpoint"]))
                 except Exception:
                     return False
+            try:
+                validated = self._validated_identity(identity, record["pid"])
+            except (TypeError, ValueError):
+                return False
+            if not all(validated[field] == record[field] for field in (
+                    "start_identity", "executable", "boot_identity")):
+                return False
             time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
         return False
 
