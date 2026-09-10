@@ -235,6 +235,41 @@ class GatewayLeaseCoordinatorTests(unittest.TestCase):
         self.assertEqual(self.supervisor.stop_calls, 1)
         self.assertIsNone(self.coordinator.store.read())
 
+    def test_no_probe_without_owner_record_releases_reserved_lease_safely(self):
+        owner_path = Path(self.temp.name) / "openocd-owner.json"
+        supervisor = GatewaySupervisor(
+            probe_discovery=lambda: (),
+            owner_record_path=owner_path,
+        )
+        coordinator = GatewayLeaseCoordinator(
+            supervisor,
+            store=self.coordinator.store,
+            policy=self.coordinator.policy,
+            clock=self.clock,
+            token_factory=lambda: "token-one",
+            lease_id_factory=lambda: "lease-one",
+            acquired_at_factory=lambda: "2026-09-08T00:00:00Z",
+        )
+
+        result = coordinator.acquire(request())
+
+        self.assertFalse(result.active)
+        self.assertEqual((result.state, result.reason_code), ("IDLE", "NO_PROBE"))
+        self.assertNotIn(result.reason_code, {"RECOVERY_REQUIRED", "CLEANUP_UNVERIFIED"})
+        self.assertIsNone(coordinator.store.read())
+        self.assertFalse(owner_path.exists())
+
+    def test_nonready_gateway_with_uncertain_owner_stays_fail_closed(self):
+        self.supervisor.ensure_result = snapshot("WAITING_PROBE", "NO_PROBE")
+        self.supervisor.stop_confirmed = False
+
+        result = self.coordinator.acquire(request())
+
+        self.assertTrue(result.active)
+        self.assertEqual((result.state, result.reason_code),
+                         ("RECOVERY_REQUIRED", "CLEANUP_UNVERIFIED"))
+        self.assertEqual(self.coordinator.store.read().state, "RECOVERY_REQUIRED")
+
     def test_cleanup_failure_remains_fail_closed_and_blocks_another_client(self):
         self.coordinator.acquire(request())
         self.supervisor.stop_error = RuntimeError("owned process did not stop")
