@@ -384,8 +384,12 @@ class GatewayLeaseCoordinatorTests(unittest.TestCase):
                          (True, "RECOVERY_REQUIRED", "RECOVERY_OWNER_UNPROVEN"))
         self.assertEqual((self.supervisor.reconcile_calls, self.supervisor.stop_calls), (1, 0))
 
-    def test_restart_tick_reconciles_persisted_lease_when_owner_never_existed(self):
-        self.coordinator.acquire(request())
+    def test_restart_tick_reconciles_persisted_reservation_when_owner_never_existed(self):
+        self.supervisor.ensure_result = snapshot("WAITING_PROBE", "NO_PROBE")
+        self.supervisor.stop_confirmed = False
+        failed = self.coordinator.acquire(request())
+        self.assertEqual((failed.state, failed.gateway_instance_id, failed.gateway_generation),
+                         ("RECOVERY_REQUIRED", "pending", 0))
         owner_path = Path(self.temp.name) / "openocd-owner.json"
         restarted_supervisor = GatewaySupervisor(
             owner_record_path=owner_path,
@@ -402,6 +406,25 @@ class GatewayLeaseCoordinatorTests(unittest.TestCase):
         self.assertEqual((status.active, status.state, status.reason_code),
                          (False, "IDLE", "RECOVERY_RECONCILED"))
         self.assertIsNone(restarted.store.read())
+
+    def test_restart_tick_keeps_active_lease_with_missing_owner_record_fail_closed(self):
+        grant = self.coordinator.acquire(request())
+        self.assertEqual((grant.public.state, grant.public.gateway_instance_id,
+                          grant.public.gateway_generation),
+                         ("ACTIVE", "gateway-1", 1))
+        owner_path = Path(self.temp.name) / "openocd-owner.json"
+        restarted = GatewayLeaseCoordinator(
+            GatewaySupervisor(owner_record_path=owner_path),
+            store=self.coordinator.store,
+            policy=self.coordinator.policy,
+            clock=self.clock,
+        )
+
+        status = restarted.tick()
+
+        self.assertEqual((status.active, status.state, status.reason_code),
+                         (True, "RECOVERY_REQUIRED", "RECOVERY_OWNER_UNPROVEN"))
+        self.assertIsNotNone(restarted.store.read())
 
     def test_restart_tick_keeps_malformed_owner_evidence_fail_closed(self):
         self.coordinator.acquire(request())

@@ -100,6 +100,11 @@ class GatewayAgentStatusStore:
 def _process_alive(pid: int) -> bool:
     try: os.kill(pid, 0)
     except OSError: return False
+    except SystemError:
+        # CPython on Windows can surface an underlying Win32 probe failure as
+        # SystemError instead of OSError.  Unknown liveness is not proof that
+        # an Agent owner is dead, so retain the owner/status fail-closed.
+        return True
     return pid > 0
 
 

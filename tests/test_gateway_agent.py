@@ -5,6 +5,7 @@ import threading
 import time
 import os
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from b300_core.gateway_agent import (
@@ -134,6 +135,20 @@ class GatewayAgentTests(unittest.TestCase):
         status = manager.ensure_running(("b300-stlink", "debug", "gateway-agent"))
         self.assertEqual(status.pid, 42)
         self.assertEqual(spawns, [])
+
+    def test_windows_process_probe_error_keeps_owner_status_fail_closed(self):
+        status_store = GatewayAgentStatusStore(Path(self.temp.name) / "status.json")
+        status_store.write(GatewayAgentStatus("agent-1", 42, 10.0, "IDLE", "GATEWAY_IDLE"))
+        manager = GatewayAgentProcessManager(store=status_store, clock=lambda: 11.0)
+
+        with mock.patch(
+            "b300_core.gateway_agent.os.kill",
+            side_effect=SystemError("os.kill probe failed"),
+        ):
+            status = manager.status()
+
+        self.assertIsNotNone(status)
+        self.assertEqual(status.pid, 42)
 
     def test_process_manager_rejects_unsafe_or_unrelated_command(self):
         manager = GatewayAgentProcessManager(
