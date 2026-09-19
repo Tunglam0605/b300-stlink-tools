@@ -2,9 +2,9 @@
 """Fail CI when known repository-growth anti-patterns are introduced.
 
 This gate is intentionally conservative: it blocks new version-layer GUI modules,
-committed transient SDD reports, and completed working-history plans while allowing
-only the explicitly documented production versioned entry point during v0.24
-consolidation.
+committed transient SDD reports, and completed working-history plans. The only
+allowed versioned GUI filename is a tiny compatibility shim; production code must
+live in canonical modules.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 ALLOWED_VERSIONED_GUI = {
-    # Production entry point pending canonical rename in a later consolidation slice.
+    # Compatibility import only; canonical production code lives in production_window.py.
     "main_window_v18.py",
 }
 

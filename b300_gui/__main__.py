@@ -13,9 +13,9 @@ if __name__ == "__main__" and not __package__:
         sys.path.insert(0, str(root))
 
 try:
-    from .main_window_v18 import MainWindowV18 as MainWindow
+    from .production_window import ProductionMainWindow as MainWindow
 except ImportError:
-    from b300_gui.main_window_v18 import MainWindowV18 as MainWindow
+    from b300_gui.production_window import ProductionMainWindow as MainWindow
 
 from b300_core.update_platform import detect_update_platform
 from b300_core.update_public_key import MINISIGN_PUBLIC_KEY
@@ -26,7 +26,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--smoke-test", action="store_true",
-        help="Construct the v0.18 GUI offscreen and exit without probing USB/ST-Link or the MCU.",
+        help="Construct the production GUI offscreen and exit without probing USB/ST-Link or the MCU.",
     )
     parser.add_argument(
         "--first-run-setup", action="store_true",

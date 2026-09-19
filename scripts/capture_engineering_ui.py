@@ -20,7 +20,7 @@ from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import QApplication, QScrollArea
 from b300_core.gateway_profiles import GatewayProfileStore
 from b300_core.project_profiles import ProjectProfileStore
-from b300_gui.main_window_v18 import MainWindowV18
+from b300_gui.production_window import ProductionMainWindow
 from b300_gui.theme import ThemeManager
 from tests.test_gui_smoke import FakeService
 
@@ -43,7 +43,7 @@ def main():
         ThemeManager.instance()._mode = 'dark'
         ThemeManager.instance().apply()
         root = Path(temp)
-        window = MainWindowV18(service=FakeService(), probe_loader=lambda: (),
+        window = ProductionMainWindow(service=FakeService(), probe_loader=lambda: (),
             automatic_updates=False, first_run_setup=False,
             gateway_store=GatewayProfileStore(root/'gateways.json', legacy_path=root/'legacy.json'),
             project_store=ProjectProfileStore(root/'projects.json'),

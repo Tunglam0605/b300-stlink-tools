@@ -14,7 +14,7 @@ from b300_core.gateway_sessions import GatewaySessionManager
 from b300_core.hardware_session import HardwareSessionManager
 from b300_core.models import ProbeInfo, ProbeRef, TargetInfo
 from b300_core.project_profiles import ProjectProfileStore
-from b300_gui.main_window_v18 import MainWindowV18
+from b300_gui.production_window import ProductionMainWindow
 from tests.test_core_hex_policy import APPLICATION_VECTOR, write_hex
 from tests.test_gui_smoke import FakeService
 
@@ -31,7 +31,7 @@ class ProgramPreflightTests(unittest.TestCase):
         self.service.session_manager = HardwareSessionManager()
         self.target = TargetInfo(0x101F6413, 512, 3.09, "S0-S2 protected", (0, 1, 2), True)
         self.service.inspect_target = mock.Mock(return_value=self.target)
-        self.window = MainWindowV18(
+        self.window = ProductionMainWindow(
             service=self.service,
             probe_loader=lambda: (ProbeInfo(name="ST-Link", serial="PROBE-A", source="usb", usb_identity="test"),),
             automatic_updates=False, first_run_setup=False,

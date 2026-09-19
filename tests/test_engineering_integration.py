@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 from types import SimpleNamespace
 from PySide6.QtWidgets import QApplication
-from b300_gui.main_window_v18 import MainWindowV18
+from b300_gui.production_window import ProductionMainWindow
 from b300_core.project_profiles import ProjectProfile, ProjectProfileStore
 from b300_core.gateway_profiles import GatewayProfile, GatewayProfileStore
 from b300_core.service import FlashResult
@@ -31,7 +31,7 @@ class EngineeringIntegrationTests(unittest.TestCase):
             gateway = GatewayProfile.create('IPC', '192.0.2.8', 'tester')
             gateways.upsert(gateway)
             probe = ProbeInfo(name='ST-Link', serial='TEST-A', source='usb', usb_identity='test')
-            window = MainWindowV18(service=FakeService(), probe_loader=lambda: (probe,),
+            window = ProductionMainWindow(service=FakeService(), probe_loader=lambda: (probe,),
                 automatic_updates=False, first_run_setup=False, project_store=projects, gateway_store=gateways)
             try:
                 context = window.app_context
@@ -67,7 +67,7 @@ class EngineeringIntegrationTests(unittest.TestCase):
                 window.busy = True
                 window._update_controls()
                 self.assertFalse(window.header_bar.btn_open_project.isEnabled())
-                with patch('b300_gui.main_window_v18.ProjectManagerDialog') as manager:
+                with patch('b300_gui.production_window.ProjectManagerDialog') as manager:
                     window._open_project_manager()
                     manager.assert_not_called()
                 window.busy = False

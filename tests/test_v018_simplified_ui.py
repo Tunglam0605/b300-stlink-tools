@@ -20,7 +20,7 @@ from b300_core.gateway_status import GatewaySnapshot
 from b300_core.models import ImageInfo, ProbeInfo, TargetInfo
 from b300_core.project_profiles import ProjectProfile, ProjectProfileStore
 from b300_gui.widgets.shared_context_bar import SharedContextBar
-from b300_gui.main_window_v18 import MainWindowV18
+from b300_gui.production_window import ProductionMainWindow
 from b300_gui.update_dialog import UpdateDialog
 from b300_core.vscode_bridge import BridgeState, DebugRole, VsCodeBridgeState
 from b300_gui.views.debug_vscode_view import DebugVsCodeView
@@ -35,7 +35,7 @@ class V018SimplifiedUiTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
 
-    def _make_window(self, **overrides) -> MainWindowV18:
+    def _make_window(self, **overrides) -> ProductionMainWindow:
         directory = tempfile.mkdtemp(prefix="b300-ui-profile-test-")
         root = Path(directory)
         options = dict(
@@ -54,11 +54,11 @@ class V018SimplifiedUiTests(unittest.TestCase):
             gateway_sessions=GatewaySessionManager(),
         )
         options.update(overrides)
-        window = MainWindowV18(**options)
+        window = ProductionMainWindow(**options)
         window._test_profile_dir = root
         return window
 
-    def _close(self, window: MainWindowV18) -> None:
+    def _close(self, window: ProductionMainWindow) -> None:
         root = getattr(window, "_test_profile_dir", None)
         window.close()
         window.deleteLater()
@@ -174,7 +174,7 @@ class V018SimplifiedUiTests(unittest.TestCase):
         try:
             created = []
             window.monitor_view.controller._session_factory = lambda **kwargs: created.append(kwargs)
-            with mock.patch("b300_gui.main_window_v18.GatewayLoginDialog") as dialog:
+            with mock.patch("b300_gui.production_window.GatewayLoginDialog") as dialog:
                 dialog.return_value.exec.return_value = 0
                 with self.assertRaisesRegex(RuntimeError, "Đã hủy đăng nhập giám sát từ xa"):
                     window.monitor_view.controller.start(LiveMonitorRequest.client(
@@ -647,7 +647,7 @@ class V018SimplifiedUiTests(unittest.TestCase):
             def submit(self, callback) -> None:
                 self.callbacks.append(callback)
 
-        with mock.patch("b300_gui.main_window_v18.GuiDispatcher", QueuedDispatcher):
+        with mock.patch("b300_gui.production_window.GuiDispatcher", QueuedDispatcher):
             window = self._make_window()
         try:
             controller = window.monitor_view.controller

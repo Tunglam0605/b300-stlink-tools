@@ -2,7 +2,7 @@
 
 Existing internal callers may import b300_gui.debug_tab.DebugTab and expect
 the setup/Live surface immediately. The production executable uses
-MainWindowV18 and does not select the retired version-layer DebugTab stack.
+ProductionMainWindow and does not select the retired version-layer DebugTab stack.
 Keep this shim thin until the package-level compatibility contract is retired.
 """
 
