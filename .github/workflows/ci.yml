@@ -124,7 +124,7 @@ jobs:
           scripts/run_unittest_module.py
 
       - name: Compile packages
-        run: python -m compileall -q b300_core b300_gui
+        run: python -m compileall -q b300_core b300_gui b300_cli
 
       - name: Check CLI help
         run: |

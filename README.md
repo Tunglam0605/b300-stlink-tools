@@ -248,7 +248,8 @@ file HEX, probe trước khi chạy.
 ## Cấu trúc repository
 
 ```text
-b300_stlink.py          CLI doctor/flash/debug
+b300_stlink.py          CLI compatibility entry + top-level dispatch
+b300_cli/               Cohesive CLI handlers (inspection/live/update/gateway)
 b300_core/              Core policy/OpenOCD/probe/memory dùng chung
 b300_gui/               Giao diện PySide6
 packaging/              Windows installer và Ubuntu AppImage/DEB staging

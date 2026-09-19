@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import ipaddress
 import os
@@ -25,14 +24,16 @@ from b300_cli.parser import (
     parse_tcp_port,
 )
 from b300_cli.reporting import (
-    Reporter, application_health_snapshot, diagnostic_snapshot, emit_snapshot,
-    flash_result_fields, flash_start_fields, format_application_health_text,
-    format_memory_rows, format_metadata_text, format_probes_text, memory_snapshot,
-    metadata_snapshot, probe_record,
+    Reporter, emit_snapshot, flash_result_fields, flash_start_fields,
+    format_probes_text, probe_record,
 )
 from b300_cli.update_commands import run_update_command
 from b300_cli import gateway_workflows
-from b300_cli.output_paths import validated_output_path
+from b300_cli.inspection_commands import (
+    read_only_error as _inspection_read_only_error,
+    run_inspection_command,
+    select_read_probe as _inspection_select_read_probe,
+)
 from b300_cli.live_commands import run_live_client, run_live_local, validate_live_options
 from b300_core.diagnostics import DiagnosticsService
 from b300_core.gateway_readiness import inspect_gateway_readiness
@@ -87,8 +88,6 @@ from b300_core.policy import (
     FLASH_END_ADDRESS,
     build_flash_plan,
     build_flash_preview,
-    sector_by_index,
-    validate_read_range,
 )
 from b300_core.service import B300Service, ProvisioningError
 from b300_core.probe import list_probes
@@ -863,24 +862,18 @@ def run_openocd(command, dry_run: bool, reporter: Reporter) -> int:
 
 def _read_only_error(args: argparse.Namespace, command: str, reason_code: str,
                      message: str) -> int:
-    record = {
-        "schema_version": 1,
-        "command": command,
-        "status": "error",
-        "reason_code": reason_code,
-        "message": message,
-    }
-    emit_snapshot(record, args.json, "%s: %s" % (reason_code, message))
-    return 1
+    """Compatibility facade for historical internal callers."""
+    return _inspection_read_only_error(args, command, reason_code, message)
 
 
 def _select_read_probe(args: argparse.Namespace, command: str) -> Optional[ProbeRef]:
-    try:
-        _info, probe = select_probe(list_probes(), args.probe_serial)
-        return probe
-    except ProbeSelectionError as error:
-        _read_only_error(args, command, error.code, error.message)
-        return None
+    """Compatibility facade preserving b300_stlink probe monkey-patch seams."""
+    return _inspection_select_read_probe(
+        args,
+        command,
+        probe_loader=list_probes,
+        select_probe_fn=select_probe,
+    )
 
 
 def _select_write_probe(args: argparse.Namespace, reporter: Reporter) -> Optional[ProbeRef]:
@@ -899,39 +892,6 @@ def _select_write_probe(args: argparse.Namespace, reporter: Reporter) -> Optiona
             ),
         )
         return None
-
-
-def _atomic_write_snapshot(output: Path, data: bytes, force: bool) -> None:
-    """Atomically replace a host snapshot only after its complete read succeeded."""
-    temporary = None
-    try:
-        with tempfile.NamedTemporaryFile(
-                mode="wb", prefix=".%s." % output.name, suffix=".tmp",
-                dir=str(output.parent), delete=False) as stream:
-            temporary = Path(stream.name)
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        if output.exists() and not force:
-            raise FileExistsError("Output file already exists; use --force to replace it.")
-        os.replace(str(temporary), str(output))
-        temporary = None
-    finally:
-        if temporary is not None:
-            try:
-                temporary.unlink()
-            except FileNotFoundError:
-                pass
-
-
-def _memory_dump_record(command: str, address: int, data: bytes, output: Path) -> dict:
-    record = memory_snapshot(command, address, data)
-    del record["data"]
-    record["output"] = str(output)
-    record["sha256"] = hashlib.sha256(data).hexdigest()
-    return record
-
-
 
 
 def _linux_setup_record(report: LinuxUsbSetupReport) -> dict:
@@ -1631,161 +1591,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             emit_snapshot(record, args.json, "\n".join(text_lines))
             return 0 if report.ready else 1
 
-        if args.command == "doctor":
-            probes = list_probes()
-            report = DiagnosticsService(
-                service=B300Service(), probe_discovery=lambda: probes,
-            ).run()
-            emit_snapshot(
-                diagnostic_snapshot("doctor", report), args.json,
-                "%s (%s)" % (report.conclusion, report.reason_code),
-            )
-            return 0 if report.conclusion == "READY_FOR_APPLICATION_FLASH" else 1
-
-        if args.command == "target" and args.target_command is None:
-            record = {
-                "schema_version": 1,
-                "command": "target",
-                "status": "error",
-                "reason_code": "TARGET_SUBCOMMAND_REQUIRED",
-                "message": "The target command requires the inspect or health subcommand.",
-                "next_action": "Run target inspect for a quick snapshot or target health for CRC/vector bootability evidence.",
-            }
-            emit_snapshot(record, args.json, "%s: %s" % (record["reason_code"], record["message"]))
-            return 1
-
-        if args.command == "metadata" and args.metadata_command is None:
-            return _read_only_error(
-                args,
-                "metadata",
-                "METADATA_SUBCOMMAND_REQUIRED",
-                "The metadata command requires the show subcommand.",
-            )
-
-        if args.command == "memory" and args.memory_command is None:
-            return _read_only_error(
-                args,
-                "memory",
-                "MEMORY_SUBCOMMAND_REQUIRED",
-                "The memory command requires read, read-sector, or dump.",
-            )
-
-        if args.command == "target" and args.target_command == "inspect":
-            probes = list_probes()
-            try:
-                _info, probe = select_probe(probes, args.probe_serial)
-            except ProbeSelectionError as error:
-                record = {
-                    "schema_version": 1,
-                    "command": "target inspect",
-                    "status": "error",
-                    "reason_code": error.code,
-                    "message": error.message,
-                    "next_action": "Connect exactly one ST-Link or select one with --probe-serial.",
-                }
-                emit_snapshot(record, args.json, "%s: %s" % (error.code, error.message))
-                return 1
-            report = DiagnosticsService(
-                service=B300Service(executable=args.openocd), probe_discovery=lambda: probes,
-            ).run(probe.serial)
-            emit_snapshot(
-                diagnostic_snapshot("target inspect", report), args.json,
-                "%s (%s)" % (report.conclusion, report.reason_code),
-            )
-            return 0 if report.conclusion == "READY_FOR_APPLICATION_FLASH" else 1
-
-        if args.command == "target" and args.target_command == "health":
-            probe = _select_read_probe(args, "target health")
-            if probe is None:
-                return 1
-            try:
-                health = B300Service(executable=args.openocd).inspect_application_health(probe)
-            except (OSError, RuntimeError, ValueError) as error:
-                return _read_only_error(
-                    args, "target health", "APPLICATION_HEALTH_READ_FAILED", str(error)
-                )
-            emit_snapshot(
-                application_health_snapshot(health), args.json,
-                format_application_health_text(health),
-            )
-            return 0 if health.bootable else 1
-
-        if args.command == "metadata" and args.metadata_command == "show":
-            probe = _select_read_probe(args, "metadata show")
-            if probe is None:
-                return 1
-            try:
-                metadata = B300Service(executable=args.openocd).read_metadata(probe)
-            except (OSError, RuntimeError, ValueError) as error:
-                return _read_only_error(args, "metadata show", "MEMORY_READ_FAILED", str(error))
-            record = metadata_snapshot(metadata)
-            emit_snapshot(record, args.json, format_metadata_text(metadata))
-            return 0
-
-        if args.command == "memory" and args.memory_command in ("read", "dump"):
-            command = "memory %s" % args.memory_command
-            try:
-                validate_read_range(args.address, args.length)
-            except ValueError as error:
-                return _read_only_error(args, command, "INVALID_MEMORY_RANGE", str(error))
-            output = None
-            if args.memory_command == "dump":
-                try:
-                    output = validated_output_path(args.output, args.force)
-                except FileExistsError as error:
-                    return _read_only_error(args, command, "OUTPUT_EXISTS", str(error))
-                except (OSError, RuntimeError, ValueError) as error:
-                    return _read_only_error(args, command, "INVALID_OUTPUT_PATH", str(error))
-            probe = _select_read_probe(args, command)
-            if probe is None:
-                return 1
-            try:
-                data = B300Service(executable=args.openocd).read_memory(
-                    probe, args.address, args.length,
-                )
-                if len(data) != args.length:
-                    raise RuntimeError("Memory read length mismatch.")
-            except (OSError, RuntimeError, ValueError) as error:
-                return _read_only_error(args, command, "MEMORY_READ_FAILED", str(error))
-            if args.memory_command == "read":
-                emit_snapshot(
-                    memory_snapshot(command, args.address, data), args.json,
-                    format_memory_rows(args.address, data),
-                )
-                return 0
-            assert output is not None
-            try:
-                _atomic_write_snapshot(output, data, args.force)
-            except FileExistsError as error:
-                return _read_only_error(args, command, "OUTPUT_EXISTS", str(error))
-            except OSError as error:
-                return _read_only_error(args, command, "INVALID_OUTPUT_PATH", str(error))
-            record = _memory_dump_record(command, args.address, data, output)
-            text = "address=%s end_address=%s size=%d output=%s sha256=%s" % (
-                record["address"], record["end_address"], record["size"], record["output"],
-                record["sha256"].upper(),
-            )
-            emit_snapshot(record, args.json, text)
-            return 0
-
-        if args.command == "memory" and args.memory_command == "read-sector":
-            command = "memory read-sector"
-            try:
-                sector = sector_by_index(args.sector)
-            except ValueError as error:
-                return _read_only_error(args, command, "INVALID_SECTOR", str(error))
-            probe = _select_read_probe(args, command)
-            if probe is None:
-                return 1
-            try:
-                data = B300Service(executable=args.openocd).read_sector(probe, args.sector)
-            except (OSError, RuntimeError, ValueError) as error:
-                return _read_only_error(args, command, "MEMORY_READ_FAILED", str(error))
-            emit_snapshot(
-                memory_snapshot(command, sector.start_address, data), args.json,
-                format_memory_rows(sector.start_address, data),
-            )
-            return 0
+        inspection_result = run_inspection_command(
+            args,
+            probe_loader=list_probes,
+            service_factory=B300Service,
+            diagnostics_factory=DiagnosticsService,
+            select_probe_fn=select_probe,
+        )
+        if inspection_result is not None:
+            return inspection_result
 
         if args.command == "debug":
             if args.debug_mode == "gateway":
