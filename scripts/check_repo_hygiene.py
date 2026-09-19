@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Fail CI when known repository-growth anti-patterns are introduced.
 
-This gate is intentionally conservative: it blocks new version-layer GUI modules
-and committed transient SDD reports while allowing only the explicitly documented
-production versioned entry point during v0.24 consolidation.
+This gate is intentionally conservative: it blocks new version-layer GUI modules,
+committed transient SDD reports, and completed working-history plans while allowing
+only the explicitly documented production versioned entry point during v0.24
+consolidation.
 """
 
 from __future__ import annotations
@@ -21,6 +22,12 @@ ALLOWED_VERSIONED_GUI = {
 }
 
 VERSIONED_GUI_RE = re.compile(r".+_v\d+\.py$")
+
+TRANSIENT_DOC_DIRS = (
+    ROOT / "docs" / "superpowers" / "plans",
+    ROOT / "docs" / "superpowers" / "roadmaps",
+    ROOT / "docs" / "rc",
+)
 
 
 def _versioned_gui_violations() -> list[str]:
@@ -47,8 +54,24 @@ def _transient_report_violations() -> list[str]:
     return violations
 
 
+def _transient_doc_violations() -> list[str]:
+    violations: list[str] = []
+    for directory in TRANSIENT_DOC_DIRS:
+        if not directory.exists():
+            continue
+        for path in sorted(p for p in directory.rglob("*") if p.is_file()):
+            violations.append(
+                f"{path.relative_to(ROOT)}: completed working-history docs must stay out of active HEAD"
+            )
+    return violations
+
+
 def main() -> int:
-    violations = _versioned_gui_violations() + _transient_report_violations()
+    violations = (
+        _versioned_gui_violations()
+        + _transient_report_violations()
+        + _transient_doc_violations()
+    )
     if violations:
         print("Repository hygiene check FAILED:", file=sys.stderr)
         for violation in violations:
