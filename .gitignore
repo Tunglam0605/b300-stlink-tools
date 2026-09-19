@@ -12,3 +12,5 @@ vendor/
 /.tmp-*/
 /release-*/
 /artifacts_oneclick/
+# Transient agent/workflow reports are local evidence, not source artifacts.
+/.superpowers/sdd/

@@ -1,9 +1,9 @@
-"""Compatibility wrapper for the pre-v0.15 DebugTab startup surface.
+"""Compatibility wrapper for the historical DebugTab package import.
 
-The Antigravity refactor moved mode selection into a dedicated first page.  Existing
-internal callers and regression suites import ``b300_gui.debug_tab.DebugTab`` and
-expect the setup/Live surface immediately.  Production v0.15 uses DebugTabV15 and
-explicitly switches back to the mode selector after construction.
+Existing internal callers may import b300_gui.debug_tab.DebugTab and expect
+the setup/Live surface immediately. The production executable uses
+MainWindowV18 and does not select the retired version-layer DebugTab stack.
+Keep this shim thin until the package-level compatibility contract is retired.
 """
 
 from __future__ import annotations
