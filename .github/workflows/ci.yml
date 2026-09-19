@@ -41,6 +41,9 @@ jobs:
         with:
           python-version: "3.9"
 
+      - name: Repository hygiene
+        run: python scripts/check_repo_hygiene.py
+
       - name: Install Ubuntu GUI runtime libraries
         if: runner.os == 'Linux'
         run: |
