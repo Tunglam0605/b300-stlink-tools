@@ -2,8 +2,8 @@
 """Fail CI when known repository-growth anti-patterns are introduced.
 
 This gate is intentionally conservative: it blocks new version-layer GUI modules
-and committed transient SDD reports while allowing the explicitly documented
-legacy files that are still being migrated during v0.24 consolidation.
+and committed transient SDD reports while allowing only the explicitly documented
+production versioned entry point during v0.24 consolidation.
 """
 
 from __future__ import annotations
@@ -16,11 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 ALLOWED_VERSIONED_GUI = {
-    "debug_tab_v15.py",
-    "debug_tab_v152.py",
-    "debug_tab_v160.py",
-    "debug_tab_v170.py",
-    "main_window_v15.py",
+    # Production entry point pending canonical rename in a later consolidation slice.
     "main_window_v18.py",
 }
 
