@@ -44,6 +44,9 @@ jobs:
       - name: Repository hygiene
         run: python scripts/check_repo_hygiene.py
 
+      - name: Functional parity contract
+        run: python scripts/check_functional_parity.py
+
       - name: Install Ubuntu GUI runtime libraries
         if: runner.os == 'Linux'
         run: |
