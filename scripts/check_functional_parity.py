@@ -9,6 +9,7 @@ BASELINE_COMMIT = "2eed7cec3aeba2e2eb67b76efd8d309dbb4066e5"
 
 REQUIRED_RUNTIME_PATHS = (
     "b300_stlink.py",
+    "b300_cli/inspection_commands.py",
     "b300_gui/__main__.py",
     "b300_gui/production_window.py",
     "b300_gui/main_window_v18.py",

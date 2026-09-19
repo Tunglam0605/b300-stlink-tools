@@ -41,7 +41,7 @@ A future refactor may move or rename implementation files, but it must preserve 
 | Update / self-update | Public signed update channel, version policy and install flow remain available | Core unchanged | `test_updater.py`, `test_updater_versioning.py`, `test_cli_update.py`, `test_cli_update_install.py`, `test_gui_updater.py` | PASS |
 | Machine/offline setup | New-machine prerequisite checks, Linux USB setup and trusted offline runtime setup remain available | Core unchanged | `test_machine_setup.py`, `test_machine_setup_dialog.py`, `test_linux_usb_setup.py`, `test_offline_setup.py` | PASS |
 | Packaging / native artifacts | GUI/CLI packaging and native bundle behavior remain covered | Build/release core unchanged | `test_gui_packaging.py`, `test_build_native_bundle.py`, `test_release_documentation.py` | PASS |
-| CLI surface | Existing doctor/flash/provision/debug/gateway/monitor/update command families remain present | `b300_stlink.py` unchanged from baseline in this consolidation | `test_b300_stlink.py` plus all `test_cli_*.py`; CI CLI help smoke | PASS |
+| CLI surface | Existing doctor/flash/provision/debug/gateway/monitor/update command families remain present | `b300_stlink.py` remains the compatibility façade; read-only doctor/target/metadata/memory orchestration is extracted to `b300_cli/inspection_commands.py` without changing syntax or reason codes | `test_b300_stlink.py` plus all `test_cli_*.py`; CI CLI help smoke | PASS |
 
 ## Consolidation diff boundary
 
