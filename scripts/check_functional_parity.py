@@ -10,6 +10,7 @@ BASELINE_COMMIT = "2eed7cec3aeba2e2eb67b76efd8d309dbb4066e5"
 REQUIRED_RUNTIME_PATHS = (
     "b300_stlink.py",
     "b300_gui/__main__.py",
+    "b300_gui/production_window.py",
     "b300_gui/main_window_v18.py",
     "b300_gui/debug_tab_compat.py",
     "b300_core/service.py",
@@ -61,6 +62,7 @@ REQUIRED_TEST_MODULES = (
     "tests/test_target_awareness.py",
     "tests/test_v018_simplified_ui.py",
     "tests/test_gui_smoke.py",
+    "tests/test_production_window_compat.py",
     "tests/test_debug_tab.py",
     "tests/test_debug_connection_ux.py",
     "tests/test_updater.py",
@@ -100,10 +102,17 @@ def main() -> int:
         problems.append("functional parity document no longer identifies the v0.23.2 baseline commit")
 
     gui_entry = (ROOT / "b300_gui/__main__.py").read_text(encoding="utf-8")
-    if "main_window_v18" not in gui_entry or "MainWindowV18 as MainWindow" not in gui_entry:
+    if "production_window" not in gui_entry or "ProductionMainWindow as MainWindow" not in gui_entry:
         problems.append(
-            "production GUI entry changed from MainWindowV18; update the parity contract "
+            "production GUI entry changed from ProductionMainWindow; update the parity contract "
             "and replacement regression coverage deliberately before changing this guard"
+        )
+
+    compat_entry = (ROOT / "b300_gui/main_window_v18.py").read_text(encoding="utf-8")
+    if "MainWindowV18 = ProductionMainWindow" not in compat_entry:
+        problems.append(
+            "historical MainWindowV18 compatibility alias was removed or changed without "
+            "an explicit compatibility decision"
         )
 
     ci_text = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")

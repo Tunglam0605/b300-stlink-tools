@@ -49,7 +49,7 @@ class GuiDispatcher(QObject):
 
 
 class VsCodeDebugController:
-    """Small orchestration facade used by ``MainWindowV18``."""
+    """Small orchestration facade used by ``ProductionMainWindow``."""
 
     def __init__(self, *, debug_service=None, context=None, ui_dispatcher=None,
                  lease_client_factory=GatewayLeaseClient) -> None:
