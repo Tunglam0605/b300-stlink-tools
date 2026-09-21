@@ -235,7 +235,7 @@ def gateway_status() -> tuple[int, dict, str]:
         "profile_path": str(default_remote_profile_path()),
         "openssh_client_ready": prereq.ready,
         "password_stored": False,
-        "host_key_memory": "OpenSSH default known_hosts",
+        "host_key_memory": "B300 managed known_hosts when enrolled; otherwise OpenSSH default known_hosts",
         "next_action": "Run `gateway connect-check` to verify real SSH authorization/connectivity." if local_ready else "Run `gateway client-setup --ssh-host HOST --ssh-user USER`.",
     }
     text = (
@@ -268,8 +268,9 @@ def gateway_connect_check(args) -> tuple[int, dict, str]:
         "reason_code": result.reason_code,
         "gateway": result.gateway,
         "message": result.message,
-        "host_key_memory": "OpenSSH default known_hosts",
-        "password_authentication": True,
+        "host_key_memory": result.host_key_memory,
+        "authentication": result.auth_mode,
+        "password_authentication": result.auth_mode != "managed_key",
         "debug_ports_exposed": False,
     }
     text = "%s: %s\n%s" % (result.reason_code, result.gateway, result.message)

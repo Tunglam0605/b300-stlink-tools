@@ -415,6 +415,7 @@ class CliGatewayAutomationTests(unittest.TestCase):
         check.assert_called_once_with(profile)
         record = json.loads(output.getvalue().strip().splitlines()[-1])
         self.assertEqual(record["host_key_memory"], "OpenSSH default known_hosts")
+        self.assertEqual(record["authentication"], "password_interactive")
         self.assertTrue(record["password_authentication"])
         self.assertFalse(record["debug_ports_exposed"])
 

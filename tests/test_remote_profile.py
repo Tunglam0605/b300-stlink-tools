@@ -101,19 +101,66 @@ class RemoteConnectivityTests(unittest.TestCase):
             return subprocess.CompletedProcess(argv, 0, "B300_SSH_READY\n", "")
         result = check_remote_connectivity(
             RemoteGatewayProfile("gateway.local", "automation", 2222), runner=runner,
-            ssh_executable="ssh-test",
+            ssh_executable="ssh-test", managed_auth=None,
         )
         self.assertTrue(result.ready)
         self.assertEqual(result.reason_code, "SSH_READY")
+        self.assertEqual(result.auth_mode, "password_interactive")
+        self.assertEqual(result.host_key_memory, "OpenSSH default known_hosts")
         self.assertIn("automation@gateway.local:2222", result.gateway)
         self.assertEqual(len(calls), 1)
+
+
+    def test_connectivity_argv_uses_managed_identity_when_provisioned(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            identity = root / "b300_gateway_ed25519"
+            known_hosts = root / "b300_known_hosts"
+            identity.write_text("private-placeholder", encoding="utf-8")
+            known_hosts.write_text("host-key-placeholder", encoding="utf-8")
+            argv = build_connectivity_argv(
+                RemoteGatewayProfile("192.168.1.120", "automation", 22),
+                ssh_executable="ssh-test", managed_auth=(identity, known_hosts),
+            )
+            joined = " ".join(str(item) for item in argv)
+            self.assertIn("BatchMode=yes", joined)
+            self.assertIn("IdentitiesOnly=yes", joined)
+            self.assertIn(str(identity), argv)
+            self.assertIn("StrictHostKeyChecking=yes", joined)
+            self.assertIn("PreferredAuthentications=publickey", joined)
+            self.assertNotIn("PasswordAuthentication=yes", joined)
+
+            calls = []
+            def runner(argv, timeout):
+                calls.append(tuple(argv))
+                return subprocess.CompletedProcess(argv, 0, "B300_SSH_READY\n", "")
+            result = check_remote_connectivity(
+                RemoteGatewayProfile("192.168.1.120", "automation", 22), runner=runner,
+                ssh_executable="ssh-test", managed_auth=(identity, known_hosts),
+            )
+            self.assertTrue(result.ready)
+            self.assertEqual(result.auth_mode, "managed_key")
+            self.assertEqual(result.host_key_memory, "B300 managed known_hosts")
+            self.assertEqual(len(calls), 1)
+
+    def test_connectivity_timeout_is_structured_failure(self):
+        def runner(argv, timeout):
+            raise subprocess.TimeoutExpired(argv, timeout)
+        result = check_remote_connectivity(
+            RemoteGatewayProfile("gateway.local", "automation", 22), runner=runner,
+            ssh_executable="ssh-test", managed_auth=None,
+        )
+        self.assertFalse(result.ready)
+        self.assertEqual(result.reason_code, "SSH_CONNECT_FAILED")
+        self.assertEqual(result.exit_code, 124)
+        self.assertIn("timed out", result.message.lower())
 
     def test_connectivity_failure_reports_no_password_value(self):
         def runner(argv, timeout):
             return subprocess.CompletedProcess(argv, 255, "", "Permission denied (password).")
         result = check_remote_connectivity(
             RemoteGatewayProfile("gateway.local", "automation", 22), runner=runner,
-            ssh_executable="ssh-test",
+            ssh_executable="ssh-test", managed_auth=None,
         )
         self.assertFalse(result.ready)
         self.assertEqual(result.reason_code, "SSH_CONNECT_FAILED")

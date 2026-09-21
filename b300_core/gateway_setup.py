@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Sequence, Tuple
 
+from .subprocess_env import external_command_env
+
 DEBUG_PORTS = (3333, 4444, 6666)
 DEFAULT_SSH_PORT = 22
 
@@ -67,7 +69,7 @@ class GatewayPrepareResult:
 CommandRunner = Callable[[Sequence[str], float], subprocess.CompletedProcess]
 
 def _run(argv: Sequence[str], timeout: float = 20.0) -> subprocess.CompletedProcess:
-    return subprocess.run(tuple(str(item) for item in argv), capture_output=True, text=True, timeout=timeout, check=False, creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW") else 0))
+    return subprocess.run(tuple(str(item) for item in argv), capture_output=True, text=True, timeout=timeout, check=False, env=external_command_env(), creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW") else 0))
 
 def _nonloopback_ipv4() -> Tuple[str, ...]:
     found = set()

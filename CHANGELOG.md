@@ -5,6 +5,9 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+- Fixed frozen Linux Gateway host inspection so external OS tools such as `systemctl`, `ss` and `ufw` do not inherit PyInstaller's bundled `LD_LIBRARY_PATH`; this prevents false `SSH_SERVICE_STOPPED` / `SSH_STARTUP_DISABLED` reports and unnecessary elevation attempts on an already-ready host.
+- Hardened `gateway connect-check`: it now uses the provisioned B300 managed SSH identity + strict managed `known_hosts` when available, preserves password-interactive fallback when not provisioned, and converts SSH timeouts into structured `SSH_CONNECT_FAILED` results instead of an uncaught traceback.
+
 ## [0.23.2] - 2026-09-10
 
 - Fixed Gateway lease cleanup when a no-probe reservation never created an OpenOCD owner, including recovery of persisted false-positive leases after Agent restart.

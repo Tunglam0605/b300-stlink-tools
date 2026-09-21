@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Sequence, Tuple
 
+from .subprocess_env import external_command_env
+
 
 TASK_NAME = "B300-STLink-GatewayAgent"
 UNIT_NAME = "b300-stlink-gateway-agent.service"
@@ -49,7 +51,7 @@ def _system(system_name: Optional[str]) -> str:
 
 def _run(command: Sequence[str]):
     return subprocess.run(tuple(str(item) for item in command), capture_output=True,
-                          text=True, check=False, shell=False)
+                          text=True, check=False, shell=False, env=external_command_env())
 
 
 def _result_field(result, key: str, default=""):
