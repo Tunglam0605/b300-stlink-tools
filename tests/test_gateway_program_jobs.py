@@ -116,7 +116,7 @@ class GatewayProgramJobsTests(unittest.TestCase):
     def test_upload_hashing_works_without_python_311_file_digest(self):
         slot = self.jobs.create_upload(self.manifest, "client-1", "SAFE123")
         Path(slot["upload_path"]).write_bytes(self.path.read_bytes())
-        with mock.patch.object(hashlib, "file_digest", None):
+        with mock.patch.object(hashlib, "file_digest", None, create=True):
             self.assertEqual(self.jobs.finalize_upload(slot["job_id"])["state"], "STAGED")
 
     def test_prepare_binds_plan_and_commit_runs_once(self):
