@@ -82,7 +82,13 @@ def run_remote_flash(args, *, profile_store=None,
         send(dict(_public_record(started), command="flash", mode="remote", status="running"))
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
-            result = session.remote_program_status(committed_job_id)
+            try:
+                result = session.remote_program_status(committed_job_id)
+            except Exception:
+                send({"command": "flash", "mode": "remote", "status": "pending",
+                      "job_id": committed_job_id, "reason_code": "JOB_STATUS_UNAVAILABLE",
+                      "next_action": "Reconnect and query this job ID before any new flash."})
+                return 2
             if result.get("state") in {"SUCCEEDED", "FAILED", "RECOVERY_REQUIRED", "CANCELLED"}:
                 try:
                     session.cleanup_remote_application(committed_job_id)

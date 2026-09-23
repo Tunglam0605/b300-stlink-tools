@@ -4,6 +4,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import tempfile
+import math
 import time
 import unittest
 from pathlib import Path
@@ -36,7 +37,10 @@ class FakeRemoteSession:
             "manifest": {"file_name": Path(path).name, "sha256": "b" * 64},
             "plan": {"erase_sectors": [3, 4, 5, 6, 7], "probe_serial": "SAFE123",
                      "metadata_address": "0x0800C000", "metadata_bytes": 44,
-                     "device_id": 0x413, "flash_kib": 512},
+                     "device_id": 0x413, "flash_kib": 512,
+                     "target_voltage": 3.1, "protection_reported": True,
+                     "readout_protected": False,
+                     "protected_sectors": [0, 1, 2]},
             "approval_token": "private-approval",
         }
 
@@ -125,6 +129,72 @@ class RemoteProgramGuiTests(unittest.TestCase):
         self.assertEqual(self.session.cancels, 1)
         self.assertEqual(self.session.cleanups, 1)
         self.assertIn("Sector 3", self.window.program_view.banner.detail_label.text())
+        view = self.window.program_view
+        self.assertIn("STM32F407", view.lbl_target.text())
+        self.assertIn("S0–S2", view.lbl_target_wrp.text())
+        self.assertIn("Mức 0", view.lbl_target_rdp.text())
+        self.assertIn("Gateway dry-run", view.badge_preflight.text())
+
+    def test_remote_dry_run_evidence_is_cleared_when_file_changes(self):
+        self._run(True, QMessageBox.StandardButton.No)
+        self.assertIn("Gateway dry-run", self.window.program_view.badge_preflight.text())
+        self.window.program_view.set_file_path(Path(self.temp.name) / "missing.hex")
+        self.assertIn("Chưa kiểm tra", self.window.program_view.badge_preflight.text())
+
+    def test_nonfinite_gateway_voltage_cannot_be_shown_as_checked_target(self):
+        plan = dict(self.session.prepare_remote_application(self.path, None, "client-1")["plan"])
+        plan["target_voltage"] = math.nan
+        with self.assertRaises(ValueError):
+            self.window.program_view.set_remote_preflight(plan)
+        self.assertIn("Chưa kiểm tra", self.window.program_view.badge_preflight.text())
+
+    def test_oversized_gateway_voltage_cannot_leave_prepared_lease_open(self):
+        original = self.session.prepare_remote_application
+
+        def malformed(*args):
+            approval = original(*args)
+            approval["plan"]["target_voltage"] = 10 ** 1000
+            return approval
+
+        with mock.patch.object(self.session, "prepare_remote_application", side_effect=malformed):
+            self._run(True, QMessageBox.StandardButton.No)
+        self.assertEqual(self.session.commits, 0)
+        self.assertEqual(self.session.cancels, 1)
+        self.assertTrue(FakeLease.created[-1].closed)
+        self.assertEqual(self.window.program_view.banner.property("variant"), "fail")
+
+    def test_malformed_gateway_evidence_cancels_prepared_job_and_releases_lease(self):
+        original = self.session.prepare_remote_application
+
+        def malformed(*args):
+            approval = original(*args)
+            approval["plan"]["target_voltage"] = math.nan
+            return approval
+
+        with mock.patch.object(self.session, "prepare_remote_application", side_effect=malformed):
+            self._run(True, QMessageBox.StandardButton.No)
+        self.assertEqual(self.session.commits, 0)
+        self.assertEqual(self.session.cancels, 1)
+        self.assertEqual(self.session.cleanups, 1)
+        self.assertTrue(FakeLease.created[-1].closed)
+        self.assertEqual(self.window.program_view.banner.property("variant"), "fail")
+
+    def test_missing_gateway_target_evidence_blocks_confirmation_and_cleans_job(self):
+        original = self.session.prepare_remote_application
+
+        def legacy(*args):
+            approval = original(*args)
+            approval["plan"].pop("protection_reported")
+            return approval
+
+        with mock.patch.object(self.session, "prepare_remote_application", side_effect=legacy):
+            self._run(False, QMessageBox.StandardButton.Yes)
+        self.assertEqual(self.session.commits, 0)
+        self.assertEqual(self.session.cancels, 1)
+        self.assertEqual(self.session.cleanups, 1)
+        self.assertTrue(FakeLease.created[-1].closed)
+        self.assertEqual(self.window.program_view.banner.property("variant"), "fail")
+        self.assertIn("Gateway", self.window.program_view.banner.detail_label.text())
 
     def test_cancel_transport_error_still_closes_flash_lease(self):
         with mock.patch.object(self.session, "cancel_remote_application",

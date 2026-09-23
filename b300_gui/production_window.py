@@ -766,36 +766,6 @@ class ProductionMainWindow(_BaseMainWindow):
             approval, lease, grant = payload
             self.busy = False
             self._update_controls()
-            try:
-                current_image_hash = inspect_image(selected_path).sha256
-            except (OSError, ValueError):
-                current_image_hash = None
-            if (self.app_context.selected_connection.connection_id != connection_id
-                    or self.app_context.selected_probe != selected_probe
-                    or self.program_view._selected_file != selected_path
-                    or self.program_view._current_image is None
-                    or self.program_view._current_image.sha256 != selected_image_hash
-                    or current_image_hash != selected_image_hash):
-                lease.close()
-                self.program_view.banner.show_info(
-                    "Điều kiện nạp đã thay đổi", "Chọn lại file và chạy kiểm tra Gateway mới.",
-                )
-                return
-            plan = approval.get("plan", {})
-            if (plan.get("erase_sectors") != [3, 4, 5, 6, 7]
-                    or plan.get("metadata_address") != "0x0800C000"
-                    or plan.get("metadata_bytes") != 44):
-                lease.close()
-                self.program_view.banner.show_fail(
-                    "Kế hoạch Gateway không hợp lệ", "Không đúng vùng Application và AppMeta.",
-                    "Kiểm tra phiên bản Gateway trước khi thử lại.",
-                )
-                return
-            manifest = approval.get("manifest", {})
-            detail = (
-                "Sector 3–7 · STLM 0x0800C000/44 byte · ST-Link %s · SHA-256 %s"
-                % (plan.get("probe_serial") or "duy nhất", manifest.get("sha256", ""))
-            )
             def cancel_prepared_job() -> bool:
                 try:
                     session.cancel_remote_application(approval["job_id"], grant)
@@ -812,6 +782,45 @@ class ProductionMainWindow(_BaseMainWindow):
                     return False
                 finally:
                     lease.close()
+            try:
+                current_image_hash = inspect_image(selected_path).sha256
+            except (OSError, ValueError):
+                current_image_hash = None
+            if (self.app_context.selected_connection.connection_id != connection_id
+                    or self.app_context.selected_probe != selected_probe
+                    or self.program_view._selected_file != selected_path
+                    or self.program_view._current_image is None
+                    or self.program_view._current_image.sha256 != selected_image_hash
+                    or current_image_hash != selected_image_hash):
+                if cancel_prepared_job():
+                    self.program_view.banner.show_info(
+                        "Điều kiện nạp đã thay đổi", "Chọn lại file và chạy kiểm tra Gateway mới.",
+                    )
+                return
+            plan = approval.get("plan", {})
+            if (plan.get("erase_sectors") != [3, 4, 5, 6, 7]
+                    or plan.get("metadata_address") != "0x0800C000"
+                    or plan.get("metadata_bytes") != 44):
+                if cancel_prepared_job():
+                    self.program_view.banner.show_fail(
+                        "Kế hoạch Gateway không hợp lệ", "Không đúng vùng Application và AppMeta.",
+                        "Kiểm tra phiên bản Gateway trước khi thử lại.",
+                    )
+                return
+            try:
+                self.program_view.set_remote_preflight(plan)
+            except ValueError as error:
+                if cancel_prepared_job():
+                    self.program_view.banner.show_fail(
+                        "Bằng chứng Gateway không hợp lệ", str(error),
+                        "Cập nhật Gateway và chạy lại dry-run trước khi nạp.",
+                    )
+                return
+            manifest = approval.get("manifest", {})
+            detail = (
+                "Sector 3–7 · STLM 0x0800C000/44 byte · ST-Link %s · SHA-256 %s"
+                % (plan.get("probe_serial") or "duy nhất", manifest.get("sha256", ""))
+            )
             if is_dry_run:
                 if cancel_prepared_job():
                     self.program_view.banner.show_pass("Gateway dry-run đạt", detail)

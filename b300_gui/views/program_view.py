@@ -245,6 +245,7 @@ class ProgramView(QWidget):
             self.set_file_path(Path(selected))
 
     def clear_project_file(self):
+        self.set_target_info(None)
         self.btn_flash_app.setEnabled(False)
         self.btn_dry_run_action.setEnabled(False)
         self._selected_file = None
@@ -259,6 +260,7 @@ class ProgramView(QWidget):
         self.file_invalidated.emit()
 
     def set_file_path(self, path: Path) -> None:
+        self.set_target_info(None)
         selected = Path(path).expanduser()
         self._selected_file = None
         self._current_image = None
@@ -342,6 +344,7 @@ class ProgramView(QWidget):
             self.lbl_target_flash.setText("Chưa kiểm tra")
             self.lbl_target_wrp.setText("Chưa kiểm tra")
             self.lbl_target_rdp.setText("Chưa kiểm tra")
+            self.lbl_target_meta.setText("Chưa kiểm tra")
             return
         self.lbl_target.setText(
             "%s · %d KiB bộ nhớ · %.2f V" % (
@@ -369,6 +372,38 @@ class ProgramView(QWidget):
         self.lbl_target_wrp.setText("Chưa kiểm tra" if not info.protection_reported else
                                     "Đã bảo vệ S0–S2" if wrp_ok else "Chưa bảo vệ đủ S0–S2")
         self.lbl_target_rdp.setText("Mức 0 (không bảo vệ)" if not info.readout_protected else "Đã khóa RDP")
+
+    def set_remote_preflight(self, plan: dict) -> bool:
+        """Show a dated-by-context Gateway plan as dry-run evidence, not live health."""
+        required = {
+            "device_id", "flash_kib", "target_voltage", "protection_reported",
+            "readout_protected", "protected_sectors",
+        }
+        if not isinstance(plan, dict) or not required.issubset(plan):
+            raise ValueError("Gateway thiếu bằng chứng MCU/WRP/RDP cho dry-run; cần cập nhật Gateway.")
+        if (type(plan["device_id"]) is not int or type(plan["flash_kib"]) is not int
+                or type(plan["protection_reported"]) is not bool
+                or type(plan["readout_protected"]) is not bool
+                or not isinstance(plan["target_voltage"], (int, float))
+                or isinstance(plan["target_voltage"], bool)
+                or not 0.0 < plan["target_voltage"] < 5.0
+                or not isinstance(plan["protected_sectors"], list)
+                or any(type(sector) is not int for sector in plan["protected_sectors"])):
+            raise ValueError("Gateway dry-run target evidence is malformed.")
+        info = TargetInfo(
+            plan["device_id"], plan["flash_kib"], float(plan["target_voltage"]),
+            "Gateway dry-run", tuple(plan["protected_sectors"]),
+            plan["protection_reported"], plan["readout_protected"],
+        )
+        validate_target_for_provisioning(info)
+        validate_bootloader_write_protection(info)
+        self.set_target_info(info)
+        self.badge_preflight.setText("✓ Gateway dry-run")
+        self.badge_preflight.setToolTip(
+            "Bằng chứng tại lần chạy thử gần nhất; lần nạp thật sẽ kiểm tra MCU lại."
+        )
+        self.lbl_target_meta.setText("Ghi STLM sau khi verify Application")
+        return True
 
     def append_log(self, text: str) -> None:
         self.activity_log.append(str(text))

@@ -138,6 +138,32 @@ class CliRemoteFlashTests(unittest.TestCase):
             self.assertEqual(session.cleanups, 1)
             self.assertEqual(output[-1]["state"], "SUCCEEDED")
 
+    def test_ssh_loss_while_polling_reports_pending_job_without_second_commit(self):
+        class LostPollingSession(FakeSession):
+            def remote_program_status(self, job_id):
+                raise ConnectionError("SSH dropped after Gateway began programming")
+
+        with tempfile.TemporaryDirectory() as directory:
+            image = write_hex(directory, 0x08010000, APPLICATION_VECTOR)
+            args = parse_args(["flash", str(image), "--gateway", "gateway-1",
+                               "--confirm-remote-application", "--json"])
+            session = LostPollingSession(None)
+            output = []
+
+            code = run_remote_flash(
+                args, profile_store=FakeProfileStore(),
+                session_factory=lambda _: session,
+                lease_factory=FakeLease, emit=output.append,
+                poll_interval_seconds=0,
+            )
+
+            self.assertEqual(code, 2)
+            self.assertEqual(session.commits, 1)
+            self.assertEqual(session.cleanups, 0)
+            self.assertEqual(output[-1]["status"], "pending")
+            self.assertEqual(output[-1]["job_id"], "a" * 32)
+            self.assertEqual(output[-1]["reason_code"], "JOB_STATUS_UNAVAILABLE")
+
     def test_remote_dry_run_returns_gateway_plan_without_committing(self):
         with tempfile.TemporaryDirectory() as directory:
             image = write_hex(directory, 0x08010000, APPLICATION_VECTOR)

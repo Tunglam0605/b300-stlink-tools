@@ -182,6 +182,11 @@ class GatewayProgramJobsTests(unittest.TestCase):
         job_id = self._upload()
         approval = self._prepare(job_id)
         self.assertEqual(approval["plan"]["erase_sectors"], [3, 4, 5, 6, 7])
+        self.assertEqual(approval["plan"]["device_id"] & 0xFFF, 0x413)
+        self.assertEqual(approval["plan"]["flash_kib"], 512)
+        self.assertTrue(approval["plan"]["protection_reported"])
+        self.assertFalse(approval["plan"]["readout_protected"])
+        self.assertEqual(approval["plan"]["protected_sectors"], [0, 1, 2])
         self.assertEqual(approval["plan"]["transaction"], [
             "flash erase_sector 0 3 7",
             "flash write_image {application.hex}",
