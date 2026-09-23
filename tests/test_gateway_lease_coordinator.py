@@ -140,6 +140,40 @@ class GatewayLeaseCoordinatorTests(unittest.TestCase):
             self.assertFalse(coordinator.release(grant.lease_id, grant.token, grant.generation).active)
             self.assertEqual(supervisor.stop_calls, 0)
 
+    def test_committed_flash_retains_lease_after_client_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            coordinator = GatewayLeaseCoordinator(
+                FakeSupervisor(),
+                store=GatewayLeaseStore(Path(directory) / "lease.json"),
+                probe_discovery=lambda: (ProbeInfo("SAFE123", "ST-Link", "test", "usb:1"),),
+                hardware_owner=FileHardwareOwner(Path(directory) / "hardware.lock"),
+            )
+            grant = coordinator.acquire(request("client-flash", "FLASH_APPLICATION"))
+            self.assertTrue(coordinator.owns_flash_lease(grant.lease_id, grant.token, grant.generation))
+            coordinator.adopt_flash_job(grant.lease_id, grant.token, grant.generation)
+            self.assertTrue(coordinator.release(grant.lease_id, grant.token, grant.generation).active)
+            self.assertFalse(coordinator.finish_flash_job(grant.lease_id, grant.token, grant.generation).active)
+
+    def test_late_internal_flash_renew_keeps_hardware_owner_until_job_finishes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            clock = FakeClock()
+            coordinator = GatewayLeaseCoordinator(
+                FakeSupervisor(),
+                store=GatewayLeaseStore(Path(directory) / "lease.json"),
+                policy=GatewayLeasePolicy(heartbeat_interval_seconds=1,
+                                          lease_ttl_seconds=5, reconnect_grace_seconds=3),
+                clock=clock,
+                probe_discovery=lambda: (ProbeInfo("SAFE123", "ST-Link", "test", "usb:1"),),
+                hardware_owner=FileHardwareOwner(Path(directory) / "hardware.lock"),
+            )
+            grant = coordinator.acquire(request("client-flash", "FLASH_APPLICATION"))
+            coordinator.adopt_flash_job(grant.lease_id, grant.token, grant.generation)
+            clock.advance(20)
+            renewed = coordinator.renew(grant.lease_id, grant.token, grant.generation)
+            self.assertTrue(renewed.active)
+            self.assertTrue(coordinator.owns_flash_lease(grant.lease_id, grant.token, grant.generation))
+            coordinator.finish_flash_job(grant.lease_id, grant.token, grant.generation)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

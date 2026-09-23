@@ -85,6 +85,7 @@ class GatewayLeaseCoordinator:
         self._probe_discovery = probe_discovery
         self._hardware_owner = hardware_owner or DEFAULT_HARDWARE_OWNER
         self._flash_owner_token = None
+        self._adopted_flash_lease_id = None
         self._flash_instance_id = uuid.uuid4().hex
         self._lock = threading.RLock()
         try:
@@ -198,7 +199,7 @@ class GatewayLeaseCoordinator:
               generation: int) -> GatewayLeasePublicSnapshot:
         with self._lock:
             now = self._clock()
-            if self._lease is not None:
+            if self._lease is not None and self._adopted_flash_lease_id is None:
                 self._advance_expiry_locked(now)
             lease = self._owner_locked(lease_id, token, generation)
             if lease is None or lease.state in {"CLEANING", "RECOVERY_REQUIRED"}:
@@ -214,12 +215,41 @@ class GatewayLeaseCoordinator:
             self._persist_locked(renewed)
             return self._public_locked(renewed, now)
 
+    def owns_flash_lease(self, lease_id: str, token: str, generation: int) -> bool:
+        with self._lock:
+            lease = self._owner_locked(lease_id, token, generation)
+            return bool(
+                lease is not None and lease.mode == "FLASH_APPLICATION"
+                and lease.state == "ACTIVE" and not self._recovery_required
+                and self._flash_owner_token is not None
+            )
+
+    def adopt_flash_job(self, lease_id: str, token: str, generation: int) -> None:
+        with self._lock:
+            if not self.owns_flash_lease(lease_id, token, generation):
+                raise ValueError("FLASH_LEASE_INVALID")
+            if self._adopted_flash_lease_id is not None:
+                raise ValueError("FLASH_JOB_ALREADY_ACTIVE")
+            self._adopted_flash_lease_id = lease_id
+
+    def finish_flash_job(self, lease_id: str, token: str,
+                         generation: int) -> GatewayLeasePublicSnapshot:
+        with self._lock:
+            lease = self._owner_locked(lease_id, token, generation)
+            if (lease is None or lease.mode != "FLASH_APPLICATION"
+                    or self._adopted_flash_lease_id != lease_id):
+                return _inactive("LEASE_INVALID")
+            self._adopted_flash_lease_id = None
+            return self._cleanup_locked("FLASH_JOB_FINISHED")
+
     def release(self, lease_id: str, token: str,
                 generation: int) -> GatewayLeasePublicSnapshot:
         with self._lock:
             lease = self._owner_locked(lease_id, token, generation)
             if lease is None:
                 return _inactive("LEASE_INVALID")
+            if lease.mode == "FLASH_APPLICATION" and self._adopted_flash_lease_id == lease_id:
+                return self._public_locked(lease, self._clock())
             if self._recovery_required or lease.state == "RECOVERY_REQUIRED":
                 return self._reconcile_recovery_locked(self._clock())
             return self._cleanup_locked("CLIENT_RELEASED")
@@ -231,7 +261,7 @@ class GatewayLeaseCoordinator:
                 return self._reconcile_recovery_locked(now)
             if self._lease is None:
                 return _inactive("GATEWAY_IDLE")
-            expired = self._advance_expiry_locked(now)
+            expired = None if self._adopted_flash_lease_id else self._advance_expiry_locked(now)
             if expired is not None:
                 return expired
             lease = self._lease
@@ -295,6 +325,8 @@ class GatewayLeaseCoordinator:
         with self._lock:
             if self._lease is None:
                 return _inactive("GATEWAY_IDLE")
+            if self._adopted_flash_lease_id is not None:
+                return self._public_locked(self._lease, self._clock())
             return self._cleanup_locked(reason_code)
 
     def _owner_locked(self, lease_id: object, token: object,
@@ -365,6 +397,7 @@ class GatewayLeaseCoordinator:
             self._lease = None
             self._recovery_required = False
             self._gateway_endpoints = (None, None)
+            self._adopted_flash_lease_id = None
             return _inactive(final_reason)
         cleaning = replace(
             lease, state="CLEANING", grace_deadline_mono=None,

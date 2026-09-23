@@ -83,6 +83,11 @@ class ThreadedReadinessService(FakeService):
             worker.join(timeout=0.5)
 
 
+class FailedReadinessService(FakeService):
+    def start(self, config, event_sink=None):
+        raise TimeoutError("OpenOCD readiness listener did not open")
+
+
 class OwnedFakeService(FakeService):
     executable = "/trusted/openocd"
 
@@ -112,6 +117,16 @@ class PendingLease:
 
 
 class GatewaySupervisorTests(unittest.TestCase):
+    def test_startup_timeout_is_distinct_from_target_verification_failure(self) -> None:
+        supervisor = GatewaySupervisor(
+            service_factory=FailedReadinessService,
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=lambda _config: "running",
+        )
+        result = supervisor.ensure()
+        self.assertEqual((result.state, result.reason_code),
+                         ("FAILED", "OPENOCD_READINESS_TIMEOUT"))
+
     def test_background_readiness_output_does_not_block_startup(self) -> None:
         supervisor = GatewaySupervisor(
             service_factory=ThreadedReadinessService,

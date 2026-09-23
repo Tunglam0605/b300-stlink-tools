@@ -11,7 +11,7 @@ import hashlib
 import re
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Callable, Optional, Tuple
 
 from .models import FlashPhaseEvent, FlashPlan, ProbeRef
@@ -62,7 +62,9 @@ class RemoteFirmwareManifest:
         kind = FirmwareKind(self.firmware_kind)
         privilege = RemotePrivilege(self.privilege)
         name = str(self.file_name).strip()
-        if not name or Path(name).name != name or name in {".", ".."}:
+        if (not name or PurePosixPath(name).name != name
+                or PureWindowsPath(name).name != name or name in {".", ".."}
+                or any(ord(character) < 32 for character in name)):
             raise ValueError("Remote firmware file name must be a plain basename.")
         if Path(name).suffix.lower() not in _ALLOWED_SUFFIXES:
             raise ValueError("Remote firmware type must be HEX, BIN, ELF or AXF.")

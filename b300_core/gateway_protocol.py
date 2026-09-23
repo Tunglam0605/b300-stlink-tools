@@ -20,6 +20,7 @@ def gateway_capabilities() -> dict:
         "capabilities": [
             "gateway-status", "gateway-ensure", "gateway-rescan",
             "gateway-gdb-activity-v1", "gateway-agent", "gateway-exclusive-lease-v1",
+            "remote_application_flash_v1",
         ],
         "transport": "authenticated-ssh",
         "debug_bind": "loopback-only",

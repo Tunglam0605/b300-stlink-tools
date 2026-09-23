@@ -545,6 +545,7 @@ class GatewaySupervisor:
         self._gdb_connection_count = 0
         self._gdb_activity_generation = 0
         self._gdb_ever_attached = False
+        self._startup_diagnostic = ""
         self._lock = threading.RLock()
         self._pending_openocd_lines: queue.SimpleQueue[str] = queue.SimpleQueue()
         self._snapshot = GatewaySnapshot.from_record({
@@ -565,6 +566,11 @@ class GatewaySupervisor:
     def snapshot(self) -> GatewaySnapshot:
         with self._lock:
             return self._snapshot
+
+    @property
+    def startup_diagnostic(self) -> str:
+        with self._lock:
+            return self._startup_diagnostic
 
     def ensure(self) -> GatewaySnapshot:
         with self._lock:
@@ -593,14 +599,24 @@ class GatewaySupervisor:
             service = self._service_factory()
             self._service = service
             self._hardware_error = False
+            self._startup_diagnostic = ""
             try:
                 service.start(config, event_sink=self._on_openocd_line)
-            except Exception:
+            except Exception as error:
+                self._drain_openocd_lines_locked()
+                self._startup_diagnostic = str(error)[:512]
+                reason = (
+                    "OPENOCD_READINESS_TIMEOUT"
+                    if isinstance(error, TimeoutError)
+                    or "timed out" in str(error).lower()
+                    or "timeout" in str(error).lower()
+                    else "OPENOCD_START_FAILED"
+                )
                 try:
                     service.stop()
                 finally:
                     self._service = None
-                return self._publish("FAILED", "TARGET_UNVERIFIED")
+                return self._publish("FAILED", reason)
             self._drain_openocd_lines_locked()
             if self._hardware_error:
                 service.stop()

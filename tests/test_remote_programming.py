@@ -69,6 +69,14 @@ class RemoteProgrammingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             bad.validate()
 
+        windows_traversal = RemoteFirmwareManifest(
+            operation=RemoteProgrammingOperation.FLASH_APPLICATION,
+            firmware_kind=FirmwareKind.APPLICATION,
+            file_name="..\\application.hex", size=12, sha256="0" * 64,
+        )
+        with self.assertRaises(ValueError):
+            windows_traversal.validate()
+
         wrong_privilege = RemoteFirmwareManifest(
             operation=RemoteProgrammingOperation.FLASH_BOOTLOADER,
             firmware_kind=FirmwareKind.BOOTLOADER,

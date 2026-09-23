@@ -21,7 +21,11 @@ MAX_REQUEST_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 64 * 1024
 RESPONSE_RETENTION_SECONDS = 3600.0
 MAX_PENDING_REQUESTS = 128
-AGENT_OPERATIONS = frozenset({"status", "acquire", "renew", "release", "rescan", "shutdown"})
+AGENT_OPERATIONS = frozenset({
+    "status", "acquire", "renew", "release", "rescan", "shutdown",
+    "program_create_upload", "program_finalize_upload", "program_prepare",
+    "program_commit", "program_status", "program_cancel",
+})
 _SAFE_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
