@@ -880,7 +880,8 @@ class RemoteSession:
         )
 
     def _run_program_request(self, operation: str, payload: dict, *,
-                             timeout_seconds: float = 10.0) -> dict:
+                             timeout_seconds: float = 10.0,
+                             request_id: Optional[str] = None) -> dict:
         if operation not in {
             "acquire", "renew", "release", "program_create_upload",
             "program_finalize_upload", "program_prepare", "program_commit",
@@ -889,12 +890,27 @@ class RemoteSession:
             raise ValueError("Unsupported Gateway programming operation.")
         request = json.dumps({
             "operation": operation, "payload": payload,
-            "request_id": uuid.uuid4().hex,
+            "request_id": request_id or uuid.uuid4().hex,
         }, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
-        return self._run_gateway_control(
-            "b300-stlink debug gateway-program-request --json",
-            timeout_seconds=timeout_seconds, stdin_payload=request,
-        )
+        command = "b300-stlink debug gateway-program-request --json"
+        try:
+            return self._run_gateway_control(
+                command, timeout_seconds=timeout_seconds, stdin_payload=request,
+            )
+        except RemoteSessionError as error:
+            retryable_control = operation in {
+                "program_create_upload", "program_finalize_upload", "program_prepare",
+                "program_status", "program_cancel", "program_cleanup",
+            }
+            if (not retryable_control or not self.connected
+                    or error.reason_code not in {"CLI_EXECUTION_FAILED", "CLI_RESPONSE_INVALID"}):
+                raise
+            # A lost control response may have followed successful dispatch.
+            # Replay the identical request ID and payload at most once; Agent
+            # and job stores reject changed inputs and duplicate side effects.
+            return self._run_gateway_control(
+                command, timeout_seconds=timeout_seconds, stdin_payload=request,
+            )
 
     def prepare_remote_application(self, path: Path, grant, client_id: str,
                                    *, progress=None) -> dict:

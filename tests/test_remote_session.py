@@ -133,6 +133,27 @@ class ForwardFactory:
 
 
 class RemoteSessionTests(unittest.TestCase):
+    def test_lost_upload_slot_response_retries_same_request_id_once(self):
+        session = RemoteSession(self.profile, credential_store=MemoryStore(), ssh_client_factory=FakeClient)
+        session.connect("secret")
+        calls = []
+        def control(command, **kwargs):
+            calls.append(json.loads(kwargs["stdin_payload"]))
+            if len(calls) == 1:
+                raise RemoteSessionError(
+                    "SSH response lost", reason_code="CLI_EXECUTION_FAILED",
+                    phase="gateway_cli",
+                )
+            return {"job_id": "a" * 32, "state": "UPLOADING"}
+        with mock.patch.object(session, "_run_gateway_control", side_effect=control):
+            slot = session._run_program_request("program_create_upload", {
+                "manifest": {}, "client_id": "client-1", "probe_serial": None,
+            })
+        self.assertEqual(slot["job_id"], "a" * 32)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0]["request_id"], calls[1]["request_id"])
+        self.assertEqual(calls[0]["payload"], calls[1]["payload"])
+
     def test_interrupted_upload_requests_gateway_slot_cancellation(self):
         with tempfile.TemporaryDirectory() as directory:
             image = write_hex(directory, 0x08010000, APPLICATION_VECTOR)
