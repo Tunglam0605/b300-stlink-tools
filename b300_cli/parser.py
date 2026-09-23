@@ -76,6 +76,20 @@ def build_parser() -> argparse.ArgumentParser:
     program_status.add_argument("job_id", help="Job ID returned by remote flash.")
     program_status.add_argument("--gateway", required=True, help="Saved Gateway profile id.")
 
+    hardware = commands.add_parser(
+        "hardware", help="Inspect or recover the local ST-Link owner after a process crash.",
+        parents=[json_parent],
+    )
+    hardware_commands = hardware.add_subparsers(dest="hardware_command")
+    hardware_recover = hardware_commands.add_parser(
+        "recover", help="Clear a crashed owner only after OpenOCD is proven stopped.",
+        parents=[json_parent],
+    )
+    hardware_recover.add_argument(
+        "--confirm-hardware-recovery", action="store_true",
+        help="Explicitly confirm local recovery after checking the connected board.",
+    )
+
     factory = commands.add_parser(
         "provision-bootloader",
         help="Factory-provision the trusted bundled B300 Bootloader and restore S0-S2 WRP.",

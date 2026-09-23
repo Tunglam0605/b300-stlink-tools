@@ -338,7 +338,7 @@ class GatewayAgent:
                 response = self._error(request, error.reason_code, str(error))
             else:
                 response = self._error(request, "AGENT_OPERATION_FAILED")
-        self.requests.respond(request.request_id, response)
+        self.requests.respond(request.request_id, response, request=request)
         self.requests.complete(request.request_id)
 
     def _dispatch(self, request: GatewayRequest) -> dict:
@@ -409,6 +409,7 @@ class GatewayAgent:
             manifest = RemoteFirmwareManifest(**payload["manifest"]).validate()
             return self._ok(request, jobs.create_upload(
                 manifest, payload["client_id"], payload["probe_serial"],
+                request_id=request.request_id,
             ))
         if operation == "program_finalize_upload":
             self._exact_keys(payload, {"job_id"})
@@ -416,6 +417,9 @@ class GatewayAgent:
         if operation == "program_status":
             self._exact_keys(payload, {"job_id"})
             return self._ok(request, jobs.status(payload["job_id"]))
+        if operation == "program_cleanup":
+            self._exact_keys(payload, {"job_id"})
+            return self._ok(request, jobs.cleanup(payload["job_id"]))
         lease_fields = {"job_id", "lease_id", "lease_token", "lease_generation"}
         if operation == "program_prepare":
             self._exact_keys(payload, lease_fields)

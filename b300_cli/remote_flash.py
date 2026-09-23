@@ -83,6 +83,10 @@ def run_remote_flash(args, *, profile_store=None,
         while time.monotonic() < deadline:
             result = session.remote_program_status(committed_job_id)
             if result.get("state") in {"SUCCEEDED", "FAILED", "RECOVERY_REQUIRED", "CANCELLED"}:
+                try:
+                    session.cleanup_remote_application(committed_job_id)
+                except Exception:
+                    pass  # terminal result remains authoritative; TTL cleanup remains
                 send(dict(_public_record(result), command="flash", mode="remote",
                           status="ok" if result["state"] == "SUCCEEDED" else "error"))
                 return 0 if result["state"] == "SUCCEEDED" else 1

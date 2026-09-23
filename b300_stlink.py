@@ -50,6 +50,7 @@ from b300_core.gateway_supervisor import (
     GatewayProcessManager, GatewayStatusStore, GatewaySupervisor,
 )
 from b300_core.gateway_status import GatewaySnapshot
+from b300_core.hardware_owner import DEFAULT_HARDWARE_OWNER, openocd_quiescent
 from b300_core.gateway_setup import (
     build_gateway_prepare_plan, client_connection_text, inspect_gateway_host,
     prepare_gateway_host,
@@ -1093,7 +1094,8 @@ def run_gateway_agent_command(args: argparse.Namespace) -> int:
         operation = incoming["operation"]
         if operation not in {
             "program_create_upload", "program_finalize_upload", "program_prepare",
-            "program_commit", "program_status", "program_cancel", "acquire", "renew", "release",
+            "program_commit", "program_status", "program_cancel", "program_cleanup",
+            "acquire", "renew", "release",
         }:
             raise ValueError("Gateway programming operation is not allowed.")
         timeout = 45.0 if operation == "program_prepare" else 10.0
@@ -1214,6 +1216,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "Gateway job %s: %s" % (record.get("job_id", ""), record.get("state", "")),
                 ),
             )
+
+        if args.command == "hardware":
+            if args.hardware_command != "recover":
+                raise ValueError("Choose the hardware recover subcommand.")
+            DEFAULT_HARDWARE_OWNER.recover(
+                confirm=args.confirm_hardware_recovery,
+                quiescent_probe=openocd_quiescent,
+            )
+            emit_snapshot({
+                "schema_version": 1, "command": "hardware recover",
+                "status": "ok", "reason_code": "HARDWARE_OWNER_RECOVERED",
+            }, args.json, "ST-Link owner recovered after OpenOCD absence was verified.")
+            return 0
 
         if args.command in {"update", "self-update"}:
             return run_update_command(args, __version__)

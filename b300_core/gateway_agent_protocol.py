@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
 import re
@@ -24,7 +25,7 @@ MAX_PENDING_REQUESTS = 128
 AGENT_OPERATIONS = frozenset({
     "status", "acquire", "renew", "release", "rescan", "shutdown",
     "program_create_upload", "program_finalize_upload", "program_prepare",
-    "program_commit", "program_status", "program_cancel",
+    "program_commit", "program_status", "program_cancel", "program_cleanup",
 })
 _SAFE_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
@@ -120,7 +121,14 @@ class GatewayRequestStore:
     def enqueue(self, request: GatewayRequest) -> Path:
         selected = GatewayRequest.from_record(request.to_record())
         self._prepare()
-        if self.response_path(selected.request_id).exists() or self.completed_path(selected.request_id).exists():
+        marker = self.completed_path(selected.request_id)
+        if marker.exists():
+            if not self._matching_program_marker(selected):
+                raise FileExistsError("REQUEST_REPLAYED")
+            if self.response_path(selected.request_id).exists():
+                raise FileExistsError("REQUEST_REPLAYED")
+            marker.unlink()
+        if self.response_path(selected.request_id).exists():
             raise FileExistsError("REQUEST_REPLAYED")
         path = self.request_path(selected.request_id)
         data = json.dumps(selected.to_record(), sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -139,7 +147,12 @@ class GatewayRequestStore:
         # before replay checks below.
         self._prepare()
         if (self.response_path(request.request_id).exists()
-                or self.completed_path(request.request_id).exists()):
+                and self._matching_program_marker(request)):
+            response = self.read_response(request.request_id)
+            if response is not None:
+                self.acknowledge_response(request.request_id)
+                return response
+        if self.response_path(request.request_id).exists():
             return self._error(request.request_id, "REQUEST_REPLAYED")
         try:
             self.enqueue(request)
@@ -182,7 +195,26 @@ class GatewayRequestStore:
                     pass
         return tuple(results)
 
-    def respond(self, request_id: str, record: Mapping[str, object]) -> None:
+    @staticmethod
+    def _request_hash(request: GatewayRequest) -> str:
+        selected = GatewayRequest.from_record(request.to_record())
+        encoded = json.dumps({
+            "operation": selected.operation, "payload": selected.payload,
+        }, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def _matching_program_marker(self, request: GatewayRequest) -> bool:
+        if not request.operation.startswith("program_"):
+            return False
+        try:
+            raw = json.loads(self.completed_path(request.request_id).read_text(encoding="ascii"))
+            return (isinstance(raw, dict) and raw.get("schema_version") == 1
+                    and raw.get("request_hash") == self._request_hash(request))
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+            return False
+
+    def respond(self, request_id: str, record: Mapping[str, object], *,
+                request: Optional[GatewayRequest] = None) -> None:
         selected_id = _id(request_id)
         payload = dict(record)
         payload.setdefault("protocol_version", AGENT_PROTOCOL_VERSION)
@@ -191,6 +223,23 @@ class GatewayRequestStore:
         if len(data) > MAX_RESPONSE_BYTES:
             raise ValueError("Gateway Agent response is too large.")
         self._prepare()
+        if request is not None and request.operation.startswith("program_"):
+            marker = self.completed_path(selected_id)
+            fd_marker, marker_name = tempfile.mkstemp(
+                prefix=selected_id + ".", suffix=".tmp", dir=str(self.completed_dir),
+            )
+            marker_temp = Path(marker_name)
+            try:
+                if os.name != "nt": os.chmod(str(marker_temp), 0o600)
+                with os.fdopen(fd_marker, "w", encoding="ascii") as handle:
+                    json.dump({
+                        "schema_version": 1,
+                        "request_hash": self._request_hash(request),
+                    }, handle, sort_keys=True)
+                    handle.flush(); os.fsync(handle.fileno())
+                os.replace(str(marker_temp), str(marker))
+            finally:
+                marker_temp.unlink(missing_ok=True)
         fd, name = tempfile.mkstemp(prefix=selected_id + ".", suffix=".tmp", dir=str(self.responses_dir))
         temp = Path(name)
         try:

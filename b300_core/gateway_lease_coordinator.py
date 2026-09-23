@@ -11,7 +11,10 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Callable, Optional, Union
 
-from .hardware_owner import DEFAULT_HARDWARE_OWNER, FileHardwareOwner, HardwareOwnerBusy
+from .hardware_owner import (
+    DEFAULT_HARDWARE_OWNER, FileHardwareOwner, HardwareOwnerBusy,
+    openocd_quiescent,
+)
 from .probe import list_probes
 from .probe_selection import ProbeSelectionError, select_probe
 
@@ -74,6 +77,7 @@ class GatewayLeaseCoordinator:
         acquired_at_factory: Callable[[], str] = _utc_now,
         probe_discovery: Callable[[], object] = list_probes,
         hardware_owner: Optional[FileHardwareOwner] = None,
+        flash_quiescent_probe: Callable[[], bool] = openocd_quiescent,
     ) -> None:
         self.supervisor = supervisor
         self.store = store or GatewayLeaseStore()
@@ -84,6 +88,7 @@ class GatewayLeaseCoordinator:
         self._acquired_at_factory = acquired_at_factory
         self._probe_discovery = probe_discovery
         self._hardware_owner = hardware_owner or DEFAULT_HARDWARE_OWNER
+        self._flash_quiescent_probe = flash_quiescent_probe
         self._flash_owner_token = None
         self._adopted_flash_lease_id = None
         self._flash_instance_id = uuid.uuid4().hex
@@ -468,7 +473,23 @@ class GatewayLeaseCoordinator:
         if lease is None:
             return _inactive("RECOVERY_REQUIRED")
         if lease.mode == "FLASH_APPLICATION":
-            return self._mark_recovery_locked(lease, "RECOVERY_OWNER_UNPROVEN", now)
+            try:
+                owner = self._hardware_owner.acquire()
+            except HardwareOwnerBusy:
+                return self._mark_recovery_locked(lease, "RECOVERY_OWNER_UNPROVEN", now)
+            try:
+                quiescent = self._flash_quiescent_probe() is True
+            except Exception:
+                quiescent = False
+            finally:
+                owner.release()
+            if not quiescent:
+                return self._mark_recovery_locked(lease, "RECOVERY_OWNER_UNPROVEN", now)
+            self.store.clear_if_generation(lease.generation)
+            self._lease = None
+            self._recovery_required = False
+            self._gateway_endpoints = (None, None)
+            return _inactive("RECOVERY_RECONCILED")
         checker = getattr(self.supervisor, "reconcile_lease_owner", None)
         if not callable(checker):
             return self._mark_recovery_locked(lease, "RECOVERY_OWNER_UNPROVEN", now)

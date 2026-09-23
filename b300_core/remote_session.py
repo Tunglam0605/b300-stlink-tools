@@ -884,7 +884,7 @@ class RemoteSession:
         if operation not in {
             "acquire", "renew", "release", "program_create_upload",
             "program_finalize_upload", "program_prepare", "program_commit",
-            "program_status", "program_cancel",
+            "program_status", "program_cancel", "program_cleanup",
         }:
             raise ValueError("Unsupported Gateway programming operation.")
         request = json.dumps({
@@ -959,6 +959,9 @@ class RemoteSession:
 
     def remote_program_status(self, job_id: str) -> dict:
         return self._run_program_request("program_status", {"job_id": job_id})
+
+    def cleanup_remote_application(self, job_id: str) -> dict:
+        return self._run_program_request("program_cleanup", {"job_id": job_id})
 
     def cancel_remote_application(self, job_id: str, grant) -> dict:
         return self._run_program_request("program_cancel", {

@@ -129,6 +129,33 @@ class GatewayProgramJobsTests(unittest.TestCase):
         self.assertEqual(self.service.calls, 1)
         self.assertTrue(self.coordinator.released)
 
+    def test_replayed_prepare_returns_same_approval_without_reinspecting(self):
+        job_id = self._upload()
+        first = self._prepare(job_id)
+        second = self._prepare(job_id)
+        self.assertEqual(second["approval_token"], first["approval_token"])
+        self.assertEqual(second["plan"], first["plan"])
+
+    def test_replayed_finalize_and_commit_never_program_twice(self):
+        job_id = self._upload()
+        self.assertEqual(self.jobs.finalize_upload(job_id)["state"], "STAGED")
+        approval = self._prepare(job_id)
+        self.jobs.commit(job_id, approval["approval_token"], "lease-1", "secret", 1)
+        self.jobs.wait_active(timeout=2)
+        repeated = self.jobs.commit(job_id, approval["approval_token"], "lease-1", "secret", 1)
+        self.assertEqual(repeated["state"], "SUCCEEDED")
+        self.assertEqual(self.service.calls, 1)
+
+    def test_terminal_cleanup_removes_staged_hex_but_keeps_result(self):
+        job_id = self._upload()
+        approval = self._prepare(job_id)
+        self.jobs.commit(job_id, approval["approval_token"], "lease-1", "secret", 1)
+        self.jobs.wait_active(timeout=2)
+        self.assertTrue(self.jobs.staged_path(job_id).exists())
+        self.jobs.cleanup(job_id)
+        self.assertFalse(self.jobs.staged_path(job_id).exists())
+        self.assertEqual(self.jobs.status(job_id)["state"], "SUCCEEDED")
+
     def test_file_change_after_prepare_is_rejected_before_flash(self):
         job_id = self._upload()
         approval = self._prepare(job_id)
@@ -178,7 +205,10 @@ class GatewayProgramJobsTests(unittest.TestCase):
             self.jobs.root, self.coordinator,
             programming=GatewayProgrammingService(service=self.service),
         )
-        self.assertEqual(fresh.status(job_id)["state"], "RECOVERY_REQUIRED")
+        recovered = fresh.status(job_id)
+        self.assertEqual(recovered["state"], "RECOVERY_REQUIRED")
+        self.assertTrue(recovered["reason"])
+        self.assertTrue(recovered["next_action"])
 
     def test_abandoned_upload_is_pruned_before_slot_quota(self):
         old = self.jobs.create_upload(self.manifest, "client-1", "SAFE123")
@@ -194,6 +224,19 @@ class GatewayProgramJobsTests(unittest.TestCase):
             with self.assertRaises(ProgramJobError) as captured:
                 self.jobs.create_upload(self.manifest, "client-2", "SAFE123")
         self.assertEqual(captured.exception.reason_code, "STAGING_QUOTA_EXCEEDED")
+
+    def test_replayed_create_upload_returns_same_slot_only_for_same_manifest(self):
+        first = self.jobs.create_upload(
+            self.manifest, "client-1", "SAFE123", request_id="request-1",
+        )
+        second = self.jobs.create_upload(
+            self.manifest, "client-1", "SAFE123", request_id="request-1",
+        )
+        self.assertEqual(first["job_id"], second["job_id"])
+        with self.assertRaises(ProgramJobError):
+            self.jobs.create_upload(
+                self.manifest, "client-2", "SAFE123", request_id="request-1",
+            )
 
 
 if __name__ == "__main__":

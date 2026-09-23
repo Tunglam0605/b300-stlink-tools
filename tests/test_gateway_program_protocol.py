@@ -21,7 +21,7 @@ class FakeJobs:
     def __init__(self):
         self.upload_path = ""
 
-    def create_upload(self, manifest, client_id, probe_serial):
+    def create_upload(self, manifest, client_id, probe_serial, *, request_id=None):
         self.upload_path = "/private/jobs/abc/artifact.part"
         return {"job_id": "a" * 32, "upload_path": self.upload_path}
 
@@ -38,6 +38,25 @@ class FakeCoordinator:
 
 
 class GatewayProgramProtocolTests(unittest.TestCase):
+    def test_same_program_request_id_and_payload_replays_without_new_authority(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = GatewayRequestStore(Path(directory))
+            agent = GatewayAgent(FakeCoordinator(), request_store=store, program_jobs=FakeJobs())
+            request = GatewayRequest.create("program_status", {"job_id": "a" * 32},
+                                            request_id="same-request")
+            store.enqueue(request)
+            agent.run_once()
+            original = store.read_response(request.request_id)
+            store.acknowledge_response(request.request_id)
+            store.enqueue(request)
+            agent.run_once()
+            self.assertEqual(store.read_response(request.request_id), original)
+
+            changed = GatewayRequest.create("program_status", {"job_id": "b" * 32},
+                                            request_id="same-request")
+            with self.assertRaises(FileExistsError):
+                store.enqueue(changed)
+
     def test_slow_prepare_does_not_block_agent_heartbeat_dispatch(self):
         class SlowJobs(FakeJobs):
             def __init__(self):

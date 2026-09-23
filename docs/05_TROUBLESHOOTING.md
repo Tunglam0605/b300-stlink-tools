@@ -50,6 +50,18 @@ b300-stlink debug gateway-agent-ensure --json
 b300-stlink debug gateway-release --json
 ```
 
+Nếu tiến trình sở hữu ST-Link bị crash và để lại durable owner marker cũ,
+kiểm tra board/job hiện tại rồi chạy **trên máy đang gắn ST-Link**:
+
+```text
+b300-stlink hardware recover --confirm-hardware-recovery --json
+```
+
+Lệnh chỉ xóa marker owner cũ sau khi xác minh không còn tiến trình OpenOCD;
+nếu OpenOCD còn chạy, recovery bị từ chối. Lệnh không nạp firmware, không
+erase và không xác nhận rằng job flash trước đó đã thành công. Xem lại
+`program-status` và trạng thái board trước mọi lần nạp mới.
+
 ## Remote Application flash qua Gateway
 
 Giữ `job_id` và JSON/log của lần nạp. Trạng thái `PENDING`, mất SSH, timeout

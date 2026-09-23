@@ -22,6 +22,7 @@ class FakeSession:
         self.profile = profile
         self.commits = 0
         self.cancels = 0
+        self.cleanups = 0
         self.closed = False
         self.statuses = iter(({"job_id": "a" * 32, "state": "RUNNING"},
                               {"job_id": "a" * 32, "state": "SUCCEEDED", "pc": 0x08010101, "bkp1r": 0}))
@@ -44,6 +45,10 @@ class FakeSession:
     def cancel_remote_application(self, job_id, grant):
         self.cancels += 1
         return {"job_id": job_id, "state": "CANCELLED"}
+
+    def cleanup_remote_application(self, job_id):
+        self.cleanups += 1
+        return {"job_id": job_id, "state": "SUCCEEDED"}
 
     def remote_program_status(self, job_id):
         return next(self.statuses)
@@ -112,6 +117,7 @@ class CliRemoteFlashTests(unittest.TestCase):
                                     poll_interval_seconds=0)
             self.assertEqual(code, 0)
             self.assertEqual(session.commits, 1)
+            self.assertEqual(session.cleanups, 1)
             self.assertEqual(output[-1]["state"], "SUCCEEDED")
 
     def test_remote_dry_run_returns_gateway_plan_without_committing(self):

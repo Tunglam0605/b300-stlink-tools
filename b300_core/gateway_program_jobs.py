@@ -108,23 +108,44 @@ class GatewayProgramJobs:
             temporary.unlink(missing_ok=True)
 
     def create_upload(self, manifest: RemoteFirmwareManifest, client_id: str,
-                      probe_serial: Optional[str]) -> dict:
+                      probe_serial: Optional[str], *,
+                      request_id: Optional[str] = None) -> dict:
         item = manifest.validate()
         if (item.operation != RemoteProgrammingOperation.FLASH_APPLICATION
                 or Path(item.file_name).suffix.lower() != ".hex"):
             raise ProgramJobError("REMOTE_FLASH_UNSUPPORTED")
         if not isinstance(client_id, str) or not client_id or len(client_id) > 64:
             raise ProgramJobError("CLIENT_INVALID")
+        if request_id is not None and (
+                not isinstance(request_id, str) or not request_id
+                or len(request_id) > 64):
+            raise ProgramJobError("REQUEST_INVALID")
         with self._lock:
             self._prune_expired()
             records = []
             for entry in self.root.iterdir():
                 if entry.is_dir() and not entry.is_symlink():
                     records.append(self._read(entry.name))
+            if request_id is not None:
+                for previous in records:
+                    if previous.get("request_id") != request_id:
+                        continue
+                    if (previous.get("manifest") != _manifest_record(item)
+                            or previous.get("client_id") != client_id
+                            or previous.get("probe_serial") != probe_serial):
+                        raise ProgramJobError("REQUEST_REPLAYED")
+                    return {
+                        "job_id": previous["job_id"],
+                        "upload_path": str(self._job_dir(previous["job_id"]) / "artifact.part"),
+                        "state": previous["state"],
+                    }
             active = sum(record["state"] in {
                 "UPLOADING", "STAGED", "AWAITING_CONFIRMATION", "RUNNING",
             } for record in records)
-            reserved_bytes = sum(int(record["manifest"]["size"]) for record in records)
+            reserved_bytes = sum(
+                int(record["manifest"]["size"]) for record in records
+                if not record.get("artifact_cleaned", False)
+            )
             if (active >= MAX_ACTIVE_JOBS or len(records) >= MAX_RETAINED_JOBS
                     or reserved_bytes + item.size > MAX_STAGING_BYTES):
                 raise ProgramJobError("STAGING_QUOTA_EXCEEDED")
@@ -134,12 +155,14 @@ class GatewayProgramJobs:
             record = {
                 "job_id": job_id, "state": "UPLOADING",
                 "manifest": _manifest_record(item), "client_id": client_id,
+                "request_id": request_id,
                 "probe_serial": probe_serial, "created_at": time.time(),
                 "phase": "uploading", "progress": 0,
                 "reason_code": "", "reason": "", "next_action": "",
             }
             self._write(job_id, record)
-            return {"job_id": job_id, "upload_path": str(directory / "artifact.part")}
+            return {"job_id": job_id, "upload_path": str(directory / "artifact.part"),
+                    "state": "UPLOADING"}
 
     def _prune_expired(self) -> None:
         now = time.time()
@@ -173,6 +196,11 @@ class GatewayProgramJobs:
     def finalize_upload(self, job_id: str) -> dict:
         with self._lock:
             record = self._read(job_id)
+            if record["state"] in {"STAGED", "AWAITING_CONFIRMATION", "RUNNING"}:
+                manifest = RemoteFirmwareManifest(**record["manifest"]).validate()
+                if not manifest.matches_file(self.staged_path(job_id)):
+                    raise ProgramJobError("ARTIFACT_CHANGED")
+                return self.status(job_id)
             if record["state"] != "UPLOADING":
                 raise ProgramJobError("JOB_STATE_INVALID")
             directory = self._job_dir(job_id)
@@ -213,6 +241,16 @@ class GatewayProgramJobs:
     def prepare(self, job_id: str, lease_id: str, token: str, generation: int) -> dict:
         with self._lock:
             record = self._read(job_id)
+            if record["state"] == "AWAITING_CONFIRMATION":
+                self._require_lease(record, lease_id, token, generation)
+                existing = self._approvals.get(job_id)
+                if (existing is None or time.monotonic() >= existing[2]
+                        or existing[3] != (lease_id, generation)):
+                    raise ProgramJobError("APPROVAL_EXPIRED")
+                self.programming._verify_received_file(existing[0].manifest, existing[0].staged_path)
+                result = self.status(job_id)
+                result["approval_token"] = existing[4]
+                return result
             if record["state"] != "STAGED":
                 raise ProgramJobError("JOB_STATE_INVALID")
             self._require_lease(record, lease_id, token, generation)
@@ -232,6 +270,7 @@ class GatewayProgramJobs:
                 approval, hashlib.sha256(approval_token.encode()).hexdigest(),
                 time.monotonic() + APPROVAL_TTL_SECONDS,
                 (lease_id, generation),
+                approval_token,
             )
             record.update(
                 state="AWAITING_CONFIRMATION", phase="prepared", progress=100,
@@ -258,6 +297,12 @@ class GatewayProgramJobs:
                token: str, generation: int) -> dict:
         with self._lock:
             record = self._read(job_id)
+            supplied_digest = hashlib.sha256(str(approval_token).encode()).hexdigest()
+            if record["state"] in {"RUNNING", "SUCCEEDED", "FAILED"}:
+                if not secrets.compare_digest(
+                        str(record.get("approval_digest", "")), supplied_digest):
+                    raise ProgramJobError("APPROVAL_MISMATCH")
+                return self.status(job_id)
             if record["state"] != "AWAITING_CONFIRMATION":
                 raise ProgramJobError("JOB_STATE_INVALID")
             self._require_lease(record, lease_id, token, generation)
@@ -265,7 +310,7 @@ class GatewayProgramJobs:
             if (selected is None or time.monotonic() >= selected[2]
                     or selected[3] != (lease_id, generation)
                     or not secrets.compare_digest(
-                        selected[1], hashlib.sha256(str(approval_token).encode()).hexdigest()
+                        selected[1], supplied_digest
                     )):
                 raise ProgramJobError("APPROVAL_MISMATCH")
             approval = selected[0]
@@ -275,7 +320,10 @@ class GatewayProgramJobs:
                 raise ProgramJobError("ARTIFACT_CHANGED", str(error)) from error
             if self._worker is not None and self._worker.is_alive():
                 raise ProgramJobError("GATEWAY_BUSY")
-            record.update(state="RUNNING", phase="validating", progress=0)
+            record.update(
+                state="RUNNING", phase="validating", progress=0,
+                approval_digest=selected[1],
+            )
             self._write(job_id, record)
             if hasattr(self.coordinator, "adopt_flash_job"):
                 self.coordinator.adopt_flash_job(lease_id, token, generation)
@@ -296,6 +344,27 @@ class GatewayProgramJobs:
             self._require_lease(record, lease_id, token, generation)
             self._approvals.pop(job_id, None)
             record.update(state="CANCELLED", phase="cancelled", progress=0)
+            self._write(job_id, record)
+            return self.status(job_id)
+
+    def cleanup(self, job_id: str) -> dict:
+        with self._lock:
+            record = self._read(job_id)
+            if record["state"] not in {"SUCCEEDED", "FAILED", "CANCELLED", "RECOVERY_REQUIRED"}:
+                raise ProgramJobError("JOB_STATE_INVALID")
+            artifact = self.staged_path(job_id)
+            if artifact.exists() or artifact.is_symlink():
+                info = artifact.lstat()
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                    raise ProgramJobError("STAGING_UNSAFE")
+                artifact.unlink()
+            partial = self._job_dir(job_id) / "artifact.part"
+            if partial.exists() or partial.is_symlink():
+                info = partial.lstat()
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                    raise ProgramJobError("STAGING_UNSAFE")
+                partial.unlink()
+            record["artifact_cleaned"] = True
             self._write(job_id, record)
             return self.status(job_id)
 
@@ -387,7 +456,16 @@ class GatewayProgramJobs:
             if (record["state"] == "RUNNING" and self._active_job_id != job_id
                     or record["state"] == "AWAITING_CONFIRMATION"
                     and job_id not in self._approvals):
-                record.update(state="RECOVERY_REQUIRED", reason_code="JOB_RECOVERY_REQUIRED")
+                record.update(
+                    state="RECOVERY_REQUIRED", phase="recovery",
+                    reason_code="JOB_RECOVERY_REQUIRED",
+                    reason="Gateway Agent restarted before this job reached a recorded terminal state.",
+                    next_action=(
+                        "Inspect the board and Gateway log. If hardware ownership remains stale, "
+                        "run local hardware recover only after OpenOCD is stopped. "
+                        "Do not retry flash automatically."
+                    ),
+                )
                 self._write(job_id, record)
             public = (
                 "job_id", "state", "manifest", "probe_serial", "plan", "phase",

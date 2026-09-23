@@ -856,6 +856,10 @@ class ProductionMainWindow(_BaseMainWindow):
                     except Exception:
                         return {"job_id": job_id, "state": "PENDING"}
                     if status.get("state") in {"SUCCEEDED", "FAILED", "RECOVERY_REQUIRED"}:
+                        try:
+                            session.cleanup_remote_application(job_id)
+                        except Exception:
+                            pass
                         return status
                     time.sleep(0.5)
                 return {"job_id": job_id, "state": "PENDING"}

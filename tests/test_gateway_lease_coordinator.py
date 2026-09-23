@@ -174,6 +174,31 @@ class GatewayLeaseCoordinatorTests(unittest.TestCase):
             self.assertTrue(coordinator.owns_flash_lease(grant.lease_id, grant.token, grant.generation))
             coordinator.finish_flash_job(grant.lease_id, grant.token, grant.generation)
 
+    def test_restarted_flash_lease_reconciles_only_when_hardware_is_quiescent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = GatewayLeaseStore(root / "lease.json")
+            owner = FileHardwareOwner(root / "hardware.lock")
+            first = GatewayLeaseCoordinator(
+                FakeSupervisor(), store=store,
+                probe_discovery=lambda: (ProbeInfo("SAFE123", "ST-Link", "test", "usb:1"),),
+                hardware_owner=owner,
+            )
+            grant = first.acquire(request("client-flash", "FLASH_APPLICATION"))
+            first._flash_owner_token.release()  # simulate an exited Agent process
+            first._flash_owner_token = None
+            busy = GatewayLeaseCoordinator(
+                FakeSupervisor(), store=store, hardware_owner=owner,
+                flash_quiescent_probe=lambda: False,
+            )
+            self.assertEqual(busy.tick().state, "RECOVERY_REQUIRED")
+            recovered = GatewayLeaseCoordinator(
+                FakeSupervisor(), store=store, hardware_owner=owner,
+                flash_quiescent_probe=lambda: True,
+            )
+            self.assertEqual(recovered.tick().reason_code, "RECOVERY_RECONCILED")
+            self.assertIsNone(store.read())
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

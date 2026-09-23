@@ -27,6 +27,7 @@ class FakeRemoteSession:
         self.commits = 0
         self.prepares = 0
         self.cancels = 0
+        self.cleanups = 0
 
     def prepare_remote_application(self, path, grant, client_id):
         self.prepares += 1
@@ -50,6 +51,10 @@ class FakeRemoteSession:
     def cancel_remote_application(self, job_id, grant):
         self.cancels += 1
         return {"job_id": job_id, "state": "CANCELLED"}
+
+    def cleanup_remote_application(self, job_id):
+        self.cleanups += 1
+        return {"job_id": job_id, "state": "SUCCEEDED"}
 
 
 class FakeLease:
@@ -119,6 +124,7 @@ class RemoteProgramGuiTests(unittest.TestCase):
     def test_gateway_confirmation_commits_and_shows_verified_result(self):
         self._run(False, QMessageBox.StandardButton.Yes)
         self.assertEqual(self.session.commits, 1)
+        self.assertEqual(self.session.cleanups, 1)
         self.assertEqual(self.window.program_view.banner.property("variant"), "pass")
 
     def test_gateway_rejected_confirmation_cancels_without_flash(self):
