@@ -35,6 +35,7 @@ from b300_cli.inspection_commands import (
     select_read_probe as _inspection_select_read_probe,
 )
 from b300_cli.live_commands import run_live_client, run_live_local, validate_live_options
+from b300_cli.remote_flash import run_remote_flash, run_remote_status
 from b300_core.diagnostics import DiagnosticsService
 from b300_core.gateway_readiness import inspect_gateway_readiness
 from b300_core.gateway_agent import (
@@ -1082,6 +1083,28 @@ def run_gateway_agent_command(args: argparse.Namespace) -> int:
         emit_snapshot(record, args.json, "Gateway Agent: %s" % record["state"])
         return 0 if status is not None else 1
 
+    if mode == "gateway-program-request":
+        raw = sys.stdin.buffer.read(64 * 1024 + 1)
+        if len(raw) > 64 * 1024:
+            raise ValueError("Gateway programming request is too large.")
+        incoming = json.loads(raw.decode("utf-8"))
+        if not isinstance(incoming, dict) or set(incoming) != {"operation", "payload", "request_id"}:
+            raise ValueError("Gateway programming request schema is invalid.")
+        operation = incoming["operation"]
+        if operation not in {
+            "program_create_upload", "program_finalize_upload", "program_prepare",
+            "program_commit", "program_status", "program_cancel", "acquire", "renew", "release",
+        }:
+            raise ValueError("Gateway programming operation is not allowed.")
+        timeout = 45.0 if operation == "program_prepare" else 10.0
+        request = GatewayRequest.create(
+            operation, incoming["payload"], request_id=incoming["request_id"],
+            timeout_seconds=timeout,
+        )
+        record = GatewayRequestStore().submit_request(request, timeout_seconds=timeout)
+        record.update(gateway_capabilities())
+        emit_snapshot(record, args.json, "%s: %s" % (mode, record.get("reason_code", "OK")))
+        return 0 if record.get("status") == "ok" else 1
     if mode == "gateway-acquire":
         required = (args.client_id, args.client_label, args.lease_mode)
         if any(item is None for item in required):
@@ -1179,8 +1202,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             return run_gateway_runtime_command(args)
         if args.command == "debug" and args.debug_mode in {
                 "gateway-agent", "gateway-agent-status", "gateway-agent-ensure",
-                "gateway-acquire", "gateway-renew", "gateway-release"}:
+                "gateway-acquire", "gateway-renew", "gateway-release",
+                "gateway-program-request"}:
             return run_gateway_agent_command(args)
+
+        if args.command == "program-status":
+            return run_remote_status(
+                args,
+                emit=lambda record: emit_snapshot(
+                    record, args.json,
+                    "Gateway job %s: %s" % (record.get("job_id", ""), record.get("state", "")),
+                ),
+            )
 
         if args.command in {"update", "self-update"}:
             return run_update_command(args, __version__)
@@ -1713,6 +1746,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
             return 0 if outcome.succeeded else 1
 
+        if args.command == "flash" and args.gateway:
+            return run_remote_flash(
+                args,
+                emit=lambda record: emit_snapshot(
+                    record, args.json,
+                    "Remote flash %s: %s" % (record.get("status", ""), record.get("job_id", "")),
+                ),
+            )
+        if args.command == "flash" and args.confirm_remote_application:
+            raise ValueError("--confirm-remote-application requires --gateway.")
         args.application = args.application.expanduser().resolve()
         service = B300Service(executable=args.openocd)
         try:

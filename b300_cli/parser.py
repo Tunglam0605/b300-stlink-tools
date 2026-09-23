@@ -65,6 +65,16 @@ def build_parser() -> argparse.ArgumentParser:
     flash.add_argument("--probe-serial", type=parse_probe_serial,
                        help="Select one ST-Link when multiple probes are connected.")
     flash.add_argument("--dry-run", action="store_true")
+    flash.add_argument("--gateway", help="Saved Gateway profile id for managed remote Application programming.")
+    flash.add_argument("--confirm-remote-application", action="store_true",
+                       help="Approve one Gateway-side dry-run and program this exact Application remotely.")
+
+    program_status = commands.add_parser(
+        "program-status", help="Query one managed Gateway Application flash job.",
+        parents=[json_parent],
+    )
+    program_status.add_argument("job_id", help="Job ID returned by remote flash.")
+    program_status.add_argument("--gateway", required=True, help="Saved Gateway profile id.")
 
     factory = commands.add_parser(
         "provision-bootloader",
@@ -88,7 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     debug.add_argument(
         "debug_mode", nargs="?",
-        choices=("gateway", "gateway-status", "gateway-ensure", "gateway-rescan", "gateway-agent", "gateway-agent-status", "gateway-agent-ensure", "gateway-acquire", "gateway-renew", "gateway-release", "client", "server", "vscode", "symbols", "selftest", "inspect", "where", "registers", "stack", "variable", "sample", "live", "poll", "read-words", "break", "watch"),
+        choices=("gateway", "gateway-status", "gateway-ensure", "gateway-rescan", "gateway-agent", "gateway-agent-status", "gateway-agent-ensure", "gateway-acquire", "gateway-renew", "gateway-release", "gateway-program-request", "client", "server", "vscode", "symbols", "selftest", "inspect", "where", "registers", "stack", "variable", "sample", "live", "poll", "read-words", "break", "watch"),
         default="gateway", metavar="mode",
         help="Debug mode: gateway, client, selftest, server (legacy alias), or diagnostics.",
     )
@@ -184,8 +194,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Word count for debug read-words (default: 1, max: 256).")
     debug.add_argument("--dry-run", action="store_true")
     debug.add_argument("--managed-child", action="store_true", help=argparse.SUPPRESS)
-    debug.add_argument("--lease-mode", choices=("LIVE_WATCH", "VSCODE_DEBUG"))
-    debug.add_argument("--mode", dest="lease_mode", choices=("LIVE_WATCH", "VSCODE_DEBUG"),
+    debug.add_argument("--lease-mode", choices=("LIVE_WATCH", "VSCODE_DEBUG", "FLASH_APPLICATION"))
+    debug.add_argument("--mode", dest="lease_mode", choices=("LIVE_WATCH", "VSCODE_DEBUG", "FLASH_APPLICATION"),
                        help="Alias for --lease-mode when acquiring a Gateway lease.")
     debug.add_argument("--client-id", default="b300-cli")
     debug.add_argument("--client-label", default="B300-CLI")
