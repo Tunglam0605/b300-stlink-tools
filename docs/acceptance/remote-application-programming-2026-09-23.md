@@ -29,6 +29,8 @@ The Gateway's original installed CLI was saved at `/home/aubot/b300-remote-candi
 
 The Windows candidate ZIPs are retained outside Git at `C:\Users\Admin\Documents\STM32\B300-STLink-Candidate-8c8b40b`. The extracted Windows runtime passed `validate_runtime`, and `b300-stlink-gui.exe --smoke-test` exited 0. The existing installed Windows GUI and its profiles/credentials were left unchanged.
 
+The existing Windows Gateway profile store was backed up to `C:\Users\Admin\Documents\STM32\B300-STLink-Candidate-8c8b40b\gateway_profiles.before.json`. The `aubot-tech-104` profile for `aubot@192.168.1.104:22` was added; three existing profiles and the prior default ID were preserved. No SSH password was stored by this acceptance run.
+
 ## Results
 
 | Gate | Result and evidence |
@@ -45,7 +47,7 @@ The Windows candidate ZIPs are retained outside Git at `C:\Users\Admin\Documents
 | Remote Live Monitor | PASS after final flash. Final Windows CLI Client collected five `xTickCount:u32` samples at 0.5 s, zero overruns, final target `running`. |
 | Lease contention | PASS. With one `VSCODE_DEBUG` lease active, a second `FLASH_APPLICATION` acquire returned `GATEWAY_BUSY` with the correct sanitized owner label/mode and did not flash. |
 | Reconnect and cleanup | PASS. Packaged CLI `program-status` found the completed GUI job after reconnect; a newly constructed GUI window's **Kiểm tra job gần nhất** showed `STLM CONFIRMED`, PC and BKP. Only `job.json` and private `flash.log` remained in the job directory; HEX was removed. After Debug/Monitor/Flash, Agent returned `IDLE`, no OpenOCD process remained, and ports 3333/6666 were closed. |
-| Software tests | PASS for 675 broad core/CLI/Gateway/SSH tests on a pre-final code snapshot (5 skipped); 120 focused tests at final log-path hardening (2 skipped); 31 focused tests on Ubuntu x64; packaged Windows GUI smoke and runtime integrity PASS. The complete Windows `unittest discover` has not yet produced a final verdict and is not claimed as PASS. |
+| Software tests | PASS for 675 broad core/CLI/Gateway/SSH tests on a pre-final code snapshot (5 skipped); 120 focused tests at final log-path hardening (2 skipped); 31 focused tests on Ubuntu x64; packaged Windows GUI smoke and runtime integrity PASS. A direct complete Windows `unittest discover` run spent a long time in cumulative GUI window suites and was stopped without a final verdict; no full-suite PASS is claimed. |
 
 Gateway job logs:
 
@@ -54,6 +56,8 @@ Gateway job logs:
 - `/home/aubot/.b300-stlink/gateway-runtime/program-jobs/1dc745058e884bff8300b890ff9c46a7/flash.log`
 
 All three retained logs now have mode `0600`; the final job log was created with `0600` by the final candidate. No terminal job retained a firmware HEX after cleanup.
+
+After installation of the exact final Linux bundle and the final flash, a separate Windows CLI Debug inspect resolved `prvIdleTask` from the matching AXF and returned `resumed_to_initial_state=true`. A separate Live Monitor run produced five samples, no overruns, and final target `running`; Gateway Agent returned `IDLE` with no OpenOCD process or debug listeners.
 
 ## Remaining release gates
 
