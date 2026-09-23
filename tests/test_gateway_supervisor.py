@@ -65,6 +65,24 @@ class StartupHardwareErrorService(FakeService):
         event_sink("Error: libusb_bulk_transfer failed")
 
 
+class ThreadedReadinessService(FakeService):
+    def start(self, config, event_sink=None):
+        delivered = threading.Event()
+
+        def report_ready():
+            event_sink("Info : Listening on port 3333 for gdb connections")
+            delivered.set()
+
+        worker = threading.Thread(target=report_ready)
+        worker.start()
+        try:
+            if not delivered.wait(0.2):
+                raise RuntimeError("readiness output callback was blocked")
+            super().start(config, event_sink=event_sink)
+        finally:
+            worker.join(timeout=0.5)
+
+
 class OwnedFakeService(FakeService):
     executable = "/trusted/openocd"
 
@@ -94,6 +112,14 @@ class PendingLease:
 
 
 class GatewaySupervisorTests(unittest.TestCase):
+    def test_background_readiness_output_does_not_block_startup(self) -> None:
+        supervisor = GatewaySupervisor(
+            service_factory=ThreadedReadinessService,
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=lambda _config: "running",
+        )
+        self.assertTrue(supervisor.ensure().attach_ready)
+
     def _restart_owner(self, directory, *, identity=None, shutdown=None,
                        endpoints_closed=None, timeout=0.05):
         identity = identity or {
