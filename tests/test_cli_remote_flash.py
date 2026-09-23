@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import tempfile
+import io
+import json
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
+import b300_stlink
 from b300_cli.parser import parse_args
 from b300_cli.remote_flash import run_remote_flash, run_remote_status
+from b300_core.remote_session import RemoteAuthenticationError
 from tests.test_core_hex_policy import APPLICATION_VECTOR, write_hex
 
 
@@ -73,6 +79,18 @@ class FakeLease:
 
 
 class CliRemoteFlashTests(unittest.TestCase):
+    def test_cli_reports_password_error_as_json_without_traceback(self):
+        output = io.StringIO()
+        with mock.patch.object(b300_stlink, "run_remote_flash", side_effect=RemoteAuthenticationError("Password required")), \
+                redirect_stdout(output):
+            code = b300_stlink.main([
+                "flash", "application.hex", "--gateway", "gateway-1", "--json",
+            ])
+        self.assertEqual(code, 1)
+        record = json.loads(output.getvalue())
+        self.assertEqual(record["event"], "error")
+        self.assertEqual(record["reason_code"], "AUTH_FAILED")
+
     def test_ctrl_c_after_prepare_cancels_before_commit(self):
         with tempfile.TemporaryDirectory() as directory:
             image = write_hex(directory, 0x08010000, APPLICATION_VECTOR)

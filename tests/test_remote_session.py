@@ -293,8 +293,9 @@ class RemoteSessionTests(unittest.TestCase):
     def test_missing_password_fails_before_network(self):
         client = FakeClient()
         session = RemoteSession(self.profile, credential_store=MemoryStore(), ssh_client_factory=lambda: client)
-        with self.assertRaisesRegex(RemoteAuthenticationError, "required"):
+        with self.assertRaisesRegex(RemoteAuthenticationError, "required") as captured:
             session.connect()
+        self.assertEqual(captured.exception.reason_code, "SSH_PASSWORD_REQUIRED")
         self.assertEqual(client.connect_calls, [])
         self.assertEqual(session.state.error_code, "SSH_PASSWORD_REQUIRED")
 

@@ -479,7 +479,10 @@ class RemoteSession:
             with self._lock:
                 self._connecting = False
                 self._last_error_code = "SSH_PASSWORD_REQUIRED"
-            raise RemoteAuthenticationError("SSH password is required for the first connection.")
+            raise RemoteAuthenticationError(
+                "SSH password is required for the first connection.",
+                reason_code="SSH_PASSWORD_REQUIRED",
+            )
 
         client = self._new_client()
         try:

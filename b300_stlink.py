@@ -1881,11 +1881,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0 if outcome.succeeded else 1
     except (OSError, RuntimeError, ValueError) as error:
         fields = {"message": str(error)}
+        if hasattr(error, "reason_code"):
+            fields["reason_code"] = error.reason_code
         if hasattr(error, "phase"):
             fields.update({
                 "phase": error.phase,
-                "reason": error.reason,
-                "next_action": error.next_action,
+                "reason": getattr(error, "reason", str(error)),
+                "next_action": getattr(error, "next_action", "Review the error and retry manually."),
             })
         reporter.emit("error", **fields)
         return 1
