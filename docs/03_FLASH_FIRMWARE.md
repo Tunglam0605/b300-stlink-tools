@@ -104,6 +104,60 @@ b300-stlink flash /opt/firmware/Main_V2_F407.hex --json
 Với nhiều probe, thêm `--probe-serial <ST-LINK-SN>` vào cả dry-run và flash
 thật. Chỉ tiếp tục khi hai lệnh cùng trỏ tới đúng probe và đúng file.
 
+## Nạp Application qua Gateway (Client Windows/Linux)
+
+Thiết lập Gateway và lưu profile SSH trước theo [hướng dẫn Gateway](04_DEBUG.md#gateway-setup-wizard-v0120).
+Client và Gateway cần cùng release hỗ trợ `remote_application_flash_v1`.
+Remote flash yêu cầu SSH host key của Gateway đã được pin trên Client. Đối chiếu
+fingerprint từ `b300-stlink gateway host-key --json` chạy trực tiếp trên Gateway,
+rồi dùng `gateway client-setup --confirm-host-fingerprint SHA256:...` hoặc
+`gateway trust-host` trên Client. SSH login đơn thuần không đủ điều kiện nạp.
+Gateway phải gắn ST-Link với board được phép nạp; chỉ SSH TCP/22 cần truy cập
+qua mạng. Không mở GDB/TCL hoặc OpenOCD trực tiếp ra LAN.
+
+Trên Client, kiểm tra đúng file, Gateway profile và probe rồi chạy:
+
+```text
+b300-stlink flash application.hex --gateway default --dry-run --json
+b300-stlink flash application.hex --gateway default --probe-serial <ST-LINK-SN> --dry-run --json
+```
+
+`default` là saved Gateway profile mặc định; có thể thay bằng profile ID đã lưu.
+Không có `--confirm-remote-application`, lệnh chỉ tải HEX lên Gateway, kiểm
+size/SHA-256, inspect board và trả về dry-run rồi hủy approval. Nếu có nhiều
+ST-Link ở Gateway, bắt buộc pin đúng `--probe-serial` trong cả hai lần chạy.
+Xem `manifest`, probe, target/WRP và kế hoạch Sector 3–7/AppMeta trong JSON.
+File phải là Intel HEX Application bắt đầu tại `0x08010000`; Gateway kiểm lại
+artifact trước khi ghi. Nếu bằng chứng không đúng hoặc Gateway báo bận, dừng.
+
+Sau khi đã xác nhận board, file, SHA-256 và probe trong phiên hiện tại, chạy
+lệnh thật với cờ xác nhận tường minh:
+
+```text
+b300-stlink flash application.hex --gateway default --confirm-remote-application --json
+b300-stlink flash application.hex --gateway default --probe-serial <ST-LINK-SN> --confirm-remote-application --json
+```
+
+Gateway tạo approval ngắn hạn từ dry-run mới của **lệnh thật**, ràng buộc
+firmware, probe, target, plan, Client và lease. Đây không phải quyền dùng lại
+dry-run trước đó. `--dry-run` không được kết hợp với cờ xác nhận. Theo dõi
+`job_id`, `state`, `phase`, `failure_phase`, `reason` và `next_action` trong
+output; chỉ `SUCCEEDED` với verify/AppMeta/reset/post-verify đầy đủ là thành công.
+Mất SSH hoặc Ctrl+C sau commit chỉ tách Client: Gateway có thể vẫn đang nạp.
+Ghi lại `job_id`, kiểm tra trạng thái job đó trước mọi lần nạp mới; không tự
+retry. Có thể hỏi lại job bằng cùng saved Gateway profile:
+
+```text
+b300-stlink program-status <job-id> --gateway default --json
+```
+
+Lệnh status chỉ đọc record của job, không nạp lại. Nếu không lấy được status,
+giữ `job_id`, kiểm tra SSH/Gateway và trạng thái board trước thao tác khác.
+
+Remote chỉ nạp Application. Factory/Bootloader, WRP/RDP, mass erase và các
+lệnh OpenOCD tùy ý không nằm trong workflow này. Flash giữ quyền sử dụng probe
+độc quyền với Debug/Monitor; sau khi nạp xong mới chuyển vai trò.
+
 ## Factory / Bootloader (không phải normal flash)
 
 Chỉ dùng khi main/chip mới hoặc khi được phép bảo trì Bootloader. Không dùng HEX

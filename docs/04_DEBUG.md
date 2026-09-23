@@ -342,3 +342,25 @@ Thiết lập Gateway một lần bằng `b300-stlink gateway quickstart --confi
 Tools trong GUI tự quản lý lease. Người dùng không cần sao chép token hay chạy acquire/release thủ công. Lệnh chẩn đoán tương ứng là `b300-stlink debug gateway-acquire --mode VSCODE_DEBUG --json` và `b300-stlink debug gateway-release --json`.
 
 Khi Gateway bận, chờ chủ sở hữu hiện tại giải phóng lease hoặc dùng Stop trong GUI. Sau khi Client crash, Agent tự hết hạn lease theo heartbeat; kiểm tra lại status rồi thử thao tác lại.
+
+### Nạp Application từ Client qua cùng Gateway
+
+Gateway profile và xác thực SSH dùng chung cho Debug/Monitor và managed
+Application flash. Remote flash còn bắt buộc pin SSH host key của Gateway:
+đọc fingerprint bằng `b300-stlink gateway host-key --json` ngay trên Gateway,
+đối chiếu rồi lưu qua `gateway client-setup --confirm-host-fingerprint` hoặc
+`gateway trust-host` trên Client. Host key chưa pin trả `HOST_KEY_UNTRUSTED`.
+Trên Gateway chạy `gateway quickstart`, trên Client chạy `gateway client-setup`
+rồi `gateway connect-check` như trên; cài
+cùng release B300 CLI hỗ trợ `remote_application_flash_v1` ở cả hai máy.
+Application HEX được gửi bằng SFTP qua SSH, Gateway kiểm hash và chạy
+transaction Application chuẩn sau dry-run và xác nhận tại Client. Xem
+[quy trình CLI](03_FLASH_FIRMWARE.md#nạp-application-qua-gateway-client-windowslinux)
+hoặc [GUI](07_GUI_WINDOWS_UBUNTU.md#nạp-application-từ-xa-qua-gateway).
+
+Trong lúc `FLASH_APPLICATION` giữ probe, không khởi động Debug hoặc Monitor.
+Flash không tạo GDB/TCL listener thường trực; các port `3333/6666` vẫn chỉ
+bind loopback cho Debug/Monitor. Khi Gateway báo `GATEWAY_BUSY`, chờ job
+kết thúc và xác minh trạng thái của nó trước khi mở phiên Debug/Monitor mới.
+Nếu SSH mất sau khi flash đã bắt đầu, việc ngắt kết nối Client không hủy job.
+Hỏi lại đúng job bằng `b300-stlink program-status <job-id> --gateway default --json`.

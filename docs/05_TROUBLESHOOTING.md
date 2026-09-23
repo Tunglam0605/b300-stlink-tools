@@ -49,3 +49,36 @@ b300-stlink debug gateway-agent-status --json
 b300-stlink debug gateway-agent-ensure --json
 b300-stlink debug gateway-release --json
 ```
+
+## Remote Application flash qua Gateway
+
+Giữ `job_id` và JSON/log của lần nạp. Trạng thái `PENDING`, mất SSH, timeout
+hoặc Ctrl+C sau commit **không** chứng minh flash đã thất bại hay kết thúc.
+Gateway có thể tiếp tục erase/program/verify sau khi Client ngắt kết nối.
+Không gửi lại lệnh flash cho tới khi biết trạng thái job cũ và kiểm tra board.
+Trên Client, hỏi lại cùng job và saved profile bằng:
+
+```text
+b300-stlink program-status <job-id> --gateway default --json
+```
+
+Trong GUI, chọn lại Gateway profile rồi bấm **Kiểm tra job gần nhất** ở PROGRAM.
+Nếu status không đọc được, giữ job ID và kiểm tra SSH/Gateway/board trước khi
+thao tác mới.
+
+| Mã/trạng thái | Hành động |
+|---|---|
+| `REMOTE_FLASH_UNSUPPORTED` | Cập nhật Client và Gateway lên cùng release có capability `remote_application_flash_v1`; không ép dùng lệnh flash local qua SSH. |
+| `HOST_KEY_UNTRUSTED` | Trên Gateway lấy fingerprint bằng `gateway host-key --json`, đối chiếu và pin bằng `gateway client-setup --confirm-host-fingerprint` hoặc `gateway trust-host` trên Client; sau đó kết nối lại. |
+| `GATEWAY_BUSY` | Probe đang thuộc Flash, Debug hoặc Monitor khác. Xác định owner/job hiện tại và chờ kết thúc; không dừng job đang erase. |
+| `PROBE_SELECTION_REQUIRED` | Chọn đúng serial ST-Link vật lý ở Gateway bằng `--probe-serial`, chạy dry-run mới. |
+| `UPLOAD_HASH_MISMATCH`, `ARTIFACT_CHANGED` | Dừng. Kiểm file/SHA-256 trên Client; chọn lại HEX và tạo approval mới. |
+| `APPROVAL_EXPIRED`, `APPROVAL_MISMATCH` | Approval không còn khớp file, target, probe hoặc lease. Chạy prepare/dry-run mới; không dùng lại approval cũ. |
+| `TARGET_UNVERIFIED`, `BOOTLOADER_WRP_INVALID`, `RDP_POLICY_VIOLATION`, `FLASH_PLAN_INVALID` | Không nạp. Kiểm board, nguồn/SWD, WRP S0–S2 và HEX Application; Factory chỉ khi được ủy quyền. |
+| `FLASH_FAILED`, `VERIFY_FAILED`, `METADATA_VERIFY_FAILED`, `POST_VERIFY_FAILED` | Dừng, lưu `failure_phase`, `reason`, `next_action` và log Gateway; kiểm nguồn/cáp/probe/metadata. Không retry tự động hoặc mass erase. |
+| `RECOVERY_REQUIRED`, `JOB_RECOVERY_REQUIRED` | Agent restart hoặc bằng chứng job/owner không chắc chắn. Điều tra job và trạng thái MCU trước thao tác mới; không coi là thành công. |
+
+Remote flash thành công cần exact `** Verified OK **`, AppMeta 44 byte hợp lệ
+được Bootloader chuyển thành `STLM + CONFIRMED`, reset thành công, PC trong
+`0x08010000..0x0807FFFF` và `BKP1R == 0`. Một dòng upload thành công hoặc
+trạng thái SSH ổn định không thay thế bằng chứng này.
