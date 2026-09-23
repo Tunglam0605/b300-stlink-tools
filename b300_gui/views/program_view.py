@@ -21,6 +21,7 @@ class ProgramView(QWidget):
     file_invalidated = Signal()
     probe_refresh_requested = Signal()
     target_inspect_requested = Signal()
+    job_status_requested = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -60,11 +61,16 @@ class ProgramView(QWidget):
         self.btn_flash_app.setEnabled(False)
         self.btn_dry_run_action = self._button("CHẠY THỬ", self._on_dry_run_clicked)
         self.btn_dry_run_action.setEnabled(False)
+        self.btn_recent_job = self._button("Kiểm tra job gần nhất", self.job_status_requested.emit)
+        self.btn_recent_job.setEnabled(False)
+        self.btn_recent_job.hide()
         self.btn_toggle_adv = self._button("Chi tiết / Chế độ nhà máy", self._toggle_advanced_card)
-        for button in (self.btn_flash_app, self.btn_dry_run_action, self.btn_toggle_adv):
+        for button in (self.btn_flash_app, self.btn_dry_run_action,
+                       self.btn_recent_job, self.btn_toggle_adv):
             buttons.addWidget(button)
         self.btn_flash_app.setMinimumWidth(190)
-        for button in (self.btn_flash_app, self.btn_dry_run_action, self.btn_toggle_adv):
+        for button in (self.btn_flash_app, self.btn_dry_run_action,
+                       self.btn_recent_job, self.btn_toggle_adv):
             button.setMinimumHeight(40)
         execution.header_layout.addLayout(buttons, 2)
         self.stepper = PipelineStepper(self)
@@ -375,6 +381,8 @@ class ProgramView(QWidget):
         self.btn_flash_bootloader.setEnabled(not busy)
         self.btn_refresh_probe.setEnabled(not busy)
         self.btn_inspect_target.setEnabled(not busy)
+        if busy:
+            self.btn_recent_job.setEnabled(False)
 
 
 __all__ = ["ProgramView"]
