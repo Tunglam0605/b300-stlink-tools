@@ -133,7 +133,11 @@ trong remote flow.
    tên file, address span, size, CRC32, SHA-256.
 2. Bấm dry-run để Client tải HEX qua SSH/SFTP. Gateway kiểm size/hash, probe,
    STM32F407 512 KiB, WRP S0–S2 rồi trả lại plan Sector 3–7 và AppMeta
-   `0x0800C000`/44 byte. Dry-run kết thúc không ghi flash.
+   `0x0800C000`/44 byte. Thẻ **MCU & Kiểm tra an toàn** hiển thị bằng chứng
+   Gateway vừa đọc (MCU, điện áp, WRP, RDP) với nhãn **Gateway dry-run**; đó là
+   snapshot của lần kiểm tra, không phải trạng thái live. Đổi HEX/kết nối sẽ xóa
+   snapshot. Gateway thiếu bằng chứng này thì GUI dừng trước xác nhận nạp.
+   Dry-run kết thúc không ghi flash.
 3. Bấm **Nạp Application**. GUI tạo một Gateway approval mới và hiển thị Gateway,
    tên file, SHA-256, probe cùng erase Sector 3–7. Chỉ chọn **Yes** khi tất cả
    khớp board và file được phép nạp.
