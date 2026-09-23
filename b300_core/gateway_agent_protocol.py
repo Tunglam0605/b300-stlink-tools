@@ -146,23 +146,26 @@ class GatewayRequestStore:
         # Prepare first so expired response/tombstone artifacts are pruned
         # before replay checks below.
         self._prepare()
-        if (self.response_path(request.request_id).exists()
-                and self._matching_program_marker(request)):
-            response = self.read_response(request.request_id)
-            if response is not None:
-                self.acknowledge_response(request.request_id)
-                return response
+        completed = self._matching_completed_response(request)
+        if completed is not None:
+            return completed
         if self.response_path(request.request_id).exists():
             return self._error(request.request_id, "REQUEST_REPLAYED")
         existing_pending = self.request_path(request.request_id).exists()
         if existing_pending:
             if not self._matching_pending_program_request(request):
+                completed = self._matching_completed_response(request)
+                if completed is not None:
+                    return completed
                 return self._error(request.request_id, "REQUEST_REPLAYED")
         else:
             try:
                 self.enqueue(request)
             except FileExistsError:
                 if not self._matching_pending_program_request(request):
+                    completed = self._matching_completed_response(request)
+                    if completed is not None:
+                        return completed
                     return self._error(request.request_id, "REQUEST_REPLAYED")
         deadline = self._clock() + min(60.0, max(0.01, float(timeout_seconds)))
         while self._clock() < deadline:
@@ -218,6 +221,15 @@ class GatewayRequestStore:
                     and raw.get("request_hash") == self._request_hash(request))
         except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
             return False
+
+    def _matching_completed_response(self, request: GatewayRequest) -> Optional[dict]:
+        if (not self.response_path(request.request_id).exists()
+                or not self._matching_program_marker(request)):
+            return None
+        response = self.read_response(request.request_id)
+        if response is not None:
+            self.acknowledge_response(request.request_id)
+        return response
 
     def _matching_pending_program_request(self, request: GatewayRequest) -> bool:
         if not request.operation.startswith("program_"):

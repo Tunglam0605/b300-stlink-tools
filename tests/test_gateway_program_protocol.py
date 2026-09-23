@@ -60,6 +60,25 @@ class GatewayProgramProtocolTests(unittest.TestCase):
                 worker.join(timeout=1)
             self.assertEqual(response["result"]["state"], "STAGED")
 
+    def test_replay_accepts_response_when_pending_file_disappears_during_check(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = GatewayRequestStore(Path(directory))
+            request = GatewayRequest.create(
+                "program_status", {"job_id": "a" * 32}, request_id="race-1",
+            )
+            store.enqueue(request)
+            def finish_during_pending_check(_request):
+                store.respond(request.request_id, {
+                    "status": "ok", "reason_code": "OK",
+                    "result": {"job_id": "a" * 32, "state": "STAGED"},
+                }, request=request)
+                store.complete(request.request_id)
+                return False
+            with mock.patch.object(store, "_matching_pending_program_request",
+                                   side_effect=finish_during_pending_check):
+                response = store.submit_request(request, timeout_seconds=0.1)
+            self.assertEqual(response["result"]["state"], "STAGED")
+
     def test_same_program_request_id_and_payload_replays_without_new_authority(self):
         with tempfile.TemporaryDirectory() as directory:
             store = GatewayRequestStore(Path(directory))
