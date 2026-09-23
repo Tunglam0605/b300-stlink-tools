@@ -57,6 +57,7 @@ def run_remote_flash(args, *, profile_store=None,
         send(safe_plan)
         if not args.confirm_remote_application:
             session.cancel_remote_application(approval["job_id"], grant)
+            session.cleanup_remote_application(approval["job_id"])
             prepared_job_id = None
             return 0
         committed_job_id = approval["job_id"]
@@ -100,6 +101,7 @@ def run_remote_flash(args, *, profile_store=None,
         if committed_job_id is None and prepared_job_id is not None and prepared_grant is not None:
             try:
                 session.cancel_remote_application(prepared_job_id, prepared_grant)
+                session.cleanup_remote_application(prepared_job_id)
             except Exception:
                 pass
         if committed_job_id is not None:

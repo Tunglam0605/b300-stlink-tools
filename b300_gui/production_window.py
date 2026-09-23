@@ -798,6 +798,7 @@ class ProductionMainWindow(_BaseMainWindow):
             )
             if is_dry_run:
                 session.cancel_remote_application(approval["job_id"], grant)
+                session.cleanup_remote_application(approval["job_id"])
                 lease.close()
                 self.program_view.banner.show_pass("Gateway dry-run đạt", detail)
                 return
@@ -810,6 +811,7 @@ class ProductionMainWindow(_BaseMainWindow):
             )
             if answer != QMessageBox.StandardButton.Yes:
                 session.cancel_remote_application(approval["job_id"], grant)
+                session.cleanup_remote_application(approval["job_id"])
                 lease.close()
                 self.program_view.banner.show_info("Đã hủy trước khi nạp", detail)
                 return

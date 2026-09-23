@@ -132,6 +132,7 @@ class CliRemoteFlashTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(session.commits, 0)
             self.assertEqual(session.cancels, 1)
+            self.assertEqual(session.cleanups, 1)
             self.assertEqual(output[-1]["plan"]["erase_sectors"], [3, 4, 5, 6, 7])
             self.assertNotIn("approval_token", output[-1])
             self.assertTrue(session.closed)

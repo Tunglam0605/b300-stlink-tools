@@ -1030,6 +1030,7 @@ def _run_gateway_agent(args: argparse.Namespace) -> int:
     def publish(item) -> None:
         status_store.write(GatewayAgentStatus(
             instance_id, os.getpid(), time.monotonic(), item.state, item.reason_code,
+            tuple(gateway_capabilities()["capabilities"]),
         ))
 
     agent = GatewayAgent(coordinator, request_store=GatewayRequestStore(), status_sink=publish)
@@ -1065,6 +1066,7 @@ def run_gateway_agent_command(args: argparse.Namespace) -> int:
             }
             record["reason_code"] = "RECOVERY_REQUIRED"
             record.update(gateway_capabilities())
+            record["capabilities"] = list(status.capabilities) if status is not None else []
             emit_snapshot(record, args.json, "Gateway Agent: RECOVERY_REQUIRED")
             return 1
         if lease is not None:
@@ -1072,6 +1074,7 @@ def run_gateway_agent_command(args: argparse.Namespace) -> int:
                 lease, time.monotonic()
             ).to_record()
         record.update(gateway_capabilities())
+        record["capabilities"] = list(status.capabilities) if status is not None else []
         emit_snapshot(record, args.json, "Gateway Agent: %s" % record["state"])
         return 0 if status is not None else 1
     manager.ensure_running(_managed_agent_command())
@@ -1081,6 +1084,7 @@ def run_gateway_agent_command(args: argparse.Namespace) -> int:
             "state": "STOPPED", "reason_code": "GATEWAY_AGENT_START_TIMEOUT",
         }
         record.update(gateway_capabilities())
+        record["capabilities"] = list(status.capabilities) if status is not None else []
         emit_snapshot(record, args.json, "Gateway Agent: %s" % record["state"])
         return 0 if status is not None else 1
 

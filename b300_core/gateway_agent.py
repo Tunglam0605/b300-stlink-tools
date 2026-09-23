@@ -19,7 +19,14 @@ from .gateway_lease import (
     GatewayLeaseRequest,
 )
 from .gateway_supervisor import gateway_runtime_root
+from .gateway_protocol import gateway_capabilities
 from .process_startup import child_process_kwargs
+
+
+LEGACY_AGENT_CAPABILITIES = (
+    "gateway-status", "gateway-ensure", "gateway-rescan",
+    "gateway-gdb-activity-v1", "gateway-agent", "gateway-exclusive-lease-v1",
+)
 
 
 @dataclass(frozen=True)
@@ -29,19 +36,23 @@ class GatewayAgentStatus:
     heartbeat_mono: float
     state: str
     reason_code: str
+    capabilities: tuple[str, ...] = LEGACY_AGENT_CAPABILITIES
 
     def to_record(self) -> dict:
         return {
             "schema_version": 1, "instance_id": self.instance_id, "pid": self.pid,
             "heartbeat_mono": self.heartbeat_mono, "state": self.state,
             "reason_code": self.reason_code,
+            "capabilities": list(self.capabilities),
         }
 
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> "GatewayAgentStatus":
-        if not isinstance(record, Mapping) or set(record) != {
+        required = {
             "schema_version", "instance_id", "pid", "heartbeat_mono", "state", "reason_code",
-        }:
+        }
+        if (not isinstance(record, Mapping) or not required <= set(record)
+                or not set(record) <= required | {"capabilities"}):
             raise ValueError("Gateway Agent status schema is invalid.")
         if type(record["schema_version"]) is not int or record["schema_version"] != 1:
             raise ValueError("Gateway Agent status version is unsupported.")
@@ -54,8 +65,13 @@ class GatewayAgentStatus:
             raise ValueError("Gateway Agent heartbeat is invalid.")
         if not isinstance(record["state"], str) or not isinstance(record["reason_code"], str):
             raise ValueError("Gateway Agent state is invalid.")
+        capabilities = record.get("capabilities", list(LEGACY_AGENT_CAPABILITIES))
+        if (not isinstance(capabilities, list) or len(capabilities) > 32
+                or any(not isinstance(value, str) or not value or len(value) > 64
+                       for value in capabilities)):
+            raise ValueError("Gateway Agent capabilities are invalid.")
         return cls(record["instance_id"], record["pid"], float(heartbeat),
-                   record["state"], record["reason_code"])
+                   record["state"], record["reason_code"], tuple(capabilities))
 
 
 class GatewayAgentStatusStore:

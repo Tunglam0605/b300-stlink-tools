@@ -119,6 +119,7 @@ class RemoteProgramGuiTests(unittest.TestCase):
         self.assertEqual(self.session.prepares, 1)
         self.assertEqual(self.session.commits, 0)
         self.assertEqual(self.session.cancels, 1)
+        self.assertEqual(self.session.cleanups, 1)
         self.assertIn("Sector 3", self.window.program_view.banner.detail_label.text())
 
     def test_gateway_confirmation_commits_and_shows_verified_result(self):

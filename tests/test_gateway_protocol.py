@@ -15,9 +15,25 @@ from b300_core.gateway_protocol import (
 from b300_core.debug_service import DebugState
 from b300_core.gateway_status import GatewaySnapshot
 from b300_core.models import ProbeInfo
+from b300_core.gateway_agent import GatewayAgentStatus
 
 
 class GatewayProtocolTests(unittest.TestCase):
+    def test_new_cli_does_not_advertise_flash_from_old_running_agent(self):
+        old = GatewayAgentStatus("old-agent", 42, 10.0, "IDLE", "GATEWAY_IDLE")
+        manager = mock.Mock()
+        manager.status.return_value = old
+        output = io.StringIO()
+        with mock.patch.object(b300_stlink, "GatewayAgentProcessManager", return_value=manager), \
+                mock.patch.object(b300_stlink, "GatewayLeaseStore") as leases, \
+                redirect_stdout(output):
+            leases.return_value.read.return_value = None
+            code = b300_stlink.main(["debug", "gateway-agent-status", "--json"])
+        self.assertEqual(code, 0)
+        record = json.loads(output.getvalue())
+        self.assertNotIn("remote_application_flash_v1", record["capabilities"])
+        self.assertIn("gateway-exclusive-lease-v1", record["capabilities"])
+
     def test_protocol_advertises_status_and_idempotent_ensure(self) -> None:
         capabilities = gateway_capabilities()
         self.assertEqual(capabilities["protocol_version"], 1)
