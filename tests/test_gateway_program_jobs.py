@@ -178,10 +178,40 @@ class GatewayProgramJobsTests(unittest.TestCase):
         log = self.jobs.root / slot["job_id"] / "flash.log"
         paths = {(Path(call.args[0]), call.args[1]) for call in chmod.call_args_list}
         self.assertIn((staged, 0o600), paths)
-        self.assertIn((log, 0o600), paths)
         if os.name != "nt":
             self.assertEqual(stat.S_IMODE(staged.stat().st_mode), 0o600)
             self.assertEqual(stat.S_IMODE(log.stat().st_mode), 0o600)
+        else:
+            self.assertIn((log, 0o600), paths)
+
+    def test_hardlinked_log_is_rejected_before_flash(self):
+        job_id = self._upload()
+        approval = self._prepare(job_id)
+        outside = Path(self.temp.name) / "outside.log"
+        outside.write_bytes(b"untouched")
+        log = self.jobs.root / job_id / "flash.log"
+        os.link(outside, log)
+        with self.assertRaises(ProgramJobError) as captured:
+            self.jobs.commit(job_id, approval["approval_token"], "lease-1", "secret", 1)
+        self.assertEqual(captured.exception.reason_code, "STAGING_UNSAFE")
+        self.assertEqual(outside.read_bytes(), b"untouched")
+        self.assertEqual(self.service.calls, 0)
+
+    def test_symlink_log_is_rejected_before_flash(self):
+        job_id = self._upload()
+        approval = self._prepare(job_id)
+        outside = Path(self.temp.name) / "outside-symlink.log"
+        outside.write_bytes(b"untouched")
+        log = self.jobs.root / job_id / "flash.log"
+        try:
+            log.symlink_to(outside)
+        except (OSError, NotImplementedError):
+            self.skipTest("Symlink creation unavailable on this host")
+        with self.assertRaises(ProgramJobError) as captured:
+            self.jobs.commit(job_id, approval["approval_token"], "lease-1", "secret", 1)
+        self.assertEqual(captured.exception.reason_code, "STAGING_UNSAFE")
+        self.assertEqual(outside.read_bytes(), b"untouched")
+        self.assertEqual(self.service.calls, 0)
 
     def test_file_change_after_prepare_is_rejected_before_flash(self):
         job_id = self._upload()

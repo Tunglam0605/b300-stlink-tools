@@ -328,6 +328,7 @@ class GatewayProgramJobs:
                 raise ProgramJobError("ARTIFACT_CHANGED", str(error)) from error
             if self._worker is not None and self._worker.is_alive():
                 raise ProgramJobError("GATEWAY_BUSY")
+            self._create_private_log(job_id)
             record.update(
                 state="RUNNING", phase="validating", progress=0,
                 approval_digest=selected[1],
@@ -343,6 +344,56 @@ class GatewayProgramJobs:
             )
             self._worker.start()
             return self.status(job_id)
+
+    def _create_private_log(self, job_id: str) -> None:
+        path = self._job_dir(job_id) / "flash.log"
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            fd = os.open(str(path), flags, 0o600)
+        except OSError as error:
+            raise ProgramJobError("STAGING_UNSAFE", "Flash log path is already occupied or unsafe.") from error
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise ProgramJobError("STAGING_UNSAFE", "Flash log is not one private regular file.")
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, 0o600)
+            else:
+                os.chmod(path, 0o600)
+        finally:
+            os.close(fd)
+
+    def _append_private_log(self, job_id: str, line: str) -> None:
+        path = self._job_dir(job_id) / "flash.log"
+        try:
+            before = path.lstat()
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+                raise ProgramJobError("STAGING_UNSAFE", "Flash log was replaced.")
+            if before.st_size >= MAX_JOB_LOG_BYTES:
+                return
+            flags = os.O_WRONLY | os.O_APPEND
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            fd = os.open(str(path), flags)
+            try:
+                opened = os.fstat(fd)
+                if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
+                        or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)):
+                    raise ProgramJobError("STAGING_UNSAFE", "Flash log identity changed.")
+                if hasattr(os, "fchmod"):
+                    os.fchmod(fd, 0o600)
+                with os.fdopen(fd, "a", encoding="utf-8", errors="replace") as handle:
+                    fd = -1
+                    handle.write(str(line).replace("\x00", "")[:2048] + "\n")
+            finally:
+                if fd >= 0:
+                    os.close(fd)
+        except (OSError, ProgramJobError):
+            # Logging cannot be allowed to redirect a destructive transaction.
+            # The canonical flash result and post-verification remain decisive.
+            return
 
     def cancel(self, job_id: str, lease_id: str, token: str, generation: int) -> dict:
         with self._lock:
@@ -390,13 +441,7 @@ class GatewayProgramJobs:
         heartbeat.start()
         try:
             def event_sink(line: str) -> None:
-                path = self._job_dir(job_id) / "flash.log"
-                if path.exists() and path.stat().st_size >= MAX_JOB_LOG_BYTES:
-                    return
-                fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-                os.chmod(path, 0o600)
-                with os.fdopen(fd, "a", encoding="utf-8", errors="replace") as handle:
-                    handle.write(str(line).replace("\x00", "")[:2048] + "\n")
+                self._append_private_log(job_id, line)
 
             def phase_sink(event) -> None:
                 with self._lock:
