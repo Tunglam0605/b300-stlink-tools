@@ -13,6 +13,7 @@ from b300_core.gateway_lease import (
     GatewayLeaseStore,
 )
 from b300_core.gateway_lease_coordinator import GatewayLeaseCoordinator
+from b300_core.hardware_owner import FileHardwareOwner
 from b300_core.gateway_status import GatewaySnapshot
 from b300_core.gateway_supervisor import GatewaySupervisor
 from b300_core.debug_service import DebugState
@@ -121,6 +122,24 @@ def request(client_id="client-a", mode="VSCODE_DEBUG"):
 
 
 class GatewayLeaseCoordinatorTests(unittest.TestCase):
+    def test_flash_lease_reserves_probe_without_opening_debug_gateway(self):
+        with tempfile.TemporaryDirectory() as directory:
+            supervisor = FakeSupervisor()
+            owner = FileHardwareOwner(Path(directory) / "hardware.lock")
+            coordinator = GatewayLeaseCoordinator(
+                supervisor,
+                store=GatewayLeaseStore(Path(directory) / "lease.json"),
+                probe_discovery=lambda: (ProbeInfo("SAFE123", "ST-Link", "test", "usb:1"),),
+                hardware_owner=owner,
+            )
+            grant = coordinator.acquire(request("client-flash", "FLASH_APPLICATION"))
+            self.assertIsInstance(grant, GatewayLeaseGrant)
+            self.assertEqual(grant.public.probe_serial, "SAFE123")
+            self.assertIsNone(grant.public.gdb_endpoint)
+            self.assertEqual(supervisor.ensure_calls, 0)
+            self.assertFalse(coordinator.release(grant.lease_id, grant.token, grant.generation).active)
+            self.assertEqual(supervisor.stop_calls, 0)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

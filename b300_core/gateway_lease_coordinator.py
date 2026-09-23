@@ -11,6 +11,10 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Callable, Optional, Union
 
+from .hardware_owner import DEFAULT_HARDWARE_OWNER, FileHardwareOwner, HardwareOwnerBusy
+from .probe import list_probes
+from .probe_selection import ProbeSelectionError, select_probe
+
 from .gateway_lease import (
     SUPPORTED_LEASE_SCHEMA_VERSION,
     GatewayLease,
@@ -68,6 +72,8 @@ class GatewayLeaseCoordinator:
         token_factory: Callable[[], str] = lambda: secrets.token_urlsafe(32),
         lease_id_factory: Callable[[], str] = lambda: uuid.uuid4().hex,
         acquired_at_factory: Callable[[], str] = _utc_now,
+        probe_discovery: Callable[[], object] = list_probes,
+        hardware_owner: Optional[FileHardwareOwner] = None,
     ) -> None:
         self.supervisor = supervisor
         self.store = store or GatewayLeaseStore()
@@ -76,6 +82,10 @@ class GatewayLeaseCoordinator:
         self._token_factory = token_factory
         self._lease_id_factory = lease_id_factory
         self._acquired_at_factory = acquired_at_factory
+        self._probe_discovery = probe_discovery
+        self._hardware_owner = hardware_owner or DEFAULT_HARDWARE_OWNER
+        self._flash_owner_token = None
+        self._flash_instance_id = uuid.uuid4().hex
         self._lock = threading.RLock()
         try:
             self._lease = self.store.read()
@@ -139,10 +149,29 @@ class GatewayLeaseCoordinator:
             try:
                 starting = replace(lease, state="STARTING", reason_code="START_REQUESTED")
                 self._persist_locked(starting)
+                if request.mode == "FLASH_APPLICATION":
+                    selected, probe_ref = select_probe(
+                        tuple(self._probe_discovery()), request.probe_serial,
+                    )
+                    self._flash_owner_token = self._hardware_owner.acquire()
+                    active = replace(
+                        self._lease, state="ACTIVE", probe_serial=probe_ref.serial,
+                        gateway_instance_id=self._flash_instance_id,
+                        gateway_generation=1, reason_code="LEASE_ACTIVE",
+                    )
+                    self._persist_locked(active)
+                    return GatewayLeaseGrant(
+                        active.lease_id, token, active.generation,
+                        self._public_locked(active, now),
+                    )
                 prepare_owner = getattr(self.supervisor, "prepare_lease_owner", None)
                 if callable(prepare_owner):
                     prepare_owner(lease_id, token, lease.generation)
                 gateway = self.supervisor.ensure()
+            except ProbeSelectionError as error:
+                return self._cleanup_locked(error.code)
+            except HardwareOwnerBusy:
+                return self._cleanup_locked("GATEWAY_BUSY")
             except Exception:
                 return self._cleanup_locked("GATEWAY_START_FAILED")
             if not gateway.attach_ready:
@@ -211,6 +240,9 @@ class GatewayLeaseCoordinator:
             if lease.state == "GRACE":
                 return self._public_locked(lease, now)
             if lease.state in {"CLEANING", "RECOVERY_REQUIRED"}:
+                return self._public_locked(lease, now)
+
+            if lease.mode == "FLASH_APPLICATION":
                 return self._public_locked(lease, now)
 
             gateway = self.supervisor.maintain_once()
@@ -324,6 +356,16 @@ class GatewayLeaseCoordinator:
         lease = self._lease
         if lease is None:
             return _inactive(final_reason)
+        if lease.mode == "FLASH_APPLICATION":
+            token = self._flash_owner_token
+            if token is not None:
+                token.release()
+                self._flash_owner_token = None
+            self.store.clear_if_generation(lease.generation)
+            self._lease = None
+            self._recovery_required = False
+            self._gateway_endpoints = (None, None)
+            return _inactive(final_reason)
         cleaning = replace(
             lease, state="CLEANING", grace_deadline_mono=None,
             reason_code="CLEANUP_IN_PROGRESS",
@@ -392,6 +434,8 @@ class GatewayLeaseCoordinator:
         lease = self._lease
         if lease is None:
             return _inactive("RECOVERY_REQUIRED")
+        if lease.mode == "FLASH_APPLICATION":
+            return self._mark_recovery_locked(lease, "RECOVERY_OWNER_UNPROVEN", now)
         checker = getattr(self.supervisor, "reconcile_lease_owner", None)
         if not callable(checker):
             return self._mark_recovery_locked(lease, "RECOVERY_OWNER_UNPROVEN", now)
