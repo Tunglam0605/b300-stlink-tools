@@ -796,11 +796,25 @@ class ProductionMainWindow(_BaseMainWindow):
                 "Sector 3–7 · STLM 0x0800C000/44 byte · ST-Link %s · SHA-256 %s"
                 % (plan.get("probe_serial") or "duy nhất", manifest.get("sha256", ""))
             )
+            def cancel_prepared_job() -> bool:
+                try:
+                    session.cancel_remote_application(approval["job_id"], grant)
+                    try:
+                        session.cleanup_remote_application(approval["job_id"])
+                    except Exception as error:
+                        self.append_log("Gateway chưa dọn được tệp job: %s" % error)
+                    return True
+                except Exception as error:
+                    self.program_view.banner.show_fail(
+                        "Chưa xác nhận trạng thái hủy job", str(error),
+                        "Kiểm tra lại job ID trước khi bắt đầu lần nạp khác.",
+                    )
+                    return False
+                finally:
+                    lease.close()
             if is_dry_run:
-                session.cancel_remote_application(approval["job_id"], grant)
-                session.cleanup_remote_application(approval["job_id"])
-                lease.close()
-                self.program_view.banner.show_pass("Gateway dry-run đạt", detail)
+                if cancel_prepared_job():
+                    self.program_view.banner.show_pass("Gateway dry-run đạt", detail)
                 return
             answer = QMessageBox.question(
                 self, "Xác nhận nạp Application từ xa",
@@ -810,10 +824,8 @@ class ProductionMainWindow(_BaseMainWindow):
                 QMessageBox.StandardButton.No,
             )
             if answer != QMessageBox.StandardButton.Yes:
-                session.cancel_remote_application(approval["job_id"], grant)
-                session.cleanup_remote_application(approval["job_id"])
-                lease.close()
-                self.program_view.banner.show_info("Đã hủy trước khi nạp", detail)
+                if cancel_prepared_job():
+                    self.program_view.banner.show_info("Đã hủy trước khi nạp", detail)
                 return
             self._run_remote_application_job(session, approval, lease, grant)
 

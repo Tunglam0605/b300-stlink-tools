@@ -154,10 +154,16 @@ class GatewayRequestStore:
                 return response
         if self.response_path(request.request_id).exists():
             return self._error(request.request_id, "REQUEST_REPLAYED")
-        try:
-            self.enqueue(request)
-        except FileExistsError:
-            return self._error(request.request_id, "REQUEST_REPLAYED")
+        existing_pending = self.request_path(request.request_id).exists()
+        if existing_pending:
+            if not self._matching_pending_program_request(request):
+                return self._error(request.request_id, "REQUEST_REPLAYED")
+        else:
+            try:
+                self.enqueue(request)
+            except FileExistsError:
+                if not self._matching_pending_program_request(request):
+                    return self._error(request.request_id, "REQUEST_REPLAYED")
         deadline = self._clock() + min(60.0, max(0.01, float(timeout_seconds)))
         while self._clock() < deadline:
             response = self.read_response(request.request_id)
@@ -212,6 +218,21 @@ class GatewayRequestStore:
                     and raw.get("request_hash") == self._request_hash(request))
         except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
             return False
+
+    def _matching_pending_program_request(self, request: GatewayRequest) -> bool:
+        if not request.operation.startswith("program_"):
+            return False
+        path = self.request_path(request.request_id)
+        for _ in range(3):
+            try:
+                raw = path.read_bytes()
+                if len(raw) > MAX_REQUEST_BYTES:
+                    return False
+                existing = GatewayRequest.from_record(json.loads(raw.decode("utf-8")))
+                return self._request_hash(existing) == self._request_hash(request)
+            except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+                self._sleep(0.01)
+        return False
 
     def respond(self, request_id: str, record: Mapping[str, object], *,
                 request: Optional[GatewayRequest] = None) -> None:

@@ -58,10 +58,13 @@ class FakeRemoteSession:
 
 
 class FakeLease:
+    created = []
+
     def __init__(self, session, **kwargs):
         self.grant = SimpleNamespace(lease_id="lease", token="secret", generation=1,
                                      public={"probe_serial": "SAFE123"})
         self.closed = False
+        self.created.append(self)
 
     def start(self, mode, *, probe_serial=None):
         return self.grant
@@ -76,6 +79,7 @@ class RemoteProgramGuiTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
+        FakeLease.created.clear()
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
         gateways = GatewayProfileStore(root / "gateways.json", legacy_path=root / "legacy.json")
@@ -121,6 +125,13 @@ class RemoteProgramGuiTests(unittest.TestCase):
         self.assertEqual(self.session.cancels, 1)
         self.assertEqual(self.session.cleanups, 1)
         self.assertIn("Sector 3", self.window.program_view.banner.detail_label.text())
+
+    def test_cancel_transport_error_still_closes_flash_lease(self):
+        with mock.patch.object(self.session, "cancel_remote_application",
+                               side_effect=RuntimeError("SSH lost")):
+            self._run(True, QMessageBox.StandardButton.No)
+        self.assertTrue(FakeLease.created[-1].closed)
+        self.assertEqual(self.window.program_view.banner.property("variant"), "fail")
 
     def test_gateway_confirmation_commits_and_shows_verified_result(self):
         self._run(False, QMessageBox.StandardButton.Yes)

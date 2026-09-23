@@ -38,6 +38,28 @@ class FakeCoordinator:
 
 
 class GatewayProgramProtocolTests(unittest.TestCase):
+    def test_same_program_request_waits_for_existing_pending_operation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = GatewayRequestStore(Path(directory))
+            request = GatewayRequest.create(
+                "program_status", {"job_id": "a" * 32}, request_id="pending-1",
+            )
+            store.enqueue(request)
+            def finish():
+                time.sleep(0.02)
+                store.respond(request.request_id, {
+                    "status": "ok", "reason_code": "OK",
+                    "result": {"job_id": "a" * 32, "state": "STAGED"},
+                }, request=request)
+                store.complete(request.request_id)
+            worker = threading.Thread(target=finish)
+            worker.start()
+            try:
+                response = store.submit_request(request, timeout_seconds=0.5)
+            finally:
+                worker.join(timeout=1)
+            self.assertEqual(response["result"]["state"], "STAGED")
+
     def test_same_program_request_id_and_payload_replays_without_new_authority(self):
         with tempfile.TemporaryDirectory() as directory:
             store = GatewayRequestStore(Path(directory))
