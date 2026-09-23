@@ -121,6 +121,13 @@ class GatewayProgramJobsTests(unittest.TestCase):
         job_id = self._upload()
         approval = self._prepare(job_id)
         self.assertEqual(approval["plan"]["erase_sectors"], [3, 4, 5, 6, 7])
+        self.assertEqual(approval["plan"]["transaction"], [
+            "flash erase_sector 0 3 7",
+            "flash write_image {application.hex}",
+            "verify_image {application.hex}",
+            "metadata_plan: 0x0800C000 / 44 bytes / STLM + VERIFIED",
+            "reset run",
+        ])
         self.assertEqual(approval["manifest"]["sha256"], self.manifest.sha256)
         self.assertNotIn("approval_token", self.jobs.status(job_id))
         self.jobs.commit(job_id, approval["approval_token"], "lease-1", "secret", 1)

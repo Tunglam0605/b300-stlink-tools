@@ -286,6 +286,13 @@ class GatewayProgramJobs:
                     "protected_sectors": list(plan.target.protected_sectors),
                     "metadata_address": "0x0800C000",
                     "metadata_bytes": 44,
+                    "transaction": [
+                        "flash erase_sector 0 3 7",
+                        "flash write_image {application.hex}",
+                        "verify_image {application.hex}",
+                        "metadata_plan: 0x0800C000 / 44 bytes / STLM + VERIFIED",
+                        "reset run",
+                    ],
                 },
             )
             self._write(job_id, record)
