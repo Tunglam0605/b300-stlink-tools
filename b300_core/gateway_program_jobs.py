@@ -223,6 +223,7 @@ class GatewayProgramJobs:
                 if target.exists() or target.is_symlink():
                     raise ProgramJobError("STAGING_UNSAFE")
                 os.replace(source, target)
+                os.chmod(target, 0o600)
                 record.update(state="STAGED", phase="staged", progress=100)
                 self._write(job_id, record)
                 return self.status(job_id)
@@ -392,7 +393,9 @@ class GatewayProgramJobs:
                 path = self._job_dir(job_id) / "flash.log"
                 if path.exists() and path.stat().st_size >= MAX_JOB_LOG_BYTES:
                     return
-                with path.open("a", encoding="utf-8", errors="replace") as handle:
+                fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+                os.chmod(path, 0o600)
+                with os.fdopen(fd, "a", encoding="utf-8", errors="replace") as handle:
                     handle.write(str(line).replace("\x00", "")[:2048] + "\n")
 
             def phase_sink(event) -> None:

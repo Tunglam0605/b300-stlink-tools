@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import tempfile
 import hashlib
+import os
+import stat
 import time
 import unittest
 from pathlib import Path
@@ -162,6 +164,24 @@ class GatewayProgramJobsTests(unittest.TestCase):
         self.jobs.cleanup(job_id)
         self.assertFalse(self.jobs.staged_path(job_id).exists())
         self.assertEqual(self.jobs.status(job_id)["state"], "SUCCEEDED")
+
+    def test_staged_artifact_and_flash_log_get_private_permissions(self):
+        slot = self.jobs.create_upload(self.manifest, "client-1", "SAFE123")
+        Path(slot["upload_path"]).write_bytes(self.path.read_bytes())
+        with mock.patch("b300_core.gateway_program_jobs.os.chmod", wraps=os.chmod) as chmod:
+            self.jobs.finalize_upload(slot["job_id"])
+            approval = self._prepare(slot["job_id"])
+            self.jobs.commit(slot["job_id"], approval["approval_token"],
+                             "lease-1", "secret", 1)
+            self.jobs.wait_active(timeout=2)
+        staged = self.jobs.staged_path(slot["job_id"])
+        log = self.jobs.root / slot["job_id"] / "flash.log"
+        paths = {(Path(call.args[0]), call.args[1]) for call in chmod.call_args_list}
+        self.assertIn((staged, 0o600), paths)
+        self.assertIn((log, 0o600), paths)
+        if os.name != "nt":
+            self.assertEqual(stat.S_IMODE(staged.stat().st_mode), 0o600)
+            self.assertEqual(stat.S_IMODE(log.stat().st_mode), 0o600)
 
     def test_file_change_after_prepare_is_rejected_before_flash(self):
         job_id = self._upload()
