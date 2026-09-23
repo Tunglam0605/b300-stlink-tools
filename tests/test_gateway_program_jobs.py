@@ -4,6 +4,7 @@ import tempfile
 import hashlib
 import os
 import stat
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -11,8 +12,11 @@ from types import SimpleNamespace
 from unittest import mock
 
 from b300_core.gateway_program_jobs import GatewayProgramJobs, ProgramJobError
+from b300_core.gateway_lease import GatewayLeaseRequest, GatewayLeaseStore
+from b300_core.gateway_lease_coordinator import GatewayLeaseCoordinator
+from b300_core.hardware_owner import FileHardwareOwner
 from b300_core.hex_image import inspect_image
-from b300_core.models import BootVerification, CommandResult, TargetInfo
+from b300_core.models import BootVerification, CommandResult, ProbeInfo, TargetInfo
 from b300_core.policy import build_flash_plan
 from b300_core.remote_programming import (
     FirmwareKind, GatewayProgrammingService, RemoteFirmwareManifest,
@@ -67,7 +71,62 @@ class FakeService:
         )
 
 
+class BlockingFlashService(FakeService):
+    def __init__(self):
+        super().__init__()
+        self.started = threading.Event()
+        self.continue_flash = threading.Event()
+
+    def flash(self, plan, event_sink=None, phase_sink=None, cancel_event=None):
+        self.started.set()
+        if not self.continue_flash.wait(3):
+            raise TimeoutError("test did not release blocked flash")
+        return super().flash(plan, event_sink=event_sink,
+                             phase_sink=phase_sink, cancel_event=cancel_event)
+
+
 class GatewayProgramJobsTests(unittest.TestCase):
+    def test_client_release_during_committed_job_does_not_abort_or_duplicate_flash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            image = write_hex(directory, 0x08010000, APPLICATION_VECTOR)
+            manifest = RemoteFirmwareManifest.from_file(
+                image, operation=RemoteProgrammingOperation.FLASH_APPLICATION,
+                firmware_kind=FirmwareKind.APPLICATION,
+            )
+            service = BlockingFlashService()
+            coordinator = GatewayLeaseCoordinator(
+                object(), store=GatewayLeaseStore(root / "lease.json"),
+                hardware_owner=FileHardwareOwner(root / "owner.lock"),
+                probe_discovery=lambda: (ProbeInfo("SAFE123", "ST-Link", "test", "usb:1"),),
+            )
+            lease = coordinator.acquire(GatewayLeaseRequest(
+                request_id="request-1", client_id="client-1",
+                client_label="Client 1", mode="FLASH_APPLICATION",
+                probe_serial="SAFE123",
+            ))
+            jobs = GatewayProgramJobs(root / "jobs", coordinator,
+                                      programming=GatewayProgrammingService(service=service))
+            slot = jobs.create_upload(manifest, "client-1", "SAFE123")
+            Path(slot["upload_path"]).write_bytes(image.read_bytes())
+            jobs.finalize_upload(slot["job_id"])
+            approval = jobs.prepare(slot["job_id"], lease.lease_id, lease.token, lease.generation)
+            try:
+                jobs.commit(slot["job_id"], approval["approval_token"],
+                            lease.lease_id, lease.token, lease.generation)
+                self.assertTrue(service.started.wait(1))
+                self.assertTrue(coordinator.release(
+                    lease.lease_id, lease.token, lease.generation,
+                ).active)
+                self.assertEqual(jobs.status(slot["job_id"])["state"], "RUNNING")
+            finally:
+                service.continue_flash.set()
+            jobs.wait_active(timeout=3)
+            self.assertEqual(jobs.status(slot["job_id"])["state"], "SUCCEEDED")
+            self.assertEqual(service.calls, 1)
+            self.assertFalse(coordinator.public_snapshot().active)
+            FileHardwareOwner(root / "owner.lock").acquire().release()
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
