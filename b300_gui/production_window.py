@@ -851,8 +851,26 @@ class ProductionMainWindow(_BaseMainWindow):
     def _run_remote_application_job(self, session, approval: dict, lease, grant) -> None:
         job_id = approval["job_id"]
         gateway = self.app_context.selected_connection.gateway
-        if gateway is not None:
+        try:
+            if gateway is None:
+                raise ValueError("Gateway connection changed before programming.")
             self._remote_program_history.save(gateway.profile_id, job_id)
+        except (OSError, ValueError) as error:
+            try:
+                session.cancel_remote_application(job_id, grant)
+                try:
+                    session.cleanup_remote_application(job_id)
+                except Exception as cleanup_error:
+                    self.append_log("Gateway chưa dọn được tệp job: %s" % cleanup_error)
+            except Exception as cancel_error:
+                self.append_log("Gateway chưa xác nhận hủy job %s: %s" % (job_id, cancel_error))
+            finally:
+                lease.close()
+            self.program_view.banner.show_fail(
+                "Không lưu được job từ xa", str(error),
+                "Kiểm tra job %s trên Gateway trước khi nạp lại." % job_id,
+            )
+            return
         self.busy = True
         self.program_view.banner.show_info(
             "Gateway đang nạp Application", "Job %s · không ngắt nguồn board." % job_id,

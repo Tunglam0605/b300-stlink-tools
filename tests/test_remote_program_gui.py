@@ -214,6 +214,16 @@ class RemoteProgramGuiTests(unittest.TestCase):
         self.assertEqual(self.session.commits, 0)
         self.assertEqual(self.session.cancels, 1)
 
+    def test_unwritable_job_history_blocks_flash_and_releases_gateway_lease(self):
+        with mock.patch.object(self.window._remote_program_history, "save",
+                               side_effect=OSError("history directory is read-only")):
+            self._run(False, QMessageBox.StandardButton.Yes)
+        self.assertEqual(self.session.commits, 0)
+        self.assertEqual(self.session.cancels, 1)
+        self.assertEqual(self.session.cleanups, 1)
+        self.assertTrue(FakeLease.created[-1].closed)
+        self.assertEqual(self.window.program_view.banner.property("variant"), "fail")
+
     def test_remote_job_is_saved_and_can_be_queried_after_reopen(self):
         self._run(False, QMessageBox.StandardButton.Yes)
         stored = RemoteProgramHistory(Path(self.temp.name) / "recent.json")
