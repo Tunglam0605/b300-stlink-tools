@@ -112,6 +112,53 @@ class PendingLease:
 
 
 class GatewaySupervisorTests(unittest.TestCase):
+    def test_stale_reader_cannot_overwrite_new_owner_fault_latch(self) -> None:
+        services = (FakeService(), FakeService())
+        service_factory = iter(services)
+        supervisor = GatewaySupervisor(
+            service_factory=lambda: next(service_factory),
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=lambda _config: "running",
+            remote_guard_factory=lambda _config: RemoteDebugGuard(FakeTcl("running")),
+        )
+        self.assertTrue(supervisor.ensure().attach_ready)
+        old_callback_started = threading.Event()
+        release_old_callback = threading.Event()
+        callback_errors = []
+
+        class DelayedFaultLine:
+            def __str__(self):
+                old_callback_started.set()
+                if not release_old_callback.wait(3):
+                    raise AssertionError("stale callback was not released")
+                return "Error: swd fault from old owner"
+
+        def send_stale_fault():
+            try:
+                services[0].emit(DelayedFaultLine())
+            except Exception as error:
+                callback_errors.append(error)
+
+        stale_reader = threading.Thread(target=send_stale_fault)
+        stale_reader.start()
+        self.addCleanup(release_old_callback.set)
+        self.assertTrue(old_callback_started.wait(0.5))
+        supervisor.stop()
+        self.assertTrue(supervisor.ensure().attach_ready)
+
+        with supervisor._lock:
+            current_reader = threading.Thread(
+                target=lambda: services[1].emit("Error: libusb failure from current owner")
+            )
+            current_reader.start()
+            current_reader.join(timeout=0.5)
+            self.assertFalse(current_reader.is_alive())
+            release_old_callback.set()
+            stale_reader.join(timeout=0.5)
+            self.assertFalse(stale_reader.is_alive())
+            self.assertEqual(callback_errors, [])
+            self.assertTrue(supervisor._hardware_fault_pending())
+
     def test_fault_queued_while_arming_guard_never_publishes_ready(self) -> None:
         service = FakeService()
         snapshots = []

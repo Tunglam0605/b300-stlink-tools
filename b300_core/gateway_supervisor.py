@@ -541,7 +541,7 @@ class GatewaySupervisor:
         self._presence: Optional[ProbePresenceTracker] = None
         self._evidence_at: Optional[float] = None
         self._hardware_error = False
-        self._pending_fault_generation: Optional[int] = None
+        self._pending_fault_event = threading.Event()
         self._manual_stop = False
         self._gdb_connection_count = 0
         self._gdb_activity_generation = 0
@@ -591,6 +591,7 @@ class GatewaySupervisor:
             self._presence = ProbePresenceTracker(selected)
             presence = self._presence.observe(tuple(self._probe_discovery()))
             self._generation = max(self._generation + 1, presence.generation)
+            self._pending_fault_event = threading.Event()
             config = DebugConfig(
                 probe_ref, "127.0.0.1", self._gdb_port, None, self._tcl_port,
                 gdb_max_connections=2,
@@ -601,10 +602,13 @@ class GatewaySupervisor:
             self._hardware_error = False
             self._startup_gdb_lines.clear()
             service_generation = self._generation
+            service_fault_event = self._pending_fault_event
             try:
                 service.start(
                     config,
-                    event_sink=lambda line: self._on_openocd_line(line, service_generation),
+                    event_sink=lambda line: self._on_openocd_line(
+                        line, service_generation, service_fault_event,
+                    ),
                 )
             except Exception:
                 try:
@@ -943,7 +947,8 @@ class GatewaySupervisor:
             raise ValueError("Gateway recovery endpoint is invalid.")
         SafeTclClient(TclEndpoint(host, int(port_text)), timeout_seconds=1.0).shutdown()
 
-    def _on_openocd_line(self, line: str, generation: Optional[int] = None) -> None:
+    def _on_openocd_line(self, line: str, generation: Optional[int] = None,
+                        fault_event: Optional[threading.Event] = None) -> None:
         # DebugService waits for its output reader to recognize readiness. A
         # reader callback must not wait for the supervisor lock held while
         # ensure() starts OpenOCD; defer bookkeeping to the owner thread.
@@ -952,7 +957,7 @@ class GatewaySupervisor:
             return
         if any(marker in str(line).lower() for marker in (
                 "libusb", "target not examined", "swd fault")):
-            self._pending_fault_generation = owner_generation
+            (fault_event or self._pending_fault_event).set()
         self._pending_openocd_lines.put((owner_generation, line))
         if not self._lock.acquire(blocking=False):
             return
@@ -979,7 +984,7 @@ class GatewaySupervisor:
                 return
 
     def _hardware_fault_pending(self) -> bool:
-        return self._hardware_error or self._pending_fault_generation == self._generation
+        return self._hardware_error or self._pending_fault_event.is_set()
 
     def _process_openocd_line_locked(self, line: str) -> None:
         lowered = str(line).lower()
