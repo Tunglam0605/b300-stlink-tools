@@ -65,6 +65,24 @@ class StartupHardwareErrorService(FakeService):
         event_sink("Error: libusb_bulk_transfer failed")
 
 
+class ThreadedReadinessService(FakeService):
+    def start(self, config, event_sink=None):
+        delivered = threading.Event()
+
+        def report_ready():
+            event_sink("Info : Listening on port 3333 for gdb connections")
+            delivered.set()
+
+        worker = threading.Thread(target=report_ready)
+        worker.start()
+        try:
+            if not delivered.wait(0.2):
+                raise RuntimeError("readiness output callback was blocked")
+            super().start(config, event_sink=event_sink)
+        finally:
+            worker.join(timeout=0.5)
+
+
 class OwnedFakeService(FakeService):
     executable = "/trusted/openocd"
 
@@ -94,6 +112,137 @@ class PendingLease:
 
 
 class GatewaySupervisorTests(unittest.TestCase):
+    def test_queued_fault_during_ready_publish_revokes_startup_result(self) -> None:
+        service = FakeService()
+
+        def publish(snapshot):
+            if snapshot.state == "READY":
+                worker = threading.Thread(
+                    target=lambda: service.emit("Error: swd fault during READY publish")
+                )
+                worker.start()
+                worker.join(timeout=0.5)
+                self.assertFalse(worker.is_alive())
+
+        supervisor = GatewaySupervisor(
+            service_factory=lambda: service,
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=lambda _config: "running",
+            snapshot_sink=publish,
+        )
+
+        result = supervisor.ensure()
+
+        self.assertEqual((result.state, result.reason_code),
+                         ("DISCONNECTED", "OPENOCD_HARDWARE_ERROR"))
+        self.assertFalse(supervisor.snapshot.attach_ready)
+        self.assertEqual(service.stop_calls, 1)
+
+    def test_queued_fault_during_observe_publish_revokes_ready_result(self) -> None:
+        service = FakeService()
+        ready_count = 0
+
+        def publish(snapshot):
+            nonlocal ready_count
+            if snapshot.state == "READY":
+                ready_count += 1
+                if ready_count == 2:
+                    worker = threading.Thread(
+                        target=lambda: service.emit("Error: libusb error during READY publish")
+                    )
+                    worker.start()
+                    worker.join(timeout=0.5)
+                    self.assertFalse(worker.is_alive())
+
+        supervisor = GatewaySupervisor(
+            service_factory=lambda: service,
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=lambda _config: "running",
+            snapshot_sink=publish,
+        )
+
+        self.assertTrue(supervisor.ensure().attach_ready)
+        result = supervisor.observe()
+
+        self.assertEqual((result.state, result.reason_code),
+                         ("DISCONNECTED", "OPENOCD_HARDWARE_ERROR"))
+        self.assertEqual(service.stop_calls, 1)
+
+    def test_failed_starter_output_cannot_fault_next_service(self) -> None:
+        class FailedStarter(FakeService):
+            def start(self, config, event_sink=None):
+                super().start(config, event_sink=event_sink)
+                delivered = threading.Event()
+
+                def report_fault():
+                    event_sink("Error: libusb_bulk_transfer failed")
+                    delivered.set()
+
+                worker = threading.Thread(target=report_fault)
+                worker.start()
+                if not delivered.wait(0.5):
+                    raise AssertionError("fault callback was blocked")
+                worker.join(timeout=0.5)
+                raise RuntimeError("OpenOCD startup failed")
+
+        failed = FailedStarter()
+        healthy = FakeService()
+        services = iter((failed, healthy))
+        supervisor = GatewaySupervisor(
+            service_factory=lambda: next(services),
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=lambda _config: "running",
+        )
+
+        self.assertEqual(supervisor.ensure().state, "FAILED")
+        result = supervisor.ensure()
+
+        self.assertEqual((result.state, result.reason_code),
+                         ("READY", "TARGET_VERIFIED"))
+        self.assertEqual(healthy.stop_calls, 0)
+        failed.emit("Error: libusb error from old OpenOCD reader")
+        self.assertTrue(supervisor.snapshot.attach_ready)
+        self.assertEqual(supervisor.maintain_once().state, "READY")
+
+    def test_startup_gdb_attach_is_replayed_to_guard(self) -> None:
+        class AttachedStarter(FakeService):
+            def start(self, config, event_sink=None):
+                super().start(config, event_sink=event_sink)
+                delivered = threading.Event()
+
+                def report_attach():
+                    event_sink("Info : accepting 'gdb' connection on tcp/3333")
+                    delivered.set()
+
+                worker = threading.Thread(target=report_attach)
+                worker.start()
+                if not delivered.wait(0.5):
+                    raise AssertionError("attach callback was blocked")
+                worker.join(timeout=0.5)
+
+        service = AttachedStarter()
+        tcl = FakeTcl("running")
+        supervisor = GatewaySupervisor(
+            service_factory=lambda: service,
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=lambda _config: tcl.state,
+            remote_guard_factory=lambda _config: RemoteDebugGuard(tcl),
+        )
+
+        self.assertEqual(supervisor.ensure().state, "READY")
+        tcl.state = "halted"
+        service.emit("Info : dropped 'gdb' connection")
+
+        self.assertEqual((tcl.state, tcl.resume_calls), ("running", 1))
+
+    def test_background_readiness_output_does_not_block_startup(self) -> None:
+        supervisor = GatewaySupervisor(
+            service_factory=ThreadedReadinessService,
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=lambda _config: "running",
+        )
+        self.assertTrue(supervisor.ensure().attach_ready)
+
     def _restart_owner(self, directory, *, identity=None, shutdown=None,
                        endpoints_closed=None, timeout=0.05):
         identity = identity or {
