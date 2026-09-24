@@ -226,7 +226,11 @@ class GatewayProgrammingService:
         # target is inspected or an approval containing that path is issued.
         self._verify_received_file(selected, staged)
         inspected_path = getattr(image, "path", staged)
-        if Path(inspected_path) != staged:
+        try:
+            same_file = os.path.samefile(inspected_path, staged)
+        except OSError as error:
+            raise RemoteProgrammingDenied("Gateway inspected firmware path disappeared.") from error
+        if not same_file:
             raise RemoteProgrammingDenied("Gateway image inspection escaped the staged firmware path.")
         target = self.service.inspect_target(probe, event_sink=event_sink)
         plan = self.service.plan(image, probe, target)

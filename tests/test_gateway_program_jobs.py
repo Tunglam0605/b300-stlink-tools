@@ -395,18 +395,19 @@ class GatewayProgramJobsTests(unittest.TestCase):
         self.assertEqual(approval["plan"]["probe_serial"], "SAFE123")
 
     def test_relative_staging_root_can_commit_approved_job(self):
-        relative_root = Path(os.path.relpath(Path(self.temp.name) / "relative-jobs"))
-        jobs = GatewayProgramJobs(
-            relative_root, self.coordinator,
-            programming=GatewayProgrammingService(service=self.service),
-        )
-        slot = jobs.create_upload(self.manifest, "client-1", "SAFE123")
-        Path(slot["upload_path"]).write_bytes(self.path.read_bytes())
-        jobs.finalize_upload(slot["job_id"])
-        approval = jobs.prepare(slot["job_id"], "lease-1", "secret", 1)
-        jobs.commit(slot["job_id"], approval["approval_token"], "lease-1", "secret", 1)
-        jobs.wait_active(timeout=2)
-        self.assertEqual(jobs.status(slot["job_id"])["state"], "SUCCEEDED")
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            relative_root = Path(os.path.relpath(Path(directory) / "relative-jobs"))
+            jobs = GatewayProgramJobs(
+                relative_root, self.coordinator,
+                programming=GatewayProgrammingService(service=self.service),
+            )
+            slot = jobs.create_upload(self.manifest, "client-1", "SAFE123")
+            Path(slot["upload_path"]).write_bytes(self.path.read_bytes())
+            jobs.finalize_upload(slot["job_id"])
+            approval = jobs.prepare(slot["job_id"], "lease-1", "secret", 1)
+            jobs.commit(slot["job_id"], approval["approval_token"], "lease-1", "secret", 1)
+            jobs.wait_active(timeout=2)
+            self.assertEqual(jobs.status(slot["job_id"])["state"], "SUCCEEDED")
 
     def test_dry_run_cancel_releases_slot_without_starting_flash(self):
         job_id = self._upload()
