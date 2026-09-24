@@ -640,5 +640,214 @@ class MarkerTransitionTests(unittest.TestCase):
                          'PENDING_REPLUG')
 
 
+class InstallerStageTests(unittest.TestCase):
+    def setUp(self):
+        from scripts import install_isolated_gateway as installer
+        self.installer = installer
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.opt = self.root / 'opt'
+        self.opt.mkdir()
+        self.install_root = self.opt / 'b300-stlink'
+        self.bundle = self.root / 'candidate.tar.gz'
+        self.calls = []
+        self._write_bundle()
+
+    def _write_bundle(self, extra=None):
+        repo = Path(__file__).resolve().parents[1]
+        files = {
+            'BUNDLE-METADATA.txt': b'platform=linux-x64\nflavor=cli\nversion=0.23.0\n',
+            'b300-stlink': b'portable-cli',
+            'packaging/linux/b300-stlink-gateway-agent-system.service': (
+                repo / 'packaging/linux/b300-stlink-gateway-agent-system.service').read_bytes(),
+            'packaging/linux/b300-stlink-ingress.mount.in': (
+                repo / 'packaging/linux/b300-stlink-ingress.mount.in').read_bytes(),
+        }
+        files.update(extra or {})
+        lines = ['# B300 runtime 0.23.0']
+        for name, data in sorted(files.items()):
+            lines.append(hashlib.sha256(data).hexdigest() + ' *' + name)
+        files['B300-RUNTIME.sha256'] = ('\n'.join(lines) + '\n').encode('utf-8')
+        with tarfile.open(self.bundle, 'w:gz') as archive:
+            for name, data in files.items():
+                member = tarfile.TarInfo(name)
+                member.size = len(data)
+                member.mode = 0o755 if name == 'b300-stlink' else 0o644
+                archive.addfile(member, io.BytesIO(data))
+        self.digest = hashlib.sha256(self.bundle.read_bytes()).hexdigest()
+
+    @staticmethod
+    def _trusted_stat(path):
+        raw = os.lstat(path)
+        mode = (stat.S_IFDIR | 0o700) if stat.S_ISDIR(raw.st_mode) else (stat.S_IFREG | 0o600)
+        return SimpleNamespace(st_mode=mode, st_uid=0, st_dev=raw.st_dev,
+                               st_ino=raw.st_ino, st_nlink=raw.st_nlink,
+                               st_size=raw.st_size)
+
+    @staticmethod
+    def _trusted_fstat(fd):
+        raw = os.fstat(fd)
+        return SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=0,
+                               st_dev=raw.st_dev, st_ino=raw.st_ino,
+                               st_nlink=raw.st_nlink, st_size=raw.st_size)
+
+    def _host(self):
+        base = InstallerPlanTests(methodName='test_plan_is_read_only_and_terminal_evidence_is_rollback_inventory')
+        base.setUp()
+        self.addCleanup(base.doCleanups)
+        class Host:
+            def inspect(inner, probe_serial=None):
+                self.calls.append('inspect')
+                return base.evidence
+        return Host()
+
+    def _stage(self, *, fsync_dir=None, host=None, plan=None,
+               path_stat=None, promote=None):
+        selected_host = host or self._host()
+        selected_stat = path_stat or self._trusted_stat
+        selected_plan = plan or self.installer.build_plan(
+            self.bundle, self.digest, host=selected_host, trust_root=self.root,
+            path_stat=selected_stat)
+        return self.installer.stage_candidate(
+            selected_plan, self.bundle, self.digest, host=selected_host,
+            install_root=self.install_root, trust_root=self.root,
+            path_stat=selected_stat, fd_stat=self._trusted_fstat,
+            trusted_uid=0,
+            effective_uid=lambda: 0, system_name='linux',
+            identity_provider=lambda: self.calls.append('id') or (2001, 2002),
+            escape_unit=lambda path: self.calls.append('escape') or
+                        r'var-spool-b300\x2dstlink-ingress.mount',
+            fsync_dir=fsync_dir or (lambda path: self.calls.append('fsync_dir')),
+            promote=promote)
+
+    def test_stage_writes_journal_before_candidate_and_renders_units_only_in_candidate(self):
+        result = self._stage()
+        candidate = Path(result['candidate_dir'])
+        journal = Path(result['journal_path'])
+        self.assertEqual(result['state'], 'STAGED')
+        self.assertFalse(result['reused'])
+        self.assertTrue(candidate.is_dir())
+        self.assertEqual((candidate / 'b300-stlink').read_bytes(), b'portable-cli')
+        mount = (candidate / 'systemd/b300-stlink-ingress.mount.rendered').read_text(encoding='utf-8')
+        self.assertIn('uid=2001,gid=2002,mode=0710', mount)
+        self.assertNotIn('@AGENT_UID@', mount)
+        service = (candidate / 'systemd/b300-stlink-gateway-agent.service').read_text(encoding='utf-8')
+        self.assertIn(r'BindsTo=var-spool-b300\x2dstlink-ingress.mount', service)
+        journal_record = json.loads(journal.read_text(encoding='utf-8'))
+        self.assertEqual(journal_record['status'], 'COMPLETE')
+        self.assertEqual(journal_record['bundle_sha256'], self.digest)
+        self.assertIn(str(candidate), journal_record['planned_paths'])
+        self.assertIn(journal_record['completion_temp'], journal_record['planned_paths'])
+        self.assertIn('B300-RUNTIME.sha256', journal_record['members'])
+        self.assertFalse((self.root / 'etc/systemd/system').exists())
+        self.assertFalse((self.root / 'outside').exists())
+        self.assertTrue(all(call in {'inspect', 'id', 'escape', 'fsync_dir'} for call in self.calls))
+
+    def test_repeated_stage_reuses_only_verified_identical_candidate(self):
+        first = self._stage()
+        before = Path(first['candidate_dir']).stat().st_ino
+        second = self._stage()
+        self.assertTrue(second['reused'])
+        self.assertEqual(second['candidate_dir'], first['candidate_dir'])
+        self.assertEqual(Path(second['candidate_dir']).stat().st_ino, before)
+        self.assertEqual(len(list(self.opt.glob('.b300-stlink-stage-*.json'))), 1)
+
+    def test_matching_manifest_cannot_hide_changed_candidate_bytes(self):
+        first = self._stage()
+        candidate = Path(first['candidate_dir'])
+        (candidate / 'b300-stlink').write_bytes(b'replaced-cli')
+        manifest = candidate / 'B300-RUNTIME.sha256'
+        lines = manifest.read_text(encoding='utf-8').splitlines()
+        updated = []
+        for line in lines:
+            if line.endswith(' *b300-stlink'):
+                updated.append(hashlib.sha256(b'replaced-cli').hexdigest() + ' *b300-stlink')
+            else:
+                updated.append(line)
+        manifest.write_text('\n'.join(updated) + '\n', encoding='utf-8')
+        with self.assertRaises(Exception):
+            self._stage()
+
+    def test_existing_candidate_path_reported_as_link_is_not_reused(self):
+        first = self._stage()
+        candidate = Path(first['candidate_dir'])
+
+        def linked_candidate(path):
+            info = self._trusted_stat(path)
+            if Path(path) == candidate:
+                return SimpleNamespace(**{**vars(info), 'st_mode': stat.S_IFLNK | 0o777})
+            return info
+
+        with self.assertRaises(Exception):
+            self._stage(path_stat=linked_candidate)
+
+    def test_concurrent_candidate_creation_is_never_overwritten(self):
+        def occupied(source, destination):
+            destination.mkdir()
+            (destination / 'sentinel').write_bytes(b'keep')
+            raise FileExistsError('candidate appeared')
+
+        with self.assertRaises(Exception):
+            self._stage(promote=occupied)
+        candidate = self.install_root / 'candidates' / ('0.23.0-' + self.digest)
+        self.assertEqual((candidate / 'sentinel').read_bytes(), b'keep')
+        journal = self.opt / ('.b300-stlink-stage-' + self.digest + '.json')
+        self.assertEqual(json.loads(journal.read_text())['status'], 'STAGING')
+
+    def test_changed_archive_after_go_plan_refuses_before_journal_or_install_root(self):
+        host = self._host()
+        plan = self.installer.build_plan(self.bundle, self.digest, host=host,
+                                         trust_root=self.root, path_stat=self._trusted_stat)
+        self._write_bundle({'changed.txt': b'new bytes'})
+        with self.assertRaises(Exception):
+            self._stage(host=host, plan=plan)
+        self.assertFalse(self.install_root.exists())
+        self.assertEqual(list(self.opt.glob('.b300-stlink-stage-*.json')), [])
+
+    def test_archive_mutation_after_journal_is_detected_on_same_open_handle(self):
+        changed = [False]
+        def mutate_after_journal(path):
+            self.calls.append('fsync_dir')
+            if Path(path) == self.opt and not changed[0]:
+                changed[0] = True
+                with self.bundle.open('ab') as stream:
+                    stream.write(b'changed-after-journal')
+
+        with self.assertRaises(Exception):
+            self._stage(fsync_dir=mutate_after_journal)
+        journal = self.opt / ('.b300-stlink-stage-' + self.digest + '.json')
+        self.assertTrue(changed[0])
+        self.assertEqual(json.loads(journal.read_text())['status'], 'STAGING')
+
+    def test_failed_stage_preserves_write_ahead_journal_and_temp_evidence(self):
+        root_syncs = [0]
+        def fail_after_journal(path):
+            self.calls.append('fsync_dir')
+            if Path(path) == self.install_root:
+                root_syncs[0] += 1
+                if root_syncs[0] == 2:
+                    raise OSError('injected fsync failure')
+        with self.assertRaises(Exception):
+            self._stage(fsync_dir=fail_after_journal)
+        journals = list(self.opt.glob('.b300-stlink-stage-*.json'))
+        self.assertEqual(len(journals), 1)
+        record = json.loads(journals[0].read_text(encoding='utf-8'))
+        self.assertEqual(record['status'], 'STAGING')
+        self.assertTrue(Path(record['temp_dir']).exists())
+        self.assertFalse(Path(record['candidate_dir']).exists())
+        with self.assertRaises(Exception) as repeated:
+            self._stage()
+        self.assertEqual(repeated.exception.reason_code, 'RECOVERY_REQUIRED')
+        self.assertTrue(Path(record['temp_dir']).exists())
+
+    def test_unsafe_member_is_rejected_without_path_escape(self):
+        self._write_bundle({'../outside': b'forbidden'})
+        with self.assertRaises(Exception):
+            self._stage()
+        self.assertFalse((self.root / 'outside').exists())
+        self.assertFalse(self.install_root.exists())
+
+
 if __name__ == '__main__':
     unittest.main()

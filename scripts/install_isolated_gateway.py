@@ -8,12 +8,14 @@ may call the root-only transition API; no apply or rollback CLI exists here.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import errno
 import hashlib
 import json
 import os
 import platform
 import re
+import secrets
 import stat
 import subprocess
 import sys
@@ -59,6 +61,8 @@ MAX_ARCHIVE_MEMBERS = 20000
 MAX_MEMBER_BYTES = 512 * 1024 * 1024
 MAX_EXPANDED_BYTES = 4 * 1024 * 1024 * 1024
 MAX_JOB_RECORD_BYTES = 65536
+MAX_STAGE_JOURNAL_BYTES = 16 * 1024 * 1024
+MAX_STAGE_RECEIPT_BYTES = 8 * 1024 * 1024
 EXPECTED_ARCHIVE_MEMBERS = frozenset({
     "BUNDLE-METADATA.txt", "B300-RUNTIME.sha256", "b300-stlink",
     "packaging/linux/b300-stlink-gateway-agent-system.service",
@@ -84,6 +88,12 @@ class TransitionError(RuntimeError):
         self.reason_code = reason_code
 
 
+class StageError(RuntimeError):
+    def __init__(self, reason_code: str) -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+
+
 class _LinuxFlock:
     @staticmethod
     def acquire(fd: int) -> None:
@@ -103,6 +113,451 @@ def _fsync_directory(path: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _identity_numbers() -> tuple[int, int]:
+    import grp
+    import pwd
+    return pwd.getpwnam("b300-agent").pw_uid, grp.getgrnam("b300-upload").gr_gid
+
+
+def _escape_ingress_mount(path: str) -> str:
+    command = ("/usr/bin/systemd-escape", "--path", "--suffix=mount", path)
+    result = subprocess.run(command, capture_output=True, text=True,
+                            timeout=4, check=False)
+    if result.returncode != 0:
+        raise StageError("SYSTEMD_ESCAPE_FAILED")
+    return result.stdout.strip()
+
+
+def _write_exclusive(path: Path, payload: bytes, *, mode: int = 0o600) -> str:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(str(path), flags, mode)
+    digest = hashlib.sha256()
+    with os.fdopen(descriptor, "wb") as stream:
+        if hasattr(os, "fchmod"):
+            os.fchmod(stream.fileno(), mode)
+        else:
+            os.chmod(path, mode)
+        stream.write(payload)
+        digest.update(payload)
+        stream.flush()
+        os.fsync(stream.fileno())
+    return digest.hexdigest()
+
+
+def _read_bounded_json(path: Path, *, maximum: int = 1024 * 1024) -> dict:
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > maximum:
+        raise StageError("STAGE_EVIDENCE_UNSAFE")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(str(path), flags)
+    with os.fdopen(descriptor, "rb") as stream:
+        data = stream.read(maximum + 1)
+    try:
+        record = json.loads(data.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise StageError("STAGE_EVIDENCE_UNSAFE") from error
+    if not isinstance(record, dict):
+        raise StageError("STAGE_EVIDENCE_UNSAFE")
+    return record
+
+
+def _runtime_manifest_expected(root: Path, version: str) -> dict[str, str]:
+    path = root / "B300-RUNTIME.sha256"
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+            or info.st_size > 1024 * 1024):
+        raise StageError("RUNTIME_MANIFEST_INVALID")
+    descriptor = os.open(str(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    with os.fdopen(descriptor, "rb") as stream:
+        raw = stream.read(1024 * 1024 + 1)
+    if len(raw) > 1024 * 1024:
+        raise StageError("RUNTIME_MANIFEST_INVALID")
+    lines = raw.decode("utf-8").splitlines()
+    if not lines or lines[0] != "# B300 runtime " + version:
+        raise StageError("RUNTIME_MANIFEST_INVALID")
+    expected = {}
+    for line in lines[1:]:
+        match = re.fullmatch(r"([0-9a-f]{64}) \*([^\r\n]+)", line)
+        if match is None:
+            raise StageError("RUNTIME_MANIFEST_INVALID")
+        digest, name = match.groups()
+        _relative_name(name)
+        if name in expected or name == "B300-RUNTIME.sha256":
+            raise StageError("RUNTIME_MANIFEST_INVALID")
+        expected[name] = digest
+    return expected
+
+
+def _hash_open_bundle(handle) -> str:
+    handle.seek(0)
+    digest = hashlib.sha256()
+    total = 0
+    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        total += len(chunk)
+        if total > MAX_BUNDLE_BYTES:
+            raise StageError("BUNDLE_TOO_LARGE")
+        digest.update(chunk)
+    handle.seek(0)
+    return digest.hexdigest()
+
+
+def _ensure_stage_parent(root: Path, relative: str, created: set[Path]) -> Path:
+    current = root
+    parts = relative.split("/")
+    for part in parts[:-1]:
+        current = current / part
+        try:
+            info = current.lstat()
+        except FileNotFoundError:
+            os.mkdir(current, 0o700)
+            created.add(current)
+            continue
+        if not stat.S_ISDIR(info.st_mode):
+            raise StageError("STAGE_PATH_UNSAFE")
+    return current / parts[-1]
+
+
+def _extract_stage_archive(handle, root: Path, members: tuple[str, ...],
+                           version: str) -> tuple[dict[str, str], set[Path]]:
+    names = set()
+    hashes = {}
+    directories: set[Path] = {root}
+    expanded = 0
+    count = 0
+    handle.seek(0)
+    with tarfile.open(fileobj=handle, mode="r|gz") as archive:
+        for member in archive:
+            count += 1
+            if count > MAX_ARCHIVE_MEMBERS:
+                raise StageError("BUNDLE_MEMBER_LIMIT")
+            if member.size < 0 or member.size > MAX_MEMBER_BYTES:
+                raise StageError("BUNDLE_MEMBER_LIMIT")
+            expanded += member.size
+            if expanded > MAX_EXPANDED_BYTES:
+                raise StageError("BUNDLE_EXPANDED_LIMIT")
+            _relative_name(member.name)
+            if (len(member.name) > 240 or not member.isfile()
+                    or member.name in names or member.name not in members):
+                raise StageError("BUNDLE_MEMBER_UNSAFE")
+            names.add(member.name)
+            target = _ensure_stage_parent(root, member.name, directories)
+            source = archive.extractfile(member)
+            if source is None:
+                raise StageError("BUNDLE_MEMBER_UNREADABLE")
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(str(target), flags, 0o600)
+            digest = hashlib.sha256()
+            copied = 0
+            with source, os.fdopen(descriptor, "wb") as output:
+                selected_mode = 0o755 if member.mode & 0o111 else 0o644
+                if hasattr(os, "fchmod"):
+                    os.fchmod(output.fileno(), selected_mode)
+                else:
+                    os.chmod(target, selected_mode)
+                while copied < member.size:
+                    chunk = source.read(min(1024 * 1024, member.size - copied))
+                    if not chunk:
+                        raise StageError("BUNDLE_MEMBER_SHORT")
+                    output.write(chunk)
+                    digest.update(chunk)
+                    copied += len(chunk)
+                output.flush()
+                os.fsync(output.fileno())
+            hashes[member.name] = digest.hexdigest()
+    if names != set(members):
+        raise StageError("BUNDLE_MEMBER_MISMATCH")
+    expected = _runtime_manifest_expected(root, version)
+    if expected != {name: digest for name, digest in hashes.items()
+                    if name != "B300-RUNTIME.sha256"}:
+        raise StageError("RUNTIME_MANIFEST_MISMATCH")
+    return hashes, directories
+
+
+def _render_stage_units(root: Path, agent_uid: int, upload_gid: int,
+                        mount_name: str) -> tuple[dict[str, str], Path]:
+    source_root = root / "packaging/linux"
+    service_source = source_root / "b300-stlink-gateway-agent-system.service"
+    mount_source = source_root / "b300-stlink-ingress.mount.in"
+    if service_source.stat().st_size > 65536 or mount_source.stat().st_size > 65536:
+        raise StageError("UNIT_TEMPLATE_INVALID")
+    service = service_source.read_text(encoding="utf-8")
+    mount = mount_source.read_text(encoding="utf-8")
+    if ("BindsTo=" + mount_name not in service
+            or "After=" + mount_name not in service
+            or "ExecStart=/opt/b300-stlink/bin/b300-stlink debug gateway-agent --managed-child --json" not in service
+            or "sudo " in service
+            or mount.count("@AGENT_UID@") != 1 or mount.count("@UPLOAD_GID@") != 1
+            or "Where=/var/spool/b300-stlink/ingress" not in mount
+            or "size=65M,nr_inodes=256,nodev,nosuid,noexec" not in mount):
+        raise StageError("UNIT_TEMPLATE_INVALID")
+    rendered = mount.replace("@AGENT_UID@", str(agent_uid)).replace(
+        "@UPLOAD_GID@", str(upload_gid))
+    if "@" in rendered:
+        raise StageError("UNIT_TEMPLATE_INVALID")
+    systemd_root = root / "systemd"
+    os.mkdir(systemd_root, 0o700)
+    hashes = {
+        "systemd/b300-stlink-gateway-agent.service": _write_exclusive(
+            systemd_root / "b300-stlink-gateway-agent.service",
+            service.encode("utf-8"), mode=0o644),
+        "systemd/b300-stlink-ingress.mount.rendered": _write_exclusive(
+            systemd_root / "b300-stlink-ingress.mount.rendered",
+            rendered.encode("utf-8"), mode=0o644),
+    }
+    return hashes, systemd_root
+
+
+def _planned_stage_paths(journal: Path, install_root: Path, candidates_root: Path,
+                         temporary: Path, candidate: Path, completion_temp: Path,
+                         members: tuple[str, ...]) -> list[str]:
+    paths = {journal, completion_temp, install_root, candidates_root, temporary, candidate,
+             temporary / "systemd", temporary / "STAGE-RECEIPT.json",
+             temporary / "systemd/b300-stlink-gateway-agent.service",
+             temporary / "systemd/b300-stlink-ingress.mount.rendered"}
+    for name in members:
+        target = temporary.joinpath(*name.split("/"))
+        paths.add(target)
+        current = target.parent
+        while current != temporary:
+            paths.add(current)
+            current = current.parent
+    return sorted(str(path) for path in paths)
+
+
+def _hash_staged_file(path: Path, maximum: int = MAX_MEMBER_BYTES) -> str:
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+            or info.st_size > maximum):
+        raise StageError("RECOVERY_REQUIRED")
+    descriptor = os.open(str(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    digest = hashlib.sha256()
+    total = 0
+    with os.fdopen(descriptor, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            total += len(chunk)
+            if total > maximum:
+                raise StageError("RECOVERY_REQUIRED")
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _rename_noreplace(source: Path, destination: Path) -> None:
+    if os.name != "posix":
+        if destination.exists() or destination.is_symlink():
+            raise FileExistsError(str(destination))
+        os.rename(source, destination)
+        return
+    libc = ctypes.CDLL(None, use_errno=True)
+    try:
+        renameat2 = libc.renameat2
+    except AttributeError as error:
+        raise StageError("ATOMIC_PROMOTE_UNAVAILABLE") from error
+    renameat2.argtypes = (ctypes.c_int, ctypes.c_char_p,
+                          ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
+    renameat2.restype = ctypes.c_int
+    result = renameat2(-100, os.fsencode(source), -100, os.fsencode(destination), 1)
+    if result != 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code), str(destination))
+
+
+def _verify_staged_candidate(candidate: Path, journal: dict,
+                             members: tuple[str, ...], expected_sha256: str) -> None:
+    if (journal.get("status") != "COMPLETE"
+            or journal.get("bundle_sha256") != expected_sha256
+            or journal.get("candidate_dir") != str(candidate)
+            or journal.get("members") != list(members)):
+        raise StageError("RECOVERY_REQUIRED")
+    try:
+        receipt = _read_bounded_json(candidate / "STAGE-RECEIPT.json",
+                                     maximum=MAX_STAGE_RECEIPT_BYTES)
+        if (receipt.get("bundle_sha256") != expected_sha256
+                or receipt.get("members") != list(members)
+                or receipt.get("version") != journal.get("version")):
+            raise StageError("RECOVERY_REQUIRED")
+        member_hashes = receipt.get("member_sha256")
+        if not isinstance(member_hashes, dict) or set(member_hashes) != set(members):
+            raise StageError("RECOVERY_REQUIRED")
+        expected = _runtime_manifest_expected(candidate, journal["version"])
+        if set(expected) != set(members) - {"B300-RUNTIME.sha256"}:
+            raise StageError("RECOVERY_REQUIRED")
+        all_files = set()
+        for directory, folders, files in os.walk(candidate, followlinks=False):
+            for name in folders + files:
+                item = Path(directory) / name
+                info = item.lstat()
+                if stat.S_ISLNK(info.st_mode):
+                    raise StageError("RECOVERY_REQUIRED")
+                if name in files:
+                    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                        raise StageError("RECOVERY_REQUIRED")
+                    all_files.add(item.relative_to(candidate).as_posix())
+                elif not stat.S_ISDIR(info.st_mode):
+                    raise StageError("RECOVERY_REQUIRED")
+        render_names = set(receipt.get("rendered_unit_sha256", {}))
+        if all_files != set(members) | render_names | {"STAGE-RECEIPT.json"}:
+            raise StageError("RECOVERY_REQUIRED")
+        for name in members:
+            path = candidate.joinpath(*name.split("/"))
+            digest = _hash_staged_file(path)
+            if digest != member_hashes[name]:
+                raise StageError("RECOVERY_REQUIRED")
+            if name != "B300-RUNTIME.sha256" and digest != expected[name]:
+                raise StageError("RECOVERY_REQUIRED")
+        for name, digest in receipt["rendered_unit_sha256"].items():
+            if _hash_staged_file(candidate / name, 65536) != digest:
+                raise StageError("RECOVERY_REQUIRED")
+    except (OSError, ValueError, UnicodeError, KeyError, TypeError) as error:
+        raise StageError("RECOVERY_REQUIRED") from error
+
+
+def stage_candidate(
+        plan: GatewayInstallPlan, bundle: Path, expected_sha256: str, *, host,
+        install_root: Path = Path("/opt/b300-stlink"), trust_root: Path = Path("/"),
+        trusted_uid: int = 0, path_stat: Callable = os.lstat,
+        fd_stat: Callable = os.fstat, effective_uid: Callable = getattr(os, "geteuid", lambda: -1),
+        system_name: str = sys.platform, identity_provider: Callable = _identity_numbers,
+        escape_unit: Callable = _escape_ingress_mount,
+        fsync_dir: Callable = _fsync_directory,
+        promote: Optional[Callable] = None,
+        probe_serial: Optional[str] = None) -> dict:
+    """Stage one exact candidate without touching active software or services."""
+    if system_name != "linux" or effective_uid() != 0:
+        raise StageError("ROOT_LINUX_REQUIRED")
+    selected = Path(bundle)
+    digest = str(expected_sha256).lower()
+    if (not isinstance(plan, GatewayInstallPlan) or not plan.ready
+            or not re.fullmatch(r"[0-9a-f]{64}", digest)
+            or plan.candidate.get("path") != str(selected)
+            or plan.candidate.get("sha256") != digest):
+        raise StageError("PLAN_NOT_FRESH")
+    fresh = build_plan(selected, digest, host=host, trust_root=trust_root,
+                       trusted_uid=trusted_uid, path_stat=path_stat,
+                       probe_serial=probe_serial)
+    if not fresh.ready or fresh.candidate != plan.candidate:
+        raise StageError("PLAN_NOT_FRESH")
+    actual, metadata, members = _inspect_bundle(selected, include_members=True)
+    if actual != digest or any(len(name) > 240 for name in members):
+        raise StageError("BUNDLE_CHANGED")
+    identities = identity_provider()
+    if (not isinstance(identities, tuple) or len(identities) != 2
+            or any(type(value) is not int or value <= 0 for value in identities)):
+        raise StageError("IDENTITY_INVALID")
+    agent_uid, upload_gid = identities
+    mount_name = escape_unit("/var/spool/b300-stlink/ingress")
+    if mount_name != MOUNT_UNIT:
+        raise StageError("MOUNT_NAME_INVALID")
+    root = Path(install_root)
+    if not root.is_absolute() or root.name != "b300-stlink":
+        raise StageError("STAGE_PATH_UNSAFE")
+    _trusted_directory_chain(root.parent, owner_uid=trusted_uid, path_stat=path_stat)
+    candidates_root = root / "candidates"
+    candidate = candidates_root / (metadata["version"] + "-" + digest)
+    journal = root.parent / (".b300-stlink-stage-" + digest + ".json")
+    for directory in (root, candidates_root):
+        try:
+            info = path_stat(directory)
+        except FileNotFoundError:
+            continue
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != trusted_uid
+                or stat.S_IMODE(info.st_mode) & 0o022):
+            raise StageError("STAGE_PATH_UNSAFE")
+    if journal.exists() or journal.is_symlink():
+        info = path_stat(journal)
+        _trusted_regular(info, owner_uid=trusted_uid, maximum=MAX_STAGE_JOURNAL_BYTES)
+        try:
+            candidate_info = path_stat(candidate)
+        except OSError as error:
+            raise StageError("RECOVERY_REQUIRED") from error
+        if (not stat.S_ISDIR(candidate_info.st_mode)
+                or candidate_info.st_uid != trusted_uid
+                or stat.S_IMODE(candidate_info.st_mode) & 0o022):
+            raise StageError("RECOVERY_REQUIRED")
+        record = _read_bounded_json(journal, maximum=MAX_STAGE_JOURNAL_BYTES)
+        _verify_staged_candidate(candidate, record, members, digest)
+        return {"state": "STAGED", "candidate_dir": str(candidate),
+                "journal_path": str(journal), "reused": True}
+    if candidate.exists() or candidate.is_symlink():
+        raise StageError("STAGE_TARGET_OCCUPIED")
+    temporary = root / (".stage-" + digest + "-" + secrets.token_hex(8))
+    journal_tmp = root.parent / (".b300-stlink-stage-complete-" + secrets.token_hex(8))
+    if temporary.exists() or temporary.is_symlink():
+        raise StageError("STAGE_TARGET_OCCUPIED")
+    planned = _planned_stage_paths(journal, root, candidates_root,
+                                   temporary, candidate, journal_tmp, members)
+    record = {"schema_version": 1, "status": "STAGING", "bundle_sha256": digest,
+              "bundle_path": str(selected), "version": metadata["version"],
+              "members": list(members), "candidate_dir": str(candidate),
+              "temp_dir": str(temporary), "planned_paths": planned,
+              "completion_temp": str(journal_tmp),
+              "agent_uid": agent_uid, "upload_gid": upload_gid,
+              "mount_unit_target": "/etc/systemd/system/" + mount_name}
+    journal_payload = (json.dumps(record, sort_keys=True,
+                                  separators=(",", ":")) + "\n").encode("utf-8")
+    if len(journal_payload) > MAX_STAGE_JOURNAL_BYTES:
+        raise StageError("STAGE_JOURNAL_TOO_LARGE")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    descriptor = os.open(str(selected), flags)
+    with os.fdopen(descriptor, "rb") as archive_handle:
+        source_info = fd_stat(archive_handle.fileno())
+        path_info = path_stat(selected)
+        if (not _same_inode(source_info, path_info) or not stat.S_ISREG(source_info.st_mode)
+                or source_info.st_uid != trusted_uid or source_info.st_nlink != 1
+                or stat.S_IMODE(source_info.st_mode) & 0o022):
+            raise StageError("BUNDLE_CHANGED")
+        if _hash_open_bundle(archive_handle) != digest:
+            raise StageError("BUNDLE_CHANGED")
+        try:
+            _write_exclusive(journal, journal_payload)
+            fsync_dir(root.parent)
+            if not root.exists():
+                os.mkdir(root, 0o755)
+                fsync_dir(root.parent)
+            if not candidates_root.exists():
+                os.mkdir(candidates_root, 0o755)
+                fsync_dir(root)
+            os.mkdir(temporary, 0o700)
+            fsync_dir(root)
+            extracted, directories = _extract_stage_archive(
+                archive_handle, temporary, members, metadata["version"])
+            if _hash_open_bundle(archive_handle) != digest:
+                raise StageError("BUNDLE_CHANGED")
+            rendered, systemd_root = _render_stage_units(
+                temporary, agent_uid, upload_gid, mount_name)
+            directories.add(systemd_root)
+            receipt = {"schema_version": 1, "bundle_sha256": digest,
+                       "members": list(members), "version": metadata["version"],
+                       "member_sha256": extracted,
+                       "rendered_unit_sha256": rendered}
+            receipt_payload = (json.dumps(receipt, sort_keys=True,
+                                          separators=(",", ":")) + "\n").encode("utf-8")
+            if len(receipt_payload) > MAX_STAGE_RECEIPT_BYTES:
+                raise StageError("STAGE_RECEIPT_TOO_LARGE")
+            _write_exclusive(temporary / "STAGE-RECEIPT.json", receipt_payload)
+            for directory in sorted(directories, key=lambda path: len(path.parts), reverse=True):
+                fsync_dir(directory)
+            if candidate.exists() or candidate.is_symlink():
+                raise StageError("STAGE_TARGET_OCCUPIED")
+            (promote or _rename_noreplace)(temporary, candidate)
+            fsync_dir(candidates_root)
+            completed = {**record, "status": "COMPLETE"}
+            completed_payload = (json.dumps(completed, sort_keys=True,
+                                            separators=(",", ":")) + "\n").encode("utf-8")
+            if len(completed_payload) > MAX_STAGE_JOURNAL_BYTES:
+                raise StageError("STAGE_JOURNAL_TOO_LARGE")
+            _write_exclusive(journal_tmp, completed_payload)
+            os.replace(journal_tmp, journal)
+            fsync_dir(root.parent)
+        except Exception as error:
+            # Keep journal, temporary files, and any promoted candidate for
+            # explicit manual recovery. Never infer a failed flash or retry.
+            if isinstance(error, StageError):
+                raise
+            raise StageError("STAGING_INTERRUPTED") from error
+    return {"state": "STAGED", "candidate_dir": str(candidate),
+            "journal_path": str(journal), "reused": False}
 
 
 def _trusted_directory_chain(path: Path, *, owner_uid: int,
@@ -345,7 +800,7 @@ def _bundle_path_safe(bundle: Path, trusted_root: Path, trusted_uid: int,
         return False
 
 
-def _inspect_bundle(bundle: Path) -> tuple[str, dict]:
+def _inspect_bundle(bundle: Path, *, include_members: bool = False):
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
     fd = os.open(str(bundle), flags)
     with os.fdopen(fd, "rb") as handle:
@@ -401,7 +856,8 @@ def _inspect_bundle(bundle: Path) -> tuple[str, dict]:
                     or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.+-]*",
                                         metadata.get("version", ""))):
                 raise ValueError("Bundle metadata has unsupported target")
-        return digest.hexdigest(), metadata
+        result = (digest.hexdigest(), metadata)
+        return (*result, tuple(sorted(names))) if include_members else result
 
 
 def inspect_job_states(root: Path) -> dict[str, int]:
