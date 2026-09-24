@@ -993,7 +993,7 @@ def _managed_gateway_command(args: argparse.Namespace) -> tuple:
 def run_gateway_runtime_command(args: argparse.Namespace) -> int:
     isolated = _isolated_gateway_config()
     if isolated is not None:
-        operation = "rescan" if args.debug_mode == "gateway-rescan" else "status"
+        operation = "runtime_" + args.debug_mode.removeprefix("gateway-")
         record = _isolated_gateway_submit(isolated, GatewayRequest.create(operation, {}), 10.0)
         if record.get("status") == "ok":
             record.update(record.get("result", {}))
@@ -1003,7 +1003,7 @@ def run_gateway_runtime_command(args: argparse.Namespace) -> int:
         record["command"] = "debug %s" % args.debug_mode
         emit_snapshot(record, args.json,
                       "Gateway %s: %s" % (args.debug_mode, record.get("reason_code", "OK")))
-        return 0 if record.get("status") == "ok" else 1
+        return 0 if record.get("status") == "ok" and record.get("state") == "READY" else 1
     manager = GatewayProcessManager()
     if args.debug_mode == "gateway-status":
         snapshot = manager.status()
@@ -1041,9 +1041,11 @@ def _isolated_flash_ready(config, jobs, socket_server) -> bool:
         state = config.state_root.lstat()
         ingress = config.ingress_root.lstat()
         sock = config.socket_path.lstat()
-        return (stat.S_ISDIR(state.st_mode) and state.st_uid != config.operator_uid
+        return (stat.S_ISDIR(state.st_mode) and state.st_uid == os.getuid()
+                and state.st_uid != config.operator_uid
                 and not state.st_mode & 0o077
-                and stat.S_ISDIR(ingress.st_mode) and ingress.st_uid != config.operator_uid
+                and stat.S_ISDIR(ingress.st_mode) and ingress.st_uid == os.getuid()
+                and ingress.st_uid != config.operator_uid
                 and not ingress.st_mode & 0o022
                 and stat.S_ISSOCK(sock.st_mode) and sock.st_uid == os.getuid()
                 and not sock.st_mode & 0o007

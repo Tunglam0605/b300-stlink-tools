@@ -392,6 +392,10 @@ class GatewayAgent:
             result = self.coordinator.public_snapshot().to_record()
             result["capabilities"] = list(self._capabilities_provider())
             return self._ok(request, result)
+        if operation in {"runtime_status", "runtime_ensure", "runtime_rescan"}:
+            self._exact_keys(payload, set())
+            action = operation.removeprefix("runtime_")
+            return self._ok(request, self.coordinator.runtime_snapshot(action).to_record())
         if operation == "acquire":
             self._exact_keys(payload, {
                 "client_id", "client_label", "mode", "probe_serial",

@@ -54,6 +54,7 @@ class FakeSupervisor:
     def __init__(self):
         self.ensure_calls = 0
         self.maintain_calls = 0
+        self.rescan_calls = 0
         self.stop_calls = 0
         self.ensure_result = snapshot()
         self.maintain_result = self.ensure_result
@@ -72,6 +73,11 @@ class FakeSupervisor:
     def maintain_once(self):
         self.maintain_calls += 1
         self.snapshot = self.maintain_result
+        return self.snapshot
+
+    def rescan(self):
+        self.rescan_calls += 1
+        self.snapshot = self.ensure_result
         return self.snapshot
 
     def stop(self):
@@ -122,6 +128,18 @@ def request(client_id="client-a", mode="VSCODE_DEBUG"):
 
 
 class GatewayLeaseCoordinatorTests(unittest.TestCase):
+    def test_runtime_snapshot_preserves_debug_lease_and_rescan_semantics(self):
+        self.assertEqual(self.coordinator.runtime_snapshot("status").state, "STOPPED")
+        self.assertEqual(self.supervisor.ensure_calls, 0)
+        self.assertEqual(self.coordinator.runtime_snapshot("ensure").state, "STOPPED")
+        self.assertEqual(self.supervisor.ensure_calls, 0)
+        grant = self.coordinator.acquire(request())
+        self.assertIsInstance(grant, GatewayLeaseGrant)
+        self.assertTrue(self.coordinator.runtime_snapshot("status").attach_ready)
+        self.assertTrue(self.coordinator.runtime_snapshot("ensure").attach_ready)
+        self.assertTrue(self.coordinator.runtime_snapshot("rescan").attach_ready)
+        self.assertEqual(self.supervisor.rescan_calls, 1)
+
     def test_flash_lease_reserves_probe_without_opening_debug_gateway(self):
         with tempfile.TemporaryDirectory() as directory:
             supervisor = FakeSupervisor()

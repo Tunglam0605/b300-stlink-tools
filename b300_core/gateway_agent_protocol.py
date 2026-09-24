@@ -24,6 +24,7 @@ RESPONSE_RETENTION_SECONDS = 3600.0
 MAX_PENDING_REQUESTS = 128
 AGENT_OPERATIONS = frozenset({
     "status", "acquire", "renew", "release", "rescan", "shutdown",
+    "runtime_status", "runtime_ensure", "runtime_rescan",
     "program_create_upload", "program_finalize_upload", "program_prepare",
     "program_commit", "program_status", "program_cancel", "program_cleanup",
 })

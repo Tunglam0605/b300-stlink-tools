@@ -326,6 +326,18 @@ class GatewayLeaseCoordinator:
                 return _inactive("GATEWAY_IDLE")
             return self._public_locked(self._lease, self._clock())
 
+    def runtime_snapshot(self, action: str):
+        """Expose the owned Debug runtime without creating an unleased owner."""
+        if action not in {"status", "ensure", "rescan"}:
+            raise ValueError("Unsupported Gateway runtime action")
+        with self._lock:
+            if (not self._recovery_required and self._lease is not None
+                    and self._lease.mode != "FLASH_APPLICATION"):
+                if action == "rescan":
+                    self.supervisor.rescan()
+                self.tick()
+            return self.supervisor.snapshot
+
     def shutdown(self, reason_code: str = "AGENT_SHUTDOWN") -> GatewayLeasePublicSnapshot:
         with self._lock:
             if self._lease is None:
