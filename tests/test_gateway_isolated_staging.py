@@ -5,6 +5,7 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from b300_core.gateway_program_jobs import GatewayProgramJobs, ProgramJobError
@@ -70,7 +71,7 @@ class IsolatedStagingTests(unittest.TestCase):
                     try:
                         upload.symlink_to(self.image)
                     except (OSError, NotImplementedError):
-                        self.skipTest("Symlink creation unavailable")
+                        continue
                 elif kind == "hardlink":
                     upload.unlink()
                     os.link(self.image, upload)
@@ -84,6 +85,54 @@ class IsolatedStagingTests(unittest.TestCase):
                 self.assertEqual(self.jobs.status(slot["job_id"])["state"], "UPLOADING")
                 self.assertTrue(self.jobs.status(slot["job_id"])["reason_code"])
                 self.assertFalse(self.jobs.staged_path(slot["job_id"]).exists())
+
+    def test_ingress_creation_failure_leaves_no_orphan_job(self):
+        failed_id = "a" * 32
+        original = os.open
+
+        def fail_file_open(path, flags, mode=0o777):
+            if str(path).endswith("artifact.part"):
+                raise OSError("injected ingress failure")
+            return original(path, flags, mode)
+
+        with mock.patch("b300_core.gateway_program_jobs.uuid.uuid4",
+                        return_value=SimpleNamespace(hex=failed_id)), \
+             mock.patch("b300_core.gateway_program_jobs.os.open", side_effect=fail_file_open):
+            with self.assertRaises(OSError):
+                self.slot()
+        self.assertFalse((self.jobs.root / failed_id).exists())
+        self.assertFalse((self.jobs.ingress_root / "program-jobs" / failed_id).exists())
+        self.assertEqual(self.slot()["state"], "UPLOADING")
+
+    def test_record_write_failure_leaves_no_orphan_job(self):
+        failed_id = "b" * 32
+        original = self.jobs._write
+
+        def fail_after_record(job_id, record):
+            original(job_id, record)
+            raise OSError("injected record failure")
+
+        with mock.patch("b300_core.gateway_program_jobs.uuid.uuid4",
+                        return_value=SimpleNamespace(hex=failed_id)), \
+             mock.patch.object(self.jobs, "_write", side_effect=fail_after_record):
+            with self.assertRaises(OSError):
+                self.slot()
+        self.assertFalse((self.jobs.root / failed_id).exists())
+        self.assertFalse((self.jobs.ingress_root / "program-jobs" / failed_id).exists())
+        self.assertEqual(self.slot()["state"], "UPLOADING")
+
+    def test_ingress_collision_preserves_preexisting_path(self):
+        collided_id = "c" * 32
+        existing = self.jobs.ingress_root / "program-jobs" / collided_id
+        existing.mkdir()
+        sentinel = existing / "user.txt"
+        sentinel.write_text("keep", encoding="utf-8")
+        with mock.patch("b300_core.gateway_program_jobs.uuid.uuid4",
+                        return_value=SimpleNamespace(hex=collided_id)):
+            with self.assertRaises(FileExistsError):
+                self.slot()
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+        self.assertFalse((self.jobs.root / collided_id).exists())
 
     def test_private_artifact_is_never_replaced_by_finalize(self):
         slot = self.slot()

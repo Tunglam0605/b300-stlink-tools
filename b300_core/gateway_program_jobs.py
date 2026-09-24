@@ -116,29 +116,55 @@ class GatewayProgramJobs:
     def _create_ingress_slot(self, job_id: str) -> Path:
         directory = self._ingress_jobs / self._job_id(job_id)
         directory.mkdir(mode=0o710)
-        if os.name != "nt":
-            os.chmod(directory, 0o710)
-            if directory.stat().st_gid != self._ingress_gid:
-                os.chown(directory, -1, self._ingress_gid)
-            if (directory.stat().st_uid != os.getuid()
-                    or directory.stat().st_gid != self._ingress_gid
-                    or stat.S_IMODE(directory.stat().st_mode) != 0o710):
-                raise ProgramJobError("STAGING_UNSAFE")
         path = directory / "artifact.part"
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(str(path), flags, 0o660)
+        created_file = None
         try:
             if os.name != "nt":
-                os.fchmod(fd, 0o660)
-                if os.fstat(fd).st_gid != self._ingress_gid:
-                    os.fchown(fd, -1, self._ingress_gid)
-                info = os.fstat(fd)
-                if (info.st_uid != os.getuid() or info.st_gid != self._ingress_gid
-                        or stat.S_IMODE(info.st_mode) != 0o660):
+                os.chmod(directory, 0o710)
+                if directory.stat().st_gid != self._ingress_gid:
+                    os.chown(directory, -1, self._ingress_gid)
+                if (directory.stat().st_uid != os.getuid()
+                        or directory.stat().st_gid != self._ingress_gid
+                        or stat.S_IMODE(directory.stat().st_mode) != 0o710):
                     raise ProgramJobError("STAGING_UNSAFE")
-        finally:
-            os.close(fd)
-        return path
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(str(path), flags, 0o660)
+            try:
+                created_file = os.fstat(fd)
+                if os.name != "nt":
+                    os.fchmod(fd, 0o660)
+                    if os.fstat(fd).st_gid != self._ingress_gid:
+                        os.fchown(fd, -1, self._ingress_gid)
+                    info = os.fstat(fd)
+                    if (info.st_uid != os.getuid() or info.st_gid != self._ingress_gid
+                            or stat.S_IMODE(info.st_mode) != 0o660):
+                        raise ProgramJobError("STAGING_UNSAFE")
+            finally:
+                os.close(fd)
+            return path
+        except Exception:
+            if created_file is not None:
+                try:
+                    current = path.lstat()
+                    if ((current.st_dev, current.st_ino)
+                            == (created_file.st_dev, created_file.st_ino)):
+                        path.unlink()
+                except FileNotFoundError:
+                    pass
+            directory.rmdir()
+            raise
+
+    def _remove_unrecorded_job(self, job_id: str) -> None:
+        directory = self._job_dir(job_id)
+        record = directory / "job.json"
+        if record.exists() or record.is_symlink():
+            info = record.lstat()
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise ProgramJobError("STAGING_UNSAFE")
+            if os.name != "nt" and info.st_uid != os.getuid():
+                raise ProgramJobError("STAGING_UNSAFE")
+            record.unlink()
+        directory.rmdir()
 
     def _remove_ingress_slot(self, job_id: str) -> None:
         if self.ingress_root is None:
@@ -248,19 +274,29 @@ class GatewayProgramJobs:
             job_id = uuid.uuid4().hex
             directory = self._job_dir(job_id)
             directory.mkdir(mode=0o700)
-            upload = (self._create_ingress_slot(job_id) if self.ingress_root is not None
-                      else self._upload_path(job_id))
-            record = {
-                "job_id": job_id, "state": "UPLOADING",
-                "manifest": _manifest_record(item), "client_id": client_id,
-                "request_id": request_id,
-                "probe_serial": probe_serial, "created_at": time.time(),
-                "phase": "uploading", "progress": 0,
-                "reason_code": "", "reason": "", "next_action": "",
-            }
-            self._write(job_id, record)
-            return {"job_id": job_id, "upload_path": str(upload),
-                    "state": "UPLOADING"}
+            ingress_created = False
+            try:
+                upload = (self._create_ingress_slot(job_id) if self.ingress_root is not None
+                          else self._upload_path(job_id))
+                ingress_created = self.ingress_root is not None
+                record = {
+                    "job_id": job_id, "state": "UPLOADING",
+                    "manifest": _manifest_record(item), "client_id": client_id,
+                    "request_id": request_id,
+                    "probe_serial": probe_serial, "created_at": time.time(),
+                    "phase": "uploading", "progress": 0,
+                    "reason_code": "", "reason": "", "next_action": "",
+                }
+                self._write(job_id, record)
+                return {"job_id": job_id, "upload_path": str(upload),
+                        "state": "UPLOADING"}
+            except Exception:
+                try:
+                    if ingress_created:
+                        self._remove_ingress_slot(job_id)
+                finally:
+                    self._remove_unrecorded_job(job_id)
+                raise
 
     def _prune_expired(self) -> None:
         now = time.time()
