@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Read-only preflight for a separately authorized isolated Ubuntu Gateway install.
+"""Preflight and a guarded marker transition for isolated Ubuntu Gateway setup.
 
-This module deliberately has no apply, verify-boundary, or rollback operation.
-The plan is evidence for a later transaction, never authorization to mutate a host.
+The CLI deliberately exposes only read-only plan. A later administrator workflow
+may call the root-only transition API; no apply or rollback CLI exists here.
 """
 
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -17,6 +18,8 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -70,6 +73,225 @@ FILE_KEYS = ("legacy_bundle_manifest", "system_unit", "mount_unit",
              "agent_udev_rule", "legacy_udev_rule", "vendor_udev_rule")
 GROUP_KEYS = ("b300-agent", "b300-probe", "b300-upload", "b300-operator",
               "plugdev", "sudo")
+SYSTEM_OWNER_LOCK = Path("/var/lib/b300-stlink/gateway/hardware-owner.lock")
+SYSTEM_MARKER = Path("/etc/b300-stlink/isolated-gateway.json")
+EXACT_IDLE_OWNER_RECORD = b'\0{"schema_version":1,"state":"IDLE"}'
+
+
+class TransitionError(RuntimeError):
+    def __init__(self, reason_code: str) -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+
+
+class _LinuxFlock:
+    @staticmethod
+    def acquire(fd: int) -> None:
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    @staticmethod
+    def release(fd: int) -> None:
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+def _fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(str(path), flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _trusted_directory_chain(path: Path, *, owner_uid: int,
+                             path_stat: Callable) -> None:
+    current = Path(path)
+    while True:
+        try:
+            info = path_stat(current)
+        except OSError as error:
+            raise TransitionError("PATH_UNSAFE") from error
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != owner_uid
+                or stat.S_IMODE(info.st_mode) & 0o022):
+            raise TransitionError("PATH_UNSAFE")
+        if current.parent == current:
+            return
+        current = current.parent
+
+
+def _trusted_regular(info, *, owner_uid: int, maximum: int) -> None:
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != owner_uid
+            or stat.S_IMODE(info.st_mode) & 0o077
+            or info.st_nlink != 1 or not 0 < info.st_size <= maximum):
+        raise TransitionError("PATH_UNSAFE")
+
+
+def _same_inode(left, right) -> bool:
+    return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
+
+
+def _read_active_marker(marker_path: Path, *, root_uid: int,
+                        path_stat: Callable, fd_stat: Callable) -> tuple[dict, object]:
+    try:
+        before = path_stat(marker_path)
+        _trusted_regular(before, owner_uid=root_uid, maximum=4096)
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        descriptor = os.open(str(marker_path), flags)
+        with os.fdopen(descriptor, "rb") as stream:
+            opened = fd_stat(stream.fileno())
+            _trusted_regular(opened, owner_uid=root_uid, maximum=4096)
+            if not _same_inode(before, opened):
+                raise TransitionError("MARKER_CHANGED")
+            raw = stream.read(4097)
+        record = json.loads(raw.decode("utf-8"))
+    except TransitionError:
+        raise
+    except (OSError, ValueError, UnicodeError, json.JSONDecodeError) as error:
+        raise TransitionError("MARKER_INVALID") from error
+    keys = {"schema_version", "socket_path", "state_root", "ingress_root",
+            "operator_uid", "operator_gid", "flash_enabled"}
+    if (not isinstance(record, dict) or set(record) != keys
+            or type(record["schema_version"]) is not int or record["schema_version"] != 1
+            or record["socket_path"] != "/run/b300-stlink/agent.sock"
+            or record["state_root"] != "/var/lib/b300-stlink/gateway"
+            or record["ingress_root"] != "/var/spool/b300-stlink/ingress"
+            or type(record["operator_uid"]) is not int or record["operator_uid"] < 0
+            or type(record["operator_gid"]) is not int or record["operator_gid"] < 0
+            or record["flash_enabled"] is not True):
+        raise TransitionError("MARKER_NOT_ACTIVE")
+    return record, opened
+
+
+def _transition_active_to_pending(
+        marker_path: Path, owner_lock_path: Path, *, probes, locker,
+        effective_uid: Callable, system_name: str, trusted_uid: int,
+        lock_uid: Optional[int] = None,
+        path_stat: Callable = os.lstat, fd_stat: Callable = os.fstat,
+        fsync_dir: Callable = _fsync_directory,
+        clock: Callable = time.monotonic, sleep: Callable = time.sleep,
+        timeout_seconds: float = 2.0) -> dict:
+    """Guard the marker switch with the Agent's existing persistent owner inode."""
+    if system_name != "linux" or effective_uid() != 0:
+        raise TransitionError("ROOT_LINUX_REQUIRED")
+    if not 0 < timeout_seconds <= 5:
+        raise ValueError("Lock timeout must be in (0, 5] seconds")
+    marker = Path(marker_path)
+    lock_path = Path(owner_lock_path)
+    selected_lock_uid = trusted_uid if lock_uid is None else lock_uid
+    _trusted_directory_chain(marker.parent, owner_uid=trusted_uid, path_stat=path_stat)
+    _trusted_directory_chain(lock_path.parent.parent, owner_uid=trusted_uid,
+                             path_stat=path_stat)
+    try:
+        lock_dir = path_stat(lock_path.parent)
+        if (not stat.S_ISDIR(lock_dir.st_mode) or lock_dir.st_uid != selected_lock_uid
+                or stat.S_IMODE(lock_dir.st_mode) & 0o077):
+            raise TransitionError("PATH_UNSAFE")
+        before = path_stat(lock_path)
+        _trusted_regular(before, owner_uid=selected_lock_uid, maximum=4097)
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        descriptor = os.open(str(lock_path), flags)
+    except TransitionError:
+        raise
+    except OSError as error:
+        raise TransitionError("LOCK_MISSING") from error
+    acquired = False
+    temporary = None
+    try:
+        opened = fd_stat(descriptor)
+        _trusted_regular(opened, owner_uid=selected_lock_uid, maximum=4097)
+        if not _same_inode(before, opened):
+            raise TransitionError("LOCK_REPLACED")
+        deadline = clock() + timeout_seconds
+        while True:
+            try:
+                locker.acquire(descriptor)
+                acquired = True
+                break
+            except OSError as error:
+                if error.errno not in (errno.EAGAIN, errno.EWOULDBLOCK) and not isinstance(error, BlockingIOError):
+                    raise TransitionError("LOCK_UNAVAILABLE") from error
+                if clock() >= deadline:
+                    raise TransitionError("LOCK_BUSY") from error
+                sleep(min(0.02, max(0.0, deadline - clock())))
+        rechecked = path_stat(lock_path)
+        _trusted_regular(rechecked, owner_uid=selected_lock_uid, maximum=4097)
+        if not _same_inode(rechecked, fd_stat(descriptor)):
+            raise TransitionError("LOCK_REPLACED")
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        durable = os.read(descriptor, 4098)
+        if durable != EXACT_IDLE_OWNER_RECORD:
+            try:
+                record = json.loads(durable[1:].decode("ascii")) if durable[:1] == b"\0" else None
+            except (UnicodeError, json.JSONDecodeError):
+                record = None
+            if isinstance(record, dict) and record.get("state") == "ACTIVE":
+                raise TransitionError("OWNER_NOT_IDLE")
+            raise TransitionError("OWNER_RECORD_INVALID")
+        for name in ("agent_idle", "jobs_idle", "openocd_quiescent"):
+            try:
+                if getattr(probes, name)() is not True:
+                    raise TransitionError("QUIESCENCE_UNKNOWN")
+            except TransitionError:
+                raise
+            except Exception as error:
+                raise TransitionError("QUIESCENCE_UNKNOWN") from error
+        record, marker_identity = _read_active_marker(
+            marker, root_uid=trusted_uid, path_stat=path_stat, fd_stat=fd_stat)
+        if not _same_inode(path_stat(marker), marker_identity):
+            raise TransitionError("MARKER_CHANGED")
+        record["flash_enabled"] = False
+        payload = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+        if len(payload) > 4096:
+            raise TransitionError("MARKER_INVALID")
+        try:
+            temporary_fd, temporary_name = tempfile.mkstemp(
+                prefix=".isolated-gateway-", dir=str(marker.parent))
+            temporary = Path(temporary_name)
+            with os.fdopen(temporary_fd, "wb") as stream:
+                if hasattr(os, "fchmod"):
+                    os.fchmod(stream.fileno(), 0o600)
+                else:
+                    os.chmod(temporary, 0o600)
+                if os.name == "posix":
+                    os.fchown(stream.fileno(), trusted_uid, -1)
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+                fresh = fd_stat(stream.fileno())
+                _trusted_regular(fresh, owner_uid=trusted_uid, maximum=4096)
+            os.replace(temporary, marker)
+            temporary = None
+            fsync_dir(marker.parent)
+        except TransitionError:
+            raise
+        except OSError as error:
+            raise TransitionError("MARKER_WRITE_FAILED") from error
+        return {"state": "PENDING_REPLUG"}
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+        try:
+            if acquired:
+                locker.release(descriptor)
+        finally:
+            os.close(descriptor)
+
+
+def transition_active_to_pending(*, probes, timeout_seconds: float = 2.0) -> dict:
+    """Root-only production entry point; no CLI command calls it yet."""
+    if not sys.platform.startswith("linux") or getattr(os, "geteuid", lambda: -1)() != 0:
+        raise TransitionError("ROOT_LINUX_REQUIRED")
+    import pwd
+    agent_uid = pwd.getpwnam("b300-agent").pw_uid
+    return _transition_active_to_pending(
+        SYSTEM_MARKER, SYSTEM_OWNER_LOCK, probes=probes, locker=_LinuxFlock(),
+        effective_uid=os.geteuid, system_name="linux", trusted_uid=0,
+        lock_uid=agent_uid, timeout_seconds=timeout_seconds)
 
 
 @dataclass(frozen=True)

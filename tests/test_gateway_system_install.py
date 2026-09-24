@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
@@ -407,6 +408,219 @@ class InstallerPlanTests(unittest.TestCase):
         with mock.patch.object(Path, 'lstat', autospec=True, side_effect=path_info), \
              mock.patch.object(os, 'readlink', return_value='../usr/lib/os-release'):
             self.assertEqual(probe._distribution(), 'ubuntu')
+
+
+class MarkerTransitionTests(unittest.TestCase):
+    def setUp(self):
+        from scripts import install_isolated_gateway as installer
+        self.installer = installer
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        self.marker = root / 'etc/b300-stlink/isolated-gateway.json'
+        self.marker.parent.mkdir(parents=True)
+        self.lock = root / 'var/lib/b300-stlink/gateway/hardware-owner.lock'
+        self.lock.parent.mkdir(parents=True)
+        self.marker.write_text(json.dumps({
+            'schema_version': 1,
+            'socket_path': '/run/b300-stlink/agent.sock',
+            'state_root': '/var/lib/b300-stlink/gateway',
+            'ingress_root': '/var/spool/b300-stlink/ingress',
+            'operator_uid': 1000, 'operator_gid': 2002,
+            'flash_enabled': True,
+        }), encoding='utf-8')
+        self.lock.write_bytes(b'\0{"schema_version":1,"state":"IDLE"}')
+        self.events = []
+
+        class Locker:
+            held = False
+
+            def acquire(inner, fd):
+                self.events.append(('acquire', os.fstat(fd).st_ino))
+                if inner.held:
+                    raise BlockingIOError('worker owns lock')
+                inner.held = True
+
+            def release(inner, fd):
+                self.events.append(('release', os.fstat(fd).st_ino))
+                inner.held = False
+
+        self.locker = Locker()
+
+    @staticmethod
+    def _safe_stat(path):
+        raw = os.lstat(path)
+        mode = stat.S_IFDIR | 0o700 if stat.S_ISDIR(raw.st_mode) else stat.S_IFREG | 0o600
+        return SimpleNamespace(st_mode=mode, st_uid=0, st_dev=raw.st_dev,
+                               st_ino=raw.st_ino, st_nlink=raw.st_nlink,
+                               st_size=raw.st_size)
+
+    @staticmethod
+    def _safe_fstat(fd):
+        raw = os.fstat(fd)
+        return SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=0,
+                               st_dev=raw.st_dev, st_ino=raw.st_ino,
+                               st_nlink=raw.st_nlink, st_size=raw.st_size)
+
+    def _probes(self, *, agent=True, jobs=True, openocd=True):
+        return SimpleNamespace(
+            agent_idle=lambda: self.events.append('agent') or agent,
+            jobs_idle=lambda: self.events.append('jobs') or jobs,
+            openocd_quiescent=lambda: self.events.append('openocd') or openocd)
+
+    def _transition(self, probes=None, **options):
+        return self.installer._transition_active_to_pending(
+            self.marker, self.lock, probes=probes or self._probes(),
+            locker=options.pop('locker', self.locker),
+            effective_uid=lambda: 0, system_name='linux', trusted_uid=0,
+            path_stat=options.pop('path_stat', self._safe_stat),
+            fd_stat=self._safe_fstat,
+            fsync_dir=lambda path: self.events.append('fsync_dir'),
+            timeout_seconds=options.pop('timeout_seconds', 0.02),
+            **options)
+
+    def test_worker_owned_lock_times_out_without_marker_mutation(self):
+        self.locker.held = True
+        original = self.marker.read_bytes()
+        inode = self.lock.stat().st_ino
+        with self.assertRaises(Exception) as captured:
+            self._transition(timeout_seconds=0.01)
+        self.assertEqual(captured.exception.reason_code, 'LOCK_BUSY')
+        self.assertEqual(self.marker.read_bytes(), original)
+        self.assertEqual(self.lock.stat().st_ino, inode)
+        self.assertNotIn('agent', self.events)
+
+    def test_transition_wins_and_fsyncs_pending_before_unlock(self):
+        from b300_core.gateway_program_jobs import GatewayProgramJobs, ProgramJobError
+        from b300_core.gateway_system_mode import parse_isolated_gateway_record
+        original_inode = self.lock.stat().st_ino
+        result = self._transition()
+        self.assertEqual(result['state'], 'PENDING_REPLUG')
+        pending = parse_isolated_gateway_record(
+            json.loads(self.marker.read_text(encoding='utf-8')))
+        self.assertFalse(pending.flash_enabled)
+        worker_jobs = GatewayProgramJobs.__new__(GatewayProgramJobs)
+        worker_jobs.ingress_root = pending.ingress_root
+        with mock.patch('b300_core.gateway_program_jobs.load_isolated_gateway_config',
+                        return_value=pending):
+            with self.assertRaises(ProgramJobError) as blocked:
+                worker_jobs._require_isolated_programming()
+        self.assertEqual(blocked.exception.reason_code, 'ISOLATED_FLASH_DISABLED')
+        self.assertEqual(self.lock.stat().st_ino, original_inode)
+        self.assertEqual(self.lock.read_bytes(), b'\0{"schema_version":1,"state":"IDLE"}')
+        self.assertLess(self.events.index('fsync_dir'),
+                        next(i for i, event in enumerate(self.events)
+                             if isinstance(event, tuple) and event[0] == 'release'))
+        self.assertEqual([event for event in self.events if isinstance(event, str)],
+                         ['agent', 'jobs', 'openocd', 'fsync_dir'])
+
+    def test_crash_released_flock_with_active_record_refuses(self):
+        self.lock.write_bytes(b'\0{"schema_version":1,"state":"ACTIVE",'
+                              b'"pid":123,"instance_id":"' + b'a' * 32 + b'"}')
+        original = self.marker.read_bytes()
+        with self.assertRaises(Exception) as captured:
+            self._transition()
+        self.assertEqual(captured.exception.reason_code, 'OWNER_NOT_IDLE')
+        self.assertEqual(self.marker.read_bytes(), original)
+        self.assertNotIn('agent', self.events)
+
+    def test_path_replacement_after_flock_refuses_without_marker_change(self):
+        original = self.marker.read_bytes()
+        calls = [0]
+
+        def changed_stat(path):
+            info = self._safe_stat(path)
+            if Path(path) == self.lock:
+                calls[0] += 1
+                if calls[0] > 1:
+                    return SimpleNamespace(**{**vars(info), 'st_ino': info.st_ino + 1})
+            return info
+
+        with self.assertRaises(Exception) as captured:
+            self._transition(path_stat=changed_stat)
+        self.assertEqual(captured.exception.reason_code, 'LOCK_REPLACED')
+        self.assertEqual(self.marker.read_bytes(), original)
+
+    def test_uncertain_job_probe_blocks_before_marker_write(self):
+        original = self.marker.read_bytes()
+        for unavailable in ('agent', 'jobs', 'openocd'):
+            with self.subTest(unavailable=unavailable):
+                self.events.clear()
+                probes = self._probes(**{unavailable: False})
+                with self.assertRaises(Exception) as captured:
+                    self._transition(probes=probes)
+                self.assertEqual(captured.exception.reason_code, 'QUIESCENCE_UNKNOWN')
+                self.assertEqual(self.marker.read_bytes(), original)
+                self.assertNotIn('fsync_dir', self.events)
+
+    def test_missing_or_corrupt_durable_owner_record_refuses(self):
+        original_marker = self.marker.read_bytes()
+        for content in (b'\0', b'\0{}', b'not-a-lock-record'):
+            with self.subTest(content=content):
+                self.lock.write_bytes(content)
+                with self.assertRaises(Exception) as captured:
+                    self._transition()
+                self.assertEqual(captured.exception.reason_code, 'OWNER_RECORD_INVALID')
+                self.assertEqual(self.marker.read_bytes(), original_marker)
+                self.assertNotIn('fsync_dir', self.events)
+        self.lock.unlink()
+        with self.assertRaises(Exception) as captured:
+            self._transition()
+        self.assertEqual(captured.exception.reason_code, 'LOCK_MISSING')
+        self.assertEqual(self.marker.read_bytes(), original_marker)
+
+    def test_adopted_flash_keeps_owner_through_disconnect_and_shutdown(self):
+        from b300_core.gateway_lease import GatewayLeaseStore
+        from b300_core.gateway_lease_coordinator import GatewayLeaseCoordinator
+        from b300_core.hardware_owner import FileHardwareOwner
+        from b300_core.models import ProbeInfo
+        from tests.test_gateway_lease_coordinator import FakeSupervisor, request
+
+        coordinator = GatewayLeaseCoordinator(
+            FakeSupervisor(), store=GatewayLeaseStore(self.lock.parent / 'lease.json'),
+            hardware_owner=FileHardwareOwner(self.lock),
+            probe_discovery=lambda: (ProbeInfo('SAFE123', 'ST-Link', 'test', 'usb:1'),))
+        grant = coordinator.acquire(request('client-flash', 'FLASH_APPLICATION'))
+        coordinator.adopt_flash_job(grant.lease_id, grant.token, grant.generation)
+        self.assertTrue(coordinator.release(grant.lease_id, grant.token, grant.generation).active)
+        self.assertTrue(coordinator.shutdown().active)
+
+        base_locker = self.locker
+
+        class CoupledLocker:
+            def acquire(self, fd):
+                if coordinator.owns_flash_lease(grant.lease_id, grant.token, grant.generation):
+                    raise BlockingIOError('adopted job still owns hardware')
+                base_locker.acquire(fd)
+
+            def release(self, fd):
+                base_locker.release(fd)
+
+        original = self.marker.read_bytes()
+        with self.assertRaises(Exception) as captured:
+            self._transition(locker=CoupledLocker(), timeout_seconds=0.01)
+        self.assertEqual(captured.exception.reason_code, 'LOCK_BUSY')
+        self.assertEqual(self.marker.read_bytes(), original)
+
+        self.assertFalse(coordinator.finish_flash_job(
+            grant.lease_id, grant.token, grant.generation).active)
+        self.assertEqual(self._transition(locker=CoupledLocker())['state'], 'PENDING_REPLUG')
+
+    @unittest.skipUnless(os.name == 'posix', 'Linux flock integration required')
+    def test_native_flock_contends_with_file_hardware_owner_inode(self):
+        from b300_core.hardware_owner import FileHardwareOwner
+        owner = FileHardwareOwner(self.lock)
+        token = owner.acquire()
+        try:
+            with self.assertRaises(Exception) as captured:
+                self._transition(locker=self.installer._LinuxFlock(),
+                                 timeout_seconds=0.01)
+            self.assertEqual(captured.exception.reason_code, 'LOCK_BUSY')
+            self.assertTrue(json.loads(self.marker.read_text(encoding='utf-8'))['flash_enabled'])
+        finally:
+            token.release()
+        self.assertEqual(self._transition(locker=self.installer._LinuxFlock())['state'],
+                         'PENDING_REPLUG')
 
 
 if __name__ == '__main__':
