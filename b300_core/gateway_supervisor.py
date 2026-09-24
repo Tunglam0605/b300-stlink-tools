@@ -13,6 +13,7 @@ import threading
 import time
 import tempfile
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Optional, Sequence
 
@@ -489,6 +490,20 @@ class GatewayProcessManager:
             output.close()
 
 
+@dataclass(frozen=True)
+class _OpenOcdLineEvent:
+    generation: int
+    line: str
+
+
+@dataclass(frozen=True)
+class _PublishEvent:
+    generation: int
+    state: str
+    reason_code: str
+    cpu_state: str
+
+
 class GatewaySupervisor:
     """Own one DebugService and publish only target-verified READY snapshots."""
 
@@ -547,7 +562,7 @@ class GatewaySupervisor:
         self._gdb_activity_generation = 0
         self._gdb_ever_attached = False
         self._lock = threading.RLock()
-        self._pending_openocd_lines: queue.SimpleQueue[tuple[int, str]] = queue.SimpleQueue()
+        self._mailbox: queue.SimpleQueue[_OpenOcdLineEvent | _PublishEvent] = queue.SimpleQueue()
         self._startup_gdb_lines: list[str] = []
         self._snapshot = GatewaySnapshot.from_record({
             "schema_version": SUPPORTED_SCHEMA_VERSION,
@@ -955,10 +970,11 @@ class GatewaySupervisor:
         owner_generation = self._generation if generation is None else generation
         if owner_generation != self._generation:
             return
-        if any(marker in str(line).lower() for marker in (
+        normalized = str(line)
+        if any(marker in normalized.lower() for marker in (
                 "libusb", "target not examined", "swd fault")):
             (fault_event or self._pending_fault_event).set()
-        self._pending_openocd_lines.put((owner_generation, line))
+        self._mailbox.put(_OpenOcdLineEvent(owner_generation, normalized))
         if not self._lock.acquire(blocking=False):
             return
         try:
@@ -969,17 +985,21 @@ class GatewaySupervisor:
     def _drain_openocd_lines_locked(self) -> None:
         while True:
             try:
-                generation, line = self._pending_openocd_lines.get_nowait()
+                event = self._mailbox.get_nowait()
             except queue.Empty:
                 return
-            if generation != self._generation:
+            if event.generation != self._generation:
                 continue
-            self._process_openocd_line_locked(line)
+            if isinstance(event, _OpenOcdLineEvent):
+                self._process_openocd_line_locked(event.line)
+            elif event.state != "READY" or not self._hardware_error:
+                self._commit_snapshot(event.state, event.reason_code,
+                                      cpu_state=event.cpu_state)
 
     def _discard_openocd_lines_locked(self) -> None:
         while True:
             try:
-                self._pending_openocd_lines.get_nowait()
+                self._mailbox.get_nowait()
             except queue.Empty:
                 return
 
@@ -1000,7 +1020,7 @@ class GatewaySupervisor:
             activity_changed = True
         if activity_changed:
             current = self._snapshot
-            self._publish(
+            self._commit_snapshot(
                 current.state, current.reason_code,
                 cpu_state=current.cpu_state if current.state == "READY" else "unknown",
             )
@@ -1015,7 +1035,7 @@ class GatewaySupervisor:
             # revokes the public READY claim immediately.
             self._hardware_error = True
             if self._service is not None:
-                self._publish("DISCONNECTED", "OPENOCD_HARDWARE_ERROR")
+                self._commit_snapshot("DISCONNECTED", "OPENOCD_HARDWARE_ERROR")
 
     def _arm_remote_guard(self, config: DebugConfig, initial_state: str) -> None:
         if self._remote_guard is not None:
@@ -1043,6 +1063,12 @@ class GatewaySupervisor:
 
     def _publish(self, state: str, reason_code: str,
                  *, cpu_state: str = "unknown") -> GatewaySnapshot:
+        self._mailbox.put(_PublishEvent(self._generation, state, reason_code, cpu_state))
+        self._drain_openocd_lines_locked()
+        return self._snapshot
+
+    def _commit_snapshot(self, state: str, reason_code: str,
+                         *, cpu_state: str = "unknown") -> GatewaySnapshot:
         self._sequence += 1
         ready = state == "READY"
         selected = None

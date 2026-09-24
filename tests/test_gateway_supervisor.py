@@ -112,6 +112,136 @@ class PendingLease:
 
 
 class GatewaySupervisorTests(unittest.TestCase):
+    def test_fault_before_ready_publish_never_reaches_snapshot_sink(self) -> None:
+        service = FakeService()
+        snapshots = []
+
+        class FaultBeforeReadyPublishSupervisor(GatewaySupervisor):
+            def _publish(self, state, reason_code, *, cpu_state="unknown"):
+                if state == "READY":
+                    worker = threading.Thread(
+                        target=lambda: service.emit("Error: swd fault before READY publish")
+                    )
+                    worker.start()
+                    worker.join(timeout=0.5)
+                    if worker.is_alive():
+                        raise AssertionError("fault callback was blocked")
+                return super()._publish(state, reason_code, cpu_state=cpu_state)
+
+        supervisor = FaultBeforeReadyPublishSupervisor(
+            service_factory=lambda: service,
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=lambda _config: "running",
+            snapshot_sink=snapshots.append,
+        )
+
+        result = supervisor.ensure()
+
+        self.assertEqual((result.state, result.reason_code),
+                         ("DISCONNECTED", "OPENOCD_HARDWARE_ERROR"))
+        self.assertFalse(any(snapshot.attach_ready for snapshot in snapshots))
+        self.assertEqual([snapshot.sequence for snapshot in snapshots],
+                         list(range(1, len(snapshots) + 1)))
+        self.assertEqual(result.sequence, len(snapshots))
+
+    def test_fault_before_ready_publish_never_writes_ready_status(self) -> None:
+        service = FakeService()
+
+        class FaultBeforeReadyPublishSupervisor(GatewaySupervisor):
+            def _publish(self, state, reason_code, *, cpu_state="unknown"):
+                if state == "READY":
+                    worker = threading.Thread(
+                        target=lambda: service.emit("Error: libusb fault before READY status")
+                    )
+                    worker.start()
+                    worker.join(timeout=0.5)
+                    if worker.is_alive():
+                        raise AssertionError("fault callback was blocked")
+                return super()._publish(state, reason_code, cpu_state=cpu_state)
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = GatewayStatusStore(Path(directory))
+            written_states = []
+
+            def persist(snapshot):
+                store.write(snapshot, owner_pid=123)
+                written_states.append(store.read()[0].state)
+
+            supervisor = FaultBeforeReadyPublishSupervisor(
+                service_factory=lambda: service,
+                probe_discovery=lambda: (PROBE,),
+                target_state_probe=lambda _config: "running",
+                snapshot_sink=persist,
+            )
+
+            result = supervisor.ensure()
+
+        self.assertEqual(result.reason_code, "OPENOCD_HARDWARE_ERROR")
+        self.assertNotIn("READY", written_states)
+
+    def test_fault_after_ready_event_delivers_ready_then_disconnected(self) -> None:
+        service = FakeService()
+        delivered = []
+
+        def publish(snapshot):
+            delivered.append(snapshot.state)
+            if snapshot.state == "READY":
+                worker = threading.Thread(
+                    target=lambda: service.emit("Error: swd fault after READY event")
+                )
+                worker.start()
+                worker.join(timeout=0.5)
+                self.assertFalse(worker.is_alive())
+
+        supervisor = GatewaySupervisor(
+            service_factory=lambda: service,
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=lambda _config: "running",
+            snapshot_sink=publish,
+        )
+
+        result = supervisor.ensure()
+
+        self.assertEqual(delivered[:3], ["STARTING", "READY", "DISCONNECTED"])
+        self.assertTrue(all(state == "DISCONNECTED" for state in delivered[3:]))
+        self.assertEqual(result.reason_code, "OPENOCD_HARDWARE_ERROR")
+
+    def test_late_reader_after_stop_does_not_revoke_new_owner(self) -> None:
+        first, second = FakeService(), FakeService()
+        services = iter((first, second))
+        supervisor = GatewaySupervisor(
+            service_factory=lambda: next(services),
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=lambda _config: "running",
+            remote_guard_factory=lambda _config: RemoteDebugGuard(FakeTcl("running")),
+        )
+
+        self.assertTrue(supervisor.ensure().attach_ready)
+        supervisor.stop()
+        first.emit("Error: libusb fault after stop")
+        self.assertEqual(supervisor.snapshot.state, "STOPPED")
+
+        self.assertTrue(supervisor.ensure().attach_ready)
+        self.assertEqual(supervisor.observe().state, "READY")
+        self.assertEqual(second.stop_calls, 0)
+
+    def test_snapshot_sink_exception_remains_synchronous(self) -> None:
+        service = FakeService()
+
+        def publish(snapshot):
+            if snapshot.state == "READY":
+                raise RuntimeError("status sink failed")
+
+        supervisor = GatewaySupervisor(
+            service_factory=lambda: service,
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=lambda _config: "running",
+            snapshot_sink=publish,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "status sink failed"):
+            supervisor.ensure()
+
     def test_stale_reader_cannot_overwrite_new_owner_fault_latch(self) -> None:
         services = (FakeService(), FakeService())
         service_factory = iter(services)
