@@ -80,6 +80,9 @@ operator boundary would require a separately specified protocol proxy.
   becomes an explicit incomplete-upload state, never an automatic flash.
 - The hardware owner lock and all Agent/legacy Gateway commands use one
   system-scoped owner identity, not a `Path.home()` lock for each Linux user.
+- The exact ST-Link USB node uses group `b300-probe` with mode `0660` and no
+  `uaccess` tag; only the `b300-agent` service account joins that group. The
+  SSH operator account remains outside it for unprivileged access.
 
 The setup path must verify actual group memberships, udev rules, `uaccess`
 grants, filesystem ownership, and systemd state on the target host before
