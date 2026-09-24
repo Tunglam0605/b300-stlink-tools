@@ -137,9 +137,14 @@ def gui_resources(platform_name: str):
 
 def runtime_resources(platform_name: str):
     """Immutable resources required by both frozen entry points."""
-    del platform_name
     trusted = load_trusted_bootloader(ROOT / "resources" / "firmware")
-    return [trusted.image.path, trusted.manifest_path, trusted.catalog_path]
+    resources = [trusted.image.path, trusted.manifest_path, trusted.catalog_path]
+    if platform_name in {"linux-x64", "linux-arm64"}:
+        resources.extend((
+            ROOT / "packaging" / "linux" / "b300-stlink-gateway-agent-system.service",
+            ROOT / "packaging" / "linux" / "b300-stlink-ingress.mount.in",
+        ))
+    return resources
 
 
 def pyinstaller_data_argument(source: Path) -> str:

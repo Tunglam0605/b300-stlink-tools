@@ -1,0 +1,23 @@
+[Unit]
+Description=B300 ST-Link isolated Gateway Agent
+After=var-spool-b300\x2dstlink-ingress.mount network.target
+Requires=var-spool-b300\x2dstlink-ingress.mount
+BindsTo=var-spool-b300\x2dstlink-ingress.mount
+
+[Service]
+Type=simple
+User=b300-agent
+Group=b300-agent
+SupplementaryGroups=b300-probe b300-upload b300-operator
+ExecStart=/opt/b300-stlink/bin/b300-stlink debug gateway-agent --managed-child --json
+RuntimeDirectory=b300-stlink
+RuntimeDirectoryMode=0755
+StateDirectory=b300-stlink
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
