@@ -44,7 +44,7 @@ from b300_core.gateway_agent import (
     GatewayAgentStatus, GatewayAgentStatusStore,
 )
 from b300_core.gateway_agent_protocol import GatewayRequest, GatewayRequestStore
-from b300_core.gateway_system_mode import load_isolated_gateway_config
+from b300_core.gateway_system_mode import load_isolated_gateway_config, ingress_mount_isolated
 from b300_core.gateway_program_jobs import GatewayProgramJobs
 from b300_core.gateway_unix_transport import GatewayUnixClient, GatewayUnixServer
 from b300_core.gateway_lease import GatewayLeasePublicSnapshot, GatewayLeaseStore
@@ -1035,7 +1035,8 @@ def _isolated_gateway_config():
 
 
 def _isolated_flash_ready(config, jobs, socket_server) -> bool:
-    if config is None or jobs is None or socket_server is None:
+    if (config is None or jobs is None or socket_server is None
+            or not config.flash_enabled):
         return False
     try:
         state = config.state_root.lstat()
@@ -1047,7 +1048,10 @@ def _isolated_flash_ready(config, jobs, socket_server) -> bool:
                 and stat.S_ISDIR(ingress.st_mode) and ingress.st_uid == os.getuid()
                 and ingress.st_uid != config.operator_uid
                 and not ingress.st_mode & 0o022
+                and ingress_mount_isolated(config.ingress_root, uid=ingress.st_uid,
+                                           gid=ingress.st_gid)
                 and stat.S_ISSOCK(sock.st_mode) and sock.st_uid == os.getuid()
+                and sock.st_gid == config.operator_gid
                 and not sock.st_mode & 0o007
                 and jobs.ingress_root == config.ingress_root
                 and DEFAULT_HARDWARE_OWNER.path == config.state_root / "hardware-owner.lock")
@@ -1095,6 +1099,7 @@ def _run_gateway_agent(args: argparse.Namespace) -> int:
                 isolated.socket_path, isolated.operator_uid,
                 lambda request, timeout: request_store.submit_request(
                     request, timeout_seconds=timeout),
+                allowed_gid=isolated.operator_gid,
             )
         program_jobs = (GatewayProgramJobs(
             root=isolated.state_root / "program-jobs", ingress_root=isolated.ingress_root,

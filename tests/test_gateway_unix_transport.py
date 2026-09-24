@@ -3,6 +3,7 @@
 import json
 import os
 import socket
+import stat
 import struct
 import tempfile
 import threading
@@ -93,6 +94,29 @@ class _PartialPeer(_SocketPeer):
 
 
 class GatewayUnixServerContinuityTests(unittest.TestCase):
+    def test_operator_socket_is_restricted_to_configured_gid(self):
+        stop = threading.Event()
+        stop.set()
+        path = Path("control.sock")
+        server = GatewayUnixServer(path, 1234, lambda _request, _timeout: {},
+                                   allowed_gid=2002)
+        info = type("Info", (), {"st_mode": stat.S_IFSOCK | 0o660,
+                                  "st_uid": 2000, "st_gid": 2002})()
+        with mock.patch("b300_core.gateway_unix_transport.socket.socket",
+                        return_value=_SocketListener(())), \
+             mock.patch("b300_core.gateway_unix_transport.os.name", "posix"), \
+             mock.patch("b300_core.gateway_unix_transport.socket.AF_UNIX", 1, create=True), \
+             mock.patch("b300_core.gateway_unix_transport.socket.SO_PEERCRED", 17, create=True), \
+             mock.patch("b300_core.gateway_unix_transport.os.getuid", return_value=2000, create=True), \
+             mock.patch("b300_core.gateway_unix_transport.os.getgid", return_value=2001, create=True), \
+             mock.patch("b300_core.gateway_unix_transport.os.getgroups", return_value=[2002], create=True), \
+             mock.patch("b300_core.gateway_unix_transport.os.chown", create=True) as chown, \
+             mock.patch("b300_core.gateway_unix_transport.os.chmod"), \
+             mock.patch("pathlib.Path.lstat", return_value=info), \
+             mock.patch("pathlib.Path.unlink"):
+            server.serve(stop)
+        chown.assert_called_once_with(str(path), -1, 2002)
+
     def test_deeply_nested_json_does_not_stop_next_valid_request(self):
         stop = threading.Event()
         invalid = _SocketPeer(b"[" * 1100 + b"0" + b"]" * 1100)
@@ -250,10 +274,14 @@ class GatewaySystemModeTests(unittest.TestCase):
                 "state_root": "/var/lib/b300-stlink/gateway",
                 "ingress_root": "/var/spool/b300-stlink/ingress",
                 "operator_uid": 1234,
+                "operator_gid": 2002,
+                "flash_enabled": False,
             }), encoding="utf-8")
             self.assertTrue(isolated_gateway_mode(marker, trusted_uid=os.getuid()))
-            self.assertEqual(load_isolated_gateway_config(
-                marker, trusted_uid=os.getuid()).operator_uid, 1234)
+            config = load_isolated_gateway_config(marker, trusted_uid=os.getuid())
+            self.assertEqual(config.operator_uid, 1234)
+            self.assertEqual(config.operator_gid, 2002)
+            self.assertFalse(config.flash_enabled)
 
 if __name__ == "__main__":
     unittest.main()

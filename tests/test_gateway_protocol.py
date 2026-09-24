@@ -26,15 +26,19 @@ class GatewayProtocolTests(unittest.TestCase):
         from pathlib import Path
         config = IsolatedGatewayConfig(Path("/run/b300-stlink/agent.sock"),
                                        Path("/var/lib/b300-stlink/gateway"),
-                                       Path("/var/spool/b300-stlink/ingress"), 1000)
+                                       Path("/var/spool/b300-stlink/ingress"), 1000,
+                                       operator_gid=2002, flash_enabled=True)
         jobs = SimpleNamespace(ingress_root=config.ingress_root)
         def info(path, state_uid, ingress_uid):
             if path == config.state_root:
                 return SimpleNamespace(st_mode=stat.S_IFDIR | 0o700, st_uid=state_uid)
             if path == config.ingress_root:
-                return SimpleNamespace(st_mode=stat.S_IFDIR | 0o750, st_uid=ingress_uid)
-            return SimpleNamespace(st_mode=stat.S_IFSOCK | 0o660, st_uid=2000)
+                return SimpleNamespace(st_mode=stat.S_IFDIR | 0o750,
+                                       st_uid=ingress_uid, st_gid=2002)
+            return SimpleNamespace(st_mode=stat.S_IFSOCK | 0o660,
+                                   st_uid=2000, st_gid=2002)
         with mock.patch.object(b300_stlink.os, "getuid", return_value=2000, create=True), \
+                mock.patch.object(b300_stlink, "ingress_mount_isolated", return_value=True, create=True), \
                 mock.patch.object(b300_stlink.DEFAULT_HARDWARE_OWNER, "path",
                                   config.state_root / "hardware-owner.lock"):
             for state_uid, ingress_uid, expected in ((2000, 2000, True),
@@ -45,6 +49,50 @@ class GatewayProtocolTests(unittest.TestCase):
                                           side_effect=lambda path: info(path, state_uid, ingress_uid)):
                     self.assertEqual(b300_stlink._isolated_flash_ready(config, jobs, object()),
                                      expected)
+
+    def test_flash_capability_refuses_absent_ingress_mount(self):
+        from b300_core.gateway_system_mode import IsolatedGatewayConfig
+        from pathlib import Path
+        config = IsolatedGatewayConfig(Path("/run/b300-stlink/agent.sock"),
+                                       Path("/var/lib/b300-stlink/gateway"),
+                                       Path("/var/spool/b300-stlink/ingress"), 1000)
+        def info(path):
+            if path == config.state_root:
+                return SimpleNamespace(st_mode=stat.S_IFDIR | 0o700, st_uid=2000)
+            if path == config.ingress_root:
+                return SimpleNamespace(st_mode=stat.S_IFDIR | 0o710, st_uid=2000, st_gid=2002)
+            return SimpleNamespace(st_mode=stat.S_IFSOCK | 0o660, st_uid=2000)
+        with mock.patch.object(b300_stlink, "ingress_mount_isolated", return_value=False,
+                               create=True), \
+             mock.patch.object(b300_stlink.os, "getuid", return_value=2000, create=True), \
+             mock.patch.object(Path, "lstat", autospec=True, side_effect=info), \
+             mock.patch.object(b300_stlink.DEFAULT_HARDWARE_OWNER, "path",
+                               config.state_root / "hardware-owner.lock"):
+            self.assertFalse(b300_stlink._isolated_flash_ready(
+                config, SimpleNamespace(ingress_root=config.ingress_root), object()))
+
+    def test_pending_replug_marker_withholds_flash_capability(self):
+        from b300_core.gateway_system_mode import IsolatedGatewayConfig
+        from pathlib import Path
+        config = IsolatedGatewayConfig(Path("/run/b300-stlink/agent.sock"),
+                                       Path("/var/lib/b300-stlink/gateway"),
+                                       Path("/var/spool/b300-stlink/ingress"), 1000,
+                                       operator_gid=2002, flash_enabled=False)
+        def info(path):
+            if path == config.state_root:
+                return SimpleNamespace(st_mode=stat.S_IFDIR | 0o700, st_uid=2000)
+            if path == config.ingress_root:
+                return SimpleNamespace(st_mode=stat.S_IFDIR | 0o710,
+                                       st_uid=2000, st_gid=2003)
+            return SimpleNamespace(st_mode=stat.S_IFSOCK | 0o660,
+                                   st_uid=2000, st_gid=2002)
+        with mock.patch.object(b300_stlink.os, "getuid", return_value=2000, create=True), \
+             mock.patch.object(b300_stlink, "ingress_mount_isolated", return_value=True), \
+             mock.patch.object(Path, "lstat", autospec=True, side_effect=info), \
+             mock.patch.object(b300_stlink.DEFAULT_HARDWARE_OWNER, "path",
+                               config.state_root / "hardware-owner.lock"):
+            self.assertFalse(b300_stlink._isolated_flash_ready(
+                config, SimpleNamespace(ingress_root=config.ingress_root), object()))
 
     def test_live_agent_status_reports_its_own_isolated_capability(self):
         from b300_core.gateway_agent import GatewayAgent

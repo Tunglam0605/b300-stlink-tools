@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import stat
 import struct
 import threading
 import time
@@ -79,11 +80,15 @@ class GatewayUnixClient:
 
 class GatewayUnixServer:
     def __init__(self, socket_path: Path, allowed_uid: int,
-                 submit: Callable[[GatewayRequest, float], dict]) -> None:
+                 submit: Callable[[GatewayRequest, float], dict], *,
+                 allowed_gid: int = None) -> None:
         self.socket_path = Path(socket_path)
         if type(allowed_uid) is not int or allowed_uid < 0:
             raise ValueError("Gateway operator UID is invalid")
         self.allowed_uid = allowed_uid
+        if allowed_gid is not None and (type(allowed_gid) is not int or allowed_gid < 0):
+            raise ValueError("Gateway operator GID is invalid")
+        self.allowed_gid = allowed_gid
         self.submit = submit
 
     def serve(self, stop_event: threading.Event) -> None:
@@ -92,7 +97,17 @@ class GatewayUnixServer:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
             listener.bind(str(self.socket_path))
             try:
+                if self.allowed_gid is not None:
+                    if self.allowed_gid not in (os.getgid(), *os.getgroups()):
+                        raise PermissionError("Agent is not in the Gateway operator group")
+                    os.chown(str(self.socket_path), -1, self.allowed_gid)
                 os.chmod(str(self.socket_path), 0o660)
+                if self.allowed_gid is not None:
+                    info = self.socket_path.lstat()
+                    if (not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid()
+                            or info.st_gid != self.allowed_gid
+                            or stat.S_IMODE(info.st_mode) != 0o660):
+                        raise PermissionError("Gateway socket ownership is unsafe")
                 listener.listen(8)
                 listener.settimeout(0.2)
                 while not stop_event.is_set():

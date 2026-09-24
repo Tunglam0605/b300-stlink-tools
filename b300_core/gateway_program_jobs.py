@@ -16,6 +16,9 @@ from pathlib import Path
 from typing import Optional
 
 from .gateway_supervisor import gateway_runtime_root
+from .gateway_system_mode import (
+    SYSTEM_INGRESS_ROOT, ingress_mount_isolated, load_isolated_gateway_config,
+)
 from .models import ProbeRef
 from .remote_programming import (
     GatewayProgrammingService, RemoteFirmwareManifest,
@@ -78,10 +81,28 @@ class GatewayProgramJobs:
         if os.name != "nt":
             os.chmod(self.root, 0o700)
 
+    def _require_isolated_programming(self) -> None:
+        if self.ingress_root != SYSTEM_INGRESS_ROOT:
+            return
+        config = load_isolated_gateway_config()
+        if (config is None or not config.flash_enabled
+                or config.ingress_root != self.ingress_root):
+            raise ProgramJobError("ISOLATED_FLASH_DISABLED",
+                                  "Isolated Application flash is pending boundary verification.")
+        if not ingress_mount_isolated(
+                self.ingress_root, uid=getattr(os, "getuid", lambda: -1)(),
+                gid=getattr(self, "_ingress_gid", -1)):
+            raise ProgramJobError("INGRESS_MOUNT_UNAVAILABLE",
+                                  "System ingress mount is unavailable or unsafe.")
+
     def _prepare_ingress(self) -> None:
         root = self.ingress_root
         try:
             info = root.lstat()
+            if root == SYSTEM_INGRESS_ROOT and not ingress_mount_isolated(
+                    root, uid=getattr(os, "getuid", lambda: -1)(), gid=info.st_gid):
+                raise ProgramJobError("INGRESS_MOUNT_UNAVAILABLE",
+                                      "System ingress mount is unavailable or unsafe.")
             parent = root.parent.lstat()
             if (not stat.S_ISDIR(info.st_mode) or not stat.S_ISDIR(parent.st_mode)
                     or root.is_symlink() or root.parent.is_symlink()):
@@ -243,6 +264,7 @@ class GatewayProgramJobs:
                 or len(request_id) > 64):
             raise ProgramJobError("REQUEST_INVALID")
         with self._lock:
+            self._require_isolated_programming()
             self._prune_expired()
             records = []
             for entry in self.root.iterdir():
@@ -345,6 +367,7 @@ class GatewayProgramJobs:
 
     def finalize_upload(self, job_id: str) -> dict:
         with self._lock:
+            self._require_isolated_programming()
             record = self._read(job_id)
             if record["state"] in {"STAGED", "AWAITING_CONFIRMATION", "RUNNING"}:
                 manifest = RemoteFirmwareManifest(**record["manifest"]).validate()
@@ -481,6 +504,7 @@ class GatewayProgramJobs:
 
     def prepare(self, job_id: str, lease_id: str, token: str, generation: int) -> dict:
         with self._lock:
+            self._require_isolated_programming()
             record = self._read(job_id)
             if record["state"] == "AWAITING_CONFIRMATION":
                 self._require_lease(record, lease_id, token, generation)
@@ -549,6 +573,7 @@ class GatewayProgramJobs:
     def commit(self, job_id: str, approval_token: str, lease_id: str,
                token: str, generation: int) -> dict:
         with self._lock:
+            self._require_isolated_programming()
             record = self._read(job_id)
             supplied_digest = hashlib.sha256(str(approval_token).encode()).hexdigest()
             if record["state"] in {"RUNNING", "SUCCEEDED", "FAILED"}:
@@ -704,6 +729,7 @@ class GatewayProgramJobs:
             staged = self._verified_staged_path(job_id)
             if approval.staged_path != staged:
                 raise ProgramJobError("STAGING_UNSAFE", "Approved staged path changed.")
+            self._require_isolated_programming()
             result = self.programming.flash_application(
                 approval, event_sink=event_sink, phase_sink=phase_sink,
             )
