@@ -286,6 +286,90 @@ class GatewayProgramJobsTests(unittest.TestCase):
             self.jobs.commit(job_id, approval["approval_token"], "lease-1", "secret", 1)
         self.assertEqual(self.service.calls, 0)
 
+    def test_symlink_replacement_after_finalize_is_rejected_before_prepare(self):
+        job_id = self._upload()
+        staged = self.jobs.staged_path(job_id)
+        with tempfile.TemporaryDirectory() as other:
+            outside = Path(other) / staged.name
+            outside.write_bytes(staged.read_bytes())
+            staged.unlink()
+            try:
+                staged.symlink_to(outside)
+            except (OSError, NotImplementedError):
+                self.skipTest("Symlink creation unavailable on this host")
+            with mock.patch.object(self.service, "inspect_image", wraps=self.service.inspect_image) as inspect:
+                with self.assertRaises(ProgramJobError) as captured:
+                    self._prepare(job_id)
+            self.assertEqual(captured.exception.reason_code, "STAGING_UNSAFE")
+            inspect.assert_not_called()
+            self.assertEqual(self.service.calls, 0)
+
+    def test_symlink_replacement_after_prepare_is_rejected_before_commit(self):
+        job_id = self._upload()
+        approval = self._prepare(job_id)
+        staged = self.jobs.staged_path(job_id)
+        with tempfile.TemporaryDirectory() as other:
+            outside = Path(other) / staged.name
+            outside.write_bytes(staged.read_bytes())
+            staged.unlink()
+            try:
+                staged.symlink_to(outside)
+            except (OSError, NotImplementedError):
+                self.skipTest("Symlink creation unavailable on this host")
+            with self.assertRaises(ProgramJobError) as captured:
+                self.jobs.commit(job_id, approval["approval_token"], "lease-1", "secret", 1)
+            self.assertEqual(captured.exception.reason_code, "STAGING_UNSAFE")
+            self.assertEqual(self.service.calls, 0)
+
+    def test_hardlink_replacement_after_finalize_is_rejected_before_prepare(self):
+        job_id = self._upload()
+        staged = self.jobs.staged_path(job_id)
+        outside = Path(self.temp.name) / staged.name
+        outside.write_bytes(staged.read_bytes())
+        staged.unlink()
+        os.link(outside, staged)
+        with mock.patch.object(self.service, "inspect_image", wraps=self.service.inspect_image) as inspect:
+            with self.assertRaises(ProgramJobError) as captured:
+                self._prepare(job_id)
+        self.assertEqual(captured.exception.reason_code, "STAGING_UNSAFE")
+        inspect.assert_not_called()
+        self.assertEqual(self.service.calls, 0)
+
+    def test_hardlink_replacement_after_prepare_is_rejected_before_commit(self):
+        job_id = self._upload()
+        approval = self._prepare(job_id)
+        staged = self.jobs.staged_path(job_id)
+        outside = Path(self.temp.name) / staged.name
+        outside.write_bytes(staged.read_bytes())
+        staged.unlink()
+        os.link(outside, staged)
+        try:
+            with self.assertRaises(ProgramJobError) as captured:
+                self.jobs.commit(job_id, approval["approval_token"], "lease-1", "secret", 1)
+        finally:
+            self.jobs.wait_active(timeout=2)
+        self.assertEqual(captured.exception.reason_code, "STAGING_UNSAFE")
+        self.assertEqual(self.service.calls, 0)
+
+    def test_worker_rechecks_private_staging_before_flash(self):
+        job_id = self._upload()
+        approval = self._prepare(job_id)
+        original = self.jobs._verified_staged_path
+        checks = []
+
+        def reject_after_commit(selected_job_id):
+            checks.append(selected_job_id)
+            if len(checks) == 2:
+                raise ProgramJobError("STAGING_UNSAFE", "Staging root was replaced.")
+            return original(selected_job_id)
+
+        with mock.patch.object(self.jobs, "_verified_staged_path", side_effect=reject_after_commit):
+            self.jobs.commit(job_id, approval["approval_token"], "lease-1", "secret", 1)
+            self.jobs.wait_active(timeout=2)
+        self.assertEqual(checks, [job_id, job_id])
+        self.assertEqual(self.jobs.status(job_id)["state"], "FAILED")
+        self.assertEqual(self.service.calls, 0)
+
     def test_wrong_lease_cannot_prepare_or_commit(self):
         job_id = self._upload()
         with self.assertRaises(ProgramJobError):
@@ -309,6 +393,20 @@ class GatewayProgramJobsTests(unittest.TestCase):
         self.jobs.finalize_upload(slot["job_id"])
         approval = self._prepare(slot["job_id"])
         self.assertEqual(approval["plan"]["probe_serial"], "SAFE123")
+
+    def test_relative_staging_root_can_commit_approved_job(self):
+        relative_root = Path(os.path.relpath(Path(self.temp.name) / "relative-jobs"))
+        jobs = GatewayProgramJobs(
+            relative_root, self.coordinator,
+            programming=GatewayProgrammingService(service=self.service),
+        )
+        slot = jobs.create_upload(self.manifest, "client-1", "SAFE123")
+        Path(slot["upload_path"]).write_bytes(self.path.read_bytes())
+        jobs.finalize_upload(slot["job_id"])
+        approval = jobs.prepare(slot["job_id"], "lease-1", "secret", 1)
+        jobs.commit(slot["job_id"], approval["approval_token"], "lease-1", "secret", 1)
+        jobs.wait_active(timeout=2)
+        self.assertEqual(jobs.status(slot["job_id"])["state"], "SUCCEEDED")
 
     def test_dry_run_cancel_releases_slot_without_starting_flash(self):
         job_id = self._upload()

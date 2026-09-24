@@ -8,7 +8,9 @@ an existing B300Service safety plan before ST-Link is touched.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+import stat
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -164,11 +166,36 @@ class GatewayProgrammingService:
     @staticmethod
     def _verify_received_file(manifest: RemoteFirmwareManifest, staged_path: Path) -> Path:
         manifest.validate()
-        staged = Path(staged_path).expanduser().resolve()
-        if not manifest.matches_file(staged):
+        staged = Path(staged_path).expanduser().absolute()
+        if staged.name != manifest.file_name:
             raise RemoteProgrammingDenied(
                 "Gateway received firmware does not match the approved name/size/SHA-256 manifest."
             )
+        try:
+            before = staged.lstat()
+            if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                    or before.st_size != manifest.size):
+                raise RemoteProgrammingDenied("Gateway staged firmware is not one private regular file.")
+            flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(str(staged), flags)
+            try:
+                opened = os.fstat(fd)
+                if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
+                        or opened.st_size != manifest.size
+                        or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)):
+                    raise RemoteProgrammingDenied("Gateway staged firmware changed while opening it.")
+                digest = hashlib.sha256()
+                with os.fdopen(fd, "rb") as handle:
+                    fd = -1
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                if digest.hexdigest() != manifest.sha256.lower():
+                    raise RemoteProgrammingDenied("Gateway received firmware SHA-256 changed.")
+            finally:
+                if fd >= 0:
+                    os.close(fd)
+        except OSError as error:
+            raise RemoteProgrammingDenied("Gateway staged firmware is missing or unsafe.") from error
         return staged
 
     @staticmethod
@@ -195,6 +222,12 @@ class GatewayProgrammingService:
         # Application address boundaries; inspect_target enforces physical target
         # identity before any destructive operation is approved.
         image = self.service.inspect_image(staged)
+        # Inspection opens the pathname again; reject a replacement before the
+        # target is inspected or an approval containing that path is issued.
+        self._verify_received_file(selected, staged)
+        inspected_path = getattr(image, "path", staged)
+        if Path(inspected_path) != staged:
+            raise RemoteProgrammingDenied("Gateway image inspection escaped the staged firmware path.")
         target = self.service.inspect_target(probe, event_sink=event_sink)
         plan = self.service.plan(image, probe, target)
         return RemoteApplicationApproval(selected, staged, plan)

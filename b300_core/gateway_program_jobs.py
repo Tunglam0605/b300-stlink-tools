@@ -49,7 +49,8 @@ class GatewayProgramJobs:
 
     def __init__(self, root: Optional[Path] = None, coordinator=None, *,
                  programming: Optional[GatewayProgrammingService] = None) -> None:
-        self.root = Path(root) if root is not None else gateway_runtime_root() / "program-jobs"
+        root_path = Path(root) if root is not None else gateway_runtime_root() / "program-jobs"
+        self.root = Path(os.path.abspath(str(root_path.expanduser())))
         self.coordinator = coordinator
         self.programming = programming or GatewayProgrammingService()
         self._lock = threading.RLock()
@@ -193,12 +194,28 @@ class GatewayProgramJobs:
         manifest = RemoteFirmwareManifest(**record["manifest"]).validate()
         return self._job_dir(job_id) / manifest.file_name
 
+    def _verified_staged_path(self, job_id: str) -> Path:
+        if self.root.is_symlink():
+            raise ProgramJobError("STAGING_UNSAFE", "Job root was replaced.")
+        directory = self._job_dir(job_id)
+        path = self.staged_path(job_id)
+        try:
+            info = path.lstat()
+            if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                    or directory.resolve(strict=True).parent != self.root.resolve(strict=True)
+                    or path.resolve(strict=True).parent != directory.resolve(strict=True)):
+                raise ProgramJobError("STAGING_UNSAFE", "Staged firmware is not one private regular file.")
+        except OSError as error:
+            raise ProgramJobError("STAGING_UNSAFE", "Staged firmware is missing or unsafe.") from error
+        return path
+
     def finalize_upload(self, job_id: str) -> dict:
         with self._lock:
             record = self._read(job_id)
             if record["state"] in {"STAGED", "AWAITING_CONFIRMATION", "RUNNING"}:
                 manifest = RemoteFirmwareManifest(**record["manifest"]).validate()
-                if not manifest.matches_file(self.staged_path(job_id)):
+                staged = self._verified_staged_path(job_id)
+                if not manifest.matches_file(staged):
                     raise ProgramJobError("ARTIFACT_CHANGED")
                 return self.status(job_id)
             if record["state"] != "UPLOADING":
@@ -248,7 +265,8 @@ class GatewayProgramJobs:
                 if (existing is None or time.monotonic() >= existing[2]
                         or existing[3] != (lease_id, generation)):
                     raise ProgramJobError("APPROVAL_EXPIRED")
-                self.programming._verify_received_file(existing[0].manifest, existing[0].staged_path)
+                staged = self._verified_staged_path(job_id)
+                self.programming._verify_received_file(existing[0].manifest, staged)
                 result = self.status(job_id)
                 result["approval_token"] = existing[4]
                 return result
@@ -260,8 +278,9 @@ class GatewayProgramJobs:
             if record["probe_serial"] is not None and record["probe_serial"] != selected_serial:
                 raise ProgramJobError("PROBE_SELECTION_REQUIRED")
             probe = ProbeRef(selected_serial)
+            staged = self._verified_staged_path(job_id)
             approval = self.programming.prepare_application(
-                manifest, self.staged_path(job_id), probe,
+                manifest, staged, probe,
             )
             plan = approval.plan
             if tuple(plan.erase_sectors) != (3, 4, 5, 6, 7):
@@ -326,7 +345,12 @@ class GatewayProgramJobs:
                 raise ProgramJobError("APPROVAL_MISMATCH")
             approval = selected[0]
             try:
-                self.programming._verify_received_file(approval.manifest, approval.staged_path)
+                staged = self._verified_staged_path(job_id)
+                if approval.staged_path != staged:
+                    raise ProgramJobError("STAGING_UNSAFE", "Approved staged path changed.")
+                self.programming._verify_received_file(approval.manifest, staged)
+            except ProgramJobError:
+                raise
             except Exception as error:
                 raise ProgramJobError("ARTIFACT_CHANGED", str(error)) from error
             if self._worker is not None and self._worker.is_alive():
@@ -452,6 +476,9 @@ class GatewayProgramJobs:
                     record.update(phase=str(event.phase), progress=int(event.progress))
                     self._write(job_id, record)
 
+            staged = self._verified_staged_path(job_id)
+            if approval.staged_path != staged:
+                raise ProgramJobError("STAGING_UNSAFE", "Approved staged path changed.")
             result = self.programming.flash_application(
                 approval, event_sink=event_sink, phase_sink=phase_sink,
             )
