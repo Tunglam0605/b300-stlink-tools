@@ -16,18 +16,29 @@ from .gateway_agent_protocol import (
 )
 
 
-def _receive(connection: socket.socket, limit: int) -> bytes:
-    header = _read_exact(connection, 4)
+def _receive(connection: socket.socket, limit: int, *,
+             stop_event: threading.Event = None, deadline: float = None) -> bytes:
+    header = _read_exact(connection, 4, stop_event=stop_event, deadline=deadline)
     length = struct.unpack(">I", header)[0]
     if length == 0 or length > limit:
         raise ValueError("Gateway frame exceeds limit")
-    return _read_exact(connection, length)
+    return _read_exact(connection, length, stop_event=stop_event, deadline=deadline)
 
 
-def _read_exact(connection: socket.socket, length: int) -> bytes:
+def _read_exact(connection: socket.socket, length: int, *,
+                stop_event: threading.Event = None, deadline: float = None) -> bytes:
     data = bytearray()
     while len(data) < length:
-        chunk = connection.recv(length - len(data))
+        if stop_event is not None and stop_event.is_set():
+            raise ConnectionError("Gateway socket server is stopping")
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError("Gateway socket frame timed out")
+        try:
+            chunk = connection.recv(length - len(data))
+        except socket.timeout:
+            if stop_event is None:
+                raise
+            continue
         if not chunk:
             raise ConnectionError("Gateway socket closed before frame completed")
         data.extend(chunk)
@@ -90,23 +101,24 @@ class GatewayUnixServer:
                     except socket.timeout:
                         continue
                     with accepted:
-                        accepted.settimeout(60.0)
+                        accepted.settimeout(0.1)
                         try:
-                            self._handle(accepted)
-                        except (OSError, UnicodeError, ValueError, TypeError,
+                            self._handle(accepted, stop_event)
+                        except (OSError, UnicodeError, ValueError, TypeError, RecursionError,
                                 ConnectionError, json.JSONDecodeError):
                             # A rejected peer receives no operation response.
                             continue
             finally:
                 self.socket_path.unlink(missing_ok=True)
 
-    def _handle(self, accepted: socket.socket) -> None:
+    def _handle(self, accepted: socket.socket, stop_event: threading.Event) -> None:
         peer_pid, peer_uid, peer_gid = struct.unpack(
             "3i", accepted.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
         if peer_uid != self.allowed_uid:
             raise PermissionError("Gateway socket peer is not the approved SSH operator")
         request = GatewayRequest.from_record(json.loads(
-            _receive(accepted, MAX_REQUEST_BYTES).decode("utf-8")))
+            _receive(accepted, MAX_REQUEST_BYTES, stop_event=stop_event,
+                     deadline=time.monotonic() + 60.0).decode("utf-8")))
         remaining = request.expires_mono - time.monotonic()
         if not 0 < remaining <= 60:
             raise ValueError("Gateway socket request expired")

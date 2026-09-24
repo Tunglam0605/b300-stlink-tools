@@ -9,12 +9,154 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from b300_core.gateway_agent_protocol import GatewayRequest
+from b300_core.gateway_agent import GatewayAgent
+from b300_core.gateway_agent_protocol import GatewayRequestStore
 from b300_core.gateway_unix_transport import (
     GatewayUnixClient, GatewayUnixServer, MAX_REQUEST_BYTES,
 )
 from b300_core.gateway_system_mode import isolated_gateway_mode, load_isolated_gateway_config
+
+
+class _SocketPeer:
+    def __init__(self, payload):
+        self.data = bytearray(struct.pack(">I", len(payload)) + payload)
+        self.sent = bytearray()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+    def settimeout(self, _timeout):
+        pass
+
+    def getsockopt(self, *_args):
+        return struct.pack("3i", 42, 1234, 1234)
+
+    def recv(self, length):
+        chunk = bytes(self.data[:length])
+        del self.data[:length]
+        return chunk
+
+    def sendall(self, data):
+        self.sent.extend(data)
+
+
+class _SocketListener:
+    def __init__(self, peers):
+        self.peers = iter(peers)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+    def bind(self, _path):
+        pass
+
+    def listen(self, _backlog):
+        pass
+
+    def settimeout(self, _timeout):
+        pass
+
+    def accept(self):
+        return next(self.peers), None
+
+
+class _PartialPeer(_SocketPeer):
+    def __init__(self):
+        super().__init__(b"")
+        self.data = bytearray(b"\x00\x00")
+        self.blocking = threading.Event()
+        self.release = threading.Event()
+        self.timeout = 60.0
+        self.closed = False
+
+    def __exit__(self, *_args):
+        self.closed = True
+
+    def settimeout(self, timeout):
+        self.timeout = timeout
+
+    def recv(self, length):
+        if self.data:
+            return super().recv(length)
+        self.blocking.set()
+        self.release.wait(min(self.timeout, 1.0))
+        raise socket.timeout()
+
+
+class GatewayUnixServerContinuityTests(unittest.TestCase):
+    def test_deeply_nested_json_does_not_stop_next_valid_request(self):
+        stop = threading.Event()
+        invalid = _SocketPeer(b"[" * 1100 + b"0" + b"]" * 1100)
+        request = GatewayRequest.create("status", {})
+        valid = _SocketPeer(json.dumps(request.to_record()).encode("utf-8"))
+        calls = []
+
+        def submit(selected, _timeout):
+            calls.append(selected.operation)
+            stop.set()
+            return {"protocol_version": 1, "request_id": selected.request_id,
+                    "status": "ok", "reason_code": "OK"}
+
+        server = GatewayUnixServer(Path("control.sock"), 1234, submit)
+        with mock.patch("b300_core.gateway_unix_transport.socket.socket",
+                        return_value=_SocketListener((invalid, valid))), \
+                mock.patch("b300_core.gateway_unix_transport.os.name", "posix"), \
+                mock.patch("b300_core.gateway_unix_transport.socket.AF_UNIX", 1, create=True), \
+                mock.patch("b300_core.gateway_unix_transport.socket.SO_PEERCRED", 17, create=True), \
+                mock.patch("b300_core.gateway_unix_transport.os.chmod"), \
+                mock.patch("pathlib.Path.unlink"):
+            server.serve(stop)
+        self.assertEqual(calls, ["status"])
+        self.assertEqual(invalid.sent, b"")
+        self.assertTrue(valid.sent)
+
+    def test_partial_frame_does_not_delay_agent_shutdown(self):
+        peer = _PartialPeer()
+        stop = threading.Event()
+        shutdown = threading.Event()
+        server = GatewayUnixServer(Path("control.sock"), 1234,
+                                   lambda _request, _timeout: {})
+
+        class Coordinator:
+            def tick(self):
+                return type("Snapshot", (), {"state": "IDLE", "reason_code": "OK",
+                                              "active": False})()
+
+            def shutdown(self, _reason):
+                shutdown.set()
+
+        with tempfile.TemporaryDirectory() as directory:
+            agent = GatewayAgent(Coordinator(), request_store=GatewayRequestStore(
+                Path(directory) / "requests"), socket_server=server,
+                poll_interval_seconds=0.02)
+            with mock.patch("b300_core.gateway_unix_transport.socket.socket",
+                            return_value=_SocketListener((peer,))), \
+                    mock.patch("b300_core.gateway_unix_transport.os.name", "posix"), \
+                    mock.patch("b300_core.gateway_unix_transport.socket.AF_UNIX", 1, create=True), \
+                    mock.patch("b300_core.gateway_unix_transport.socket.SO_PEERCRED", 17, create=True), \
+                    mock.patch("b300_core.gateway_unix_transport.os.chmod"), \
+                    mock.patch("pathlib.Path.unlink"):
+                runner = threading.Thread(target=agent.run, args=(stop,), daemon=True)
+                runner.start()
+                try:
+                    self.assertTrue(peer.blocking.wait(1))
+                    stop.set()
+                    runner.join(0.4)
+                    self.assertFalse(runner.is_alive(), "Agent shutdown waited for a partial frame")
+                    self.assertTrue(shutdown.is_set())
+                    self.assertTrue(peer.closed)
+                finally:
+                    peer.release.set()
+                    runner.join(2)
 
 
 @unittest.skipUnless(os.name == "posix" and hasattr(socket, "SO_PEERCRED"),
