@@ -48,9 +48,12 @@ class GatewayProgramJobs:
     """Only the Agent may prepare or commit jobs; SFTP writes upload bytes."""
 
     def __init__(self, root: Optional[Path] = None, coordinator=None, *,
-                 programming: Optional[GatewayProgrammingService] = None) -> None:
+                 programming: Optional[GatewayProgrammingService] = None,
+                 ingress_root: Optional[Path] = None) -> None:
         root_path = Path(root) if root is not None else gateway_runtime_root() / "program-jobs"
         self.root = Path(os.path.abspath(str(root_path.expanduser())))
+        self.ingress_root = (Path(os.path.abspath(str(Path(ingress_root).expanduser())))
+                             if ingress_root is not None else None)
         self.coordinator = coordinator
         self.programming = programming or GatewayProgrammingService()
         self._lock = threading.RLock()
@@ -58,6 +61,15 @@ class GatewayProgramJobs:
         self._worker = None
         self._active_job_id = None
         self._prepare_root()
+        if self.ingress_root is not None:
+            if os.name != "nt":
+                private = self.root.lstat()
+                parent = self.root.parent.lstat()
+                if (private.st_uid != os.getuid() or parent.st_uid != os.getuid()
+                        or not stat.S_ISDIR(parent.st_mode)
+                        or parent.st_mode & 0o077):
+                    raise ProgramJobError("STAGING_UNSAFE", "Private state root is unsafe.")
+            self._prepare_ingress()
 
     def _prepare_root(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -65,6 +77,89 @@ class GatewayProgramJobs:
             raise ProgramJobError("STAGING_UNSAFE", "Job root cannot be a symlink.")
         if os.name != "nt":
             os.chmod(self.root, 0o700)
+
+    def _prepare_ingress(self) -> None:
+        root = self.ingress_root
+        try:
+            info = root.lstat()
+            parent = root.parent.lstat()
+            if (not stat.S_ISDIR(info.st_mode) or not stat.S_ISDIR(parent.st_mode)
+                    or root.is_symlink() or root.parent.is_symlink()):
+                raise ProgramJobError("STAGING_UNSAFE")
+            if os.name != "nt":
+                if (info.st_uid != os.getuid() or info.st_mode & 0o022
+                        or not info.st_mode & 0o010
+                        or parent.st_mode & 0o022):
+                    raise ProgramJobError("STAGING_UNSAFE")
+                self._ingress_gid = info.st_gid
+            jobs = root / "program-jobs"
+            jobs.mkdir(mode=0o710, exist_ok=True)
+            if jobs.is_symlink() or not jobs.is_dir():
+                raise ProgramJobError("STAGING_UNSAFE")
+            if os.name != "nt":
+                os.chmod(jobs, 0o710)
+                if jobs.stat().st_gid != self._ingress_gid:
+                    os.chown(jobs, -1, self._ingress_gid)
+                if (jobs.stat().st_uid != os.getuid()
+                        or jobs.stat().st_gid != self._ingress_gid
+                        or stat.S_IMODE(jobs.stat().st_mode) != 0o710):
+                    raise ProgramJobError("STAGING_UNSAFE")
+            self._ingress_jobs = jobs
+        except OSError as error:
+            raise ProgramJobError("STAGING_UNSAFE", "Ingress root is unsafe.") from error
+
+    def _upload_path(self, job_id: str) -> Path:
+        if self.ingress_root is None:
+            return self._job_dir(job_id) / "artifact.part"
+        return self._ingress_jobs / self._job_id(job_id) / "artifact.part"
+
+    def _create_ingress_slot(self, job_id: str) -> Path:
+        directory = self._ingress_jobs / self._job_id(job_id)
+        directory.mkdir(mode=0o710)
+        if os.name != "nt":
+            os.chmod(directory, 0o710)
+            if directory.stat().st_gid != self._ingress_gid:
+                os.chown(directory, -1, self._ingress_gid)
+            if (directory.stat().st_uid != os.getuid()
+                    or directory.stat().st_gid != self._ingress_gid
+                    or stat.S_IMODE(directory.stat().st_mode) != 0o710):
+                raise ProgramJobError("STAGING_UNSAFE")
+        path = directory / "artifact.part"
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(str(path), flags, 0o660)
+        try:
+            if os.name != "nt":
+                os.fchmod(fd, 0o660)
+                if os.fstat(fd).st_gid != self._ingress_gid:
+                    os.fchown(fd, -1, self._ingress_gid)
+                info = os.fstat(fd)
+                if (info.st_uid != os.getuid() or info.st_gid != self._ingress_gid
+                        or stat.S_IMODE(info.st_mode) != 0o660):
+                    raise ProgramJobError("STAGING_UNSAFE")
+        finally:
+            os.close(fd)
+        return path
+
+    def _remove_ingress_slot(self, job_id: str) -> None:
+        if self.ingress_root is None:
+            return
+        directory = self._ingress_jobs / self._job_id(job_id)
+        if not directory.exists() and not directory.is_symlink():
+            return
+        info = directory.lstat()
+        if not stat.S_ISDIR(info.st_mode):
+            raise ProgramJobError("STAGING_UNSAFE")
+        if os.name != "nt" and (info.st_uid != os.getuid()
+                                or info.st_gid != self._ingress_gid
+                                or stat.S_IMODE(info.st_mode) != 0o710):
+            raise ProgramJobError("STAGING_UNSAFE")
+        artifact = directory / "artifact.part"
+        if artifact.exists() or artifact.is_symlink():
+            file_info = artifact.lstat()
+            if not stat.S_ISREG(file_info.st_mode) or file_info.st_nlink != 1:
+                raise ProgramJobError("STAGING_UNSAFE")
+            artifact.unlink()
+        directory.rmdir()
 
     @staticmethod
     def _job_id(value: str) -> str:
@@ -137,7 +232,7 @@ class GatewayProgramJobs:
                         raise ProgramJobError("REQUEST_REPLAYED")
                     return {
                         "job_id": previous["job_id"],
-                        "upload_path": str(self._job_dir(previous["job_id"]) / "artifact.part"),
+                        "upload_path": str(self._upload_path(previous["job_id"])),
                         "state": previous["state"],
                     }
             active = sum(record["state"] in {
@@ -153,6 +248,8 @@ class GatewayProgramJobs:
             job_id = uuid.uuid4().hex
             directory = self._job_dir(job_id)
             directory.mkdir(mode=0o700)
+            upload = (self._create_ingress_slot(job_id) if self.ingress_root is not None
+                      else self._upload_path(job_id))
             record = {
                 "job_id": job_id, "state": "UPLOADING",
                 "manifest": _manifest_record(item), "client_id": client_id,
@@ -162,7 +259,7 @@ class GatewayProgramJobs:
                 "reason_code": "", "reason": "", "next_action": "",
             }
             self._write(job_id, record)
-            return {"job_id": job_id, "upload_path": str(directory / "artifact.part"),
+            return {"job_id": job_id, "upload_path": str(upload),
                     "state": "UPLOADING"}
 
     def _prune_expired(self) -> None:
@@ -180,6 +277,7 @@ class GatewayProgramJobs:
                 } else RESULT_TTL_SECONDS)
                 if age < ttl or record["state"] == "RUNNING":
                     continue
+                self._remove_ingress_slot(entry.name)
                 for child in entry.iterdir():
                     if child.is_dir() and not child.is_symlink():
                         raise ProgramJobError("STAGING_UNSAFE")
@@ -220,6 +318,15 @@ class GatewayProgramJobs:
                 return self.status(job_id)
             if record["state"] != "UPLOADING":
                 raise ProgramJobError("JOB_STATE_INVALID")
+            if self.ingress_root is not None:
+                try:
+                    return self._finalize_isolated(job_id, record)
+                except ProgramJobError as error:
+                    record.update(reason_code=error.reason_code,
+                                  reason=str(error)[:256],
+                                  next_action="Correct the upload and create a new transaction if needed.")
+                    self._write(job_id, record)
+                    raise
             directory = self._job_dir(job_id)
             source = directory / "artifact.part"
             try:
@@ -246,6 +353,86 @@ class GatewayProgramJobs:
                 return self.status(job_id)
             except FileNotFoundError as error:
                 raise ProgramJobError("UPLOAD_INCOMPLETE") from error
+
+    def _finalize_isolated(self, job_id: str, record: dict) -> dict:
+        manifest = RemoteFirmwareManifest(**record["manifest"]).validate()
+        source = self._upload_path(job_id)
+        private_dir = self._job_dir(job_id)
+        target = private_dir / manifest.file_name
+        temporary = None
+        descriptor = -1
+        try:
+            self._prepare_ingress()
+            parent = source.parent.lstat()
+            if (not stat.S_ISDIR(parent.st_mode) or source.parent.is_symlink()
+                    or source.parent.resolve(strict=True).parent != self._ingress_jobs.resolve(strict=True)):
+                raise ProgramJobError("STAGING_UNSAFE")
+            if os.name != "nt" and (parent.st_uid != os.getuid()
+                                    or parent.st_gid != self._ingress_gid
+                                    or stat.S_IMODE(parent.st_mode) != 0o710):
+                raise ProgramJobError("STAGING_UNSAFE")
+            before = source.lstat()
+            if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                    or before.st_size > 32 * 1024 * 1024):
+                raise ProgramJobError("STAGING_UNSAFE")
+            if os.name != "nt" and (before.st_uid != os.getuid()
+                                    or before.st_gid != self._ingress_gid
+                                    or stat.S_IMODE(before.st_mode) != 0o660):
+                raise ProgramJobError("STAGING_UNSAFE")
+            descriptor = os.open(str(source), os.O_RDONLY | getattr(os, "O_BINARY", 0)
+                                 | getattr(os, "O_NOFOLLOW", 0)
+                                 | getattr(os, "O_CLOEXEC", 0))
+            opened = os.fstat(descriptor)
+            if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
+                    or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+                    or opened.st_size != manifest.size):
+                raise ProgramJobError("STAGING_UNSAFE")
+            private_fd, private_name = tempfile.mkstemp(prefix="artifact-", suffix=".tmp",
+                                                        dir=str(private_dir))
+            temporary = Path(private_name)
+            digest = hashlib.sha256()
+            copied = 0
+            with os.fdopen(descriptor, "rb") as ingress:
+                descriptor = -1
+                with os.fdopen(private_fd, "wb") as staged:
+                    for chunk in iter(lambda: ingress.read(1024 * 1024), b""):
+                        copied += len(chunk)
+                        if copied > 32 * 1024 * 1024:
+                            raise ProgramJobError("UPLOAD_TOO_LARGE")
+                        staged.write(chunk)
+                        digest.update(chunk)
+                    staged.flush()
+                    os.fsync(staged.fileno())
+                    after = os.fstat(ingress.fileno())
+            current = source.lstat()
+            identity = lambda item: (item.st_dev, item.st_ino, item.st_size,
+                                     item.st_mtime_ns, item.st_ctime_ns)
+            if identity(opened) != identity(after) or identity(after) != identity(current):
+                raise ProgramJobError("STAGING_UNSAFE", "Ingress changed during copy.")
+            if copied != manifest.size or digest.hexdigest() != manifest.sha256:
+                raise ProgramJobError("UPLOAD_HASH_MISMATCH")
+            if os.name != "nt":
+                os.chmod(temporary, 0o600)
+            # Linking a completed private temporary is atomic and fails if a prior
+            # finalized artifact already exists; neither retry nor replay replaces it.
+            os.link(temporary, target)
+            temporary.unlink()
+            temporary = None
+            record.update(state="STAGED", phase="staged", progress=100,
+                          reason_code="", reason="", next_action="")
+            self._write(job_id, record)
+            return self.status(job_id)
+        except FileExistsError as error:
+            raise ProgramJobError("STAGING_UNSAFE", "Private artifact already exists.") from error
+        except FileNotFoundError as error:
+            raise ProgramJobError("UPLOAD_INCOMPLETE") from error
+        except OSError as error:
+            raise ProgramJobError("STAGING_UNSAFE", "Ingress or private staging failed safely.") from error
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
     def _require_lease(self, record: dict, lease_id: str, token: str, generation: int) -> None:
         if self.coordinator is None or not self.coordinator.owns_flash_lease(
@@ -444,12 +631,14 @@ class GatewayProgramJobs:
                 if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
                     raise ProgramJobError("STAGING_UNSAFE")
                 artifact.unlink()
-            partial = self._job_dir(job_id) / "artifact.part"
+            partial = self._upload_path(job_id)
             if partial.exists() or partial.is_symlink():
                 info = partial.lstat()
                 if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
                     raise ProgramJobError("STAGING_UNSAFE")
-                partial.unlink()
+                if self.ingress_root is None:
+                    partial.unlink()
+            self._remove_ingress_slot(job_id)
             record["artifact_cleaned"] = True
             self._write(job_id, record)
             return self.status(job_id)

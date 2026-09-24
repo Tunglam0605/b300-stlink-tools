@@ -44,6 +44,7 @@ from b300_core.gateway_agent import (
 )
 from b300_core.gateway_agent_protocol import GatewayRequest, GatewayRequestStore
 from b300_core.gateway_system_mode import load_isolated_gateway_config
+from b300_core.gateway_program_jobs import GatewayProgramJobs
 from b300_core.gateway_unix_transport import GatewayUnixClient, GatewayUnixServer
 from b300_core.gateway_lease import GatewayLeasePublicSnapshot, GatewayLeaseStore
 from b300_core.gateway_lease_coordinator import GatewayLeaseCoordinator
@@ -1035,33 +1036,38 @@ def _run_gateway_agent(args: argparse.Namespace) -> int:
         owner_lock.acquire()
     except RuntimeError:
         return 1
-    supervisor = GatewaySupervisor(
-        service_factory=lambda: DebugService(executable=args.openocd),
-        probe_discovery=list_probes,
-        gdb_port=args.gdb_port,
-        tcl_port=args.tcl_port or 6666,
-        requested_serial=args.probe_serial,
-    )
-    coordinator = GatewayLeaseCoordinator(supervisor, store=GatewayLeaseStore())
-
-    def publish(item) -> None:
-        status_store.write(GatewayAgentStatus(
-            instance_id, os.getpid(), time.monotonic(), item.state, item.reason_code,
-            tuple(gateway_capabilities()["capabilities"]),
-        ))
-
-    request_store = GatewayRequestStore(
-        isolated.state_root / "agent-control" if isolated is not None else None)
-    socket_server = None
-    if isolated is not None:
-        socket_server = GatewayUnixServer(
-            isolated.socket_path, isolated.operator_uid,
-            lambda request, timeout: request_store.submit_request(
-                request, timeout_seconds=timeout),
-        )
-    agent = GatewayAgent(coordinator, request_store=request_store,
-                         status_sink=publish, socket_server=socket_server)
     try:
+        supervisor = GatewaySupervisor(
+            service_factory=lambda: DebugService(executable=args.openocd),
+            probe_discovery=list_probes,
+            gdb_port=args.gdb_port,
+            tcl_port=args.tcl_port or 6666,
+            requested_serial=args.probe_serial,
+        )
+        coordinator = GatewayLeaseCoordinator(supervisor, store=GatewayLeaseStore())
+
+        def publish(item) -> None:
+            status_store.write(GatewayAgentStatus(
+                instance_id, os.getpid(), time.monotonic(), item.state, item.reason_code,
+                tuple(gateway_capabilities()["capabilities"]),
+            ))
+
+        request_store = GatewayRequestStore(
+            isolated.state_root / "agent-control" if isolated is not None else None)
+        socket_server = None
+        if isolated is not None:
+            socket_server = GatewayUnixServer(
+                isolated.socket_path, isolated.operator_uid,
+                lambda request, timeout: request_store.submit_request(
+                    request, timeout_seconds=timeout),
+            )
+        program_jobs = (GatewayProgramJobs(
+            root=isolated.state_root / "program-jobs", ingress_root=isolated.ingress_root,
+            coordinator=coordinator,
+        ) if isolated is not None else None)
+        agent = GatewayAgent(coordinator, request_store=request_store,
+                             status_sink=publish, socket_server=socket_server,
+                             program_jobs=program_jobs)
         try:
             return agent.run()
         except KeyboardInterrupt:

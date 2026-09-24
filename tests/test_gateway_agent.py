@@ -50,6 +50,47 @@ class GatewayAgentTests(unittest.TestCase):
         self.coordinator = FakeCoordinator()
         self.agent = GatewayAgent(self.coordinator, request_store=self.store)
 
+    def test_isolated_agent_injects_private_program_jobs(self):
+        config = type("Config", (), {
+            "state_root": Path(self.temp.name) / "private",
+            "ingress_root": Path(self.temp.name) / "ingress",
+            "socket_path": Path(self.temp.name) / "agent.sock",
+            "operator_uid": -2,
+        })()
+        args = parse_args(["debug", "gateway-agent", "--json"])
+        with mock.patch("b300_stlink.load_isolated_gateway_config", return_value=config), \
+             mock.patch("b300_stlink.GatewayAgentOwnerLock") as owner, \
+             mock.patch("b300_stlink.GatewaySupervisor"), \
+             mock.patch("b300_stlink.GatewayLeaseCoordinator"), \
+             mock.patch("b300_stlink.GatewayUnixServer"), \
+             mock.patch("b300_stlink.GatewayProgramJobs") as jobs, \
+             mock.patch("b300_stlink.GatewayAgent") as agent:
+            agent.return_value.run.return_value = 0
+            self.assertEqual(b300_stlink._run_gateway_agent(args), 0)
+        jobs.assert_called_once()
+        self.assertEqual(jobs.call_args.kwargs["root"], config.state_root / "program-jobs")
+        self.assertEqual(jobs.call_args.kwargs["ingress_root"], config.ingress_root)
+        self.assertIs(agent.call_args.kwargs["program_jobs"], jobs.return_value)
+        owner.return_value.release.assert_called_once()
+
+    def test_isolated_agent_releases_owner_lock_if_ingress_is_unsafe(self):
+        config = type("Config", (), {
+            "state_root": Path(self.temp.name) / "private",
+            "ingress_root": Path(self.temp.name) / "ingress",
+            "socket_path": Path(self.temp.name) / "agent.sock",
+            "operator_uid": -2,
+        })()
+        args = parse_args(["debug", "gateway-agent", "--json"])
+        with mock.patch("b300_stlink.load_isolated_gateway_config", return_value=config), \
+             mock.patch("b300_stlink.GatewayAgentOwnerLock") as owner, \
+             mock.patch("b300_stlink.GatewaySupervisor"), \
+             mock.patch("b300_stlink.GatewayLeaseCoordinator"), \
+             mock.patch("b300_stlink.GatewayUnixServer"), \
+             mock.patch("b300_stlink.GatewayProgramJobs", side_effect=ValueError("unsafe ingress")):
+            with self.assertRaises(ValueError):
+                b300_stlink._run_gateway_agent(args)
+        owner.return_value.release.assert_called_once()
+
     def test_agent_idle_only_ticks_coordinator(self):
         result = self.agent.run_once()
         self.assertEqual((result.state, result.reason_code), ("IDLE", "GATEWAY_IDLE"))
