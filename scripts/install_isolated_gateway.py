@@ -94,6 +94,12 @@ class StageError(RuntimeError):
         self.reason_code = reason_code
 
 
+class BoundaryError(RuntimeError):
+    def __init__(self, reason_code: str) -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+
+
 class _LinuxFlock:
     @staticmethod
     def acquire(fd: int) -> None:
@@ -588,7 +594,8 @@ def _same_inode(left, right) -> bool:
 
 
 def _read_active_marker(marker_path: Path, *, root_uid: int,
-                        path_stat: Callable, fd_stat: Callable) -> tuple[dict, object]:
+                        path_stat: Callable, fd_stat: Callable,
+                        expected_enabled: bool = True) -> tuple[dict, object]:
     try:
         before = path_stat(marker_path)
         _trusted_regular(before, owner_uid=root_uid, maximum=4096)
@@ -614,8 +621,8 @@ def _read_active_marker(marker_path: Path, *, root_uid: int,
             or record["ingress_root"] != "/var/spool/b300-stlink/ingress"
             or type(record["operator_uid"]) is not int or record["operator_uid"] < 0
             or type(record["operator_gid"]) is not int or record["operator_gid"] < 0
-            or record["flash_enabled"] is not True):
-        raise TransitionError("MARKER_NOT_ACTIVE")
+            or record["flash_enabled"] is not expected_enabled):
+        raise TransitionError("MARKER_NOT_ACTIVE" if expected_enabled else "MARKER_NOT_PENDING")
     return record, opened
 
 
@@ -626,7 +633,9 @@ def _transition_active_to_pending(
         path_stat: Callable = os.lstat, fd_stat: Callable = os.fstat,
         fsync_dir: Callable = _fsync_directory,
         clock: Callable = time.monotonic, sleep: Callable = time.sleep,
-        timeout_seconds: float = 2.0) -> dict:
+        timeout_seconds: float = 2.0,
+        expected_enabled: bool = True, target_enabled: bool = False,
+        extra_check: Optional[Callable] = None) -> dict:
     """Guard the marker switch with the Agent's existing persistent owner inode."""
     if system_name != "linux" or effective_uid() != 0:
         raise TransitionError("ROOT_LINUX_REQUIRED")
@@ -693,10 +702,13 @@ def _transition_active_to_pending(
             except Exception as error:
                 raise TransitionError("QUIESCENCE_UNKNOWN") from error
         record, marker_identity = _read_active_marker(
-            marker, root_uid=trusted_uid, path_stat=path_stat, fd_stat=fd_stat)
+            marker, root_uid=trusted_uid, path_stat=path_stat, fd_stat=fd_stat,
+            expected_enabled=expected_enabled)
         if not _same_inode(path_stat(marker), marker_identity):
             raise TransitionError("MARKER_CHANGED")
-        record["flash_enabled"] = False
+        if extra_check is not None:
+            extra_check()
+        record["flash_enabled"] = target_enabled
         payload = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
         if len(payload) > 4096:
             raise TransitionError("MARKER_INVALID")
@@ -723,7 +735,7 @@ def _transition_active_to_pending(
             raise
         except OSError as error:
             raise TransitionError("MARKER_WRITE_FAILED") from error
-        return {"state": "PENDING_REPLUG"}
+        return {"state": "ACTIVE" if target_enabled else "PENDING_REPLUG"}
     finally:
         if temporary is not None:
             try:
@@ -747,6 +759,258 @@ def transition_active_to_pending(*, probes, timeout_seconds: float = 2.0) -> dic
         SYSTEM_MARKER, SYSTEM_OWNER_LOCK, probes=probes, locker=_LinuxFlock(),
         effective_uid=os.geteuid, system_name="linux", trusted_uid=0,
         lock_uid=agent_uid, timeout_seconds=timeout_seconds)
+
+
+_USB_OPEN_SOURCE = (
+    "import errno,os,sys\n"
+    "flags=os.O_RDONLY|os.O_NONBLOCK|getattr(os,'O_CLOEXEC',0)|getattr(os,'O_NOFOLLOW',0)\n"
+    "try: fd=os.open(sys.argv[1],flags)\n"
+    "except OSError as error: sys.exit(13 if error.errno in (errno.EACCES,errno.EPERM) else 14)\n"
+    "else: os.close(fd)\n"
+)
+
+
+def _run_boundary_command(command: tuple[str, ...]):
+    if not (command in (("/usr/bin/setpriv", "--version"),
+                        ("/usr/bin/python3", "--version"))
+            or (command and command[0] == "/usr/bin/setpriv"
+                and "/usr/bin/python3" in command and command[-2] == _USB_OPEN_SOURCE)):
+        raise BoundaryError("OPEN_COMMAND_UNSAFE")
+    return subprocess.run(command, capture_output=True, text=True,
+                          timeout=4, check=False)
+
+
+def _boundary_identities() -> dict:
+    import grp
+    import pwd
+    agent = pwd.getpwnam("b300-agent")
+    operator = pwd.getpwnam("aubot")
+    probe_gid = grp.getgrnam("b300-probe").gr_gid
+    upload_gid = grp.getgrnam("b300-upload").gr_gid
+    operator_access_gid = grp.getgrnam("b300-operator").gr_gid
+    return {
+        "agent_uid": agent.pw_uid, "agent_gid": agent.pw_gid,
+        "probe_gid": probe_gid, "upload_gid": upload_gid,
+        "operator_access_gid": operator_access_gid,
+        "operator_uid": operator.pw_uid, "operator_gid": operator.pw_gid,
+        "operator_groups": tuple(os.getgrouplist("aubot", operator.pw_gid)),
+        "agent_groups": (probe_gid, upload_gid, operator_access_gid),
+    }
+
+
+def _bounded_ingress_mount(agent_uid: int, upload_gid: int) -> bool:
+    command = ("/usr/bin/findmnt", "--json", "--bytes", "--output",
+               "TARGET,FSTYPE,OPTIONS,SIZE", "--mountpoint",
+               "/var/spool/b300-stlink/ingress")
+    try:
+        result = subprocess.run(command, capture_output=True, text=True,
+                                timeout=4, check=False)
+        if result.returncode != 0:
+            return False
+        filesystems = json.loads(result.stdout).get("filesystems")
+        if not isinstance(filesystems, list) or len(filesystems) != 1:
+            return False
+        item = filesystems[0]
+        options = str(item.get("options", "")).split(",")
+        values = dict(part.split("=", 1) for part in options if "=" in part)
+        return (item.get("target") == "/var/spool/b300-stlink/ingress"
+                and item.get("fstype") == "tmpfs"
+                and int(item.get("size", -1)) == 65 * 1024 * 1024
+                and {"nodev", "nosuid", "noexec"}.issubset(set(options))
+                and values.get("nr_inodes") == "256"
+                and values.get("uid") == str(agent_uid)
+                and values.get("gid") == str(upload_gid)
+                and values.get("mode", "").lstrip("0") == "710")
+    except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError,
+            subprocess.TimeoutExpired):
+        return False
+
+
+def _open_tool_versions(runner: Callable) -> None:
+    try:
+        setpriv = runner(("/usr/bin/setpriv", "--version"))
+        python = runner(("/usr/bin/python3", "--version"))
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise BoundaryError("OPEN_TOOLS_UNAVAILABLE") from error
+    if (setpriv.returncode != 0 or python.returncode != 0
+            or re.search(r"util-linux [0-9]+\.[0-9]+", str(setpriv.stdout)) is None
+            or re.search(r"Python 3\.(?:9|[1-9][0-9])(?:\.|\s)",
+                         str(python.stdout)) is None):
+        raise BoundaryError("OPEN_TOOLS_UNAVAILABLE")
+
+
+def _unprivileged_open_result(node: str, identities: dict, *, agent: bool,
+                              runner: Callable) -> int:
+    if re.fullmatch(r"/dev/bus/usb/[0-9]{3}/[0-9]{3}", node) is None:
+        raise BoundaryError("USB_NODE_UNSAFE")
+    uid_key, gid_key = (("agent_uid", "agent_gid") if agent
+                        else ("operator_uid", "operator_gid"))
+    command = ["/usr/bin/setpriv", "--reuid", str(identities[uid_key]),
+               "--regid", str(identities[gid_key])]
+    if agent:
+        command.append("--groups=" + ",".join(str(gid) for gid in identities["agent_groups"]))
+    else:
+        command.append("--init-groups")
+    command.extend(("--bounding-set=-all", "--inh-caps=-all",
+                    "--no-new-privs", "--reset-env", "/usr/bin/python3",
+                    "-I", "-c", _USB_OPEN_SOURCE, node))
+    try:
+        result = runner(tuple(command))
+        return int(result.returncode)
+    except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+        raise BoundaryError("USB_OPEN_UNKNOWN") from error
+
+
+def _validate_boundary_identities(identities: dict) -> None:
+    fields = ("agent_uid", "agent_gid", "probe_gid", "upload_gid",
+              "operator_access_gid", "operator_uid", "operator_gid")
+    if (not isinstance(identities, dict)
+            or any(type(identities.get(field)) is not int or identities[field] <= 0
+                   for field in fields)
+            or identities["agent_uid"] == identities["operator_uid"]):
+        raise BoundaryError("IDENTITY_INVALID")
+    agent_groups = identities.get("agent_groups")
+    operator_groups = identities.get("operator_groups")
+    if (not isinstance(agent_groups, (tuple, list))
+            or not isinstance(operator_groups, (tuple, list))
+            or any(type(value) is not int or value <= 0
+                   for value in (*agent_groups, *operator_groups))
+            or not {identities["probe_gid"], identities["upload_gid"],
+                    identities["operator_access_gid"]}.issubset(set(agent_groups))
+            or identities["probe_gid"] in operator_groups
+            or identities["probe_gid"] == identities["operator_gid"]):
+        raise BoundaryError("IDENTITY_INVALID")
+
+
+def _verify_boundary(
+        marker_path: Path, owner_lock_path: Path, *, probe_serial: Optional[str],
+        probe_provider: Callable, mount_check: Callable, identity_provider: Callable,
+        node_stat: Callable, runner: Callable, probes, locker,
+        effective_uid: Callable, system_name: str, trusted_uid: int,
+        lock_uid: Optional[int] = None, path_stat: Callable = os.lstat,
+        fd_stat: Callable = os.fstat, fsync_dir: Callable = _fsync_directory,
+        timeout_seconds: float = 2.0) -> dict:
+    """Activate only after duplicate boundary proofs, including one under flock."""
+    if system_name != "linux" or effective_uid() != 0:
+        raise BoundaryError("ROOT_LINUX_REQUIRED")
+    marker = Path(marker_path)
+    _trusted_directory_chain(marker.parent, owner_uid=trusted_uid, path_stat=path_stat)
+    _read_active_marker(marker, root_uid=trusted_uid, path_stat=path_stat,
+                        fd_stat=fd_stat, expected_enabled=False)
+    try:
+        identities = identity_provider()
+    except (OSError, KeyError) as error:
+        raise BoundaryError("IDENTITY_INVALID") from error
+    _validate_boundary_identities(identities)
+    first_identity = [None]
+    last_node = [None]
+
+    def prove() -> None:
+        try:
+            if getattr(probes, "service_idle")() is not True:
+                raise BoundaryError("SERVICE_NOT_IDLE")
+        except BoundaryError:
+            raise
+        except Exception as error:
+            raise BoundaryError("SERVICE_NOT_IDLE") from error
+        try:
+            if mount_check(identities["agent_uid"], identities["upload_gid"]) is not True:
+                raise BoundaryError("INGRESS_MOUNT_UNSAFE")
+        except BoundaryError:
+            raise
+        except Exception as error:
+            raise BoundaryError("INGRESS_MOUNT_UNSAFE") from error
+        try:
+            evidence = probe_provider(probe_serial)
+        except Exception as error:
+            raise BoundaryError("PROBE_NOT_UNIQUE") from error
+        if (not isinstance(evidence, dict) or evidence.get("count") != 1
+                or evidence.get("incomplete_count") != 0
+                or evidence.get("selected") is not True):
+            raise BoundaryError("PROBE_NOT_UNIQUE")
+        node = evidence.get("node")
+        if not isinstance(node, str) or re.fullmatch(
+                r"/dev/bus/usb/[0-9]{3}/[0-9]{3}", node) is None:
+            raise BoundaryError("USB_NODE_UNSAFE")
+        if (evidence.get("uid") != 0 or evidence.get("gid") != identities["probe_gid"]
+                or evidence.get("mode") != "0660"
+                or evidence.get("device_type") != "char"
+                or evidence.get("acl_known") is not True
+                or evidence.get("operator_acl") is not False):
+            raise BoundaryError("USB_ACL_UNSAFE")
+        try:
+            before = node_stat(node)
+        except OSError as error:
+            raise BoundaryError("USB_NODE_UNSAFE") from error
+        identity = (node, before.st_dev, before.st_ino)
+        if (not stat.S_ISCHR(before.st_mode) or before.st_uid != 0
+                or before.st_gid != identities["probe_gid"]
+                or stat.S_IMODE(before.st_mode) != 0o660
+                or (before.st_dev, before.st_ino) !=
+                   (evidence.get("st_dev"), evidence.get("st_ino"))):
+            raise BoundaryError("USB_NODE_UNSAFE")
+        if first_identity[0] is not None and first_identity[0] != identity:
+            raise BoundaryError("PROBE_CHANGED")
+        first_identity[0] = identity
+        _open_tool_versions(runner)
+        agent_result = _unprivileged_open_result(node, identities, agent=True, runner=runner)
+        if agent_result == 13:
+            raise BoundaryError("AGENT_USB_DENIED")
+        if agent_result != 0:
+            raise BoundaryError("USB_OPEN_UNKNOWN")
+        operator_result = _unprivileged_open_result(
+            node, identities, agent=False, runner=runner)
+        if operator_result == 0:
+            raise BoundaryError("OPERATOR_USB_ALLOWED")
+        if operator_result != 13:
+            raise BoundaryError("USB_OPEN_UNKNOWN")
+        after = node_stat(node)
+        if (not stat.S_ISCHR(after.st_mode) or after.st_uid != 0
+                or after.st_gid != identities["probe_gid"]
+                or stat.S_IMODE(after.st_mode) != 0o660
+                or (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino)):
+            raise BoundaryError("PROBE_CHANGED")
+        last_node[0] = node
+
+    for name in ("agent_idle", "jobs_idle", "openocd_quiescent"):
+        try:
+            if getattr(probes, name)() is not True:
+                raise BoundaryError("QUIESCENCE_UNKNOWN")
+        except BoundaryError:
+            raise
+        except Exception as error:
+            raise BoundaryError("QUIESCENCE_UNKNOWN") from error
+    prove()
+    _transition_active_to_pending(
+        marker, owner_lock_path, probes=probes, locker=locker,
+        effective_uid=effective_uid, system_name=system_name,
+        trusted_uid=trusted_uid, lock_uid=lock_uid,
+        path_stat=path_stat, fd_stat=fd_stat, fsync_dir=fsync_dir,
+        timeout_seconds=timeout_seconds, expected_enabled=False,
+        target_enabled=True, extra_check=prove)
+    return {"state": "ACTIVE", "verified": True, "probe_node": last_node[0],
+            "checks": {"probe": True, "usb_acl": True, "agent_open": True,
+                       "operator_denied": True, "bounded_ingress": True,
+                       "quiescent": True}}
+
+
+def verify_boundary(*, probe_serial: Optional[str], probes,
+                    timeout_seconds: float = 2.0) -> dict:
+    """Root-only production boundary verification; no CLI command calls it."""
+    if not sys.platform.startswith("linux") or getattr(os, "geteuid", lambda: -1)() != 0:
+        raise BoundaryError("ROOT_LINUX_REQUIRED")
+    identities = _boundary_identities()
+    host = LinuxHostProbe()
+    return _verify_boundary(
+        SYSTEM_MARKER, SYSTEM_OWNER_LOCK, probe_serial=probe_serial,
+        probe_provider=lambda serial: host._probe_state(serial, {"exists": True,
+            "gid": identities["probe_gid"]}),
+        mount_check=_bounded_ingress_mount,
+        identity_provider=lambda: identities,
+        node_stat=os.lstat, runner=_run_boundary_command,
+        probes=probes, locker=_LinuxFlock(), effective_uid=os.geteuid,
+        system_name="linux", trusted_uid=0, lock_uid=identities["agent_uid"],
+        timeout_seconds=timeout_seconds)
 
 
 @dataclass(frozen=True)
@@ -1183,18 +1447,21 @@ class LinuxHostProbe:
         result = {"count": count, "incomplete_count": incomplete_count,
                   "selected": len(selected) == 1,
                   "node": None, "uid": None, "gid": None, "mode": None,
+                  "device_type": None, "st_dev": None, "st_ino": None,
                   "agent_owned": False, "acl_known": False, "operator_acl": None}
         if len(selected) == 1:
             _, node, info = selected[0]
             acl = self._query(("getfacl", "-cp", node))
             result.update(node=node, uid=info.st_uid, gid=info.st_gid,
                           mode="%04o" % stat.S_IMODE(info.st_mode),
+                          device_type="char" if stat.S_ISCHR(info.st_mode) else "other",
+                          st_dev=info.st_dev, st_ino=info.st_ino,
                           agent_owned=bool(agent_group.get("exists") and
                                            agent_group.get("gid") == info.st_gid),
                           acl_known=acl is not None,
                           operator_acl=(None if acl is None else any(
-                              re.fullmatch(r"user:%s:rw[x-]" % re.escape(self.operator_name),
-                                           line) is not None
+                              re.fullmatch(r"user:%s:[rwx-]{3}" % re.escape(self.operator_name),
+                                           line.partition("#")[0].strip()) is not None
                               for line in acl.splitlines())))
         return result
 
