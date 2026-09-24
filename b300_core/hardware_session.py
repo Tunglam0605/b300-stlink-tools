@@ -9,6 +9,7 @@ from enum import Enum
 from typing import Iterator, Optional
 
 from .models import ProbeRef
+from .hardware_owner import DEFAULT_HARDWARE_OWNER, FileHardwareOwner, HardwareOwnerBusy
 
 
 class HardwareMode(str, Enum):
@@ -64,8 +65,10 @@ class HardwareSessionManager:
         HardwareMode.MONITORING: (HardwareMode.MONITORING,),
     }
 
-    def __init__(self) -> None:
+    def __init__(self, *, owner: Optional[FileHardwareOwner] = None) -> None:
         self._lock = threading.RLock()
+        self._process_owner = owner or DEFAULT_HARDWARE_OWNER
+        self._process_owner_token = None
         self._owner_ident: Optional[int] = None
         self._depth = 0
         self._state = HardwareSessionState(HardwareMode.IDLE, None)
@@ -83,6 +86,11 @@ class HardwareSessionManager:
             raise ValueError("IDLE cannot be acquired as a hardware operation.")
         owner = threading.get_ident()
         with self._lock:
+            if self._owner_ident is None:
+                try:
+                    self._process_owner_token = self._process_owner.acquire()
+                except HardwareOwnerBusy as error:
+                    raise HardwareBusyError(str(error)) from error
             self._acquire_thread_bound(selected, probe, owner)
             state = self._state
         try:
@@ -107,6 +115,10 @@ class HardwareSessionManager:
         with self._lock:
             if self._owner_ident is not None:
                 self._raise_busy(self._state)
+            try:
+                self._process_owner_token = self._process_owner.acquire()
+            except HardwareOwnerBusy as error:
+                raise HardwareBusyError(str(error)) from error
             lease_id = self._next_lease_id
             self._next_lease_id += 1
             self._owner_ident = owner
@@ -150,10 +162,14 @@ class HardwareSessionManager:
             self._clear()
 
     def _clear(self) -> None:
+        token = self._process_owner_token
+        self._process_owner_token = None
         self._owner_ident = None
         self._depth = 0
         self._detached_lease_id = None
         self._state = HardwareSessionState(HardwareMode.IDLE, None)
+        if token is not None:
+            token.release()
 
     @staticmethod
     def _raise_busy(active: HardwareSessionState) -> None:

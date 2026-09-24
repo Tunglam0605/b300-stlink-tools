@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import threading
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from b300_core.gateway_lease import (
@@ -13,6 +14,7 @@ from b300_core.gateway_lease import (
     GatewayLeaseStore,
 )
 from b300_core.gateway_lease_coordinator import GatewayLeaseCoordinator
+from b300_core.hardware_owner import FileHardwareOwner
 from b300_core.gateway_status import GatewaySnapshot
 from b300_core.gateway_supervisor import GatewaySupervisor
 from b300_core.debug_service import DebugState
@@ -53,6 +55,7 @@ class FakeSupervisor:
     def __init__(self):
         self.ensure_calls = 0
         self.maintain_calls = 0
+        self.rescan_calls = 0
         self.stop_calls = 0
         self.ensure_result = snapshot()
         self.maintain_result = self.ensure_result
@@ -71,6 +74,11 @@ class FakeSupervisor:
     def maintain_once(self):
         self.maintain_calls += 1
         self.snapshot = self.maintain_result
+        return self.snapshot
+
+    def rescan(self):
+        self.rescan_calls += 1
+        self.snapshot = self.ensure_result
         return self.snapshot
 
     def stop(self):
@@ -121,6 +129,135 @@ def request(client_id="client-a", mode="VSCODE_DEBUG"):
 
 
 class GatewayLeaseCoordinatorTests(unittest.TestCase):
+    def test_runtime_rescan_never_restarts_persisted_recovery_lease(self):
+        grant = self.coordinator.acquire(request())
+        self.assertIsInstance(grant, GatewayLeaseGrant)
+        restarted_supervisor = FakeSupervisor()
+        restarted = GatewayLeaseCoordinator(
+            restarted_supervisor, store=self.coordinator.store, clock=self.clock)
+        self.assertEqual(restarted.public_snapshot().state, "RECOVERY_REQUIRED")
+        result = restarted.runtime_snapshot("rescan")
+        self.assertFalse(result.attach_ready)
+        self.assertEqual(restarted_supervisor.rescan_calls, 0)
+        self.assertEqual(restarted_supervisor.ensure_calls, 0)
+
+    def test_runtime_rescan_rejects_expired_lease_before_tick(self):
+        grant = self.coordinator.acquire(request())
+        self.assertIsInstance(grant, GatewayLeaseGrant)
+        self.clock.advance(6)
+        for action in ("status", "ensure", "rescan"):
+            with self.subTest(action=action):
+                expired = self.coordinator.runtime_snapshot(action)
+                self.assertFalse(expired.attach_ready)
+        self.assertEqual(self.supervisor.rescan_calls, 0)
+        self.assertEqual(self.supervisor.maintain_calls, 0)
+
+    def test_runtime_rescan_rejects_grace_cleaning_and_recovery_states(self):
+        grant = self.coordinator.acquire(request())
+        self.assertIsInstance(grant, GatewayLeaseGrant)
+        original = self.coordinator._lease
+        for state in ("GRACE", "CLEANING", "RECOVERY_REQUIRED"):
+            with self.subTest(state=state):
+                self.coordinator._persist_locked(replace(
+                    original, state=state,
+                    grace_deadline_mono=(original.deadline_mono + 3 if state == "GRACE" else None),
+                    reason_code="RECOVERY_REQUIRED" if state == "RECOVERY_REQUIRED" else "LEASE_GRACE"))
+                for action in ("status", "ensure", "rescan"):
+                    result = self.coordinator.runtime_snapshot(action)
+                    self.assertFalse(result.attach_ready)
+                self.assertEqual(self.supervisor.rescan_calls, 0)
+                self.assertEqual(self.supervisor.ensure_calls, 1)
+                self.assertEqual(self.supervisor.maintain_calls, 0)
+
+    def test_runtime_snapshot_preserves_debug_lease_and_rescan_semantics(self):
+        self.assertEqual(self.coordinator.runtime_snapshot("status").state, "STOPPED")
+        self.assertEqual(self.supervisor.ensure_calls, 0)
+        self.assertEqual(self.coordinator.runtime_snapshot("ensure").state, "STOPPED")
+        self.assertEqual(self.supervisor.ensure_calls, 0)
+        grant = self.coordinator.acquire(request())
+        self.assertIsInstance(grant, GatewayLeaseGrant)
+        self.assertTrue(self.coordinator.runtime_snapshot("status").attach_ready)
+        self.assertTrue(self.coordinator.runtime_snapshot("ensure").attach_ready)
+        self.assertTrue(self.coordinator.runtime_snapshot("rescan").attach_ready)
+        self.assertEqual(self.supervisor.rescan_calls, 1)
+
+    def test_flash_lease_reserves_probe_without_opening_debug_gateway(self):
+        with tempfile.TemporaryDirectory() as directory:
+            supervisor = FakeSupervisor()
+            owner = FileHardwareOwner(Path(directory) / "hardware.lock")
+            coordinator = GatewayLeaseCoordinator(
+                supervisor,
+                store=GatewayLeaseStore(Path(directory) / "lease.json"),
+                probe_discovery=lambda: (ProbeInfo("SAFE123", "ST-Link", "test", "usb:1"),),
+                hardware_owner=owner,
+            )
+            grant = coordinator.acquire(request("client-flash", "FLASH_APPLICATION"))
+            self.assertIsInstance(grant, GatewayLeaseGrant)
+            self.assertEqual(grant.public.probe_serial, "SAFE123")
+            self.assertIsNone(grant.public.gdb_endpoint)
+            self.assertEqual(supervisor.ensure_calls, 0)
+            self.assertFalse(coordinator.release(grant.lease_id, grant.token, grant.generation).active)
+            self.assertEqual(supervisor.stop_calls, 0)
+
+    def test_committed_flash_retains_lease_after_client_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            coordinator = GatewayLeaseCoordinator(
+                FakeSupervisor(),
+                store=GatewayLeaseStore(Path(directory) / "lease.json"),
+                probe_discovery=lambda: (ProbeInfo("SAFE123", "ST-Link", "test", "usb:1"),),
+                hardware_owner=FileHardwareOwner(Path(directory) / "hardware.lock"),
+            )
+            grant = coordinator.acquire(request("client-flash", "FLASH_APPLICATION"))
+            self.assertTrue(coordinator.owns_flash_lease(grant.lease_id, grant.token, grant.generation))
+            coordinator.adopt_flash_job(grant.lease_id, grant.token, grant.generation)
+            self.assertTrue(coordinator.release(grant.lease_id, grant.token, grant.generation).active)
+            self.assertFalse(coordinator.finish_flash_job(grant.lease_id, grant.token, grant.generation).active)
+
+    def test_late_internal_flash_renew_keeps_hardware_owner_until_job_finishes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            clock = FakeClock()
+            coordinator = GatewayLeaseCoordinator(
+                FakeSupervisor(),
+                store=GatewayLeaseStore(Path(directory) / "lease.json"),
+                policy=GatewayLeasePolicy(heartbeat_interval_seconds=1,
+                                          lease_ttl_seconds=5, reconnect_grace_seconds=3),
+                clock=clock,
+                probe_discovery=lambda: (ProbeInfo("SAFE123", "ST-Link", "test", "usb:1"),),
+                hardware_owner=FileHardwareOwner(Path(directory) / "hardware.lock"),
+            )
+            grant = coordinator.acquire(request("client-flash", "FLASH_APPLICATION"))
+            coordinator.adopt_flash_job(grant.lease_id, grant.token, grant.generation)
+            clock.advance(20)
+            renewed = coordinator.renew(grant.lease_id, grant.token, grant.generation)
+            self.assertTrue(renewed.active)
+            self.assertTrue(coordinator.owns_flash_lease(grant.lease_id, grant.token, grant.generation))
+            coordinator.finish_flash_job(grant.lease_id, grant.token, grant.generation)
+
+    def test_restarted_flash_lease_reconciles_only_when_hardware_is_quiescent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = GatewayLeaseStore(root / "lease.json")
+            owner = FileHardwareOwner(root / "hardware.lock")
+            first = GatewayLeaseCoordinator(
+                FakeSupervisor(), store=store,
+                probe_discovery=lambda: (ProbeInfo("SAFE123", "ST-Link", "test", "usb:1"),),
+                hardware_owner=owner,
+            )
+            grant = first.acquire(request("client-flash", "FLASH_APPLICATION"))
+            first._flash_owner_token.release()  # simulate an exited Agent process
+            first._flash_owner_token = None
+            busy = GatewayLeaseCoordinator(
+                FakeSupervisor(), store=store, hardware_owner=owner,
+                flash_quiescent_probe=lambda: False,
+            )
+            self.assertEqual(busy.tick().state, "RECOVERY_REQUIRED")
+            recovered = GatewayLeaseCoordinator(
+                FakeSupervisor(), store=store, hardware_owner=owner,
+                flash_quiescent_probe=lambda: True,
+            )
+            self.assertEqual(recovered.tick().reason_code, "RECOVERY_RECONCILED")
+            self.assertIsNone(store.read())
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

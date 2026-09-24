@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable, Optional, Sequence, Tuple
 
 from .subprocess_env import external_command_env
+from .gateway_system_mode import load_isolated_gateway_config
 
 
 TASK_NAME = "B300-STLink-GatewayAgent"
@@ -74,6 +75,9 @@ def inspect_gateway_agent_setup(*, cli_path: Path, system_name: Optional[str] = 
         return GatewayAgentSetupReport(system, True, installed, running, version, enabled,
                                         "AGENT_READY" if enabled else "AGENT_MISSING")
     if system == "linux":
+        if load_isolated_gateway_config() is not None:
+            return GatewayAgentSetupReport(system, True, True, False, None, False,
+                                           "ISOLATED_SYSTEM_AGENT")
         enabled_result = runner(("systemctl", "--user", "is-enabled", UNIT_NAME))
         active_result = runner(("systemctl", "--user", "is-active", UNIT_NAME))
         installed = cli.is_file() or _result_field(enabled_result, "returncode", 1) == 0
@@ -95,6 +99,8 @@ def build_gateway_agent_setup_plan(report: GatewayAgentSetupReport, *, cli_path:
                                    system_name: Optional[str] = None) -> GatewayAgentSetupPlan:
     system = _system(system_name or report.platform)
     if not report.supported:
+        return GatewayAgentSetupPlan(system, (), False, False)
+    if system == "linux" and report.reason_code == "ISOLATED_SYSTEM_AGENT":
         return GatewayAgentSetupPlan(system, (), False, False)
     # Preserve the caller's path spelling. Windows resolves existing path
     # components with filesystem casing, which breaks the exact task command

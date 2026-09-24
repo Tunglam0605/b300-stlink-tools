@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Optional
+import time
+import uuid
 
 from PySide6.QtCore import QDateTime, QTimer, QUrl, QSize, Qt
 from PySide6.QtGui import QDesktopServices, QPixmap
@@ -23,6 +25,9 @@ from b300_core.project_profiles import ProjectProfileStore
 from b300_core.vscode_bridge import BridgeState, DebugRole
 from b300_core.remote_profile import RemoteGatewayProfile
 from b300_core.remote_session import RemoteSession
+from b300_core.gateway_lease_client import GatewayLeaseClient
+from b300_core.hex_image import inspect_image
+from b300_core.remote_program_history import RemoteProgramHistory
 from .main_window import MainWindow as _BaseMainWindow
 from .confirm_dialog import ConfirmFlashDialog
 from .operation_state import OperationState
@@ -50,6 +55,7 @@ class ProductionMainWindow(_BaseMainWindow):
         gateway_store = kwargs.pop("gateway_store", None)
         project_store = kwargs.pop("project_store", None)
         gateway_sessions = kwargs.pop("gateway_sessions", None)
+        remote_program_history = kwargs.pop("remote_program_history", None)
         gateway_access_provider = kwargs.pop("gateway_access_provider", discover_gateway_access)
         kwargs.setdefault("legacy_workbenches", False)
         super().__init__(*args, **kwargs)
@@ -59,6 +65,7 @@ class ProductionMainWindow(_BaseMainWindow):
         self._gateway_store = gateway_store or GatewayProfileStore()
         self._project_store = project_store or ProjectProfileStore()
         self._gateway_sessions = gateway_sessions or GatewaySessionManager()
+        self._remote_program_history = remote_program_history or RemoteProgramHistory()
         self._gateway_access_provider = gateway_access_provider
         self._vscode_remote_session: Optional[RemoteSession] = None
         self._remote_login_dialog: Optional[GatewayLoginDialog] = None
@@ -222,6 +229,7 @@ class ProductionMainWindow(_BaseMainWindow):
 
         self.program_view = ProgramView(self)
         self.program_view.flash_application_requested.connect(self._on_v18_flash_application)
+        self.program_view.job_status_requested.connect(self._check_recent_remote_program)
         self.program_view.flash_bootloader_requested.connect(self._on_v18_flash_bootloader)
         self.program_view.file_selected.connect(self._on_v18_file_selected)
         self.program_view.file_invalidated.connect(self._on_v18_image_invalidated)
@@ -407,13 +415,30 @@ class ProductionMainWindow(_BaseMainWindow):
             self.program_view.set_busy(hardware_busy)
             self.program_view.set_probes(self.app_context.probes, self.app_context.selected_probe)
             self.program_view.btn_flash_app.setEnabled(
-                local_connection and not hardware_busy and self.openocd_ready and bool(self._probes)
-                and not (self._probe_selection_required and self.probe_combo.currentData() is None)
-                and self.program_view._selected_file is not None
+                not hardware_busy and self.program_view._selected_file is not None
+                and (
+                    not local_connection
+                    or (self.openocd_ready and bool(self._probes)
+                        and not (self._probe_selection_required and self.probe_combo.currentData() is None))
+                )
             )
             if not local_connection:
-                self.program_view.btn_dry_run_action.setEnabled(False)
+                self.program_view.btn_dry_run_action.setEnabled(
+                    not hardware_busy and self.program_view._selected_file is not None
+                )
                 self.program_view.btn_flash_bootloader.setEnabled(False)
+            self.program_view.btn_recent_job.setVisible(not local_connection)
+            recent_job = None
+            if not local_connection:
+                gateway = self.app_context.selected_connection.gateway
+                if gateway is not None:
+                    try:
+                        recent_job = self._remote_program_history.get(gateway.profile_id)
+                    except (OSError, ValueError):
+                        recent_job = None
+            self.program_view.btn_recent_job.setEnabled(
+                not local_connection and not hardware_busy and bool(recent_job)
+            )
         if hasattr(self, "device_view"):
             self.device_view.set_busy(hardware_busy or not local_connection or not self.openocd_ready or not self._probes)
         if hasattr(self, "debug_vscode_view"):
@@ -672,6 +697,9 @@ class ProductionMainWindow(_BaseMainWindow):
     def _on_v18_flash_application(self, path: Path, is_dry_run: bool) -> None:
         if self._operation_state().is_hardware_busy:
             return
+        if not self.app_context.selected_connection.is_local:
+            self._begin_remote_application_program(path, is_dry_run)
+            return
         self.program_view.set_file_path(path)
         if self.image_info is None:
             self.program_view.banner.show_fail(
@@ -689,6 +717,275 @@ class ProductionMainWindow(_BaseMainWindow):
             self.show_dry_run() if is_dry_run else self.confirm_flash()
 
         self._begin_target_inspection(continue_program)
+
+    def _begin_remote_application_program(self, path: Path, is_dry_run: bool) -> None:
+        gateway = self.app_context.selected_connection.gateway
+        if gateway is None or self.busy:
+            return
+        self.program_view.set_file_path(path)
+        if self.program_view._selected_file is None:
+            self.program_view.banner.show_fail(
+                "HEX không hợp lệ", self.program_view.app_meta_label.text(),
+                "Chọn một Application Intel HEX hợp lệ.",
+            )
+            return
+        endpoint = gateway.endpoint
+        if not self._session_matches(endpoint):
+            self._show_remote_login({
+                "host": endpoint.host, "user": endpoint.user,
+                "ssh_port": endpoint.port,
+            }, launch_after=False)
+        if not self._session_matches(endpoint):
+            self.program_view.banner.show_info("Chưa kết nối Gateway", "Kết nối SSH rồi thử lại.")
+            return
+        session = self._get_or_create_remote_session(endpoint)
+        connection_id = self.app_context.selected_connection.connection_id
+        selected_probe = self.app_context.selected_probe
+        selected_path = self.program_view._selected_file
+        selected_image_hash = self.program_view._current_image.sha256
+        self.busy = True
+        self.program_view.banner.show_info(
+            "Đang tải và kiểm tra Application", "Gateway sẽ kiểm tra file, ST-Link và MCU trước khi xác nhận.",
+        )
+        self._update_controls()
+
+        def prepare(log, phase, cancel):
+            client_id = "b300-gui-" + uuid.uuid4().hex
+            lease = GatewayLeaseClient(
+                session, client_id=client_id, client_label="B300 GUI Remote Flash",
+            )
+            try:
+                grant = lease.start("FLASH_APPLICATION", probe_serial=selected_probe)
+                approval = session.prepare_remote_application(selected_path, grant, client_id)
+                return approval, lease, grant
+            except BaseException:
+                lease.close()
+                raise
+
+        def prepared(payload):
+            approval, lease, grant = payload
+            self.busy = False
+            self._update_controls()
+            def cancel_prepared_job() -> bool:
+                try:
+                    session.cancel_remote_application(approval["job_id"], grant)
+                    try:
+                        session.cleanup_remote_application(approval["job_id"])
+                    except Exception as error:
+                        self.append_log("Gateway chưa dọn được tệp job: %s" % error)
+                    return True
+                except Exception as error:
+                    self.program_view.banner.show_fail(
+                        "Chưa xác nhận trạng thái hủy job", str(error),
+                        "Kiểm tra lại job ID trước khi bắt đầu lần nạp khác.",
+                    )
+                    return False
+                finally:
+                    lease.close()
+            try:
+                current_image_hash = inspect_image(selected_path).sha256
+            except (OSError, ValueError):
+                current_image_hash = None
+            if (self.app_context.selected_connection.connection_id != connection_id
+                    or self.app_context.selected_probe != selected_probe
+                    or self.program_view._selected_file != selected_path
+                    or self.program_view._current_image is None
+                    or self.program_view._current_image.sha256 != selected_image_hash
+                    or current_image_hash != selected_image_hash):
+                if cancel_prepared_job():
+                    self.program_view.banner.show_info(
+                        "Điều kiện nạp đã thay đổi", "Chọn lại file và chạy kiểm tra Gateway mới.",
+                    )
+                return
+            plan = approval.get("plan", {})
+            if (plan.get("erase_sectors") != [3, 4, 5, 6, 7]
+                    or plan.get("metadata_address") != "0x0800C000"
+                    or plan.get("metadata_bytes") != 44):
+                if cancel_prepared_job():
+                    self.program_view.banner.show_fail(
+                        "Kế hoạch Gateway không hợp lệ", "Không đúng vùng Application và AppMeta.",
+                        "Kiểm tra phiên bản Gateway trước khi thử lại.",
+                    )
+                return
+            try:
+                self.program_view.set_remote_preflight(plan)
+            except ValueError as error:
+                if cancel_prepared_job():
+                    self.program_view.banner.show_fail(
+                        "Bằng chứng Gateway không hợp lệ", str(error),
+                        "Cập nhật Gateway và chạy lại dry-run trước khi nạp.",
+                    )
+                return
+            manifest = approval.get("manifest", {})
+            detail = (
+                "Sector 3–7 · STLM 0x0800C000/44 byte · ST-Link %s · SHA-256 %s"
+                % (plan.get("probe_serial") or "duy nhất", manifest.get("sha256", ""))
+            )
+            if is_dry_run:
+                if cancel_prepared_job():
+                    self.program_view.banner.show_pass("Gateway dry-run đạt", detail)
+                return
+            answer = QMessageBox.question(
+                self, "Xác nhận nạp Application từ xa",
+                "Gateway: %s\nFile: %s\n%s\n\nXóa Sector 3–7 và nạp Application này?"
+                % (gateway.name, manifest.get("file_name", selected_path.name), detail),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                if cancel_prepared_job():
+                    self.program_view.banner.show_info("Đã hủy trước khi nạp", detail)
+                return
+            self._run_remote_application_job(session, approval, lease, grant)
+
+        def failed(failure):
+            self.busy = False
+            self._update_controls()
+            self.program_view.banner.show_fail(
+                "Gateway kiểm tra không đạt", getattr(failure, "message", str(failure)),
+                getattr(failure, "next_action", "Kiểm tra SSH, ST-Link và file HEX."),
+            )
+
+        self._start_worker(prepare, prepared, cancellable=False, on_failed=failed)
+
+    def _run_remote_application_job(self, session, approval: dict, lease, grant) -> None:
+        job_id = approval["job_id"]
+        gateway = self.app_context.selected_connection.gateway
+        try:
+            if gateway is None:
+                raise ValueError("Gateway connection changed before programming.")
+            self._remote_program_history.save(gateway.profile_id, job_id)
+        except (OSError, ValueError) as error:
+            try:
+                session.cancel_remote_application(job_id, grant)
+                try:
+                    session.cleanup_remote_application(job_id)
+                except Exception as cleanup_error:
+                    self.append_log("Gateway chưa dọn được tệp job: %s" % cleanup_error)
+            except Exception as cancel_error:
+                self.append_log("Gateway chưa xác nhận hủy job %s: %s" % (job_id, cancel_error))
+            finally:
+                lease.close()
+            self.program_view.banner.show_fail(
+                "Không lưu được job từ xa", str(error),
+                "Kiểm tra job %s trên Gateway trước khi nạp lại." % job_id,
+            )
+            return
+        self.busy = True
+        self.program_view.banner.show_info(
+            "Gateway đang nạp Application", "Job %s · không ngắt nguồn board." % job_id,
+        )
+        self._update_controls()
+
+        def execute(log, phase, cancel):
+            try:
+                try:
+                    session.commit_remote_application(approval, grant)
+                except Exception:
+                    # A lost SSH response may still mean commit succeeded. Query
+                    # the immutable job; never submit commit a second time.
+                    try:
+                        status = session.remote_program_status(job_id)
+                    except Exception:
+                        return {"job_id": job_id, "state": "PENDING"}
+                    if status.get("state") not in {"RUNNING", "SUCCEEDED", "FAILED"}:
+                        return {"job_id": job_id, "state": "PENDING"}
+                deadline = time.monotonic() + 420.0
+                while time.monotonic() < deadline:
+                    try:
+                        status = session.remote_program_status(job_id)
+                    except Exception:
+                        return {"job_id": job_id, "state": "PENDING"}
+                    if status.get("state") in {"SUCCEEDED", "FAILED", "RECOVERY_REQUIRED"}:
+                        try:
+                            session.cleanup_remote_application(job_id)
+                        except Exception:
+                            pass
+                        return status
+                    time.sleep(0.5)
+                return {"job_id": job_id, "state": "PENDING"}
+            finally:
+                lease.close()
+
+        def finished(result):
+            self.busy = False
+            self._update_controls()
+            if result.get("state") == "SUCCEEDED":
+                self.program_view.banner.show_pass(
+                    "Nạp Application từ xa thành công",
+                    "STLM CONFIRMED · PC 0x%08X · BKP1R %s"
+                    % (result.get("pc", 0), result.get("bkp1r")),
+                )
+            elif result.get("state") == "PENDING":
+                self.program_view.banner.show_info(
+                    "Gateway đang giữ job", "Job %s · kết nối lại để xem kết quả; không nạp lại."
+                    % job_id,
+                )
+            else:
+                self.program_view.banner.show_fail(
+                    "Nạp Application từ xa không đạt", result.get("reason", result.get("state", "Unknown")),
+                    result.get("next_action", "Xem log Gateway và kiểm tra board trước khi thử lại."),
+                )
+
+        self._start_worker(execute, finished, cancellable=False)
+
+    def _check_recent_remote_program(self) -> None:
+        gateway = self.app_context.selected_connection.gateway
+        if gateway is None or self.busy:
+            return
+        try:
+            job_id = self._remote_program_history.get(gateway.profile_id)
+        except (OSError, ValueError) as error:
+            self.program_view.banner.show_fail(
+                "Không đọc được lịch sử job", str(error), "Kiểm tra cấu hình Client.",
+            )
+            return
+        if not job_id:
+            self.program_view.banner.show_info("Chưa có job từ xa", "Chạy dry-run hoặc nạp Application trước.")
+            return
+        endpoint = gateway.endpoint
+        if not self._session_matches(endpoint):
+            self._show_remote_login({
+                "host": endpoint.host, "user": endpoint.user, "ssh_port": endpoint.port,
+            }, launch_after=False)
+        if not self._session_matches(endpoint):
+            return
+        session = self._get_or_create_remote_session(endpoint)
+        self.busy = True
+        self._update_controls()
+
+        def loaded(record):
+            self.busy = False
+            self._update_controls()
+            state = record.get("state", "UNKNOWN")
+            if state == "SUCCEEDED":
+                self.program_view.banner.show_pass(
+                    "Job Gateway đã hoàn tất",
+                    "STLM CONFIRMED · PC 0x%08X · BKP1R %s"
+                    % (record.get("pc", 0), record.get("bkp1r")),
+                )
+            elif state in {"FAILED", "RECOVERY_REQUIRED"}:
+                self.program_view.banner.show_fail(
+                    "Job Gateway cần kiểm tra", record.get("reason", state),
+                    record.get("next_action", "Xem log Gateway và trạng thái board."),
+                )
+            else:
+                self.program_view.banner.show_info(
+                    "Job Gateway: %s" % state, "Job %s · %s" % (job_id, record.get("phase", "")),
+                )
+
+        def failed(failure):
+            self.busy = False
+            self._update_controls()
+            self.program_view.banner.show_fail(
+                "Không đọc được job Gateway", getattr(failure, "message", str(failure)),
+                "Kiểm tra SSH rồi thử lại bằng cùng job ID.",
+            )
+
+        self._start_worker(
+            lambda log, phase, cancel: session.remote_program_status(job_id),
+            loaded, on_failed=failed,
+        )
 
     def confirm_flash(self) -> None:
         plan = self.flash_plan

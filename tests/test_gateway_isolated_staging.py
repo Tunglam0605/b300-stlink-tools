@@ -1,0 +1,322 @@
+from __future__ import annotations
+
+import os
+import stat
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+from b300_core.gateway_program_jobs import GatewayProgramJobs, ProgramJobError
+from b300_core.remote_programming import (
+    FirmwareKind, GatewayProgrammingService, RemoteFirmwareManifest,
+    RemoteProgrammingOperation,
+)
+from tests.test_core_hex_policy import APPLICATION_VECTOR, write_hex
+from tests.test_gateway_program_jobs import FakeCoordinator, FakeService
+
+
+class IsolatedStagingTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        (self.root / "ingress").mkdir(mode=0o710)
+        self.image = write_hex(self.temp.name, 0x08010000, APPLICATION_VECTOR)
+        self.original = self.image.read_bytes()
+        self.manifest = RemoteFirmwareManifest.from_file(
+            self.image, operation=RemoteProgrammingOperation.FLASH_APPLICATION,
+            firmware_kind=FirmwareKind.APPLICATION,
+        )
+        self.service = FakeService()
+        self.jobs = GatewayProgramJobs(
+            self.root / "private", FakeCoordinator(),
+            ingress_root=self.root / "ingress",
+            programming=GatewayProgrammingService(service=self.service),
+        )
+
+    def slot(self):
+        return self.jobs.create_upload(self.manifest, "client-1", "SAFE123")
+
+    def test_missing_system_mount_allows_private_recovery_without_ingress_write(self):
+        from b300_core import gateway_program_jobs
+        ingress = self.root / 'second-ingress'
+        ingress.mkdir(mode=0o710)
+        private = self.root / 'second-private'
+        with mock.patch.object(gateway_program_jobs, 'SYSTEM_INGRESS_ROOT', ingress), \
+             mock.patch.object(gateway_program_jobs, 'ingress_mount_isolated',
+                               return_value=False):
+            recovered = GatewayProgramJobs(private, FakeCoordinator(), ingress_root=ingress)
+            with self.assertRaises(ProgramJobError) as captured:
+                recovered.create_upload(self.manifest, 'client-1', 'SAFE123')
+        self.assertEqual(captured.exception.reason_code, 'ISOLATED_FLASH_DISABLED')
+        self.assertFalse((ingress / 'program-jobs').exists())
+
+    def test_lost_mount_preserves_status_cancel_cleanup_and_underlying_path(self):
+        from b300_core import gateway_program_jobs
+        slot = self.slot()
+        upload = Path(slot['upload_path'])
+        upload.write_bytes(self.original)
+        self.jobs.finalize_upload(slot['job_id'])
+        with mock.patch.object(gateway_program_jobs, 'SYSTEM_INGRESS_ROOT',
+                               self.jobs.ingress_root), \
+             mock.patch.object(gateway_program_jobs, 'ingress_mount_isolated',
+                               return_value=False):
+            recovered = GatewayProgramJobs(
+                self.jobs.root, FakeCoordinator(), ingress_root=self.jobs.ingress_root,
+                programming=GatewayProgrammingService(service=self.service))
+            self.assertEqual(recovered.status(slot['job_id'])['state'], 'STAGED')
+            recovered.cancel(slot['job_id'], 'lease-1', 'secret', 1)
+            recovered.cleanup(slot['job_id'])
+        self.assertTrue((self.jobs.root / slot['job_id'] / 'job.json').exists())
+        self.assertTrue(upload.exists())
+        self.assertEqual(self.service.calls, 0)
+
+    def test_lost_system_ingress_mount_refuses_new_upload_without_job_record(self):
+        from b300_core import gateway_program_jobs
+        from b300_core.gateway_system_mode import IsolatedGatewayConfig
+        active = IsolatedGatewayConfig(Path('/run/b300-stlink/agent.sock'),
+                                       self.jobs.root.parent, self.jobs.ingress_root,
+                                       1000, 2002, True)
+        with mock.patch.object(gateway_program_jobs, "SYSTEM_INGRESS_ROOT",
+                               self.jobs.ingress_root, create=True), \
+             mock.patch.object(gateway_program_jobs, "load_isolated_gateway_config",
+                               return_value=active), \
+             mock.patch.object(gateway_program_jobs, "ingress_mount_isolated",
+                               return_value=False, create=True):
+            with self.assertRaisesRegex(ProgramJobError, "mount") as captured:
+                self.slot()
+        self.assertEqual(captured.exception.reason_code, "INGRESS_MOUNT_UNAVAILABLE")
+        self.assertEqual(list(self.jobs.root.iterdir()), [])
+
+    def test_direct_agent_upload_request_is_blocked_while_marker_pending(self):
+        from b300_core.gateway_agent import GatewayAgent
+        from b300_core.gateway_agent_protocol import GatewayRequest
+        from b300_core.gateway_system_mode import IsolatedGatewayConfig
+        from b300_core import gateway_program_jobs
+        pending = IsolatedGatewayConfig(Path('/run/b300-stlink/agent.sock'),
+                                        self.jobs.root.parent, self.jobs.ingress_root,
+                                        1000, 2002, False)
+        payload = {'manifest': {
+            'operation': 'FLASH_APPLICATION', 'firmware_kind': 'APPLICATION',
+            'file_name': self.manifest.file_name, 'size': self.manifest.size,
+            'sha256': self.manifest.sha256, 'target': 'STM32F407ZET6',
+            'board': 'B300', 'privilege': 'STANDARD'},
+            'client_id': 'client-1', 'probe_serial': 'SAFE123'}
+        agent = GatewayAgent(self.jobs.coordinator, request_store=mock.Mock(),
+                             program_jobs=self.jobs)
+        with mock.patch.object(gateway_program_jobs, 'SYSTEM_INGRESS_ROOT',
+                               self.jobs.ingress_root), \
+             mock.patch.object(gateway_program_jobs, 'load_isolated_gateway_config',
+                               return_value=pending, create=True), \
+             mock.patch.object(gateway_program_jobs, 'ingress_mount_isolated',
+                               return_value=True):
+            with self.assertRaises(ProgramJobError) as captured:
+                agent._dispatch(GatewayRequest.create('program_create_upload', payload))
+        self.assertEqual(captured.exception.reason_code, 'ISOLATED_FLASH_DISABLED')
+        self.assertEqual(list(self.jobs.root.iterdir()), [])
+        self.assertEqual(self.service.calls, 0)
+
+    def test_direct_agent_commit_cannot_flash_after_marker_becomes_pending(self):
+        from b300_core.gateway_agent import GatewayAgent
+        from b300_core.gateway_agent_protocol import GatewayRequest
+        from b300_core.gateway_system_mode import IsolatedGatewayConfig
+        from b300_core import gateway_program_jobs
+        slot = self.slot()
+        Path(slot['upload_path']).write_bytes(self.original)
+        self.jobs.finalize_upload(slot['job_id'])
+        approval = self.jobs.prepare(slot['job_id'], 'lease-1', 'secret', 1)
+        pending = IsolatedGatewayConfig(Path('/run/b300-stlink/agent.sock'),
+                                        self.jobs.root.parent, self.jobs.ingress_root,
+                                        1000, 2002, False)
+        agent = GatewayAgent(self.jobs.coordinator, request_store=mock.Mock(),
+                             program_jobs=self.jobs)
+        payload = {'job_id': slot['job_id'], 'approval_token': approval['approval_token'],
+                   'lease_id': 'lease-1', 'lease_token': 'secret',
+                   'lease_generation': 1}
+        with mock.patch.object(gateway_program_jobs, 'SYSTEM_INGRESS_ROOT',
+                               self.jobs.ingress_root), \
+             mock.patch.object(gateway_program_jobs, 'load_isolated_gateway_config',
+                               return_value=pending, create=True), \
+             mock.patch.object(gateway_program_jobs, 'ingress_mount_isolated',
+                               return_value=True):
+            with self.assertRaises(ProgramJobError) as captured:
+                agent._dispatch(GatewayRequest.create('program_commit', payload))
+        self.assertEqual(captured.exception.reason_code, 'ISOLATED_FLASH_DISABLED')
+        self.assertEqual(self.jobs.status(slot['job_id'])['state'], 'AWAITING_CONFIRMATION')
+        self.assertFalse((self.jobs.root / slot['job_id'] / 'flash.log').exists())
+        self.assertEqual(self.service.calls, 0)
+
+    def test_worker_rechecks_pending_marker_before_flash_call(self):
+        from b300_core.gateway_system_mode import IsolatedGatewayConfig
+        from b300_core import gateway_program_jobs
+        slot = self.slot()
+        Path(slot['upload_path']).write_bytes(self.original)
+        self.jobs.finalize_upload(slot['job_id'])
+        self.jobs.prepare(slot['job_id'], 'lease-1', 'secret', 1)
+        approved = self.jobs._approvals[slot['job_id']][0]
+        pending = IsolatedGatewayConfig(Path('/run/b300-stlink/agent.sock'),
+                                        self.jobs.root.parent, self.jobs.ingress_root,
+                                        1000, 2002, False)
+        with mock.patch.object(gateway_program_jobs, 'SYSTEM_INGRESS_ROOT',
+                               self.jobs.ingress_root), \
+             mock.patch.object(gateway_program_jobs, 'load_isolated_gateway_config',
+                               return_value=pending), \
+             mock.patch.object(gateway_program_jobs, 'ingress_mount_isolated',
+                               return_value=True):
+            self.jobs._run_job(slot['job_id'], approved, 'lease-1', 'secret', 1)
+        self.assertEqual(self.service.calls, 0)
+        self.assertEqual(self.jobs.status(slot['job_id'])['reason_code'],
+                         'ISOLATED_FLASH_DISABLED')
+
+    def test_finalized_artifact_is_private_and_survives_ingress_rewrite(self):
+        slot = self.slot()
+        upload = Path(slot["upload_path"])
+        self.assertEqual(upload.parts[-3:], ("program-jobs", slot["job_id"], "artifact.part"))
+        self.assertEqual(upload.read_bytes(), b"")
+        upload.write_bytes(self.original)
+        public = self.jobs.finalize_upload(slot["job_id"])
+        private = self.jobs.staged_path(slot["job_id"])
+        self.assertNotEqual(private.parent, upload.parent)
+        self.assertEqual(private.read_bytes(), self.original)
+        self.assertNotIn(str(private), str(slot))
+        self.assertNotIn(str(private), str(public))
+        upload.write_bytes(b"changed")
+        approval = self.jobs.prepare(slot["job_id"], "lease-1", "secret", 1)
+        self.assertEqual(private.read_bytes(), self.original)
+        self.assertEqual(approval["state"], "AWAITING_CONFIRMATION")
+        upload.unlink()
+        self.jobs.commit(slot["job_id"], approval["approval_token"], "lease-1", "secret", 1)
+        self.jobs.wait_active(timeout=3)
+        self.assertEqual(self.jobs.status(slot["job_id"])["state"], "SUCCEEDED")
+        self.assertEqual(self.service.calls, 1)
+
+    def test_unsafe_ingress_fails_before_private_promotion(self):
+        for kind in ("symlink", "hardlink", "oversized", "mismatch"):
+            with self.subTest(kind=kind):
+                slot = self.slot()
+                upload = Path(slot["upload_path"])
+                if kind == "symlink":
+                    upload.unlink()
+                    try:
+                        upload.symlink_to(self.image)
+                    except (OSError, NotImplementedError):
+                        continue
+                elif kind == "hardlink":
+                    upload.unlink()
+                    os.link(self.image, upload)
+                elif kind == "oversized":
+                    with upload.open("wb") as stream:
+                        stream.truncate(32 * 1024 * 1024 + 1)
+                else:
+                    upload.write_bytes(self.original[:-1])
+                with self.assertRaises(ProgramJobError):
+                    self.jobs.finalize_upload(slot["job_id"])
+                self.assertEqual(self.jobs.status(slot["job_id"])["state"], "UPLOADING")
+                self.assertTrue(self.jobs.status(slot["job_id"])["reason_code"])
+                self.assertFalse(self.jobs.staged_path(slot["job_id"]).exists())
+
+    def test_ingress_creation_failure_leaves_no_orphan_job(self):
+        failed_id = "a" * 32
+        original = os.open
+
+        def fail_file_open(path, flags, mode=0o777):
+            if str(path).endswith("artifact.part"):
+                raise OSError("injected ingress failure")
+            return original(path, flags, mode)
+
+        with mock.patch("b300_core.gateway_program_jobs.uuid.uuid4",
+                        return_value=SimpleNamespace(hex=failed_id)), \
+             mock.patch("b300_core.gateway_program_jobs.os.open", side_effect=fail_file_open):
+            with self.assertRaises(OSError):
+                self.slot()
+        self.assertFalse((self.jobs.root / failed_id).exists())
+        self.assertFalse((self.jobs.ingress_root / "program-jobs" / failed_id).exists())
+        self.assertEqual(self.slot()["state"], "UPLOADING")
+
+    def test_record_write_failure_leaves_no_orphan_job(self):
+        failed_id = "b" * 32
+        original = self.jobs._write
+
+        def fail_after_record(job_id, record):
+            original(job_id, record)
+            raise OSError("injected record failure")
+
+        with mock.patch("b300_core.gateway_program_jobs.uuid.uuid4",
+                        return_value=SimpleNamespace(hex=failed_id)), \
+             mock.patch.object(self.jobs, "_write", side_effect=fail_after_record):
+            with self.assertRaises(OSError):
+                self.slot()
+        self.assertFalse((self.jobs.root / failed_id).exists())
+        self.assertFalse((self.jobs.ingress_root / "program-jobs" / failed_id).exists())
+        self.assertEqual(self.slot()["state"], "UPLOADING")
+
+    def test_ingress_collision_preserves_preexisting_path(self):
+        collided_id = "c" * 32
+        existing = self.jobs.ingress_root / "program-jobs" / collided_id
+        existing.mkdir()
+        sentinel = existing / "user.txt"
+        sentinel.write_text("keep", encoding="utf-8")
+        with mock.patch("b300_core.gateway_program_jobs.uuid.uuid4",
+                        return_value=SimpleNamespace(hex=collided_id)):
+            with self.assertRaises(FileExistsError):
+                self.slot()
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+        self.assertFalse((self.jobs.root / collided_id).exists())
+
+    def test_private_artifact_is_never_replaced_by_finalize(self):
+        slot = self.slot()
+        Path(slot["upload_path"]).write_bytes(self.original)
+        private = self.jobs.staged_path(slot["job_id"])
+        private.write_bytes(b"prior artifact")
+        with self.assertRaises(ProgramJobError):
+            self.jobs.finalize_upload(slot["job_id"])
+        self.assertEqual(private.read_bytes(), b"prior artifact")
+        self.assertEqual(self.jobs.status(slot["job_id"])["state"], "UPLOADING")
+
+    def test_cancel_cleanup_removes_ingress_slot(self):
+        slot = self.slot()
+        upload = Path(slot["upload_path"])
+        upload.write_bytes(self.original)
+        self.jobs.cancel(slot["job_id"], "lease-1", "secret", 1)
+        self.jobs.cleanup(slot["job_id"])
+        self.assertFalse(upload.exists())
+        self.assertFalse(upload.parent.exists())
+
+    def test_ingress_change_during_copy_does_not_promote_private_artifact(self):
+        slot = self.slot()
+        upload = Path(slot["upload_path"])
+        upload.write_bytes(self.original)
+        real_fstat = os.fstat
+        source_checks = 0
+
+        def mutate_on_post_copy(fd):
+            nonlocal source_checks
+            info = real_fstat(fd)
+            if info.st_ino == upload.stat().st_ino and info.st_dev == upload.stat().st_dev:
+                source_checks += 1
+                if source_checks == 2:
+                    upload.write_bytes(b"X" + self.original[1:])
+                    info = real_fstat(fd)
+            return info
+
+        with mock.patch("b300_core.gateway_program_jobs.os.fstat", side_effect=mutate_on_post_copy):
+            with self.assertRaises(ProgramJobError) as captured:
+                self.jobs.finalize_upload(slot["job_id"])
+        self.assertEqual(captured.exception.reason_code, "STAGING_UNSAFE")
+        self.assertFalse(self.jobs.staged_path(slot["job_id"]).exists())
+        self.assertEqual(list(self.jobs.staged_path(slot["job_id"]).parent.glob("artifact-*.tmp")), [])
+
+    @unittest.skipUnless(os.name == "posix", "POSIX ownership and mode")
+    def test_ingress_slot_has_upload_group_permissions(self):
+        slot = self.slot()
+        directory = Path(slot["upload_path"]).parent
+        self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o710)
+        self.assertEqual(stat.S_IMODE(Path(slot["upload_path"]).stat().st_mode), 0o660)
+        self.assertEqual(directory.stat().st_uid, os.getuid())
+        self.assertEqual(directory.stat().st_gid, self.jobs.ingress_root.stat().st_gid)
+
+
+if __name__ == "__main__":
+    unittest.main()
