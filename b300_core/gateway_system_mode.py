@@ -60,8 +60,32 @@ class IsolatedGatewayConfig:
     state_root: Path
     ingress_root: Path
     operator_uid: int
-    operator_gid: int = -1
+    operator_gid: Optional[int] = None
     flash_enabled: bool = False
+
+
+def parse_isolated_gateway_record(record: object) -> IsolatedGatewayConfig:
+    """Read the original marker as pending; never infer an operator group."""
+    legacy_keys = {"schema_version", "socket_path", "state_root", "ingress_root",
+                   "operator_uid"}
+    current_keys = legacy_keys | {"operator_gid", "flash_enabled"}
+    if not isinstance(record, dict) or set(record) not in (legacy_keys, current_keys):
+        raise ValueError("Isolated Gateway marker schema is invalid")
+    if (type(record["schema_version"]) is not int or record["schema_version"] != 1
+            or type(record["operator_uid"]) is not int or record["operator_uid"] < 0
+            or record["socket_path"] != SYSTEM_SOCKET_PATH.as_posix()
+            or record["state_root"] != SYSTEM_STATE_ROOT.as_posix()
+            or record["ingress_root"] != SYSTEM_INGRESS_ROOT.as_posix()):
+        raise ValueError("Isolated Gateway marker schema is invalid")
+    if set(record) == legacy_keys:
+        return IsolatedGatewayConfig(SYSTEM_SOCKET_PATH, SYSTEM_STATE_ROOT,
+                                     SYSTEM_INGRESS_ROOT, record["operator_uid"])
+    if (type(record["operator_gid"]) is not int or record["operator_gid"] < 0
+            or type(record["flash_enabled"]) is not bool):
+        raise ValueError("Isolated Gateway marker schema is invalid")
+    return IsolatedGatewayConfig(SYSTEM_SOCKET_PATH, SYSTEM_STATE_ROOT,
+                                 SYSTEM_INGRESS_ROOT, record["operator_uid"],
+                                 record["operator_gid"], record["flash_enabled"])
 
 
 def load_isolated_gateway_config(
@@ -94,20 +118,7 @@ def load_isolated_gateway_config(
             record = json.loads(handle.read(4097).decode("utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ValueError("Isolated Gateway marker is invalid") from error
-    if (not isinstance(record, dict) or set(record) != {
-            "schema_version", "socket_path", "state_root", "ingress_root",
-            "operator_uid", "operator_gid", "flash_enabled",
-    } or type(record["schema_version"]) is not int or record["schema_version"] != 1
-            or type(record["operator_uid"]) is not int or record["operator_uid"] < 0
-            or type(record["operator_gid"]) is not int or record["operator_gid"] < 0
-            or type(record["flash_enabled"]) is not bool
-            or record["socket_path"] != str(SYSTEM_SOCKET_PATH)
-            or record["state_root"] != str(SYSTEM_STATE_ROOT)
-            or record["ingress_root"] != str(SYSTEM_INGRESS_ROOT)):
-        raise ValueError("Isolated Gateway marker schema is invalid")
-    return IsolatedGatewayConfig(SYSTEM_SOCKET_PATH, SYSTEM_STATE_ROOT,
-                                 SYSTEM_INGRESS_ROOT, record["operator_uid"],
-                                 record["operator_gid"], record["flash_enabled"])
+    return parse_isolated_gateway_record(record)
 
 
 def isolated_gateway_mode(marker_path: Path = ISOLATED_GATEWAY_MARKER, *,
@@ -117,4 +128,4 @@ def isolated_gateway_mode(marker_path: Path = ISOLATED_GATEWAY_MARKER, *,
 
 __all__ = ["ISOLATED_GATEWAY_MARKER", "IsolatedGatewayConfig",
            "isolated_gateway_mode", "load_isolated_gateway_config",
-           "ingress_mount_isolated"]
+           "ingress_mount_isolated", "parse_isolated_gateway_record"]

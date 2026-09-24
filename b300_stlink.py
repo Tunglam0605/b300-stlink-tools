@@ -1059,6 +1059,18 @@ def _isolated_flash_ready(config, jobs, socket_server) -> bool:
         return False
 
 
+def _live_gateway_capabilities(isolated_mode: bool, jobs, socket_server,
+                               *, config_loader=_isolated_gateway_config) -> tuple:
+    current = None
+    if isolated_mode:
+        try:
+            current = config_loader()
+        except (OSError, ValueError):
+            pass
+    return tuple(gateway_capabilities(isolated_flash_ready=
+                 _isolated_flash_ready(current, jobs, socket_server))["capabilities"])
+
+
 def _run_gateway_agent(args: argparse.Namespace) -> int:
     isolated = _isolated_gateway_config()
     if isolated is not None and getattr(os, "getuid", lambda: -1)() == isolated.operator_uid:
@@ -1082,8 +1094,8 @@ def _run_gateway_agent(args: argparse.Namespace) -> int:
         coordinator = GatewayLeaseCoordinator(supervisor, store=GatewayLeaseStore())
 
         def live_capabilities():
-            return tuple(gateway_capabilities(isolated_flash_ready=
-                _isolated_flash_ready(isolated, program_jobs, socket_server))["capabilities"])
+            return _live_gateway_capabilities(
+                isolated is not None, program_jobs, socket_server)
 
         def publish(item) -> None:
             status_store.write(GatewayAgentStatus(

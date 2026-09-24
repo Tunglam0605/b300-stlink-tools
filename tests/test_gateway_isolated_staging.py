@@ -39,7 +39,7 @@ class IsolatedStagingTests(unittest.TestCase):
     def slot(self):
         return self.jobs.create_upload(self.manifest, "client-1", "SAFE123")
 
-    def test_missing_system_mount_is_rejected_before_ingress_directory_creation(self):
+    def test_missing_system_mount_allows_private_recovery_without_ingress_write(self):
         from b300_core import gateway_program_jobs
         ingress = self.root / 'second-ingress'
         ingress.mkdir(mode=0o710)
@@ -47,10 +47,31 @@ class IsolatedStagingTests(unittest.TestCase):
         with mock.patch.object(gateway_program_jobs, 'SYSTEM_INGRESS_ROOT', ingress), \
              mock.patch.object(gateway_program_jobs, 'ingress_mount_isolated',
                                return_value=False):
+            recovered = GatewayProgramJobs(private, FakeCoordinator(), ingress_root=ingress)
             with self.assertRaises(ProgramJobError) as captured:
-                GatewayProgramJobs(private, FakeCoordinator(), ingress_root=ingress)
-        self.assertEqual(captured.exception.reason_code, 'INGRESS_MOUNT_UNAVAILABLE')
+                recovered.create_upload(self.manifest, 'client-1', 'SAFE123')
+        self.assertEqual(captured.exception.reason_code, 'ISOLATED_FLASH_DISABLED')
         self.assertFalse((ingress / 'program-jobs').exists())
+
+    def test_lost_mount_preserves_status_cancel_cleanup_and_underlying_path(self):
+        from b300_core import gateway_program_jobs
+        slot = self.slot()
+        upload = Path(slot['upload_path'])
+        upload.write_bytes(self.original)
+        self.jobs.finalize_upload(slot['job_id'])
+        with mock.patch.object(gateway_program_jobs, 'SYSTEM_INGRESS_ROOT',
+                               self.jobs.ingress_root), \
+             mock.patch.object(gateway_program_jobs, 'ingress_mount_isolated',
+                               return_value=False):
+            recovered = GatewayProgramJobs(
+                self.jobs.root, FakeCoordinator(), ingress_root=self.jobs.ingress_root,
+                programming=GatewayProgrammingService(service=self.service))
+            self.assertEqual(recovered.status(slot['job_id'])['state'], 'STAGED')
+            recovered.cancel(slot['job_id'], 'lease-1', 'secret', 1)
+            recovered.cleanup(slot['job_id'])
+        self.assertTrue((self.jobs.root / slot['job_id'] / 'job.json').exists())
+        self.assertTrue(upload.exists())
+        self.assertEqual(self.service.calls, 0)
 
     def test_lost_system_ingress_mount_refuses_new_upload_without_job_record(self):
         from b300_core import gateway_program_jobs

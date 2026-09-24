@@ -72,7 +72,9 @@ class GatewayProgramJobs:
                         or not stat.S_ISDIR(parent.st_mode)
                         or parent.st_mode & 0o077):
                     raise ProgramJobError("STAGING_UNSAFE", "Private state root is unsafe.")
-            self._prepare_ingress()
+            self._ingress_jobs = self.ingress_root / "program-jobs"
+            if self.ingress_root != SYSTEM_INGRESS_ROOT or self._system_ingress_mounted():
+                self._prepare_ingress()
 
     def _prepare_root(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -89,11 +91,19 @@ class GatewayProgramJobs:
                 or config.ingress_root != self.ingress_root):
             raise ProgramJobError("ISOLATED_FLASH_DISABLED",
                                   "Isolated Application flash is pending boundary verification.")
-        if not ingress_mount_isolated(
-                self.ingress_root, uid=getattr(os, "getuid", lambda: -1)(),
-                gid=getattr(self, "_ingress_gid", -1)):
+        if not self._system_ingress_mounted():
             raise ProgramJobError("INGRESS_MOUNT_UNAVAILABLE",
                                   "System ingress mount is unavailable or unsafe.")
+        self._prepare_ingress()
+
+    def _system_ingress_mounted(self) -> bool:
+        try:
+            info = self.ingress_root.lstat()
+            return ingress_mount_isolated(
+                self.ingress_root, uid=getattr(os, "getuid", lambda: -1)(),
+                gid=info.st_gid)
+        except OSError:
+            return False
 
     def _prepare_ingress(self) -> None:
         root = self.ingress_root
@@ -692,14 +702,17 @@ class GatewayProgramJobs:
                 if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
                     raise ProgramJobError("STAGING_UNSAFE")
                 artifact.unlink()
-            partial = self._upload_path(job_id)
-            if partial.exists() or partial.is_symlink():
-                info = partial.lstat()
-                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-                    raise ProgramJobError("STAGING_UNSAFE")
-                if self.ingress_root is None:
-                    partial.unlink()
-            self._remove_ingress_slot(job_id)
+            ingress_available = (self.ingress_root != SYSTEM_INGRESS_ROOT
+                                 or self._system_ingress_mounted())
+            if ingress_available:
+                partial = self._upload_path(job_id)
+                if partial.exists() or partial.is_symlink():
+                    info = partial.lstat()
+                    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                        raise ProgramJobError("STAGING_UNSAFE")
+                    if self.ingress_root is None:
+                        partial.unlink()
+                self._remove_ingress_slot(job_id)
             record["artifact_cleaned"] = True
             self._write(job_id, record)
             return self.status(job_id)

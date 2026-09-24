@@ -21,6 +21,34 @@ from b300_core.gateway_agent import GatewayAgentStatus
 
 
 class GatewayProtocolTests(unittest.TestCase):
+    def test_live_capability_reloads_marker_before_each_status(self):
+        from b300_core.gateway_agent import GatewayAgent
+        from b300_core.gateway_agent_protocol import GatewayRequest
+        from b300_core.gateway_system_mode import IsolatedGatewayConfig
+        from pathlib import Path
+        active = IsolatedGatewayConfig(Path('/run/b300-stlink/agent.sock'),
+                                       Path('/var/lib/b300-stlink/gateway'),
+                                       Path('/var/spool/b300-stlink/ingress'),
+                                       1000, 2002, True)
+        pending = IsolatedGatewayConfig(active.socket_path, active.state_root,
+                                        active.ingress_root, 1000, 2002, False)
+        states = iter((active, pending))
+        coordinator = mock.Mock()
+        coordinator.public_snapshot.return_value.to_record.side_effect = (
+            lambda: {'state': 'IDLE'})
+        agent = GatewayAgent(
+            coordinator, request_store=mock.Mock(),
+            capabilities=lambda: b300_stlink._live_gateway_capabilities(
+                True, object(), object(), config_loader=lambda: next(states)))
+        with mock.patch.object(b300_stlink, '_isolated_flash_ready',
+                               side_effect=lambda config, jobs, socket: config.flash_enabled):
+            first = agent._dispatch(GatewayRequest.create('status', {}))
+            second = agent._dispatch(GatewayRequest.create('status', {}))
+        self.assertIn('remote_application_flash_isolated_v1',
+                      first['result']['capabilities'])
+        self.assertNotIn('remote_application_flash_isolated_v1',
+                         second['result']['capabilities'])
+
     def test_flash_capability_rejects_third_party_state_and_ingress_owners(self):
         from b300_core.gateway_system_mode import IsolatedGatewayConfig
         from pathlib import Path

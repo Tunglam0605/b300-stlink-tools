@@ -251,6 +251,21 @@ class GatewayUnixTransportTests(unittest.TestCase):
 
 class GatewaySystemModeTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "posix", "POSIX ownership metadata required")
+    def test_original_marker_file_loads_pending_for_recovery(self):
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "marker.json"
+            marker.write_text(json.dumps({
+                "schema_version": 1,
+                "socket_path": "/run/b300-stlink/agent.sock",
+                "state_root": "/var/lib/b300-stlink/gateway",
+                "ingress_root": "/var/spool/b300-stlink/ingress",
+                "operator_uid": 1234,
+            }), encoding="utf-8")
+            config = load_isolated_gateway_config(marker, trusted_uid=os.getuid())
+            self.assertFalse(config.flash_enabled)
+            self.assertIsNone(config.operator_gid)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX ownership metadata required")
     def test_missing_marker_selects_legacy_mode(self):
         with tempfile.TemporaryDirectory() as directory:
             self.assertFalse(isolated_gateway_mode(Path(directory) / "absent.json",

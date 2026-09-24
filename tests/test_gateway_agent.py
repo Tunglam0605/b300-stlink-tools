@@ -17,6 +17,7 @@ from b300_core.gateway_agent_protocol import (
     GatewayRequest,
     GatewayRequestStore,
 )
+from b300_core.gateway_system_mode import IsolatedGatewayConfig
 from b300_cli.parser import parse_args
 import b300_stlink
 
@@ -51,12 +52,10 @@ class GatewayAgentTests(unittest.TestCase):
         self.agent = GatewayAgent(self.coordinator, request_store=self.store)
 
     def test_isolated_agent_injects_private_program_jobs(self):
-        config = type("Config", (), {
-            "state_root": Path(self.temp.name) / "private",
-            "ingress_root": Path(self.temp.name) / "ingress",
-            "socket_path": Path(self.temp.name) / "agent.sock",
-            "operator_uid": -2,
-        })()
+        config = IsolatedGatewayConfig(
+            Path(self.temp.name) / "agent.sock",
+            Path(self.temp.name) / "private",
+            Path(self.temp.name) / "ingress", 999999)
         args = parse_args(["debug", "gateway-agent", "--json"])
         with mock.patch.object(b300_stlink.sys, "platform", "linux"), \
              mock.patch("b300_stlink.load_isolated_gateway_config", return_value=config), \
@@ -75,12 +74,10 @@ class GatewayAgentTests(unittest.TestCase):
         owner.return_value.release.assert_called_once()
 
     def test_isolated_agent_releases_owner_lock_if_ingress_is_unsafe(self):
-        config = type("Config", (), {
-            "state_root": Path(self.temp.name) / "private",
-            "ingress_root": Path(self.temp.name) / "ingress",
-            "socket_path": Path(self.temp.name) / "agent.sock",
-            "operator_uid": -2,
-        })()
+        config = IsolatedGatewayConfig(
+            Path(self.temp.name) / "agent.sock",
+            Path(self.temp.name) / "private",
+            Path(self.temp.name) / "ingress", 999999)
         args = parse_args(["debug", "gateway-agent", "--json"])
         with mock.patch.object(b300_stlink.sys, "platform", "linux"), \
              mock.patch("b300_stlink.load_isolated_gateway_config", return_value=config), \
