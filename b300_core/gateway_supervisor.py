@@ -541,6 +541,7 @@ class GatewaySupervisor:
         self._presence: Optional[ProbePresenceTracker] = None
         self._evidence_at: Optional[float] = None
         self._hardware_error = False
+        self._pending_fault_generation: Optional[int] = None
         self._manual_stop = False
         self._gdb_connection_count = 0
         self._gdb_activity_generation = 0
@@ -573,7 +574,7 @@ class GatewaySupervisor:
             self._manual_stop = False
             if self._service is not None:
                 self._drain_openocd_lines_locked()
-                if self._hardware_error:
+                if self._hardware_fault_pending():
                     return self.observe()
                 if (self._snapshot.state == "READY"
                         and self._service.state in (DebugState.READY, DebugState.CONNECTED)):
@@ -614,7 +615,7 @@ class GatewaySupervisor:
                     self._discard_openocd_lines_locked()
                 return self._publish("FAILED", "TARGET_UNVERIFIED")
             self._drain_openocd_lines_locked()
-            if self._hardware_error:
+            if self._hardware_fault_pending():
                 service.stop()
                 self._service = None
                 return self._publish("DISCONNECTED", "OPENOCD_HARDWARE_ERROR")
@@ -629,18 +630,26 @@ class GatewaySupervisor:
                 # without colliding with its still-bound listeners.
                 return self._publish("DISCONNECTED", "TARGET_UNVERIFIED")
             self._drain_openocd_lines_locked()
-            if self._hardware_error:
+            if self._hardware_fault_pending():
                 service.stop()
                 self._service = None
                 return self._publish("DISCONNECTED", "OPENOCD_HARDWARE_ERROR")
             self._arm_remote_guard(config, cpu_state)
+            self._drain_openocd_lines_locked()
+            if self._hardware_fault_pending():
+                self._stop_service("hardware_error")
+                return self._publish("DISCONNECTED", "OPENOCD_HARDWARE_ERROR")
             self._evidence_at = self._clock()
             ready = self._publish("READY", "TARGET_VERIFIED", cpu_state=cpu_state)
             self._drain_openocd_lines_locked()
-            if self._hardware_error:
+            if self._hardware_fault_pending():
                 self._stop_service("hardware_error")
                 return self._publish("DISCONNECTED", "OPENOCD_HARDWARE_ERROR")
             self._persist_lease_owner_locked(ready, service)
+            self._drain_openocd_lines_locked()
+            if self._hardware_fault_pending():
+                self._stop_service("hardware_error")
+                return self._publish("DISCONNECTED", "OPENOCD_HARDWARE_ERROR")
             return self._snapshot
 
     def observe(self) -> GatewaySnapshot:
@@ -649,7 +658,7 @@ class GatewaySupervisor:
             if self._manual_stop or self._snapshot.state == "STOPPED":
                 return self._snapshot
             service = self._service
-            if (self._hardware_error
+            if (self._hardware_fault_pending()
                     or (self._snapshot.state == "DISCONNECTED"
                         and self._snapshot.reason_code == "OPENOCD_HARDWARE_ERROR")):
                 if service is not None:
@@ -676,13 +685,13 @@ class GatewaySupervisor:
             except Exception:
                 return self._publish("DISCONNECTED", "TARGET_UNVERIFIED")
             self._arm_remote_guard(config, cpu_state)
-            if self._hardware_error:
+            if self._hardware_fault_pending():
                 self._stop_service("hardware_error")
                 return self._publish("DISCONNECTED", "OPENOCD_HARDWARE_ERROR")
             self._evidence_at = self._clock()
             self._publish("READY", "TARGET_VERIFIED", cpu_state=cpu_state)
             self._drain_openocd_lines_locked()
-            if self._hardware_error:
+            if self._hardware_fault_pending():
                 self._stop_service("hardware_error")
                 return self._publish("DISCONNECTED", "OPENOCD_HARDWARE_ERROR")
             return self._snapshot
@@ -941,6 +950,9 @@ class GatewaySupervisor:
         owner_generation = self._generation if generation is None else generation
         if owner_generation != self._generation:
             return
+        if any(marker in str(line).lower() for marker in (
+                "libusb", "target not examined", "swd fault")):
+            self._pending_fault_generation = owner_generation
         self._pending_openocd_lines.put((owner_generation, line))
         if not self._lock.acquire(blocking=False):
             return
@@ -965,6 +977,9 @@ class GatewaySupervisor:
                 self._pending_openocd_lines.get_nowait()
             except queue.Empty:
                 return
+
+    def _hardware_fault_pending(self) -> bool:
+        return self._hardware_error or self._pending_fault_generation == self._generation
 
     def _process_openocd_line_locked(self, line: str) -> None:
         lowered = str(line).lower()

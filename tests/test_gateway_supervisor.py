@@ -112,6 +112,103 @@ class PendingLease:
 
 
 class GatewaySupervisorTests(unittest.TestCase):
+    def test_fault_queued_while_arming_guard_never_publishes_ready(self) -> None:
+        service = FakeService()
+        snapshots = []
+
+        class FaultDuringArm(RemoteDebugGuard):
+            def capture_initial_state(self, state=None):
+                worker = threading.Thread(
+                    target=lambda: service.emit("Error: swd fault while arming guard")
+                )
+                worker.start()
+                worker.join(timeout=0.5)
+                if worker.is_alive():
+                    raise AssertionError("fault callback was blocked")
+                return super().capture_initial_state(state)
+
+        supervisor = GatewaySupervisor(
+            service_factory=lambda: service,
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=lambda _config: "running",
+            remote_guard_factory=lambda _config: FaultDuringArm(FakeTcl("running")),
+            snapshot_sink=snapshots.append,
+        )
+
+        result = supervisor.ensure()
+
+        self.assertEqual((result.state, result.reason_code),
+                         ("DISCONNECTED", "OPENOCD_HARDWARE_ERROR"))
+        self.assertFalse(any(snapshot.attach_ready for snapshot in snapshots))
+        self.assertEqual(service.stop_calls, 1)
+
+    def test_fault_queued_during_owner_persistence_revokes_returned_ready(self) -> None:
+        service = OwnedFakeService()
+
+        def process_identity(pid):
+            worker = threading.Thread(
+                target=lambda: service.emit("Error: libusb fault while persisting owner")
+            )
+            worker.start()
+            worker.join(timeout=0.5)
+            if worker.is_alive():
+                raise AssertionError("fault callback was blocked")
+            return {
+                "pid": pid, "start_identity": "start-a",
+                "executable": "/trusted/openocd", "boot_identity": "boot-a",
+            }
+
+        with tempfile.TemporaryDirectory() as directory:
+            supervisor = GatewaySupervisor(
+                service_factory=lambda: service,
+                probe_discovery=lambda: (PROBE,),
+                target_state_probe=lambda _config: "running",
+                owner_record_path=Path(directory) / "openocd-owner.json",
+                process_identity=process_identity,
+            )
+            supervisor.prepare_lease_owner("lease-1", "private-token", 1)
+
+            result = supervisor.ensure()
+
+        self.assertEqual((result.state, result.reason_code),
+                         ("DISCONNECTED", "OPENOCD_HARDWARE_ERROR"))
+        self.assertEqual(service.stop_calls, 1)
+
+    def test_fault_queued_after_final_drain_revokes_returned_ready(self) -> None:
+        service = FakeService()
+
+        class FaultAfterDrainSupervisor(GatewaySupervisor):
+            owner_persisted = False
+            fault_sent = False
+
+            def _persist_lease_owner_locked(self, snapshot, owner):
+                super()._persist_lease_owner_locked(snapshot, owner)
+                self.owner_persisted = True
+
+            def _drain_openocd_lines_locked(self):
+                super()._drain_openocd_lines_locked()
+                if self.owner_persisted and not self.fault_sent:
+                    self.fault_sent = True
+                    worker = threading.Thread(
+                        target=lambda: service.emit("Error: swd fault after final drain")
+                    )
+                    worker.start()
+                    worker.join(timeout=0.5)
+                    if worker.is_alive():
+                        raise AssertionError("fault callback was blocked")
+
+        supervisor = FaultAfterDrainSupervisor(
+            service_factory=lambda: service,
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=lambda _config: "running",
+        )
+
+        result = supervisor.ensure()
+
+        self.assertEqual((result.state, result.reason_code),
+                         ("DISCONNECTED", "OPENOCD_HARDWARE_ERROR"))
+        self.assertEqual(service.stop_calls, 1)
+
     def test_queued_fault_during_ready_publish_revokes_startup_result(self) -> None:
         service = FakeService()
 
