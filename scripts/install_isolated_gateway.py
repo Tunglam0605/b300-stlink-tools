@@ -53,6 +53,8 @@ def _openocd_quiescent() -> bool:
 
 MAX_BUNDLE_BYTES = 2 * 1024 * 1024 * 1024
 MAX_ARCHIVE_MEMBERS = 20000
+MAX_MEMBER_BYTES = 512 * 1024 * 1024
+MAX_EXPANDED_BYTES = 4 * 1024 * 1024 * 1024
 MAX_JOB_RECORD_BYTES = 65536
 EXPECTED_ARCHIVE_MEMBERS = frozenset({
     "BUNDLE-METADATA.txt", "B300-RUNTIME.sha256", "b300-stlink",
@@ -136,25 +138,36 @@ def _inspect_bundle(bundle: Path) -> tuple[str, dict]:
                 raise ValueError("Bundle exceeds the size limit")
             digest.update(chunk)
         handle.seek(0)
-        with tarfile.open(fileobj=handle, mode="r:gz") as archive:
-            members = archive.getmembers()
-            if len(members) > MAX_ARCHIVE_MEMBERS:
-                raise ValueError("Bundle has too many members")
+        with tarfile.open(fileobj=handle, mode="r|gz") as archive:
             names = set()
-            for member in members:
+            expanded = 0
+            count = 0
+            metadata_raw = None
+            for member in archive:
+                count += 1
+                if count > MAX_ARCHIVE_MEMBERS:
+                    raise ValueError("Bundle has too many members")
+                if member.size < 0 or member.size > MAX_MEMBER_BYTES:
+                    raise ValueError("Bundle member exceeds size limit")
+                expanded += member.size
+                if expanded > MAX_EXPANDED_BYTES:
+                    raise ValueError("Bundle expanded size exceeds limit")
                 _relative_name(member.name)
                 if not member.isfile() or member.name in names:
                     raise ValueError("Bundle contains duplicate or non-regular members")
                 names.add(member.name)
+                if member.name == "BUNDLE-METADATA.txt":
+                    if member.size > 4096:
+                        raise ValueError("Bundle metadata exceeds limit")
+                    metadata_file = archive.extractfile(member)
+                    if metadata_file is None:
+                        raise ValueError("Bundle metadata is unreadable")
+                    metadata_raw = metadata_file.read(4097)
             if not EXPECTED_ARCHIVE_MEMBERS.issubset(names):
                 raise ValueError("Bundle lacks required isolated Gateway files")
-            metadata_member = archive.getmember("BUNDLE-METADATA.txt")
-            if metadata_member.size > 4096:
-                raise ValueError("Bundle metadata exceeds limit")
-            metadata_file = archive.extractfile(metadata_member)
-            if metadata_file is None:
+            if metadata_raw is None:
                 raise ValueError("Bundle metadata is unreadable")
-            raw = metadata_file.read(4097).decode("ascii")
+            raw = metadata_raw.decode("ascii")
             metadata = {}
             for line in raw.splitlines():
                 key, separator, value = line.partition("=")
@@ -239,7 +252,7 @@ def _safe_inventory(evidence: dict) -> tuple[dict, dict]:
               for key in GROUP_KEYS}
     probe = evidence.get("probe", {})
     public_probe = {key: probe.get(key) for key in
-                    ("count", "selected", "node", "uid", "gid", "mode",
+                    ("count", "incomplete_count", "selected", "node", "uid", "gid", "mode",
                      "agent_owned", "acl_known", "operator_acl")}
     host = {"os_name": evidence.get("os_name"),
             "distribution": evidence.get("distribution"),
@@ -461,6 +474,8 @@ class LinuxHostProbe:
     def _probe_state(self, probe_serial: Optional[str], agent_group: dict) -> dict:
         sysfs = self._mapped("/sys/bus/usb/devices")
         matches = []
+        count = 0
+        incomplete_count = 0
         try:
             devices = tuple(sysfs.iterdir())
         except OSError:
@@ -469,8 +484,12 @@ class LinuxHostProbe:
             try:
                 vendor = (directory / "idVendor").read_text(encoding="ascii").strip().lower()
                 product = (directory / "idProduct").read_text(encoding="ascii").strip().lower()
-                if (vendor, product) != ("0483", "3748"):
-                    continue
+            except (OSError, UnicodeError):
+                continue
+            if (vendor, product) != ("0483", "3748"):
+                continue
+            count += 1
+            try:
                 serial = (directory / "serial").read_text(encoding="ascii").strip()
                 bus = int((directory / "busnum").read_text(encoding="ascii"))
                 number = int((directory / "devnum").read_text(encoding="ascii"))
@@ -478,10 +497,13 @@ class LinuxHostProbe:
                 info = self._mapped(node).lstat()
                 matches.append((serial, node, info))
             except (OSError, ValueError, UnicodeError):
-                continue
+                incomplete_count += 1
         selected = ([item for item in matches if item[0] == probe_serial]
-                    if probe_serial is not None else matches if len(matches) == 1 else [])
-        result = {"count": len(matches), "selected": len(selected) == 1,
+                    if probe_serial is not None else matches if count == 1 else [])
+        if incomplete_count:
+            selected = []
+        result = {"count": count, "incomplete_count": incomplete_count,
+                  "selected": len(selected) == 1,
                   "node": None, "uid": None, "gid": None, "mode": None,
                   "agent_owned": False, "acl_known": False, "operator_acl": None}
         if len(selected) == 1:
@@ -605,6 +627,8 @@ def build_plan(bundle: Path, expected_sha256: str, *, host=None,
     if public_host["openocd_quiescent"] is not True:
         _block(blockers, "OPENOCD_NOT_QUIESCENT", "OpenOCD is running or its state is unknown.")
     probe = public_host["probe"]
+    if type(probe["incomplete_count"]) is not int or probe["incomplete_count"] != 0:
+        _block(blockers, "PROBE_INCOMPLETE", "At least one matching ST-Link has incomplete identity or node evidence.")
     if (type(probe["count"]) is not int or probe["count"] < 1
             or probe["selected"] is not True
             or probe["count"] > 1 and probe_serial is None):

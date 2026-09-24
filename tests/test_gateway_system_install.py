@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import gzip
 import io
 import os
 import shutil
@@ -135,7 +136,8 @@ class InstallerPlanTests(unittest.TestCase):
             'lease_present': {'legacy': False, 'system': False},
             'jobs': {'legacy': {'SUCCEEDED': 2}, 'system': {}},
             'openocd_quiescent': True,
-            'probe': {'count': 1, 'selected': True, 'node': '/dev/bus/usb/001/002',
+            'probe': {'count': 1, 'incomplete_count': 0, 'selected': True,
+                      'node': '/dev/bus/usb/001/002',
                       'uid': 0, 'gid': 46, 'mode': '0660', 'agent_owned': False,
                       'acl_known': True},
             'groups': {'b300-agent': {'exists': False},
@@ -325,6 +327,48 @@ class InstallerPlanTests(unittest.TestCase):
                           'is-active', 'b300-stlink-gateway-agent.service'))
         self.assertEqual(before, sorted(path.relative_to(self.root).as_posix()
                                         for path in self.root.rglob('*')))
+
+    def test_incomplete_second_stlink_is_counted_and_blocks_pinned_selection(self):
+        for name, complete in (('1-1', True), ('1-2', False)):
+            device = self.root / 'sys/bus/usb/devices' / name
+            device.mkdir(parents=True)
+            (device / 'idVendor').write_text('0483', encoding='ascii')
+            (device / 'idProduct').write_text('3748', encoding='ascii')
+            if complete:
+                for field, value in {'serial': 'SAFE123', 'busnum': '1',
+                                     'devnum': '2'}.items():
+                    (device / field).write_text(value, encoding='ascii')
+        node = self.root / 'dev/bus/usb/001/002'
+        node.parent.mkdir(parents=True)
+        node.write_bytes(b'')
+        probe = self.installer.LinuxHostProbe(
+            root=self.root, system_name='Linux',
+            runner=lambda command: SimpleNamespace(returncode=0, stdout='user:aubot:rw-'))
+        evidence = probe._probe_state('SAFE123', {'exists': False})
+        self.assertEqual(evidence['count'], 2)
+        self.assertEqual(evidence['incomplete_count'], 1)
+        self.assertFalse(evidence['selected'])
+        plan, _ = self._plan({**self.evidence, 'probe': evidence}, probe_serial='SAFE123')
+        codes = {item['code'] for item in plan.to_record()['blockers']}
+        self.assertIn('PROBE_INCOMPLETE', codes)
+        self.assertIn('PROBE_NOT_UNIQUE', codes)
+
+    def test_declared_oversized_tar_member_is_rejected_from_header(self):
+        member = tarfile.TarInfo('oversized.bin')
+        member.size = 1024 * 1024 * 1024
+        with gzip.open(self.bundle, 'wb') as stream:
+            stream.write(member.tobuf())
+            stream.write(b'\0' * 1024)
+        with self.assertRaisesRegex(ValueError, 'member exceeds'):
+            self.installer._inspect_bundle(self.bundle)
+
+    def test_tar_member_count_and_total_declared_size_are_bounded(self):
+        with mock.patch.object(self.installer, 'MAX_ARCHIVE_MEMBERS', 1):
+            with self.assertRaisesRegex(ValueError, 'too many members'):
+                self.installer._inspect_bundle(self.bundle)
+        with mock.patch.object(self.installer, 'MAX_EXPANDED_BYTES', 1):
+            with self.assertRaisesRegex(ValueError, 'expanded size exceeds'):
+                self.installer._inspect_bundle(self.bundle)
 
     def test_system_target_owned_by_operator_is_path_blocker(self):
         probe = self.installer.LinuxHostProbe(root=self.root, system_name='Linux')
