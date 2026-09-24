@@ -112,6 +112,65 @@ class PendingLease:
 
 
 class GatewaySupervisorTests(unittest.TestCase):
+    def test_fault_latched_before_line_enqueue_suppresses_ready_sink(self) -> None:
+        service = FakeService()
+        snapshots = []
+        before_line_put = threading.Event()
+        release_line_put = threading.Event()
+        callback_errors = []
+        workers = []
+
+        class PausingMailbox:
+            def __init__(self, underlying):
+                self.underlying = underlying
+
+            def put(self, event):
+                if "swd fault" in getattr(event, "line", ""):
+                    before_line_put.set()
+                    if not release_line_put.wait(3):
+                        raise AssertionError("fault line enqueue was not released")
+                self.underlying.put(event)
+
+            def get_nowait(self):
+                return self.underlying.get_nowait()
+
+        def send_fault():
+            try:
+                service.emit("Error: swd fault before mailbox enqueue")
+            except Exception as error:
+                callback_errors.append(error)
+
+        class FaultBeforeEnqueueSupervisor(GatewaySupervisor):
+            def _publish(self, state, reason_code, *, cpu_state="unknown"):
+                if state == "READY":
+                    worker = threading.Thread(target=send_fault)
+                    workers.append(worker)
+                    worker.start()
+                    if not before_line_put.wait(0.5):
+                        raise AssertionError("fault callback did not reach mailbox")
+                return super()._publish(state, reason_code, cpu_state=cpu_state)
+
+        supervisor = FaultBeforeEnqueueSupervisor(
+            service_factory=lambda: service,
+            probe_discovery=lambda: (PROBE,),
+            target_state_probe=lambda _config: "running",
+            remote_guard_factory=lambda _config: RemoteDebugGuard(FakeTcl("running")),
+            snapshot_sink=snapshots.append,
+        )
+        supervisor._mailbox = PausingMailbox(supervisor._mailbox)
+
+        try:
+            result = supervisor.ensure()
+        finally:
+            release_line_put.set()
+            for worker in workers:
+                worker.join(timeout=0.5)
+
+        self.assertEqual(callback_errors, [])
+        self.assertEqual((result.state, result.reason_code),
+                         ("DISCONNECTED", "OPENOCD_HARDWARE_ERROR"))
+        self.assertFalse(any(snapshot.attach_ready for snapshot in snapshots))
+
     def test_fault_before_ready_publish_never_reaches_snapshot_sink(self) -> None:
         service = FakeService()
         snapshots = []

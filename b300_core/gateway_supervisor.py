@@ -992,7 +992,7 @@ class GatewaySupervisor:
                 continue
             if isinstance(event, _OpenOcdLineEvent):
                 self._process_openocd_line_locked(event.line)
-            elif event.state != "READY" or not self._hardware_error:
+            elif event.state != "READY" or not self._hardware_fault_pending():
                 self._commit_snapshot(event.state, event.reason_code,
                                       cpu_state=event.cpu_state)
 
