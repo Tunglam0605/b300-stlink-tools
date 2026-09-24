@@ -331,12 +331,25 @@ class GatewayLeaseCoordinator:
         if action not in {"status", "ensure", "rescan"}:
             raise ValueError("Unsupported Gateway runtime action")
         with self._lock:
-            if (not self._recovery_required and self._lease is not None
-                    and self._lease.mode != "FLASH_APPLICATION"):
+            lease = self._lease
+            active = (not self._recovery_required and lease is not None
+                      and lease.mode in {"LIVE_WATCH", "VSCODE_DEBUG"}
+                      and lease.state == "ACTIVE" and self._clock() < lease.deadline_mono)
+            if active:
                 if action == "rescan":
                     self.supervisor.rescan()
                 self.tick()
-            return self.supervisor.snapshot
+                lease = self._lease
+                active = (not self._recovery_required and lease is not None
+                          and lease.mode in {"LIVE_WATCH", "VSCODE_DEBUG"}
+                          and lease.state == "ACTIVE" and self._clock() < lease.deadline_mono)
+            snapshot = self.supervisor.snapshot
+            if active or not snapshot.attach_ready:
+                return snapshot
+            return replace(snapshot, state="DISCONNECTED",
+                           reason_code="RECOVERY_REQUIRED" if self._recovery_required
+                           else "LEASE_NOT_ACTIVE", gdb_endpoint=None,
+                           tcl_endpoint=None, cpu_state="unknown", evidence_age_ms=None)
 
     def shutdown(self, reason_code: str = "AGENT_SHUTDOWN") -> GatewayLeasePublicSnapshot:
         with self._lock:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import threading
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from b300_core.gateway_lease import (
@@ -128,6 +129,46 @@ def request(client_id="client-a", mode="VSCODE_DEBUG"):
 
 
 class GatewayLeaseCoordinatorTests(unittest.TestCase):
+    def test_runtime_rescan_never_restarts_persisted_recovery_lease(self):
+        grant = self.coordinator.acquire(request())
+        self.assertIsInstance(grant, GatewayLeaseGrant)
+        restarted_supervisor = FakeSupervisor()
+        restarted = GatewayLeaseCoordinator(
+            restarted_supervisor, store=self.coordinator.store, clock=self.clock)
+        self.assertEqual(restarted.public_snapshot().state, "RECOVERY_REQUIRED")
+        result = restarted.runtime_snapshot("rescan")
+        self.assertFalse(result.attach_ready)
+        self.assertEqual(restarted_supervisor.rescan_calls, 0)
+        self.assertEqual(restarted_supervisor.ensure_calls, 0)
+
+    def test_runtime_rescan_rejects_expired_lease_before_tick(self):
+        grant = self.coordinator.acquire(request())
+        self.assertIsInstance(grant, GatewayLeaseGrant)
+        self.clock.advance(6)
+        for action in ("status", "ensure", "rescan"):
+            with self.subTest(action=action):
+                expired = self.coordinator.runtime_snapshot(action)
+                self.assertFalse(expired.attach_ready)
+        self.assertEqual(self.supervisor.rescan_calls, 0)
+        self.assertEqual(self.supervisor.maintain_calls, 0)
+
+    def test_runtime_rescan_rejects_grace_cleaning_and_recovery_states(self):
+        grant = self.coordinator.acquire(request())
+        self.assertIsInstance(grant, GatewayLeaseGrant)
+        original = self.coordinator._lease
+        for state in ("GRACE", "CLEANING", "RECOVERY_REQUIRED"):
+            with self.subTest(state=state):
+                self.coordinator._persist_locked(replace(
+                    original, state=state,
+                    grace_deadline_mono=(original.deadline_mono + 3 if state == "GRACE" else None),
+                    reason_code="RECOVERY_REQUIRED" if state == "RECOVERY_REQUIRED" else "LEASE_GRACE"))
+                for action in ("status", "ensure", "rescan"):
+                    result = self.coordinator.runtime_snapshot(action)
+                    self.assertFalse(result.attach_ready)
+                self.assertEqual(self.supervisor.rescan_calls, 0)
+                self.assertEqual(self.supervisor.ensure_calls, 1)
+                self.assertEqual(self.supervisor.maintain_calls, 0)
+
     def test_runtime_snapshot_preserves_debug_lease_and_rescan_semantics(self):
         self.assertEqual(self.coordinator.runtime_snapshot("status").state, "STOPPED")
         self.assertEqual(self.supervisor.ensure_calls, 0)
