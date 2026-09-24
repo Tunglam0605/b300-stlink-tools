@@ -275,6 +275,7 @@ class GatewayAgent:
                  request_store: Optional[GatewayRequestStore] = None,
                  program_jobs: Optional[object] = None,
                  status_sink: Optional[Callable[[GatewayAgentSnapshot], None]] = None,
+                 socket_server: Optional[object] = None,
                  clock: Callable[[], float] = time.monotonic,
                  poll_interval_seconds: float = 0.25) -> None:
         if not 0.02 <= float(poll_interval_seconds) <= 5.0:
@@ -284,6 +285,7 @@ class GatewayAgent:
         self.program_jobs = program_jobs
         self._clock = clock
         self._status_sink = status_sink
+        self._socket_server = socket_server
         self._poll_interval = float(poll_interval_seconds)
         self._shutdown_requested = False
         self._inflight_prepare = set()
@@ -317,13 +319,32 @@ class GatewayAgent:
 
     def run(self, stop_event: Optional[threading.Event] = None) -> int:
         event = stop_event or threading.Event()
+        socket_failures = []
+        socket_thread = None
+        if self._socket_server is not None:
+            def serve_socket() -> None:
+                try:
+                    self._socket_server.serve(event)
+                except Exception as error:
+                    socket_failures.append(error)
+                    event.set()
+            socket_thread = threading.Thread(target=serve_socket,
+                                             name="b300-gateway-control-socket", daemon=False)
+            socket_thread.start()
         try:
             while not self._shutdown_requested:
+                if socket_failures:
+                    raise RuntimeError("Gateway socket server failed") from socket_failures[0]
                 self.run_once()
                 if event.wait(self._poll_interval):
                     break
+            if socket_failures:
+                raise RuntimeError("Gateway socket server failed") from socket_failures[0]
             return 0
         finally:
+            event.set()
+            if socket_thread is not None:
+                socket_thread.join()
             with self._prepare_lock:
                 workers = tuple(self._prepare_workers.values())
             for worker in workers:

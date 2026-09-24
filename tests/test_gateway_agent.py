@@ -17,6 +17,8 @@ from b300_core.gateway_agent_protocol import (
     GatewayRequest,
     GatewayRequestStore,
 )
+from b300_cli.parser import parse_args
+import b300_stlink
 
 
 class FakeCoordinator:
@@ -52,6 +54,36 @@ class GatewayAgentTests(unittest.TestCase):
         result = self.agent.run_once()
         self.assertEqual((result.state, result.reason_code), ("IDLE", "GATEWAY_IDLE"))
         self.assertEqual(self.coordinator.calls, [("tick",)])
+
+    def test_isolated_status_uses_socket_without_per_user_spawn(self):
+        args = parse_args(["debug", "gateway-agent-status", "--json"])
+        with mock.patch("b300_stlink.load_isolated_gateway_config") as marker, \
+                mock.patch("b300_stlink.GatewayUnixClient") as client, \
+                mock.patch("b300_stlink.GatewayAgentProcessManager") as manager, \
+                mock.patch("b300_stlink.emit_snapshot") as emit:
+            marker.return_value.socket_path = Path("/run/b300-stlink/agent.sock")
+            client.return_value.submit_request.return_value = {
+                "protocol_version": 1, "request_id": "req", "status": "ok",
+                "reason_code": "OK", "result": {"state": "IDLE"},
+            }
+            self.assertEqual(b300_stlink.run_gateway_agent_command(args), 0)
+            manager.return_value.ensure_running.assert_not_called()
+            self.assertEqual(client.return_value.submit_request.call_args.args[0].operation,
+                             "status")
+            self.assertEqual(emit.call_args.args[0]["state"], "IDLE")
+
+    def test_isolated_missing_socket_reports_not_running_without_spawn(self):
+        args = parse_args(["debug", "gateway-agent-ensure", "--json"])
+        with mock.patch("b300_stlink.load_isolated_gateway_config") as marker, \
+                mock.patch("b300_stlink.GatewayUnixClient") as client, \
+                mock.patch("b300_stlink.GatewayAgentProcessManager") as manager, \
+                mock.patch("b300_stlink.emit_snapshot") as emit:
+            marker.return_value.socket_path = Path("/run/b300-stlink/agent.sock")
+            client.return_value.submit_request.side_effect = FileNotFoundError()
+            self.assertEqual(b300_stlink.run_gateway_agent_command(args), 1)
+            manager.return_value.ensure_running.assert_not_called()
+            self.assertEqual(emit.call_args.args[0]["reason_code"],
+                             "GATEWAY_AGENT_NOT_RUNNING")
 
     def test_valid_status_request_is_processed_once(self):
         request = GatewayRequest.create("status", {}, request_id="req-1", timeout_seconds=5)

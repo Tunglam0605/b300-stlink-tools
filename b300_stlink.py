@@ -43,6 +43,8 @@ from b300_core.gateway_agent import (
     GatewayAgentStatus, GatewayAgentStatusStore,
 )
 from b300_core.gateway_agent_protocol import GatewayRequest, GatewayRequestStore
+from b300_core.gateway_system_mode import load_isolated_gateway_config
+from b300_core.gateway_unix_transport import GatewayUnixClient, GatewayUnixServer
 from b300_core.gateway_lease import GatewayLeasePublicSnapshot, GatewayLeaseStore
 from b300_core.gateway_lease_coordinator import GatewayLeaseCoordinator
 from b300_core.gateway_protocol import gateway_capabilities
@@ -984,6 +986,17 @@ def _managed_gateway_command(args: argparse.Namespace) -> tuple:
 
 
 def run_gateway_runtime_command(args: argparse.Namespace) -> int:
+    isolated = load_isolated_gateway_config()
+    if isolated is not None:
+        operation = "rescan" if args.debug_mode == "gateway-rescan" else "status"
+        record = _isolated_gateway_submit(isolated, GatewayRequest.create(operation, {}), 10.0)
+        if record.get("status") == "ok":
+            record.update(record.get("result", {}))
+        record.update(gateway_capabilities())
+        record["command"] = "debug %s" % args.debug_mode
+        emit_snapshot(record, args.json,
+                      "Gateway %s: %s" % (args.debug_mode, record.get("reason_code", "OK")))
+        return 0 if record.get("status") == "ok" else 1
     manager = GatewayProcessManager()
     if args.debug_mode == "gateway-status":
         snapshot = manager.status()
@@ -1011,8 +1024,12 @@ def _managed_agent_command() -> tuple:
 
 
 def _run_gateway_agent(args: argparse.Namespace) -> int:
+    isolated = load_isolated_gateway_config()
+    if isolated is not None and getattr(os, "getuid", lambda: -1)() == isolated.operator_uid:
+        raise PermissionError("The SSH operator cannot start the isolated Gateway Agent")
     instance_id = uuid.uuid4().hex
-    status_store = GatewayAgentStatusStore()
+    status_store = GatewayAgentStatusStore(
+        isolated.state_root / "agent-status.json" if isolated is not None else None)
     owner_lock = GatewayAgentOwnerLock(status_store.start_lock_path)
     try:
         owner_lock.acquire()
@@ -1033,7 +1050,17 @@ def _run_gateway_agent(args: argparse.Namespace) -> int:
             tuple(gateway_capabilities()["capabilities"]),
         ))
 
-    agent = GatewayAgent(coordinator, request_store=GatewayRequestStore(), status_sink=publish)
+    request_store = GatewayRequestStore(
+        isolated.state_root / "agent-control" if isolated is not None else None)
+    socket_server = None
+    if isolated is not None:
+        socket_server = GatewayUnixServer(
+            isolated.socket_path, isolated.operator_uid,
+            lambda request, timeout: request_store.submit_request(
+                request, timeout_seconds=timeout),
+        )
+    agent = GatewayAgent(coordinator, request_store=request_store,
+                         status_sink=publish, socket_server=socket_server)
     try:
         try:
             return agent.run()
@@ -1043,10 +1070,26 @@ def _run_gateway_agent(args: argparse.Namespace) -> int:
         owner_lock.release()
 
 
+def _isolated_gateway_submit(config, request: GatewayRequest, timeout: float) -> dict:
+    try:
+        return GatewayUnixClient(config.socket_path).submit_request(request, timeout)
+    except (FileNotFoundError, ConnectionRefusedError):
+        return {"protocol_version": 1, "request_id": request.request_id,
+                "status": "error", "reason_code": "GATEWAY_AGENT_NOT_RUNNING"}
+
+
 def run_gateway_agent_command(args: argparse.Namespace) -> int:
     mode = args.debug_mode
     if mode == "gateway-agent":
         return _run_gateway_agent(args)
+    isolated = load_isolated_gateway_config()
+    if isolated is not None and mode in {"gateway-agent-status", "gateway-agent-ensure"}:
+        record = _isolated_gateway_submit(isolated, GatewayRequest.create("status", {}), 10.0)
+        if record.get("status") == "ok":
+            record.update(record.get("result", {}))
+        record.update(gateway_capabilities())
+        emit_snapshot(record, args.json, "Gateway Agent: %s" % record.get("reason_code", "OK"))
+        return 0 if record.get("status") == "ok" else 1
     manager = GatewayAgentProcessManager()
     if mode == "gateway-agent-status":
         status = manager.status()
@@ -1077,7 +1120,8 @@ def run_gateway_agent_command(args: argparse.Namespace) -> int:
         record["capabilities"] = list(status.capabilities) if status is not None else []
         emit_snapshot(record, args.json, "Gateway Agent: %s" % record["state"])
         return 0 if status is not None else 1
-    manager.ensure_running(_managed_agent_command())
+    if isolated is None:
+        manager.ensure_running(_managed_agent_command())
     if mode == "gateway-agent-ensure":
         status = manager.status()
         record = status.to_record() if status is not None else {
@@ -1107,7 +1151,8 @@ def run_gateway_agent_command(args: argparse.Namespace) -> int:
             operation, incoming["payload"], request_id=incoming["request_id"],
             timeout_seconds=timeout,
         )
-        record = GatewayRequestStore().submit_request(request, timeout_seconds=timeout)
+        record = (_isolated_gateway_submit(isolated, request, timeout) if isolated is not None
+                  else GatewayRequestStore().submit_request(request, timeout_seconds=timeout))
         record.update(gateway_capabilities())
         emit_snapshot(record, args.json, "%s: %s" % (mode, record.get("reason_code", "OK")))
         return 0 if record.get("status") == "ok" else 1
@@ -1127,7 +1172,8 @@ def run_gateway_agent_command(args: argparse.Namespace) -> int:
             "lease_id": args.lease_id, "lease_token": args.lease_token,
             "lease_generation": args.lease_generation,
         }, request_id=args.request_id)
-    record = GatewayRequestStore().submit_request(request)
+    record = (_isolated_gateway_submit(isolated, request, 10.0) if isolated is not None
+              else GatewayRequestStore().submit_request(request))
     record.update(gateway_capabilities())
     emit_snapshot(record, args.json, "%s: %s" % (mode, record.get("reason_code", "OK")))
     return 0 if record.get("status") == "ok" else 1
