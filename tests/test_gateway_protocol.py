@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import io
 import json
+import stat
 import unittest
 from contextlib import redirect_stdout
 from unittest import mock
+from types import SimpleNamespace
 
 import b300_stlink
 from b300_cli.parser import parse_args
@@ -15,9 +17,221 @@ from b300_core.gateway_protocol import (
 from b300_core.debug_service import DebugState
 from b300_core.gateway_status import GatewaySnapshot
 from b300_core.models import ProbeInfo
+from b300_core.gateway_agent import GatewayAgentStatus
 
 
 class GatewayProtocolTests(unittest.TestCase):
+    def test_live_capability_reloads_marker_before_each_status(self):
+        from b300_core.gateway_agent import GatewayAgent
+        from b300_core.gateway_agent_protocol import GatewayRequest
+        from b300_core.gateway_system_mode import IsolatedGatewayConfig
+        from pathlib import Path
+        active = IsolatedGatewayConfig(Path('/run/b300-stlink/agent.sock'),
+                                       Path('/var/lib/b300-stlink/gateway'),
+                                       Path('/var/spool/b300-stlink/ingress'),
+                                       1000, 2002, True)
+        pending = IsolatedGatewayConfig(active.socket_path, active.state_root,
+                                        active.ingress_root, 1000, 2002, False)
+        states = iter((active, pending))
+        coordinator = mock.Mock()
+        coordinator.public_snapshot.return_value.to_record.side_effect = (
+            lambda: {'state': 'IDLE'})
+        agent = GatewayAgent(
+            coordinator, request_store=mock.Mock(),
+            capabilities=lambda: b300_stlink._live_gateway_capabilities(
+                True, object(), object(), config_loader=lambda: next(states)))
+        with mock.patch.object(b300_stlink, '_isolated_flash_ready',
+                               side_effect=lambda config, jobs, socket: config.flash_enabled):
+            first = agent._dispatch(GatewayRequest.create('status', {}))
+            second = agent._dispatch(GatewayRequest.create('status', {}))
+        self.assertIn('remote_application_flash_isolated_v1',
+                      first['result']['capabilities'])
+        self.assertNotIn('remote_application_flash_isolated_v1',
+                         second['result']['capabilities'])
+
+    def test_flash_capability_rejects_third_party_state_and_ingress_owners(self):
+        from b300_core.gateway_system_mode import IsolatedGatewayConfig
+        from pathlib import Path
+        config = IsolatedGatewayConfig(Path("/run/b300-stlink/agent.sock"),
+                                       Path("/var/lib/b300-stlink/gateway"),
+                                       Path("/var/spool/b300-stlink/ingress"), 1000,
+                                       operator_gid=2002, flash_enabled=True)
+        jobs = SimpleNamespace(ingress_root=config.ingress_root)
+        def info(path, state_uid, ingress_uid):
+            if path == config.state_root:
+                return SimpleNamespace(st_mode=stat.S_IFDIR | 0o700, st_uid=state_uid)
+            if path == config.ingress_root:
+                return SimpleNamespace(st_mode=stat.S_IFDIR | 0o750,
+                                       st_uid=ingress_uid, st_gid=2002)
+            return SimpleNamespace(st_mode=stat.S_IFSOCK | 0o660,
+                                   st_uid=2000, st_gid=2002)
+        with mock.patch.object(b300_stlink.os, "getuid", return_value=2000, create=True), \
+                mock.patch.object(b300_stlink, "ingress_mount_isolated", return_value=True, create=True), \
+                mock.patch.object(b300_stlink.DEFAULT_HARDWARE_OWNER, "path",
+                                  config.state_root / "hardware-owner.lock"):
+            for state_uid, ingress_uid, expected in ((2000, 2000, True),
+                                                     (3000, 2000, False),
+                                                     (2000, 3000, False)):
+                with self.subTest(state_uid=state_uid, ingress_uid=ingress_uid), \
+                        mock.patch.object(Path, "lstat", autospec=True,
+                                          side_effect=lambda path: info(path, state_uid, ingress_uid)):
+                    self.assertEqual(b300_stlink._isolated_flash_ready(config, jobs, object()),
+                                     expected)
+
+    def test_flash_capability_refuses_absent_ingress_mount(self):
+        from b300_core.gateway_system_mode import IsolatedGatewayConfig
+        from pathlib import Path
+        config = IsolatedGatewayConfig(Path("/run/b300-stlink/agent.sock"),
+                                       Path("/var/lib/b300-stlink/gateway"),
+                                       Path("/var/spool/b300-stlink/ingress"), 1000)
+        def info(path):
+            if path == config.state_root:
+                return SimpleNamespace(st_mode=stat.S_IFDIR | 0o700, st_uid=2000)
+            if path == config.ingress_root:
+                return SimpleNamespace(st_mode=stat.S_IFDIR | 0o710, st_uid=2000, st_gid=2002)
+            return SimpleNamespace(st_mode=stat.S_IFSOCK | 0o660, st_uid=2000)
+        with mock.patch.object(b300_stlink, "ingress_mount_isolated", return_value=False,
+                               create=True), \
+             mock.patch.object(b300_stlink.os, "getuid", return_value=2000, create=True), \
+             mock.patch.object(Path, "lstat", autospec=True, side_effect=info), \
+             mock.patch.object(b300_stlink.DEFAULT_HARDWARE_OWNER, "path",
+                               config.state_root / "hardware-owner.lock"):
+            self.assertFalse(b300_stlink._isolated_flash_ready(
+                config, SimpleNamespace(ingress_root=config.ingress_root), object()))
+
+    def test_pending_replug_marker_withholds_flash_capability(self):
+        from b300_core.gateway_system_mode import IsolatedGatewayConfig
+        from pathlib import Path
+        config = IsolatedGatewayConfig(Path("/run/b300-stlink/agent.sock"),
+                                       Path("/var/lib/b300-stlink/gateway"),
+                                       Path("/var/spool/b300-stlink/ingress"), 1000,
+                                       operator_gid=2002, flash_enabled=False)
+        def info(path):
+            if path == config.state_root:
+                return SimpleNamespace(st_mode=stat.S_IFDIR | 0o700, st_uid=2000)
+            if path == config.ingress_root:
+                return SimpleNamespace(st_mode=stat.S_IFDIR | 0o710,
+                                       st_uid=2000, st_gid=2003)
+            return SimpleNamespace(st_mode=stat.S_IFSOCK | 0o660,
+                                   st_uid=2000, st_gid=2002)
+        with mock.patch.object(b300_stlink.os, "getuid", return_value=2000, create=True), \
+             mock.patch.object(b300_stlink, "ingress_mount_isolated", return_value=True), \
+             mock.patch.object(Path, "lstat", autospec=True, side_effect=info), \
+             mock.patch.object(b300_stlink.DEFAULT_HARDWARE_OWNER, "path",
+                               config.state_root / "hardware-owner.lock"):
+            self.assertFalse(b300_stlink._isolated_flash_ready(
+                config, SimpleNamespace(ingress_root=config.ingress_root), object()))
+
+    def test_live_agent_status_reports_its_own_isolated_capability(self):
+        from b300_core.gateway_agent import GatewayAgent
+        from b300_core.gateway_agent_protocol import GatewayRequest
+        coordinator = mock.Mock()
+        coordinator.public_snapshot.return_value.to_record.return_value = {"state": "IDLE"}
+        agent = GatewayAgent(coordinator, request_store=mock.Mock(),
+                             capabilities=("gateway-exclusive-lease-v1",
+                                           "remote_application_flash_isolated_v1"))
+        response = agent._dispatch(GatewayRequest.create("status", {}))
+        self.assertIn("remote_application_flash_isolated_v1",
+                      response["result"]["capabilities"])
+
+    def test_isolated_status_does_not_invent_live_flash_capability(self):
+        from b300_core.gateway_system_mode import IsolatedGatewayConfig
+        from pathlib import Path
+        config = IsolatedGatewayConfig(Path("/run/b300-stlink/agent.sock"),
+                                       Path("/var/lib/b300-stlink/gateway"),
+                                       Path("/var/spool/b300-stlink/ingress"), 1000)
+        response = {"protocol_version": 1, "status": "ok", "reason_code": "OK",
+                    "result": {"state": "IDLE"},
+                    "capabilities": ["gateway-exclusive-lease-v1"]}
+        output = io.StringIO()
+        with mock.patch.object(b300_stlink.sys, "platform", "linux"), \
+                mock.patch.object(b300_stlink, "load_isolated_gateway_config", return_value=config), \
+                mock.patch.object(b300_stlink, "_isolated_gateway_submit", return_value=response), \
+                redirect_stdout(output):
+            code = b300_stlink.main(["debug", "gateway-agent-ensure", "--json"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("remote_application_flash_isolated_v1",
+                         json.loads(output.getvalue())["capabilities"])
+
+    def test_isolated_runtime_commands_return_gateway_snapshots_for_debug_clients(self):
+        from b300_core.gateway_agent import GatewayAgent
+        from b300_core.gateway_system_mode import IsolatedGatewayConfig
+        from pathlib import Path
+        config = IsolatedGatewayConfig(Path("/run/b300-stlink/agent.sock"),
+                                       Path("/var/lib/b300-stlink/gateway"),
+                                       Path("/var/spool/b300-stlink/ingress"), 1000)
+        ready = self._ready()
+        coordinator = mock.Mock()
+        coordinator.runtime_snapshot.return_value = ready
+        agent = GatewayAgent(coordinator, request_store=mock.Mock())
+        for mode, operation in (("gateway-status", "runtime_status"),
+                                ("gateway-ensure", "runtime_ensure"),
+                                ("gateway-rescan", "runtime_rescan")):
+            with self.subTest(mode=mode):
+                output = io.StringIO()
+                def submit(_config, request, _timeout):
+                    self.assertEqual(request.operation, operation)
+                    return agent._dispatch(request)
+                with mock.patch.object(b300_stlink.sys, "platform", "linux"), \
+                        mock.patch.object(b300_stlink, "load_isolated_gateway_config", return_value=config), \
+                        mock.patch.object(b300_stlink, "_isolated_gateway_submit", side_effect=submit), \
+                        redirect_stdout(output):
+                    self.assertEqual(b300_stlink.main(["debug", mode, "--json"]), 0)
+                snapshot = GatewaySnapshot.from_record(json.loads(output.getvalue()))
+                self.assertTrue(snapshot.attach_ready)
+                self.assertEqual(snapshot.gdb_endpoint, "127.0.0.1:3333")
+
+
+    def test_missing_isolated_socket_does_not_launch_user_gateway(self):
+        from b300_core.gateway_system_mode import IsolatedGatewayConfig
+        from pathlib import Path
+        config = IsolatedGatewayConfig(Path("/run/b300-stlink/agent.sock"),
+                                       Path("/var/lib/b300-stlink/gateway"),
+                                       Path("/var/spool/b300-stlink/ingress"), 1000)
+        output = io.StringIO()
+        with mock.patch.object(b300_stlink.sys, "platform", "linux"), \
+                mock.patch.object(b300_stlink, "load_isolated_gateway_config", return_value=config), \
+                mock.patch.object(b300_stlink, "GatewayUnixClient") as client, \
+                mock.patch.object(b300_stlink, "GatewayAgentProcessManager") as manager, \
+                redirect_stdout(output):
+            client.return_value.submit_request.side_effect = FileNotFoundError
+            code = b300_stlink.main(["debug", "gateway-agent-ensure", "--json"])
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(output.getvalue())["reason_code"],
+                         "GATEWAY_AGENT_NOT_RUNNING")
+        manager.assert_not_called()
+
+    def test_direct_gateway_child_is_refused_in_isolated_mode(self):
+        from b300_core.gateway_system_mode import IsolatedGatewayConfig
+        from pathlib import Path
+        config = IsolatedGatewayConfig(Path("/run/b300-stlink/agent.sock"),
+                                       Path("/var/lib/b300-stlink/gateway"),
+                                       Path("/var/spool/b300-stlink/ingress"), 1000)
+        output = io.StringIO()
+        with mock.patch.object(b300_stlink.sys, "platform", "linux"), \
+                mock.patch.object(b300_stlink, "load_isolated_gateway_config", return_value=config), \
+                mock.patch.object(b300_stlink, "_run_managed_gateway_child") as child, \
+                redirect_stdout(output):
+            self.assertEqual(b300_stlink.main([
+                "debug", "gateway", "--managed-child", "--json"]), 1)
+        self.assertIn("isolated Gateway Agent", output.getvalue())
+        child.assert_not_called()
+
+    def test_new_cli_does_not_advertise_flash_from_old_running_agent(self):
+        old = GatewayAgentStatus("old-agent", 42, 10.0, "IDLE", "GATEWAY_IDLE")
+        manager = mock.Mock()
+        manager.status.return_value = old
+        output = io.StringIO()
+        with mock.patch.object(b300_stlink, "GatewayAgentProcessManager", return_value=manager), \
+                mock.patch.object(b300_stlink, "GatewayLeaseStore") as leases, \
+                redirect_stdout(output):
+            leases.return_value.read.return_value = None
+            code = b300_stlink.main(["debug", "gateway-agent-status", "--json"])
+        self.assertEqual(code, 0)
+        record = json.loads(output.getvalue())
+        self.assertNotIn("remote_application_flash_v1", record["capabilities"])
+        self.assertIn("gateway-exclusive-lease-v1", record["capabilities"])
+
     def test_protocol_advertises_status_and_idempotent_ensure(self) -> None:
         capabilities = gateway_capabilities()
         self.assertEqual(capabilities["protocol_version"], 1)

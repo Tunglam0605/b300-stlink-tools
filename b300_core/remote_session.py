@@ -8,8 +8,10 @@ import shlex
 import socket
 import tempfile
 import threading
+import uuid
+from dataclasses import asdict
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable, Dict, Optional, Protocol, Tuple
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -23,6 +25,11 @@ from .gateway_protocol import (
     GATEWAY_STATUS_COMMAND,
 )
 from .versioning import SemVer
+from .ssh_host_trust import trusted_known_hosts_file
+from .remote_programming import (
+    FirmwareKind, RemoteFirmwareManifest, RemoteProgrammingOperation,
+)
+from .hex_image import inspect_image
 from b300_version import __version__
 
 
@@ -368,6 +375,7 @@ class RemoteSession:
         self._connecting = False
         self._generation = 0
         self._last_error_code: Optional[str] = None
+        self._host_pinned = False
 
     @property
     def endpoint(self) -> str:
@@ -409,6 +417,7 @@ class RemoteSession:
 
     def _new_client(self):
         if self._ssh_client_factory is not None:
+            self._host_pinned = True
             return self._ssh_client_factory()
         try:
             import paramiko
@@ -418,9 +427,16 @@ class RemoteSession:
             ) from error
         client = paramiko.SSHClient()
         client.load_system_host_keys()
-        # Internal-tool default: accept first-contact host keys without a second wizard.
-        # Existing known system keys are still checked by Paramiko when present.
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        known = trusted_known_hosts_file(self.profile.host, self.profile.port)
+        if known is not None:
+            client.load_host_keys(str(known))
+            client.set_missing_host_key_policy(paramiko.RejectPolicy())
+            self._host_pinned = True
+        else:
+            # Legacy Debug and Monitor sessions retain their existing setup
+            # path. Destructive remote programming separately requires a pin.
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            self._host_pinned = False
         return client
 
     @staticmethod
@@ -463,7 +479,10 @@ class RemoteSession:
             with self._lock:
                 self._connecting = False
                 self._last_error_code = "SSH_PASSWORD_REQUIRED"
-            raise RemoteAuthenticationError("SSH password is required for the first connection.")
+            raise RemoteAuthenticationError(
+                "SSH password is required for the first connection.",
+                reason_code="SSH_PASSWORD_REQUIRED",
+            )
 
         client = self._new_client()
         try:
@@ -696,13 +715,15 @@ class RemoteSession:
         return snapshot
 
     def _run_gateway_control(self, command: str, arguments: Tuple[str, ...] = (), *,
-                             timeout_seconds: float = 10.0) -> dict:
+                             timeout_seconds: float = 10.0,
+                             stdin_payload: Optional[bytes] = None) -> dict:
         """Run one fixed Gateway Agent command and return bounded JSON output."""
         allowed = {
             GATEWAY_AGENT_STATUS_COMMAND, GATEWAY_AGENT_ENSURE_COMMAND,
             "b300-stlink debug gateway-acquire --json",
             "b300-stlink debug gateway-renew --json",
             "b300-stlink debug gateway-release --json",
+            "b300-stlink debug gateway-program-request --json",
         }
         if command not in allowed:
             raise ValueError("Unsupported remote Gateway Agent command.")
@@ -719,7 +740,13 @@ class RemoteSession:
         if arguments:
             remote_command += " " + " ".join(shlex.quote(str(item)) for item in arguments)
         try:
-            _stdin, stdout, stderr = client.exec_command(remote_command, timeout=float(timeout_seconds))
+            request_stdin, stdout, stderr = client.exec_command(remote_command, timeout=float(timeout_seconds))
+            if stdin_payload is not None:
+                if command != "b300-stlink debug gateway-program-request --json" or len(stdin_payload) > 64 * 1024:
+                    raise ValueError("Gateway stdin request is invalid or too large.")
+                request_stdin.write(stdin_payload)
+                request_stdin.flush()
+                request_stdin.channel.shutdown_write()
             output = stdout.read(256 * 1024 + 1)
             error_output = stderr.read(16 * 1024 + 1)
             if len(output) > 256 * 1024 or len(error_output) > 16 * 1024:
@@ -761,9 +788,14 @@ class RemoteSession:
                 reason_code="PROTOCOL_MISMATCH", phase="gateway_protocol",
                 next_action="Update B300 CLI on the Gateway, then retry.", retriable=False,
             )
-        if not isinstance(capabilities, list) or "gateway-exclusive-lease-v1" not in capabilities:
+        required_capability = (
+            "remote_application_flash_isolated_v1"
+            if command == "b300-stlink debug gateway-program-request --json"
+            else "gateway-exclusive-lease-v1"
+        )
+        if not isinstance(capabilities, list) or required_capability not in capabilities:
             raise RemoteSessionError(
-                "Gateway CLI does not advertise exclusive lease support.",
+                "Gateway CLI does not advertise the required programming capability.",
                 reason_code="CLI_TOO_OLD", phase="gateway_cli",
                 next_action="Update B300 CLI on the Gateway, then retry.", retriable=False,
             )
@@ -798,13 +830,21 @@ class RemoteSession:
         required = {"request_id", "client_id", "client_label", "mode", "probe_serial"}
         if set(request) != required:
             raise ValueError("Gateway lease request fields are invalid.")
-        result = self._run_gateway_control(
-            "b300-stlink debug gateway-acquire --json",
-            ("--request-id", request["request_id"], "--client-id", request["client_id"],
-             "--client-label", request["client_label"], "--lease-mode", request["mode"])
-            + (("--probe-serial", request["probe_serial"]) if request.get("probe_serial") else ()),
-            timeout_seconds=timeout_seconds,
-        )
+        if request["mode"] == "FLASH_APPLICATION":
+            result = self._run_program_request("acquire", {
+                "client_id": request["client_id"],
+                "client_label": request["client_label"],
+                "mode": request["mode"],
+                "probe_serial": request["probe_serial"],
+            }, timeout_seconds=timeout_seconds)
+        else:
+            result = self._run_gateway_control(
+                "b300-stlink debug gateway-acquire --json",
+                ("--request-id", request["request_id"], "--client-id", request["client_id"],
+                 "--client-label", request["client_label"], "--lease-mode", request["mode"])
+                + (("--probe-serial", request["probe_serial"]) if request.get("probe_serial") else ()),
+                timeout_seconds=timeout_seconds,
+            )
         public_fields = GatewayLeasePublicSnapshot.from_record({
             key: result[key] for key in (
                 "active", "lease_id", "generation", "client_label", "mode", "state",
@@ -819,6 +859,11 @@ class RemoteSession:
         )
 
     def renew_gateway(self, grant, *, timeout_seconds: float = 5.0) -> dict:
+        if grant.public.get("mode") == "FLASH_APPLICATION":
+            return self._run_program_request("renew", {
+                "lease_id": grant.lease_id, "lease_token": grant.token,
+                "lease_generation": grant.generation,
+            }, timeout_seconds=timeout_seconds)
         return self._run_gateway_control(
             "b300-stlink debug gateway-renew --json",
             ("--lease-id", grant.lease_id, "--lease-token", grant.token,
@@ -826,11 +871,159 @@ class RemoteSession:
         )
 
     def release_gateway(self, grant, *, timeout_seconds: float = 5.0) -> dict:
+        if grant.public.get("mode") == "FLASH_APPLICATION":
+            return self._run_program_request("release", {
+                "lease_id": grant.lease_id, "lease_token": grant.token,
+                "lease_generation": grant.generation,
+            }, timeout_seconds=timeout_seconds)
         return self._run_gateway_control(
             "b300-stlink debug gateway-release --json",
             ("--lease-id", grant.lease_id, "--lease-token", grant.token,
              "--lease-generation", str(grant.generation)), timeout_seconds=timeout_seconds,
         )
+
+    def _run_program_request(self, operation: str, payload: dict, *,
+                             timeout_seconds: float = 10.0,
+                             request_id: Optional[str] = None) -> dict:
+        if operation not in {
+            "acquire", "renew", "release", "program_create_upload",
+            "program_finalize_upload", "program_prepare", "program_commit",
+            "program_status", "program_cancel", "program_cleanup",
+        }:
+            raise ValueError("Unsupported Gateway programming operation.")
+        request = json.dumps({
+            "operation": operation, "payload": payload,
+            "request_id": request_id or uuid.uuid4().hex,
+        }, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+        command = "b300-stlink debug gateway-program-request --json"
+        try:
+            return self._run_gateway_control(
+                command, timeout_seconds=timeout_seconds, stdin_payload=request,
+            )
+        except RemoteSessionError as error:
+            retryable_control = operation in {
+                "program_create_upload", "program_finalize_upload", "program_prepare",
+                "program_status", "program_cancel", "program_cleanup",
+            }
+            if (not retryable_control or not self.connected
+                    or error.reason_code not in {"CLI_EXECUTION_FAILED", "CLI_RESPONSE_INVALID"}):
+                raise
+            # A lost control response may have followed successful dispatch.
+            # Replay the identical request ID and payload at most once; Agent
+            # and job stores reject changed inputs and duplicate side effects.
+            return self._run_gateway_control(
+                command, timeout_seconds=timeout_seconds, stdin_payload=request,
+            )
+
+    def prepare_remote_application(self, path: Path, grant, client_id: str,
+                                   *, progress=None) -> dict:
+        if not self._host_pinned:
+            raise RemoteSessionError(
+                "Gateway SSH host key is not pinned for remote programming.",
+                reason_code="HOST_KEY_UNTRUSTED", phase="ssh_auth",
+                next_action="Trust the Gateway host key, reconnect, then retry.",
+                retriable=False,
+            )
+        image = inspect_image(path)
+        manifest = RemoteFirmwareManifest.from_file(
+            path, operation=RemoteProgrammingOperation.FLASH_APPLICATION,
+            firmware_kind=FirmwareKind.APPLICATION,
+        )
+        if image.start_address != 0x08010000:
+            raise RemoteSessionError(
+                "Application HEX does not start at the B300 Application address.",
+                reason_code="FLASH_PLAN_INVALID", phase="validating", retriable=False,
+            )
+        capabilities = self.ensure_gateway_agent()
+        if "remote_application_flash_isolated_v1" not in capabilities.get("capabilities", []):
+            raise RemoteSessionError(
+                "Gateway does not support managed Application programming.",
+                reason_code="REMOTE_FLASH_UNSUPPORTED", phase="gateway_protocol",
+                next_action="Update the Gateway B300 CLI to the matching release.",
+                retriable=False,
+            )
+        manifest_record = {
+            key: value.value if hasattr(value, "value") else value
+            for key, value in asdict(manifest).items()
+        }
+        slot = self._run_program_request("program_create_upload", {
+            "manifest": manifest_record,
+            "client_id": client_id,
+            "probe_serial": grant.public.get("probe_serial"),
+        })
+        try:
+            self.upload_application_file(path, slot, progress=progress)
+            self._run_program_request("program_finalize_upload", {"job_id": slot["job_id"]})
+            return self._run_program_request("program_prepare", {
+                "job_id": slot["job_id"],
+                "lease_id": grant.lease_id,
+                "lease_token": grant.token,
+                "lease_generation": grant.generation,
+            }, timeout_seconds=55.0)
+        except BaseException:
+            try:
+                self.cancel_remote_application(slot["job_id"], grant)
+            except Exception:
+                pass
+            raise
+
+    def commit_remote_application(self, approval: dict, grant) -> dict:
+        return self._run_program_request("program_commit", {
+            "job_id": approval["job_id"],
+            "approval_token": approval["approval_token"],
+            "lease_id": grant.lease_id,
+            "lease_token": grant.token,
+            "lease_generation": grant.generation,
+        })
+
+    def remote_program_status(self, job_id: str) -> dict:
+        return self._run_program_request("program_status", {"job_id": job_id})
+
+    def cleanup_remote_application(self, job_id: str) -> dict:
+        return self._run_program_request("program_cleanup", {"job_id": job_id})
+
+    def cancel_remote_application(self, job_id: str, grant) -> dict:
+        return self._run_program_request("program_cancel", {
+            "job_id": job_id,
+            "lease_id": grant.lease_id,
+            "lease_token": grant.token,
+            "lease_generation": grant.generation,
+        })
+
+    def upload_application_file(self, local_path: Path, slot: dict,
+                                *, progress=None) -> None:
+        """Send bytes only to a Gateway-issued private upload slot."""
+        if not isinstance(slot, dict):
+            raise ValueError("Gateway upload slot is invalid.")
+        job_id = slot.get("job_id")
+        remote = slot.get("upload_path")
+        if (not isinstance(job_id, str) or len(job_id) != 32
+                or any(character not in "0123456789abcdef" for character in job_id)
+                or not isinstance(remote, str)):
+            raise ValueError("Gateway upload slot is invalid.")
+        remote_path = PurePosixPath(remote)
+        if (not remote_path.is_absolute() or ".." in remote_path.parts
+                or remote_path.parts[-3:] != ("program-jobs", job_id, "artifact.part")):
+            raise ValueError("Gateway upload path is outside the managed slot.")
+        source = Path(local_path).expanduser().resolve()
+        if not source.is_file():
+            raise ValueError("Selected Application HEX is missing.")
+        with self._lock:
+            if not self.connected or self._client is None:
+                raise RemoteSessionError("SSH session is not connected.")
+            client = self._client
+        try:
+            sftp = client.open_sftp()
+            try:
+                sftp.put(str(source), remote, callback=progress)
+            finally:
+                sftp.close()
+        except Exception as error:
+            raise RemoteSessionError(
+                "Application upload to Gateway failed.",
+                reason_code="UPLOAD_FAILED", phase="upload",
+                next_action="Check SSH and retry the upload manually.",
+            ) from error
 
     def gateway_status(self, *, timeout_seconds: float = 5.0) -> GatewaySnapshot:
         """Read the authenticated Gateway's current fail-closed snapshot."""

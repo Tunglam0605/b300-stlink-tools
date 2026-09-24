@@ -118,6 +118,43 @@ Dry-run không kết nối ghi flash.
 GUI không tự retry bất kỳ lỗi erase/program/verify nào. Mọi lỗi hiển thị phase,
 nguyên nhân và hành động tiếp theo.
 
+## Nạp Application từ xa qua Gateway
+
+Thiết lập Gateway/Client và saved SSH profile theo [hướng dẫn Gateway](04_DEBUG.md#gateway-setup-wizard-v0120).
+Client và Gateway phải dùng release hỗ trợ `remote_application_flash_v1`.
+Remote flash yêu cầu SSH host key của Gateway đã được pin trên Client bằng
+fingerprint đối chiếu với `gateway host-key` chạy tại Gateway. Nếu chưa pin,
+Client báo `HOST_KEY_UNTRUSTED` và dừng trước khi nạp.
+Trong thanh ngữ cảnh chung, chọn Gateway đã đăng nhập SSH và đúng ST-Link ở
+Gateway. Khi có nhiều probe, chọn serial cụ thể; Bootloader/Factory không có
+trong remote flow.
+
+1. Trong **PROGRAM**, chọn Intel HEX Application tại `0x08010000` và kiểm
+   tên file, address span, size, CRC32, SHA-256.
+2. Bấm dry-run để Client tải HEX qua SSH/SFTP. Gateway kiểm size/hash, probe,
+   STM32F407 512 KiB, WRP S0–S2 rồi trả lại plan Sector 3–7 và AppMeta
+   `0x0800C000`/44 byte. Thẻ **MCU & Kiểm tra an toàn** hiển thị bằng chứng
+   Gateway vừa đọc (MCU, điện áp, WRP, RDP) với nhãn **Gateway dry-run**; đó là
+   snapshot của lần kiểm tra, không phải trạng thái live. Đổi HEX/kết nối sẽ xóa
+   snapshot. Gateway thiếu bằng chứng này thì GUI dừng trước xác nhận nạp.
+   Dry-run kết thúc không ghi flash.
+3. Bấm **Nạp Application**. GUI tạo một Gateway approval mới và hiển thị Gateway,
+   tên file, SHA-256, probe cùng erase Sector 3–7. Chỉ chọn **Yes** khi tất cả
+   khớp board và file được phép nạp.
+4. Giữ nguồn board/ST-Link ổn định. Theo dõi job tới `SUCCEEDED` hoặc lỗi có
+   `reason`/`next_action`. Debug và Monitor phải chờ flash giải phóng probe.
+
+Gateway không cần xác nhận vật lý thứ hai. Mất SSH hoặc đóng Client sau khi
+commit không hủy flash. Nếu GUI hiển thị job đang giữ/pending, ghi lại job ID,
+kết nối lại, chọn cùng Gateway profile trong **PROGRAM** rồi bấm
+**Kiểm tra job gần nhất**. GUI lưu job ID gần nhất theo profile qua lần mở ứng
+dụng sau và hỏi trạng thái Gateway; chỉ bật nút khi profile đó có job đã lưu.
+Cũng có thể dùng `b300-stlink program-status <job-id> --gateway <profile> --json`.
+Khi không truy vấn được trạng thái, kiểm tra log Gateway và board trước thao
+tác mới. Không retry mù.
+Chỉ báo thành công sau Application verify, AppMeta `STLM + CONFIRMED`, PC
+trong Application và BKP1R đã clear.
+
 ## Factory / Bootloader
 
 Tab **Factory / Bootloader** tách hoàn toàn khỏi tab Application. GUI chỉ còn một thao tác chính: **NẠP BOOTLOADER**. Khi bấm nút, tool tự chạy preflight read-only để xác minh đúng STM32F407 512 KiB, RDP, trạng thái WRP và trusted bundled Bootloader; chỉ khi preflight đạt mới tạo Factory plan và chuyển sang provisioning.

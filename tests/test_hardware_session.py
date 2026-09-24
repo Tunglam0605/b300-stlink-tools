@@ -1,14 +1,29 @@
 from __future__ import annotations
 
 import threading
+import tempfile
 import unittest
+from pathlib import Path
 
 from b300_core.hardware_session import HardwareBusyError, HardwareMode, HardwareSessionManager
+from b300_core.hardware_owner import FileHardwareOwner
 from b300_core.models import ProbeRef
 from b300_core.service import B300Service
 
 
 class HardwareSessionManagerTests(unittest.TestCase):
+    def test_independent_managers_cannot_claim_one_physical_stlink(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "hardware.lock"
+            first = HardwareSessionManager(owner=FileHardwareOwner(path))
+            second = HardwareSessionManager(owner=FileHardwareOwner(path))
+            with first.acquire(HardwareMode.DEBUGGING, ProbeRef("SAFE123")):
+                with self.assertRaises(HardwareBusyError):
+                    with second.acquire(HardwareMode.FLASHING, ProbeRef("SAFE123")):
+                        pass
+            with second.acquire(HardwareMode.FLASHING, ProbeRef("SAFE123")):
+                self.assertEqual(second.snapshot().mode, HardwareMode.FLASHING)
+
     def test_acquire_sets_mode_and_releases_to_idle(self) -> None:
         manager = HardwareSessionManager()
         self.assertEqual(manager.snapshot().mode, HardwareMode.IDLE)

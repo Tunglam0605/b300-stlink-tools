@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import tempfile
+import json
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
+from tests.test_core_hex_policy import APPLICATION_VECTOR, write_hex
 
 from b300_core.remote_profile import RemoteGatewayProfile
 from b300_core.remote_session import (
@@ -63,6 +66,20 @@ class FakeClient:
         self.transport.active = False
 
 
+class FakeSftp:
+    def __init__(self):
+        self.transfers = []
+        self.closed = False
+
+    def put(self, local, remote, callback=None):
+        self.transfers.append((Path(local).read_bytes(), remote))
+        if callback:
+            callback(len(self.transfers[-1][0]), len(self.transfers[-1][0]))
+
+    def close(self):
+        self.closed = True
+
+
 class MemoryStore:
     def __init__(self, secret=None):
         self.secret = secret
@@ -116,6 +133,120 @@ class ForwardFactory:
 
 
 class RemoteSessionTests(unittest.TestCase):
+    def test_remote_flash_rejects_legacy_flash_capability(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = write_hex(directory, 0x08010000, APPLICATION_VECTOR)
+            session = RemoteSession(self.profile, credential_store=MemoryStore(), ssh_client_factory=FakeClient)
+            session.connect("secret")
+            grant = SimpleNamespace(public={"probe_serial": "SAFE123"})
+            with mock.patch.object(session, "ensure_gateway_agent", return_value={
+                    "capabilities": ["remote_application_flash_v1"]}), \
+                    mock.patch.object(session, "_run_program_request") as program:
+                with self.assertRaises(RemoteSessionError) as captured:
+                    session.prepare_remote_application(image, grant, "client-1")
+            self.assertEqual(captured.exception.reason_code, "REMOTE_FLASH_UNSUPPORTED")
+            program.assert_not_called()
+
+    def test_lost_upload_slot_response_retries_same_request_id_once(self):
+        session = RemoteSession(self.profile, credential_store=MemoryStore(), ssh_client_factory=FakeClient)
+        session.connect("secret")
+        calls = []
+        def control(command, **kwargs):
+            calls.append(json.loads(kwargs["stdin_payload"]))
+            if len(calls) == 1:
+                raise RemoteSessionError(
+                    "SSH response lost", reason_code="CLI_EXECUTION_FAILED",
+                    phase="gateway_cli",
+                )
+            return {"job_id": "a" * 32, "state": "UPLOADING"}
+        with mock.patch.object(session, "_run_gateway_control", side_effect=control):
+            slot = session._run_program_request("program_create_upload", {
+                "manifest": {}, "client_id": "client-1", "probe_serial": None,
+            })
+        self.assertEqual(slot["job_id"], "a" * 32)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0]["request_id"], calls[1]["request_id"])
+        self.assertEqual(calls[0]["payload"], calls[1]["payload"])
+
+    def test_interrupted_upload_requests_gateway_slot_cancellation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = write_hex(directory, 0x08010000, APPLICATION_VECTOR)
+            session = RemoteSession(self.profile, credential_store=MemoryStore(), ssh_client_factory=FakeClient)
+            session.connect("secret")
+            job_id = "a" * 32
+            slot = {"job_id": job_id, "upload_path": "/home/aubot/program-jobs/" + job_id + "/artifact.part"}
+            operations = []
+            def command(operation, payload, **kwargs):
+                operations.append(operation)
+                return slot if operation == "program_create_upload" else {"job_id": job_id, "state": "CANCELLED"}
+            grant = SimpleNamespace(lease_id="lease", token="secret", generation=1,
+                                    public={"probe_serial": "SAFE123"})
+            with mock.patch.object(session, "ensure_gateway_agent", return_value={"capabilities": ["remote_application_flash_isolated_v1"]}), \
+                    mock.patch.object(session, "_run_program_request", side_effect=command), \
+                    mock.patch.object(session, "upload_application_file", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    session.prepare_remote_application(image, grant, "client-1")
+            self.assertEqual(operations, ["program_create_upload", "program_cancel"])
+
+    def test_remote_programming_requires_pinned_gateway_host_key(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = write_hex(directory, 0x08010000, APPLICATION_VECTOR)
+            session = RemoteSession(self.profile, credential_store=MemoryStore(), ssh_client_factory=FakeClient)
+            session.connect("secret")
+            session._host_pinned = False
+            with self.assertRaises(RemoteSessionError) as captured:
+                session.prepare_remote_application(
+                    image,
+                    SimpleNamespace(public={"probe_serial": "SAFE123"}),
+                    "client-1",
+                )
+            self.assertEqual(captured.exception.reason_code, "HOST_KEY_UNTRUSTED")
+
+    def test_prepare_remote_application_uploads_then_requests_gateway_plan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = write_hex(directory, 0x08010000, APPLICATION_VECTOR)
+            client = FakeClient()
+            sftp = FakeSftp()
+            client.open_sftp = lambda: sftp
+            session = RemoteSession(self.profile, credential_store=MemoryStore(), ssh_client_factory=lambda: client)
+            session.connect("secret")
+            job_id = "b" * 32
+            slot = {"job_id": job_id, "upload_path": "/home/aubot/program-jobs/" + job_id + "/artifact.part"}
+            prepared = {"job_id": job_id, "state": "AWAITING_CONFIRMATION", "plan": {"erase_sectors": [3, 4, 5, 6, 7]}, "approval_token": "approval"}
+            responses = iter((slot, {"state": "STAGED"}, prepared))
+            with mock.patch.object(session, "ensure_gateway_agent", return_value={"capabilities": ["remote_application_flash_isolated_v1"]}), \
+                    mock.patch.object(session, "_run_gateway_control", side_effect=lambda *a, **k: next(responses)) as control:
+                result = session.prepare_remote_application(
+                    image, SimpleNamespace(lease_id="lease", token="secret", generation=1,
+                                           public={"probe_serial": "SAFE123"}), "client-1",
+                )
+            self.assertEqual(result, prepared)
+            self.assertEqual(sftp.transfers[0][0], image.read_bytes())
+            self.assertEqual([json.loads(call.kwargs["stdin_payload"])["operation"] for call in control.call_args_list], [
+                "program_create_upload", "program_finalize_upload", "program_prepare",
+            ])
+
+    def test_program_upload_uses_sftp_only_for_gateway_slot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "application.hex"
+            image.write_bytes(b":00000001FF\n")
+            client = FakeClient()
+            sftp = FakeSftp()
+            client.open_sftp = lambda: sftp
+            session = RemoteSession(self.profile, credential_store=MemoryStore(), ssh_client_factory=lambda: client)
+            session.connect("secret")
+            slot = {
+                "job_id": "a" * 32,
+                "upload_path": "/home/aubot/.b300-stlink/gateway-runtime/program-jobs/" + "a" * 32 + "/artifact.part",
+            }
+            session.upload_application_file(image, slot)
+            self.assertEqual(sftp.transfers, [(image.read_bytes(), slot["upload_path"])])
+            self.assertTrue(sftp.closed)
+            with self.assertRaises(ValueError):
+                session.upload_application_file(image, {
+                    "job_id": "a" * 32, "upload_path": "/tmp/other.hex",
+                })
+
     def setUp(self):
         self.profile = RemoteGatewayProfile("192.168.1.145", "Admin", 22)
 
@@ -176,8 +307,9 @@ class RemoteSessionTests(unittest.TestCase):
     def test_missing_password_fails_before_network(self):
         client = FakeClient()
         session = RemoteSession(self.profile, credential_store=MemoryStore(), ssh_client_factory=lambda: client)
-        with self.assertRaisesRegex(RemoteAuthenticationError, "required"):
+        with self.assertRaisesRegex(RemoteAuthenticationError, "required") as captured:
             session.connect()
+        self.assertEqual(captured.exception.reason_code, "SSH_PASSWORD_REQUIRED")
         self.assertEqual(client.connect_calls, [])
         self.assertEqual(session.state.error_code, "SSH_PASSWORD_REQUIRED")
 

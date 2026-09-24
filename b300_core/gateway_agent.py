@@ -19,7 +19,14 @@ from .gateway_lease import (
     GatewayLeaseRequest,
 )
 from .gateway_supervisor import gateway_runtime_root
+from .gateway_protocol import gateway_capabilities
 from .process_startup import child_process_kwargs
+
+
+LEGACY_AGENT_CAPABILITIES = (
+    "gateway-status", "gateway-ensure", "gateway-rescan",
+    "gateway-gdb-activity-v1", "gateway-agent", "gateway-exclusive-lease-v1",
+)
 
 
 @dataclass(frozen=True)
@@ -29,19 +36,23 @@ class GatewayAgentStatus:
     heartbeat_mono: float
     state: str
     reason_code: str
+    capabilities: tuple[str, ...] = LEGACY_AGENT_CAPABILITIES
 
     def to_record(self) -> dict:
         return {
             "schema_version": 1, "instance_id": self.instance_id, "pid": self.pid,
             "heartbeat_mono": self.heartbeat_mono, "state": self.state,
             "reason_code": self.reason_code,
+            "capabilities": list(self.capabilities),
         }
 
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> "GatewayAgentStatus":
-        if not isinstance(record, Mapping) or set(record) != {
+        required = {
             "schema_version", "instance_id", "pid", "heartbeat_mono", "state", "reason_code",
-        }:
+        }
+        if (not isinstance(record, Mapping) or not required <= set(record)
+                or not set(record) <= required | {"capabilities"}):
             raise ValueError("Gateway Agent status schema is invalid.")
         if type(record["schema_version"]) is not int or record["schema_version"] != 1:
             raise ValueError("Gateway Agent status version is unsupported.")
@@ -54,8 +65,13 @@ class GatewayAgentStatus:
             raise ValueError("Gateway Agent heartbeat is invalid.")
         if not isinstance(record["state"], str) or not isinstance(record["reason_code"], str):
             raise ValueError("Gateway Agent state is invalid.")
+        capabilities = record.get("capabilities", list(LEGACY_AGENT_CAPABILITIES))
+        if (not isinstance(capabilities, list) or len(capabilities) > 32
+                or any(not isinstance(value, str) or not value or len(value) > 64
+                       for value in capabilities)):
+            raise ValueError("Gateway Agent capabilities are invalid.")
         return cls(record["instance_id"], record["pid"], float(heartbeat),
-                   record["state"], record["reason_code"])
+                   record["state"], record["reason_code"], tuple(capabilities))
 
 
 class GatewayAgentStatusStore:
@@ -257,21 +273,43 @@ class GatewayAgentSnapshot:
 class GatewayAgent:
     def __init__(self, coordinator: object, *,
                  request_store: Optional[GatewayRequestStore] = None,
+                 program_jobs: Optional[object] = None,
                  status_sink: Optional[Callable[[GatewayAgentSnapshot], None]] = None,
+                 socket_server: Optional[object] = None,
+                 capabilities=None,
                  clock: Callable[[], float] = time.monotonic,
                  poll_interval_seconds: float = 0.25) -> None:
         if not 0.02 <= float(poll_interval_seconds) <= 5.0:
             raise ValueError("Gateway Agent poll interval must be in [0.02, 5.0].")
         self.coordinator = coordinator
         self.requests = request_store or GatewayRequestStore()
+        self.program_jobs = program_jobs
         self._clock = clock
         self._status_sink = status_sink
+        self._socket_server = socket_server
+        self._capabilities_provider = (capabilities if callable(capabilities)
+                                       else lambda: tuple(capabilities or gateway_capabilities()["capabilities"]))
         self._poll_interval = float(poll_interval_seconds)
         self._shutdown_requested = False
+        self._inflight_prepare = set()
+        self._prepare_workers = {}
+        self._prepare_lock = threading.RLock()
 
     def run_once(self) -> GatewayAgentSnapshot:
         for request in self.requests.pending():
-            self._dispatch_once(request)
+            if request.operation == "program_prepare":
+                with self._prepare_lock:
+                    if request.request_id in self._inflight_prepare:
+                        continue
+                    self._inflight_prepare.add(request.request_id)
+                    worker = threading.Thread(
+                        target=self._run_prepare_request, args=(request,),
+                        name="b300-gateway-program-prepare", daemon=False,
+                    )
+                    self._prepare_workers[request.request_id] = worker
+                    worker.start()
+            else:
+                self._dispatch_once(request)
         lease = self.coordinator.tick()
         result = GatewayAgentSnapshot(
             state=str(getattr(lease, "state", "IDLE")),
@@ -284,14 +322,47 @@ class GatewayAgent:
 
     def run(self, stop_event: Optional[threading.Event] = None) -> int:
         event = stop_event or threading.Event()
+        socket_failures = []
+        socket_thread = None
+        if self._socket_server is not None:
+            def serve_socket() -> None:
+                try:
+                    self._socket_server.serve(event)
+                except Exception as error:
+                    socket_failures.append(error)
+                    event.set()
+            socket_thread = threading.Thread(target=serve_socket,
+                                             name="b300-gateway-control-socket", daemon=False)
+            socket_thread.start()
         try:
             while not self._shutdown_requested:
+                if socket_failures:
+                    raise RuntimeError("Gateway socket server failed") from socket_failures[0]
                 self.run_once()
                 if event.wait(self._poll_interval):
                     break
+            if socket_failures:
+                raise RuntimeError("Gateway socket server failed") from socket_failures[0]
             return 0
         finally:
+            event.set()
+            if socket_thread is not None:
+                socket_thread.join()
+            with self._prepare_lock:
+                workers = tuple(self._prepare_workers.values())
+            for worker in workers:
+                worker.join()
+            if self.program_jobs is not None:
+                self.program_jobs.wait_active()
             self.coordinator.shutdown("AGENT_SHUTDOWN")
+
+    def _run_prepare_request(self, request: GatewayRequest) -> None:
+        try:
+            self._dispatch_once(request)
+        finally:
+            with self._prepare_lock:
+                self._inflight_prepare.discard(request.request_id)
+                self._prepare_workers.pop(request.request_id, None)
 
     def _dispatch_once(self, request: GatewayRequest) -> None:
         try:
@@ -301,17 +372,30 @@ class GatewayAgent:
                 response = self._dispatch(request)
         except (KeyError, TypeError, ValueError) as error:
             response = self._error(request, "REQUEST_INVALID", str(error))
-        except Exception:
-            response = self._error(request, "AGENT_OPERATION_FAILED")
-        self.requests.respond(request.request_id, response)
+        except Exception as error:
+            from .gateway_program_jobs import ProgramJobError
+            if isinstance(error, ProgramJobError):
+                response = self._error(request, error.reason_code, str(error))
+            else:
+                response = self._error(request, "AGENT_OPERATION_FAILED")
+        response["capabilities"] = list(self._capabilities_provider())
+        self.requests.respond(request.request_id, response, request=request)
         self.requests.complete(request.request_id)
 
     def _dispatch(self, request: GatewayRequest) -> dict:
         operation = request.operation
         payload = request.payload
+        if operation.startswith("program_"):
+            return self._dispatch_program(request)
         if operation == "status":
             self._exact_keys(payload, set())
-            return self._ok(request, self.coordinator.public_snapshot().to_record())
+            result = self.coordinator.public_snapshot().to_record()
+            result["capabilities"] = list(self._capabilities_provider())
+            return self._ok(request, result)
+        if operation in {"runtime_status", "runtime_ensure", "runtime_rescan"}:
+            self._exact_keys(payload, set())
+            action = operation.removeprefix("runtime_")
+            return self._ok(request, self.coordinator.runtime_snapshot(action).to_record())
         if operation == "acquire":
             self._exact_keys(payload, {
                 "client_id", "client_label", "mode", "probe_serial",
@@ -355,6 +439,55 @@ class GatewayAgent:
             self._shutdown_requested = True
             return self._ok(request, self._record(result))
         raise ValueError("Unsupported Gateway Agent operation.")
+
+    def _dispatch_program(self, request: GatewayRequest) -> dict:
+        from .gateway_program_jobs import GatewayProgramJobs
+        from .remote_programming import RemoteFirmwareManifest
+
+        if self.program_jobs is None:
+            self.program_jobs = GatewayProgramJobs(coordinator=self.coordinator)
+        jobs = self.program_jobs
+        payload = request.payload
+        operation = request.operation
+        if operation == "program_create_upload":
+            self._exact_keys(payload, {"manifest", "client_id", "probe_serial"})
+            if not isinstance(payload["manifest"], dict):
+                raise ValueError("Firmware manifest must be an object.")
+            manifest = RemoteFirmwareManifest(**payload["manifest"]).validate()
+            return self._ok(request, jobs.create_upload(
+                manifest, payload["client_id"], payload["probe_serial"],
+                request_id=request.request_id,
+            ))
+        if operation == "program_finalize_upload":
+            self._exact_keys(payload, {"job_id"})
+            return self._ok(request, jobs.finalize_upload(payload["job_id"]))
+        if operation == "program_status":
+            self._exact_keys(payload, {"job_id"})
+            return self._ok(request, jobs.status(payload["job_id"]))
+        if operation == "program_cleanup":
+            self._exact_keys(payload, {"job_id"})
+            return self._ok(request, jobs.cleanup(payload["job_id"]))
+        lease_fields = {"job_id", "lease_id", "lease_token", "lease_generation"}
+        if operation == "program_prepare":
+            self._exact_keys(payload, lease_fields)
+            return self._ok(request, jobs.prepare(
+                payload["job_id"], payload["lease_id"],
+                payload["lease_token"], payload["lease_generation"],
+            ))
+        if operation == "program_cancel":
+            self._exact_keys(payload, lease_fields)
+            return self._ok(request, jobs.cancel(
+                payload["job_id"], payload["lease_id"],
+                payload["lease_token"], payload["lease_generation"],
+            ))
+        if operation == "program_commit":
+            self._exact_keys(payload, lease_fields | {"approval_token"})
+            return self._ok(request, jobs.commit(
+                payload["job_id"], payload["approval_token"],
+                payload["lease_id"], payload["lease_token"],
+                payload["lease_generation"],
+            ))
+        raise ValueError("Unsupported Gateway programming operation.")
 
     @staticmethod
     def _exact_keys(payload: Mapping[str, object], expected: set) -> None:

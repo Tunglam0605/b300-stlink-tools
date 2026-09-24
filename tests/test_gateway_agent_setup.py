@@ -15,6 +15,22 @@ CLI = Path("C:/Tools/b300-stlink.exe")
 
 
 class GatewayAgentSetupTests(unittest.TestCase):
+    def test_isolated_linux_setup_never_enables_user_service(self):
+        from b300_core import gateway_agent_setup
+        from b300_core.gateway_system_mode import IsolatedGatewayConfig
+        config = IsolatedGatewayConfig(Path("/run/b300-stlink/agent.sock"),
+                                       Path("/var/lib/b300-stlink/gateway"),
+                                       Path("/var/spool/b300-stlink/ingress"), 1000)
+        with mock.patch.object(gateway_agent_setup, "load_isolated_gateway_config",
+                               return_value=config, create=True):
+            report = inspect_gateway_agent_setup(
+                cli_path=CLI, system_name="Linux",
+                runner=lambda command: self.fail("per-user systemctl must not run"))
+            plan = build_gateway_agent_setup_plan(report, cli_path=CLI,
+                                                  system_name="Linux")
+        self.assertEqual(report.reason_code, "ISOLATED_SYSTEM_AGENT")
+        self.assertEqual(plan.commands, ())
+
     def test_windows_plan_uses_hidden_logon_task_and_exact_cli_path(self):
         report = GatewayAgentSetupReport(
             platform="windows", supported=True, installed=False, running=False,

@@ -1,0 +1,13 @@
+# Install this template as the exact name returned by:
+# systemd-escape --path --suffix=mount /var/spool/b300-stlink/ingress
+[Unit]
+Description=Bounded B300 ST-Link SFTP ingress
+
+[Mount]
+What=tmpfs
+Where=/var/spool/b300-stlink/ingress
+Type=tmpfs
+Options=size=65M,nr_inodes=256,nodev,nosuid,noexec,uid=@AGENT_UID@,gid=@UPLOAD_GID@,mode=0710
+
+[Install]
+WantedBy=multi-user.target

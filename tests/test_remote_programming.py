@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -69,6 +70,14 @@ class RemoteProgrammingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             bad.validate()
 
+        windows_traversal = RemoteFirmwareManifest(
+            operation=RemoteProgrammingOperation.FLASH_APPLICATION,
+            firmware_kind=FirmwareKind.APPLICATION,
+            file_name="..\\application.hex", size=12, sha256="0" * 64,
+        )
+        with self.assertRaises(ValueError):
+            windows_traversal.validate()
+
         wrong_privilege = RemoteFirmwareManifest(
             operation=RemoteProgrammingOperation.FLASH_BOOTLOADER,
             firmware_kind=FirmwareKind.BOOTLOADER,
@@ -108,11 +117,59 @@ class RemoteProgrammingTests(unittest.TestCase):
             gateway = GatewayProgrammingService(service=fake)
             approval = gateway.prepare_application(manifest, path, ProbeRef("STLINK123"))
             self.assertIs(approval.plan, fake.plan_value)
-            self.assertEqual(fake.calls[0], ("inspect_image", path.resolve()))
+            self.assertEqual(fake.calls[0][0], "inspect_image")
+            self.assertTrue(os.path.samefile(fake.calls[0][1], path))
             self.assertEqual(fake.calls[1], ("inspect_target", "STLINK123"))
             result = gateway.flash_application(approval)
             self.assertIs(result, fake.flash_result)
             self.assertEqual(fake.calls[-1], ("flash", fake.plan_value))
+
+    def test_gateway_rejects_hardlinked_artifact_before_worker_flash(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            job = root / "job"
+            job.mkdir()
+            path = self.make_file(job)
+            manifest = RemoteFirmwareManifest.from_file(
+                path, operation=RemoteProgrammingOperation.FLASH_APPLICATION,
+                firmware_kind=FirmwareKind.APPLICATION,
+            )
+            fake = FakeService()
+            gateway = GatewayProgrammingService(service=fake)
+            approval = gateway.prepare_application(manifest, path, ProbeRef("STLINK123"))
+            outside = self.make_file(root, name=path.name, payload=path.read_bytes())
+            path.unlink()
+            os.link(outside, path)
+            with self.assertRaises(RemoteProgrammingDenied):
+                gateway.flash_application(approval)
+            self.assertEqual([name for name, *_ in fake.calls], [
+                "inspect_image", "inspect_target", "plan",
+            ])
+
+    def test_gateway_rejects_file_replaced_during_image_inspection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            job = root / "job"
+            job.mkdir()
+            path = self.make_file(job)
+            manifest = RemoteFirmwareManifest.from_file(
+                path, operation=RemoteProgrammingOperation.FLASH_APPLICATION,
+                firmware_kind=FirmwareKind.APPLICATION,
+            )
+            outside = self.make_file(root, name=path.name, payload=path.read_bytes())
+            fake = FakeService()
+
+            def replace_after_inspection(staged):
+                image = "IMAGE"
+                path.unlink()
+                os.link(outside, path)
+                return image
+
+            fake.inspect_image = replace_after_inspection
+            gateway = GatewayProgrammingService(service=fake)
+            with self.assertRaises(RemoteProgrammingDenied):
+                gateway.prepare_application(manifest, path, ProbeRef("STLINK123"))
+            self.assertEqual(fake.calls, [])
 
     def test_bin_elf_axf_transfer_contract_exists_but_execution_fails_closed(self) -> None:
         for suffix in (".bin", ".elf", ".axf"):

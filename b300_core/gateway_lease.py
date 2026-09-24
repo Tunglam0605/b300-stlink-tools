@@ -14,7 +14,7 @@ from typing import Mapping, Optional
 
 
 SUPPORTED_LEASE_SCHEMA_VERSION = 1
-LEASE_MODES = frozenset({"LIVE_WATCH", "VSCODE_DEBUG"})
+LEASE_MODES = frozenset({"LIVE_WATCH", "VSCODE_DEBUG", "FLASH_APPLICATION"})
 LEASE_STATES = frozenset({
     "RESERVED", "STARTING", "ACTIVE", "GRACE", "CLEANING",
     "RECOVERY_REQUIRED",
@@ -419,11 +419,8 @@ class GatewayLeaseBusy:
 
 
 def _default_lease_path() -> Path:
-    override = os.environ.get("B300_GATEWAY_RUNTIME_DIR")
-    root = Path(override).expanduser() if override else (
-        Path.home() / ".b300-stlink" / "gateway-runtime"
-    )
-    return root / "lease.json"
+    from .gateway_supervisor import gateway_runtime_root
+    return gateway_runtime_root() / "lease.json"
 
 
 class GatewayLeaseStore:

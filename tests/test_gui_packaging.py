@@ -519,7 +519,7 @@ class GuiPackagingTests(unittest.TestCase):
         self.assertIn("resources/firmware/b300_bootloader_manifest.json", names)
 
     def test_internal_linux_archives_stage_gateway_agent_unit_for_x64_and_arm64(self) -> None:
-        """Linux x64 and ARM64 bundles both carry the systemd-user unit."""
+        """Every Linux flavor keeps legacy and isolated units at stable paths."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             openocd = root / "openocd"
@@ -534,25 +534,65 @@ class GuiPackagingTests(unittest.TestCase):
             manifest_digest = hashlib.sha256(
                 package_internal.openocd_manifest(openocd)
             ).hexdigest()
+            system = ROOT / 'packaging/linux/b300-stlink-gateway-agent-system.service'
+            mount = ROOT / 'packaging/linux/b300-stlink-ingress.mount.in'
             for platform in ("linux-x64", "linux-arm64"):
-                output = root / (platform + ".tar.gz")
-                with mock.patch.object(
-                    package_internal, "TRUSTED_TREE_MANIFESTS",
-                    {platform: manifest_digest},
-                ):
-                    self.assertEqual(package_internal.main([
-                        "--flavor", "cli", "--executable", str(executable),
-                        "--openocd-root", str(openocd), "--bootstrap", str(bootstrap),
-                        "--output", str(output), "--platform", platform,
-                        "--openocd-archive", xpack.name, "--openocd-sha256", "A" * 64,
-                        "--openocd-package", str(xpack),
-                        "--internal-distribution-approved",
-                    ]), 0)
-                with tarfile.open(output, "r:gz") as archive:
-                    self.assertIn(
-                        "packaging/linux/b300-stlink-gateway-agent.service",
-                        archive.getnames(),
-                    )
+                for flavor in ("cli", "gui"):
+                    with self.subTest(platform=platform, flavor=flavor):
+                        selected = executable if flavor == 'cli' else root / 'b300-stlink-gui'
+                        if flavor == 'gui':
+                            selected.write_bytes(b'gui')
+                        output = root / (platform + '-' + flavor + ".tar.gz")
+                        with mock.patch.object(
+                            package_internal, "TRUSTED_TREE_MANIFESTS",
+                            {platform: manifest_digest},
+                        ):
+                            self.assertEqual(package_internal.main([
+                                "--flavor", flavor, "--executable", str(selected),
+                                "--openocd-root", str(openocd), "--bootstrap", str(bootstrap),
+                                "--output", str(output), "--platform", platform,
+                                "--openocd-archive", xpack.name, "--openocd-sha256", "A" * 64,
+                                "--openocd-package", str(xpack),
+                                "--resource", str(system), "--resource", str(mount),
+                                "--internal-distribution-approved",
+                            ]), 0)
+                        with tarfile.open(output, "r:gz") as archive:
+                            names = archive.getnames()
+                            self.assertIn('packaging/linux/b300-stlink-gateway-agent.service', names)
+                            service_name = 'packaging/linux/b300-stlink-gateway-agent-system.service'
+                            mount_name = 'packaging/linux/b300-stlink-ingress.mount.in'
+                            self.assertIn(service_name, names)
+                            self.assertIn(mount_name, names)
+                            self.assertNotIn(
+                                r'packaging/linux/var-spool-b300\x2dstlink-ingress.mount',
+                                names)
+                            service_text = archive.extractfile(service_name).read().decode('utf-8')
+                            mount_text = archive.extractfile(mount_name).read().decode('utf-8')
+                        self.assertIn(r'BindsTo=var-spool-b300\x2dstlink-ingress.mount',
+                                      service_text)
+                        self.assertIn(r'After=var-spool-b300\x2dstlink-ingress.mount',
+                                      service_text)
+                        self.assertIn('User=b300-agent', service_text)
+                        self.assertIn('Group=b300-agent', service_text)
+                        self.assertIn('ExecStart=/opt/b300-stlink/bin/b300-stlink debug gateway-agent --managed-child --json',
+                                      service_text)
+                        self.assertNotIn('sudo ', service_text)
+                        self.assertIn('Where=/var/spool/b300-stlink/ingress', mount_text)
+                        self.assertIn('systemd-escape --path --suffix=mount /var/spool/b300-stlink/ingress',
+                                      mount_text)
+                        self.assertIn('Type=tmpfs', mount_text)
+                        self.assertIn('size=65M,nr_inodes=256,nodev,nosuid,noexec', mount_text)
+                        self.assertIn('uid=@AGENT_UID@,gid=@UPLOAD_GID@,mode=0710', mount_text)
+
+    def test_linux_runtime_resources_select_system_templates_without_windows_leak(self) -> None:
+        expected = {
+            ROOT / 'packaging/linux/b300-stlink-gateway-agent-system.service',
+            ROOT / 'packaging/linux/b300-stlink-ingress.mount.in',
+        }
+        for platform in ('linux-x64', 'linux-arm64'):
+            with self.subTest(platform=platform):
+                self.assertTrue(expected.issubset(set(build_native_bundle.runtime_resources(platform))))
+        self.assertTrue(expected.isdisjoint(set(build_native_bundle.runtime_resources('windows-x64'))))
 
     def test_internal_cli_zip_excludes_gui(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -60,9 +60,11 @@ class EngineeringContextController:
             )
             if old != current:
                 window._update_controls()
-            if not connection.is_local:
-                window.program_view.banner.show_info('PROGRAM qua Gateway chưa được hỗ trợ',
-                    'Chọn ST-Link cục bộ để nạp; GIÁM SÁT và GỠ LỖI VS CODE dùng kết nối SSH đã chọn.')
+            if not connection.is_local and old != current:
+                window.program_view.banner.show_info(
+                    'Nạp Application qua Gateway',
+                    'Chọn HEX, tải lên Gateway, kiểm tra kế hoạch rồi xác nhận tại Client.',
+                )
             self.bar.render()
         finally:
             self._updating = False

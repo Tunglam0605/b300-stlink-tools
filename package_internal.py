@@ -66,6 +66,10 @@ def resource_archive_name(resource: Path) -> str:
         return "resources/firmware/" + resource.name
     if resource.parent.name == "stlink-driver" and resource.parent.parent.name == "vendor":
         return "vendor/stlink-driver/" + resource.name
+    if (resource.parent.name == "linux" and resource.parent.parent.name == "packaging"
+            and resource.name in {"b300-stlink-gateway-agent-system.service",
+                                  "b300-stlink-ingress.mount.in"}):
+        return "packaging/linux/" + resource.name
     return resource.name
 
 
