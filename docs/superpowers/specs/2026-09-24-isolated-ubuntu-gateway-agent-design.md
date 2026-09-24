@@ -70,6 +70,14 @@ operator boundary would require a separately specified protocol proxy.
   Per-job directories permit the authenticated SSH upload user to write only
   that ingress file, and permit the Agent to read it. They do not expose the
   Agent's private job root.
+- On Ubuntu the ingress root is a dedicated system-level tmpfs mount at
+  `/var/spool/b300-stlink/ingress`, limited to `size=65M,nr_inodes=256` and
+  mounted `nodev,nosuid,noexec`. It bounds aggregate allocated SFTP ingress
+  storage at write time; it does not replace the 32-MiB per-file finalize
+  check. The Agent refuses upload slots if the exact mount is absent or its
+  filesystem/options/ownership differ. Durable job records stay under
+  `/var/lib/b300-stlink/gateway`, so loss of volatile ingress after reboot
+  becomes an explicit incomplete-upload state, never an automatic flash.
 - The hardware owner lock and all Agent/legacy Gateway commands use one
   system-scoped owner identity, not a `Path.home()` lock for each Linux user.
 
@@ -162,6 +170,9 @@ leave pre-existing profiles, SSH host trust, and unrelated user files intact.
   upload and can inspect the selected probe. Socket peer rejection, malformed
   requests, replay, quotas, symlink/hardlink/path escape, and concurrent ingress
   mutation all fail closed.
+- Prove an oversized SFTP write is bounded by the dedicated mount, an absent
+  mount prevents new upload slots without a disk fallback, and lost ingress
+  after reboot leaves durable job evidence and requires a new manual upload.
 - Unit/integration tests cover private-copy identity across finalize, prepare,
   commit, worker flash, cleanup, Agent restart, disconnect, and two-Client
   contention. Windows x64 and Linux Client tests cover unchanged GUI/CLI flow;
