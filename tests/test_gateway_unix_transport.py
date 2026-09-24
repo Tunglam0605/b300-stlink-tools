@@ -195,11 +195,17 @@ class GatewayUnixTransportTests(unittest.TestCase):
         self.server = GatewayUnixServer(self.path, os.getuid(), self._submit)
         self.thread = threading.Thread(target=self.server.serve, args=(self.stop,), daemon=True)
         self.thread.start()
-        deadline = time.monotonic() + 2
-        while not self.path.exists() and time.monotonic() < deadline:
-            time.sleep(0.01)
-        self.assertTrue(self.path.exists())
         self.addCleanup(self._stop)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                    probe.connect(str(self.path))
+                break
+            except (FileNotFoundError, ConnectionRefusedError):
+                time.sleep(0.01)
+        else:
+            self.fail("Gateway socket did not begin accepting connections")
 
     def _stop(self):
         self.stop.set()
