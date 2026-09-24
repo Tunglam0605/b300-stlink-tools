@@ -36,12 +36,14 @@ flash/debug and Windows Client operation remain supported.
 ## 2. Trust boundary
 
 The SSH account may create and modify an **ingress** `.part` file before
-finalization. It cannot write the Agent executable, control state, private job
-records, logs, approved firmware, or ST-Link USB device. A finalized image is
+finalization. As an unprivileged process, it cannot write the Agent executable,
+control state, private job records, logs, approved firmware, or ST-Link USB
+device. On the tested IPC, `aubot` retains sudo because no alternate administrator
+account exists; a sudo-capable operator can bypass this OS boundary. A finalized image is
 an Agent-owned copy whose exact bytes were checked against the Client manifest.
 The Agent never prepares or flashes from an ingress path.
 
-The SSH account is still a **trusted debug operator**: current VS Code/GDB and
+The SSH account is still a **trusted administrator and debug operator**: current VS Code/GDB and
 Live Monitor workflows intentionally grant it controlled access to a running
 debug session through SSH forwarding. This release does not claim to withstand
 a malicious operator issuing raw debugger traffic if a debug listener is
@@ -76,6 +78,8 @@ grants, filesystem ownership, and systemd state on the target host before
 claiming the boundary is active. The Agent stays non-root during operation.
 System administration is limited to installation, account/group, udev, and
 service setup; it must not run `sudo b300-stlink` to bypass USB permissions.
+Migration removes direct `plugdev`/`uaccess` USB access from `aubot` but does not
+remove its sudo membership or claim resistance to an intentionally privileged operator.
 
 ## 4. Upload and programming flow
 
@@ -153,7 +157,7 @@ leave pre-existing profiles, SSH host trust, and unrelated user files intact.
 
 ## 7. Verification and release gates
 
-- Test the actual privilege boundary on Ubuntu x64 and ARM64: `aubot` cannot
+- Test the unprivileged boundary on Ubuntu x64 and ARM64: `aubot` without sudo cannot
   write private files or open ST-Link; `b300-agent` can read only the intended
   upload and can inspect the selected probe. Socket peer rejection, malformed
   requests, replay, quotas, symlink/hardlink/path escape, and concurrent ingress
