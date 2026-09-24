@@ -416,6 +416,7 @@ class MarkerTransitionTests(unittest.TestCase):
         self.installer = installer
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
+        self.test_uid = os.getuid() if hasattr(os, 'getuid') else 0
         root = Path(self.temp.name)
         self.marker = root / 'etc/b300-stlink/isolated-gateway.json'
         self.marker.parent.mkdir(parents=True)
@@ -447,18 +448,16 @@ class MarkerTransitionTests(unittest.TestCase):
 
         self.locker = Locker()
 
-    @staticmethod
-    def _safe_stat(path):
+    def _safe_stat(self, path):
         raw = os.lstat(path)
         mode = stat.S_IFDIR | 0o700 if stat.S_ISDIR(raw.st_mode) else stat.S_IFREG | 0o600
-        return SimpleNamespace(st_mode=mode, st_uid=0, st_dev=raw.st_dev,
+        return SimpleNamespace(st_mode=mode, st_uid=self.test_uid, st_dev=raw.st_dev,
                                st_ino=raw.st_ino, st_nlink=raw.st_nlink,
                                st_size=raw.st_size)
 
-    @staticmethod
-    def _safe_fstat(fd):
+    def _safe_fstat(self, fd):
         raw = os.fstat(fd)
-        return SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=0,
+        return SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=self.test_uid,
                                st_dev=raw.st_dev, st_ino=raw.st_ino,
                                st_nlink=raw.st_nlink, st_size=raw.st_size)
 
@@ -472,7 +471,7 @@ class MarkerTransitionTests(unittest.TestCase):
         return self.installer._transition_active_to_pending(
             self.marker, self.lock, probes=probes or self._probes(),
             locker=options.pop('locker', self.locker),
-            effective_uid=lambda: 0, system_name='linux', trusted_uid=0,
+            effective_uid=lambda: 0, system_name='linux', trusted_uid=self.test_uid,
             path_stat=options.pop('path_stat', self._safe_stat),
             fd_stat=self._safe_fstat,
             fsync_dir=lambda path: self.events.append('fsync_dir'),
@@ -489,6 +488,24 @@ class MarkerTransitionTests(unittest.TestCase):
         self.assertEqual(self.marker.read_bytes(), original)
         self.assertEqual(self.lock.stat().st_ino, inode)
         self.assertNotIn('agent', self.events)
+
+    def test_wrong_trusted_uid_refuses_without_marker_mutation(self):
+        original = self.marker.read_bytes()
+        with self.assertRaises(Exception) as captured:
+            self.installer._transition_active_to_pending(
+                self.marker, self.lock, probes=self._probes(), locker=self.locker,
+                effective_uid=lambda: 0, system_name='linux',
+                trusted_uid=self.test_uid + 1, path_stat=self._safe_stat,
+                fd_stat=self._safe_fstat, fsync_dir=lambda path: None)
+        self.assertEqual(captured.exception.reason_code, 'PATH_UNSAFE')
+        self.assertEqual(self.marker.read_bytes(), original)
+
+    def test_public_transition_requires_root_linux(self):
+        with mock.patch.object(sys, 'platform', 'linux'), \
+             mock.patch.object(os, 'geteuid', return_value=1000, create=True):
+            with self.assertRaises(Exception) as captured:
+                self.installer.transition_active_to_pending(probes=self._probes())
+        self.assertEqual(captured.exception.reason_code, 'ROOT_LINUX_REQUIRED')
 
     def test_transition_wins_and_fsyncs_pending_before_unlock(self):
         from b300_core.gateway_program_jobs import GatewayProgramJobs, ProgramJobError
