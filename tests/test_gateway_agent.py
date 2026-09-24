@@ -58,7 +58,8 @@ class GatewayAgentTests(unittest.TestCase):
             "operator_uid": -2,
         })()
         args = parse_args(["debug", "gateway-agent", "--json"])
-        with mock.patch("b300_stlink.load_isolated_gateway_config", return_value=config), \
+        with mock.patch.object(b300_stlink.sys, "platform", "linux"), \
+             mock.patch("b300_stlink.load_isolated_gateway_config", return_value=config), \
              mock.patch("b300_stlink.GatewayAgentOwnerLock") as owner, \
              mock.patch("b300_stlink.GatewaySupervisor"), \
              mock.patch("b300_stlink.GatewayLeaseCoordinator"), \
@@ -81,7 +82,8 @@ class GatewayAgentTests(unittest.TestCase):
             "operator_uid": -2,
         })()
         args = parse_args(["debug", "gateway-agent", "--json"])
-        with mock.patch("b300_stlink.load_isolated_gateway_config", return_value=config), \
+        with mock.patch.object(b300_stlink.sys, "platform", "linux"), \
+             mock.patch("b300_stlink.load_isolated_gateway_config", return_value=config), \
              mock.patch("b300_stlink.GatewayAgentOwnerLock") as owner, \
              mock.patch("b300_stlink.GatewaySupervisor"), \
              mock.patch("b300_stlink.GatewayLeaseCoordinator"), \
@@ -98,7 +100,8 @@ class GatewayAgentTests(unittest.TestCase):
 
     def test_isolated_status_uses_socket_without_per_user_spawn(self):
         args = parse_args(["debug", "gateway-agent-status", "--json"])
-        with mock.patch("b300_stlink.load_isolated_gateway_config") as marker, \
+        with mock.patch.object(b300_stlink.sys, "platform", "linux"), \
+                mock.patch("b300_stlink.load_isolated_gateway_config") as marker, \
                 mock.patch("b300_stlink.GatewayUnixClient") as client, \
                 mock.patch("b300_stlink.GatewayAgentProcessManager") as manager, \
                 mock.patch("b300_stlink.emit_snapshot") as emit:
@@ -115,7 +118,8 @@ class GatewayAgentTests(unittest.TestCase):
 
     def test_isolated_missing_socket_reports_not_running_without_spawn(self):
         args = parse_args(["debug", "gateway-agent-ensure", "--json"])
-        with mock.patch("b300_stlink.load_isolated_gateway_config") as marker, \
+        with mock.patch.object(b300_stlink.sys, "platform", "linux"), \
+                mock.patch("b300_stlink.load_isolated_gateway_config") as marker, \
                 mock.patch("b300_stlink.GatewayUnixClient") as client, \
                 mock.patch("b300_stlink.GatewayAgentProcessManager") as manager, \
                 mock.patch("b300_stlink.emit_snapshot") as emit:

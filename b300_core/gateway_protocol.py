@@ -13,15 +13,18 @@ GATEWAY_AGENT_STATUS_COMMAND = "b300-stlink debug gateway-agent-status --json"
 GATEWAY_AGENT_ENSURE_COMMAND = "b300-stlink debug gateway-agent-ensure --json"
 
 
-def gateway_capabilities() -> dict:
+def gateway_capabilities(*, isolated_flash_ready: bool = False) -> dict:
+    capabilities = [
+        "gateway-status", "gateway-ensure", "gateway-rescan",
+        "gateway-gdb-activity-v1", "gateway-agent", "gateway-exclusive-lease-v1",
+        "remote_application_flash_v1",
+    ]
+    if isolated_flash_ready:
+        capabilities.append("remote_application_flash_isolated_v1")
     return {
         "protocol_version": GATEWAY_PROTOCOL_VERSION,
         "tool_version": __version__,
-        "capabilities": [
-            "gateway-status", "gateway-ensure", "gateway-rescan",
-            "gateway-gdb-activity-v1", "gateway-agent", "gateway-exclusive-lease-v1",
-            "remote_application_flash_v1",
-        ],
+        "capabilities": capabilities,
         "transport": "authenticated-ssh",
         "debug_bind": "loopback-only",
     }

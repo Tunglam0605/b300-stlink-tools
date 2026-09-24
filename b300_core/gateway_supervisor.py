@@ -9,6 +9,7 @@ import queue
 import socket
 import re
 import subprocess
+import sys
 import threading
 import time
 import tempfile
@@ -26,9 +27,14 @@ from .probe_selection import ProbeSelectionError, select_probe
 from .remote_debug_guard import RemoteDebugGuard
 from .tcl_client import SafeTclClient, TclEndpoint
 from .process_startup import child_process_kwargs
+from .gateway_system_mode import load_isolated_gateway_config
 
 
 def gateway_runtime_root() -> Path:
+    if sys.platform.startswith("linux"):
+        isolated = load_isolated_gateway_config()
+        if isolated is not None:
+            return isolated.state_root
     override = os.environ.get("B300_GATEWAY_RUNTIME_DIR")
     if override:
         return Path(override).expanduser()

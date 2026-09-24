@@ -19,6 +19,72 @@ from b300_core.gateway_agent import GatewayAgentStatus
 
 
 class GatewayProtocolTests(unittest.TestCase):
+    def test_live_agent_status_reports_its_own_isolated_capability(self):
+        from b300_core.gateway_agent import GatewayAgent
+        from b300_core.gateway_agent_protocol import GatewayRequest
+        coordinator = mock.Mock()
+        coordinator.public_snapshot.return_value.to_record.return_value = {"state": "IDLE"}
+        agent = GatewayAgent(coordinator, request_store=mock.Mock(),
+                             capabilities=("gateway-exclusive-lease-v1",
+                                           "remote_application_flash_isolated_v1"))
+        response = agent._dispatch(GatewayRequest.create("status", {}))
+        self.assertIn("remote_application_flash_isolated_v1",
+                      response["result"]["capabilities"])
+
+    def test_isolated_status_does_not_invent_live_flash_capability(self):
+        from b300_core.gateway_system_mode import IsolatedGatewayConfig
+        from pathlib import Path
+        config = IsolatedGatewayConfig(Path("/run/b300-stlink/agent.sock"),
+                                       Path("/var/lib/b300-stlink/gateway"),
+                                       Path("/var/spool/b300-stlink/ingress"), 1000)
+        response = {"protocol_version": 1, "status": "ok", "reason_code": "OK",
+                    "result": {"state": "IDLE"},
+                    "capabilities": ["gateway-exclusive-lease-v1"]}
+        output = io.StringIO()
+        with mock.patch.object(b300_stlink.sys, "platform", "linux"), \
+                mock.patch.object(b300_stlink, "load_isolated_gateway_config", return_value=config), \
+                mock.patch.object(b300_stlink, "_isolated_gateway_submit", return_value=response), \
+                redirect_stdout(output):
+            code = b300_stlink.main(["debug", "gateway-agent-ensure", "--json"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("remote_application_flash_isolated_v1",
+                         json.loads(output.getvalue())["capabilities"])
+
+    def test_missing_isolated_socket_does_not_launch_user_gateway(self):
+        from b300_core.gateway_system_mode import IsolatedGatewayConfig
+        from pathlib import Path
+        config = IsolatedGatewayConfig(Path("/run/b300-stlink/agent.sock"),
+                                       Path("/var/lib/b300-stlink/gateway"),
+                                       Path("/var/spool/b300-stlink/ingress"), 1000)
+        output = io.StringIO()
+        with mock.patch.object(b300_stlink.sys, "platform", "linux"), \
+                mock.patch.object(b300_stlink, "load_isolated_gateway_config", return_value=config), \
+                mock.patch.object(b300_stlink, "GatewayUnixClient") as client, \
+                mock.patch.object(b300_stlink, "GatewayAgentProcessManager") as manager, \
+                redirect_stdout(output):
+            client.return_value.submit_request.side_effect = FileNotFoundError
+            code = b300_stlink.main(["debug", "gateway-agent-ensure", "--json"])
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(output.getvalue())["reason_code"],
+                         "GATEWAY_AGENT_NOT_RUNNING")
+        manager.assert_not_called()
+
+    def test_direct_gateway_child_is_refused_in_isolated_mode(self):
+        from b300_core.gateway_system_mode import IsolatedGatewayConfig
+        from pathlib import Path
+        config = IsolatedGatewayConfig(Path("/run/b300-stlink/agent.sock"),
+                                       Path("/var/lib/b300-stlink/gateway"),
+                                       Path("/var/spool/b300-stlink/ingress"), 1000)
+        output = io.StringIO()
+        with mock.patch.object(b300_stlink.sys, "platform", "linux"), \
+                mock.patch.object(b300_stlink, "load_isolated_gateway_config", return_value=config), \
+                mock.patch.object(b300_stlink, "_run_managed_gateway_child") as child, \
+                redirect_stdout(output):
+            self.assertEqual(b300_stlink.main([
+                "debug", "gateway", "--managed-child", "--json"]), 1)
+        self.assertIn("isolated Gateway Agent", output.getvalue())
+        child.assert_not_called()
+
     def test_new_cli_does_not_advertise_flash_from_old_running_agent(self):
         old = GatewayAgentStatus("old-agent", 42, 10.0, "IDLE", "GATEWAY_IDLE")
         manager = mock.Mock()

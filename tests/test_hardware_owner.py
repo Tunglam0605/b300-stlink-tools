@@ -12,9 +12,25 @@ from unittest import mock
 
 import b300_stlink
 from b300_core.hardware_owner import FileHardwareOwner
+from b300_core.gateway_system_mode import IsolatedGatewayConfig
 
 
 class FileHardwareOwnerTests(unittest.TestCase):
+    def test_isolated_owner_ignores_user_home_and_runtime_override(self):
+        from b300_core import hardware_owner, gateway_supervisor
+        from b300_core.gateway_lease import GatewayLeaseStore
+        config = IsolatedGatewayConfig(Path("/run/b300-stlink/agent.sock"),
+                                       Path("/var/lib/b300-stlink/gateway"),
+                                       Path("/var/spool/b300-stlink/ingress"), 1000)
+        with mock.patch.object(sys, "platform", "linux"), \
+                mock.patch.object(hardware_owner, "load_isolated_gateway_config", return_value=config, create=True), \
+                mock.patch.object(gateway_supervisor, "load_isolated_gateway_config", return_value=config, create=True), \
+                mock.patch.dict("os.environ", {"B300_GATEWAY_RUNTIME_DIR": "/tmp/ssh-controlled"}):
+            self.assertEqual(hardware_owner.default_hardware_owner_path(),
+                             config.state_root / "hardware-owner.lock")
+            self.assertEqual(gateway_supervisor.gateway_runtime_root(), config.state_root)
+            self.assertEqual(GatewayLeaseStore().path, config.state_root / "lease.json")
+
     def test_local_recovery_command_requires_confirmation_and_quiescent_probe(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "hardware.lock"

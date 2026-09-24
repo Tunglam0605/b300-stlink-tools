@@ -276,6 +276,7 @@ class GatewayAgent:
                  program_jobs: Optional[object] = None,
                  status_sink: Optional[Callable[[GatewayAgentSnapshot], None]] = None,
                  socket_server: Optional[object] = None,
+                 capabilities=None,
                  clock: Callable[[], float] = time.monotonic,
                  poll_interval_seconds: float = 0.25) -> None:
         if not 0.02 <= float(poll_interval_seconds) <= 5.0:
@@ -286,6 +287,8 @@ class GatewayAgent:
         self._clock = clock
         self._status_sink = status_sink
         self._socket_server = socket_server
+        self._capabilities_provider = (capabilities if callable(capabilities)
+                                       else lambda: tuple(capabilities or gateway_capabilities()["capabilities"]))
         self._poll_interval = float(poll_interval_seconds)
         self._shutdown_requested = False
         self._inflight_prepare = set()
@@ -375,6 +378,7 @@ class GatewayAgent:
                 response = self._error(request, error.reason_code, str(error))
             else:
                 response = self._error(request, "AGENT_OPERATION_FAILED")
+        response["capabilities"] = list(self._capabilities_provider())
         self.requests.respond(request.request_id, response, request=request)
         self.requests.complete(request.request_id)
 
@@ -385,7 +389,9 @@ class GatewayAgent:
             return self._dispatch_program(request)
         if operation == "status":
             self._exact_keys(payload, set())
-            return self._ok(request, self.coordinator.public_snapshot().to_record())
+            result = self.coordinator.public_snapshot().to_record()
+            result["capabilities"] = list(self._capabilities_provider())
+            return self._ok(request, result)
         if operation == "acquire":
             self._exact_keys(payload, {
                 "client_id", "client_label", "mode", "probe_serial",

@@ -133,6 +133,20 @@ class ForwardFactory:
 
 
 class RemoteSessionTests(unittest.TestCase):
+    def test_remote_flash_rejects_legacy_flash_capability(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = write_hex(directory, 0x08010000, APPLICATION_VECTOR)
+            session = RemoteSession(self.profile, credential_store=MemoryStore(), ssh_client_factory=FakeClient)
+            session.connect("secret")
+            grant = SimpleNamespace(public={"probe_serial": "SAFE123"})
+            with mock.patch.object(session, "ensure_gateway_agent", return_value={
+                    "capabilities": ["remote_application_flash_v1"]}), \
+                    mock.patch.object(session, "_run_program_request") as program:
+                with self.assertRaises(RemoteSessionError) as captured:
+                    session.prepare_remote_application(image, grant, "client-1")
+            self.assertEqual(captured.exception.reason_code, "REMOTE_FLASH_UNSUPPORTED")
+            program.assert_not_called()
+
     def test_lost_upload_slot_response_retries_same_request_id_once(self):
         session = RemoteSession(self.profile, credential_store=MemoryStore(), ssh_client_factory=FakeClient)
         session.connect("secret")
@@ -167,7 +181,7 @@ class RemoteSessionTests(unittest.TestCase):
                 return slot if operation == "program_create_upload" else {"job_id": job_id, "state": "CANCELLED"}
             grant = SimpleNamespace(lease_id="lease", token="secret", generation=1,
                                     public={"probe_serial": "SAFE123"})
-            with mock.patch.object(session, "ensure_gateway_agent", return_value={"capabilities": ["remote_application_flash_v1"]}), \
+            with mock.patch.object(session, "ensure_gateway_agent", return_value={"capabilities": ["remote_application_flash_isolated_v1"]}), \
                     mock.patch.object(session, "_run_program_request", side_effect=command), \
                     mock.patch.object(session, "upload_application_file", side_effect=KeyboardInterrupt):
                 with self.assertRaises(KeyboardInterrupt):
@@ -200,7 +214,7 @@ class RemoteSessionTests(unittest.TestCase):
             slot = {"job_id": job_id, "upload_path": "/home/aubot/program-jobs/" + job_id + "/artifact.part"}
             prepared = {"job_id": job_id, "state": "AWAITING_CONFIRMATION", "plan": {"erase_sectors": [3, 4, 5, 6, 7]}, "approval_token": "approval"}
             responses = iter((slot, {"state": "STAGED"}, prepared))
-            with mock.patch.object(session, "ensure_gateway_agent", return_value={"capabilities": ["remote_application_flash_v1"]}), \
+            with mock.patch.object(session, "ensure_gateway_agent", return_value={"capabilities": ["remote_application_flash_isolated_v1"]}), \
                     mock.patch.object(session, "_run_gateway_control", side_effect=lambda *a, **k: next(responses)) as control:
                 result = session.prepare_remote_application(
                     image, SimpleNamespace(lease_id="lease", token="secret", generation=1,

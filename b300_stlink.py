@@ -7,6 +7,7 @@ import json
 import ipaddress
 import os
 import signal
+import stat
 import sys
 import tempfile
 import threading
@@ -698,6 +699,9 @@ def run_debug_gateway(args: argparse.Namespace, reporter: Reporter) -> int:
 
 
 def run_debug(args: argparse.Namespace, reporter: Reporter) -> int:
+    if (args.debug_mode in {"gateway", "server"}
+            and not args.dry_run and _isolated_gateway_config() is not None):
+        raise PermissionError("Use the isolated Gateway Agent for Debug ownership")
     if not ipaddress.ip_address(args.bind_address).is_loopback:
         reporter.emit(
             "warning",
@@ -987,13 +991,15 @@ def _managed_gateway_command(args: argparse.Namespace) -> tuple:
 
 
 def run_gateway_runtime_command(args: argparse.Namespace) -> int:
-    isolated = load_isolated_gateway_config()
+    isolated = _isolated_gateway_config()
     if isolated is not None:
         operation = "rescan" if args.debug_mode == "gateway-rescan" else "status"
         record = _isolated_gateway_submit(isolated, GatewayRequest.create(operation, {}), 10.0)
         if record.get("status") == "ok":
             record.update(record.get("result", {}))
+        live_capabilities = record.get("capabilities", record.get("result", {}).get("capabilities", []))
         record.update(gateway_capabilities())
+        record["capabilities"] = list(live_capabilities)
         record["command"] = "debug %s" % args.debug_mode
         emit_snapshot(record, args.json,
                       "Gateway %s: %s" % (args.debug_mode, record.get("reason_code", "OK")))
@@ -1024,8 +1030,31 @@ def _managed_agent_command() -> tuple:
     return tuple(command)
 
 
+def _isolated_gateway_config():
+    return load_isolated_gateway_config() if sys.platform.startswith("linux") else None
+
+
+def _isolated_flash_ready(config, jobs, socket_server) -> bool:
+    if config is None or jobs is None or socket_server is None:
+        return False
+    try:
+        state = config.state_root.lstat()
+        ingress = config.ingress_root.lstat()
+        sock = config.socket_path.lstat()
+        return (stat.S_ISDIR(state.st_mode) and state.st_uid != config.operator_uid
+                and not state.st_mode & 0o077
+                and stat.S_ISDIR(ingress.st_mode) and ingress.st_uid != config.operator_uid
+                and not ingress.st_mode & 0o022
+                and stat.S_ISSOCK(sock.st_mode) and sock.st_uid == os.getuid()
+                and not sock.st_mode & 0o007
+                and jobs.ingress_root == config.ingress_root
+                and DEFAULT_HARDWARE_OWNER.path == config.state_root / "hardware-owner.lock")
+    except (OSError, AttributeError):
+        return False
+
+
 def _run_gateway_agent(args: argparse.Namespace) -> int:
-    isolated = load_isolated_gateway_config()
+    isolated = _isolated_gateway_config()
     if isolated is not None and getattr(os, "getuid", lambda: -1)() == isolated.operator_uid:
         raise PermissionError("The SSH operator cannot start the isolated Gateway Agent")
     instance_id = uuid.uuid4().hex
@@ -1046,10 +1075,14 @@ def _run_gateway_agent(args: argparse.Namespace) -> int:
         )
         coordinator = GatewayLeaseCoordinator(supervisor, store=GatewayLeaseStore())
 
+        def live_capabilities():
+            return tuple(gateway_capabilities(isolated_flash_ready=
+                _isolated_flash_ready(isolated, program_jobs, socket_server))["capabilities"])
+
         def publish(item) -> None:
             status_store.write(GatewayAgentStatus(
                 instance_id, os.getpid(), time.monotonic(), item.state, item.reason_code,
-                tuple(gateway_capabilities()["capabilities"]),
+                live_capabilities(),
             ))
 
         request_store = GatewayRequestStore(
@@ -1067,7 +1100,7 @@ def _run_gateway_agent(args: argparse.Namespace) -> int:
         ) if isolated is not None else None)
         agent = GatewayAgent(coordinator, request_store=request_store,
                              status_sink=publish, socket_server=socket_server,
-                             program_jobs=program_jobs)
+                             program_jobs=program_jobs, capabilities=live_capabilities)
         try:
             return agent.run()
         except KeyboardInterrupt:
@@ -1088,12 +1121,14 @@ def run_gateway_agent_command(args: argparse.Namespace) -> int:
     mode = args.debug_mode
     if mode == "gateway-agent":
         return _run_gateway_agent(args)
-    isolated = load_isolated_gateway_config()
+    isolated = _isolated_gateway_config()
     if isolated is not None and mode in {"gateway-agent-status", "gateway-agent-ensure"}:
         record = _isolated_gateway_submit(isolated, GatewayRequest.create("status", {}), 10.0)
         if record.get("status") == "ok":
             record.update(record.get("result", {}))
+        live_capabilities = record.get("capabilities", record.get("result", {}).get("capabilities", []))
         record.update(gateway_capabilities())
+        record["capabilities"] = list(live_capabilities)
         emit_snapshot(record, args.json, "Gateway Agent: %s" % record.get("reason_code", "OK"))
         return 0 if record.get("status") == "ok" else 1
     manager = GatewayAgentProcessManager()
@@ -1159,7 +1194,10 @@ def run_gateway_agent_command(args: argparse.Namespace) -> int:
         )
         record = (_isolated_gateway_submit(isolated, request, timeout) if isolated is not None
                   else GatewayRequestStore().submit_request(request, timeout_seconds=timeout))
+        live_capabilities = record.get("capabilities", []) if isolated is not None else None
         record.update(gateway_capabilities())
+        if live_capabilities is not None:
+            record["capabilities"] = list(live_capabilities)
         emit_snapshot(record, args.json, "%s: %s" % (mode, record.get("reason_code", "OK")))
         return 0 if record.get("status") == "ok" else 1
     if mode == "gateway-acquire":
@@ -1180,7 +1218,10 @@ def run_gateway_agent_command(args: argparse.Namespace) -> int:
         }, request_id=args.request_id)
     record = (_isolated_gateway_submit(isolated, request, 10.0) if isolated is not None
               else GatewayRequestStore().submit_request(request))
+    live_capabilities = record.get("capabilities", []) if isolated is not None else None
     record.update(gateway_capabilities())
+    if live_capabilities is not None:
+        record["capabilities"] = list(live_capabilities)
     emit_snapshot(record, args.json, "%s: %s" % (mode, record.get("reason_code", "OK")))
     return 0 if record.get("status") == "ok" else 1
 

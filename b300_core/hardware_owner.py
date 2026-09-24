@@ -7,11 +7,13 @@ import io
 import json
 import os
 import subprocess
+import sys
 import threading
 import uuid
 from pathlib import Path
 
 from .subprocess_env import external_command_env
+from .gateway_system_mode import load_isolated_gateway_config
 
 
 class HardwareOwnerBusy(RuntimeError):
@@ -197,6 +199,12 @@ class FileHardwareOwner:
                 self._unlock(handle)
 
 
-DEFAULT_HARDWARE_OWNER = FileHardwareOwner(
-    Path.home() / ".b300-stlink" / "hardware-owner.lock"
-)
+def default_hardware_owner_path() -> Path:
+    if sys.platform.startswith("linux"):
+        isolated = load_isolated_gateway_config()
+        if isolated is not None:
+            return isolated.state_root / "hardware-owner.lock"
+    return Path.home() / ".b300-stlink" / "hardware-owner.lock"
+
+
+DEFAULT_HARDWARE_OWNER = FileHardwareOwner(default_hardware_owner_path())

@@ -789,7 +789,7 @@ class RemoteSession:
                 next_action="Update B300 CLI on the Gateway, then retry.", retriable=False,
             )
         required_capability = (
-            "remote_application_flash_v1"
+            "remote_application_flash_isolated_v1"
             if command == "b300-stlink debug gateway-program-request --json"
             else "gateway-exclusive-lease-v1"
         )
@@ -935,7 +935,7 @@ class RemoteSession:
                 reason_code="FLASH_PLAN_INVALID", phase="validating", retriable=False,
             )
         capabilities = self.ensure_gateway_agent()
-        if "remote_application_flash_v1" not in capabilities.get("capabilities", []):
+        if "remote_application_flash_isolated_v1" not in capabilities.get("capabilities", []):
             raise RemoteSessionError(
                 "Gateway does not support managed Application programming.",
                 reason_code="REMOTE_FLASH_UNSUPPORTED", phase="gateway_protocol",
