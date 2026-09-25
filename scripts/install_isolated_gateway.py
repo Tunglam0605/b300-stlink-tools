@@ -1157,6 +1157,14 @@ class LinuxHostProbe:
             "/etc/udev/rules.d/99-b300-agent.rules",
             "/var/lib/b300-stlink/gateway", "/var/spool/b300-stlink/ingress",
         )
+        try:
+            agent_uid = self.account_lookup("b300-agent").pw_uid
+        except (KeyError, OSError, ImportError):
+            agent_uid = None
+        agent_state_paths = {
+            self._mapped("/var/lib/b300-stlink"),
+            self._mapped("/var/lib/b300-stlink/gateway"),
+        }
         hazards = set()
         for target in targets:
             current = self.root
@@ -1169,8 +1177,15 @@ class LinuxHostProbe:
                 except OSError:
                     hazards.add(target)
                     break
-                if (stat.S_ISLNK(info.st_mode) or info.st_uid != 0
-                        or stat.S_IMODE(info.st_mode) & 0o022):
+                mode = stat.S_IMODE(info.st_mode)
+                if stat.S_ISLNK(info.st_mode) or mode & 0o022:
+                    hazards.add(target)
+                    break
+                if current in agent_state_paths and agent_uid is not None:
+                    if not stat.S_ISDIR(info.st_mode) or info.st_uid not in {0, agent_uid}:
+                        hazards.add(target)
+                        break
+                elif info.st_uid != 0:
                     hazards.add(target)
                     break
         return tuple(sorted(hazards))

@@ -409,6 +409,41 @@ class InstallerPlanTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'expanded size exceeds'):
                 self.installer._inspect_bundle(self.bundle)
 
+    def test_b300_agent_owned_state_directory_is_not_a_path_blocker(self):
+        agent = SimpleNamespace(pw_uid=997)
+        probe = self.installer.LinuxHostProbe(
+            root=self.root, system_name='Linux',
+            account_lookup=lambda name: agent if name == 'b300-agent' else (_ for _ in ()).throw(KeyError(name)),
+        )
+        state_parent = self.root / 'var/lib/b300-stlink'
+        state_root = state_parent / 'gateway'
+
+        def path_info(path):
+            selected = Path(path)
+            uid = 997 if selected in {state_parent, state_root} else 0
+            return SimpleNamespace(st_mode=stat.S_IFDIR | 0o700, st_uid=uid)
+
+        with mock.patch.object(Path, 'lstat', autospec=True, side_effect=path_info):
+            hazards = probe._path_hazards()
+        self.assertNotIn('/var/lib/b300-stlink/gateway', hazards)
+
+    def test_unknown_owner_on_state_directory_remains_a_path_blocker(self):
+        agent = SimpleNamespace(pw_uid=997)
+        probe = self.installer.LinuxHostProbe(
+            root=self.root, system_name='Linux',
+            account_lookup=lambda name: agent if name == 'b300-agent' else (_ for _ in ()).throw(KeyError(name)),
+        )
+        state_parent = self.root / 'var/lib/b300-stlink'
+
+        def path_info(path):
+            selected = Path(path)
+            uid = 1234 if selected == state_parent else 0
+            return SimpleNamespace(st_mode=stat.S_IFDIR | 0o700, st_uid=uid)
+
+        with mock.patch.object(Path, 'lstat', autospec=True, side_effect=path_info):
+            hazards = probe._path_hazards()
+        self.assertIn('/var/lib/b300-stlink/gateway', hazards)
+
     def test_system_target_owned_by_operator_is_path_blocker(self):
         probe = self.installer.LinuxHostProbe(root=self.root, system_name='Linux')
         foreign = self.root / 'opt/b300-stlink'
