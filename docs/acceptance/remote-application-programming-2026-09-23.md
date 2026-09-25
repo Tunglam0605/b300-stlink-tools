@@ -84,3 +84,55 @@ The operator opened the packaged Windows GUI at `C:\Users\Admin\Documents\STM32\
 The Ubuntu x64 Gateway runs matching protocol code built from `a953bc8`; `450c8bb` changed only the Windows GUI's behavior when local job-history persistence fails. In that case GUI now cancels the uncommitted Gateway job and releases the lease before showing a failure. Eleven Qt-isolated remote PROGRAM GUI tests pass, including this failure path. The exact source commit `93c338a` added the remote GUI module to CI's split-case list after ordinary 60-second Linux module runs timed out; both CI runs `35846413516` and `35846419503` passed Windows x64, Ubuntu x64 and ARM64 on Python 3.9. Development packages at source commit `450c8bb` passed on all three platforms in no-publish run `35845399712`.
 
 Independent `target health --json` after the operator's packaged-GUI dry-run remained `BOOTABLE`, CRC `0x8C8A6ED2`, AppMeta `STLM CONFIRMED` sequence 8; Gateway Agent returned `GATEWAY_IDLE`. No destructive GUI flash was performed for this candidate. A signed Stable version, packaged GUI destructive flash acceptance, and controlled disconnect/crash hardware tests remain pending.
+
+
+## Final v0.24.0 hardware and recovery acceptance — 2026-09-25
+
+Release hardware baseline: `main@4008b06` (source version `0.24.0`). The final evidence-only commit after this section changes documentation/release metadata only and must pass CI again before tagging.
+
+### Exact artifacts and target
+
+- Application HEX: `Main_V2_F407.hex`, 368987-byte Intel HEX, SHA-256 `E94C44983005EC9D93C4EC932DE65E7811E05D7F21B9468233C372D5D616D37F`; canonical Application span `0x08010000..0x0803005B`, 131164 bytes, CRC32 `0x8C8A6ED2`.
+- Windows x64 package built from `4008b06`: GUI ZIP SHA-256 `F9DA6C74BBFF5630BC1A1E11C9BC5E3B1CE5291630AFB8A432C3DC0009D20E19`; CLI ZIP SHA-256 `D7A291055705E292E3236D7EAF11A524F57626E44B49B8AEBCA87DECC2799DF7`. Packaged companion CLI reports `0.24.0`; packaged GUI `--smoke-test` exits 0.
+- Linux x64 CLI archive built from the same source baseline: SHA-256 `7DE6B64697BC8F40E672FC2F52E11A01D6123AE0358F137F191AF74A8828C375`. The executable installed on `aubot-tech` and the executable extracted from that archive are bit-for-bit identical, SHA-256 `AC30F5D21B254D3B8DD1116B95F9EEC280151BC08132F69DF5B8A4869C1090CF`, and both report `0.24.0`.
+- Physical target: one ST-Link/V2 `0483:3748`, STM32F407 512 KiB, about 3.08 V, RDP off, WRP Sector 0-2 protected.
+
+### Real Application flash
+
+The installed v0.24.0 Linux CLI performed a real Application transaction on the physical board. Dry-run first showed exactly Sector 3-7 erase, Application write/verify, 44-byte `STLM + VERIFIED` at `0x0800C000`, then reset only after exact metadata read-back.
+
+The real transaction PASS evidence includes:
+
+- exact `** Verified OK **`;
+- only Sector 3-7 erased; Sector 0-2 remained WRP protected;
+- 44-byte metadata write/read-back verified;
+- Bootloader promoted `STLM VERIFIED` sequence 9 to `STLM CONFIRMED` sequence 10;
+- post-verify PC `0x08025936` is inside the Application range;
+- `BKP1R = 0`;
+- final result `status=succeeded`, `application_running=true`;
+- local flash log: `/home/aubot/b300-v024-real-flash-20260925.log`, SHA-256 `DFC7962E1547806B9662EACD1366D0F7BCE71B0A2411AF401DFB10F49375EBCF`.
+
+### Client disconnect recovery
+
+Managed Gateway job `060b9dc10b8f42beae321d72cee7e100` was committed and returned `RUNNING`; the initiating client then exited deliberately without polling, retrying, cleanup, renewal or release. A new client queried the same job and received `SUCCEEDED / complete / 100`. The job retained no firmware artifact after cleanup, reported `BKP1R=0`, `STLM CONFIRMED` sequence 12, and its private flash log contains exact `** Verified OK **` (SHA-256 `C01A0F3F81E9FB39670BE039488947EB3F76DAC4A57E2514EC91B46E4DB81F30`).
+
+A second managed job `13b2ff46699b4e3e944d9dfba0090c9e` was `RUNNING` while a real Windows OpenSSH session to the Gateway was established and then forcibly terminated. The SSH process was alive before the forced drop and absent afterwards; the already-committed Gateway job continued independently to `SUCCEEDED / complete / 100`, with `BKP1R=0`, `STLM CONFIRMED` sequence 14 and exact `** Verified OK **` in the private flash log (SHA-256 `A0AE300A44AA62E7E107B89900E71367C9AE3BAB015CDBB7B89C83BE77CFA731`).
+
+### Gateway Agent crash recovery
+
+With no active lease and hardware owner `IDLE`, the live Gateway Agent child PID `1986897` (instance `159ebb1b46114da4becfc53df94706f4`) was deliberately terminated with SIGKILL. The user service recovered automatically with `NRestarts=1`; the new Agent child PID `2160449` published a new instance `a18bc2ca521c44188d60bece4376d1fd` and returned `GATEWAY_IDLE`.
+
+Post-recovery evidence PASS:
+
+- no persisted lease;
+- hardware owner `IDLE`;
+- no residual OpenOCD debug listener ownership;
+- `doctor` returns `READY_FOR_APPLICATION_FLASH`;
+- STM32F407 remains about 3.08 V, RDP off and WRP S0-S2 protected;
+- `target health` returns `BOOTABLE`, actual/expected CRC32 `0x8C8A6ED2`, valid vector and `STLM CONFIRMED`.
+
+### Final release decision
+
+The packaged Windows GUI destructive click-through remains explicitly **DEFERRED**, as permitted by the existing release gate wording (“confirm ... or keep that packaged GUI hardware gate deferred”). The final packaged GUI smoke-test passes, a preceding production GUI source build already completed a real remote flash, and the exact v0.24.0 core/Gateway transaction plus disconnect/crash recovery have now been exercised on physical hardware.
+
+With the exact final evidence commit passing CI, v0.24.0 is accepted for signed Stable publication. Remote Bootloader provisioning remains factory-local only; no Bootloader, mass-erase, RDP or normal-path WRP behavior was changed by this acceptance.
