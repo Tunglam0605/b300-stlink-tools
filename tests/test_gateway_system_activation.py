@@ -5,6 +5,7 @@ import os
 import stat
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -119,6 +120,27 @@ class ActivationTransactionTests(unittest.TestCase):
             "enable", "--now", activation.installer.SYSTEM_UNIT))
         self.assertLess(legacy_stop, system_start)
         self.assertNotIn(b'"flash_enabled":true', marker.read_bytes().lower())
+
+    def test_prepare_persists_rollback_receipt_before_active_runtime_change(self):
+        with mock.patch.object(
+                activation, "_copy_runtime",
+                side_effect=activation.ActivationError("INJECTED_FAILURE")):
+            with self.assertRaises(activation.ActivationError) as captured:
+                activation._prepare(
+                    self.plan, self.bundle, self.digest, host=object(),
+                    root=self.root, runner=self.runner,
+                    identities_provider=lambda: dict(self.identities),
+                    stager=self._stager, fsync_dir=lambda path: None,
+                    effective_uid=lambda: 0, system_name="linux",
+                )
+        self.assertEqual(captured.exception.reason_code, "INJECTED_FAILURE")
+        receipt = self.root / "opt/b300-stlink/ACTIVATION-RECEIPT.json"
+        self.assertTrue(receipt.is_file())
+        record = json.loads(receipt.read_text(encoding="utf-8"))
+        self.assertEqual(record["status"], "PREPARING")
+        self.assertFalse(
+            (self.root / "etc/b300-stlink/isolated-gateway.json").exists())
+        self.assertEqual(self.runner.commands, [])
 
     def test_prepare_never_uses_flash_or_openocd_commands(self):
         activation._prepare(

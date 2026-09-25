@@ -311,15 +311,6 @@ def _prepare(
     )
     candidate = Path(stage["candidate_dir"])
     active_root = _mapped(root, ACTIVE_ROOT)
-    _copy_runtime(candidate, active_root, fsync_dir=fsync_dir)
-
-    systemd = candidate / "systemd"
-    _install_regular(systemd / installer.SYSTEM_UNIT,
-                     _mapped(root, SYSTEM_UNIT_PATH), mode=0o644, fsync_dir=fsync_dir)
-    _install_regular(systemd / "b300-stlink-ingress.mount.rendered",
-                     _mapped(root, MOUNT_UNIT_PATH), mode=0o644, fsync_dir=fsync_dir)
-    _atomic_bytes(_mapped(root, UDEV_RULE_PATH), UDEV_RULE,
-                  mode=0o644, fsync_dir=fsync_dir)
     marker = _mapped(root, MARKER_PATH)
 
     receipt = {
@@ -338,6 +329,17 @@ def _prepare(
     }
     receipt_path = _mapped(root, RECEIPT_PATH)
     _atomic_json(receipt_path, receipt, fsync_dir=fsync_dir)
+
+    # The rollback inventory is durable before the first active-system target
+    # is installed. A crash after this point is recoverable without guessing.
+    _copy_runtime(candidate, active_root, fsync_dir=fsync_dir)
+    systemd = candidate / "systemd"
+    _install_regular(systemd / installer.SYSTEM_UNIT,
+                     _mapped(root, SYSTEM_UNIT_PATH), mode=0o644, fsync_dir=fsync_dir)
+    _install_regular(systemd / "b300-stlink-ingress.mount.rendered",
+                     _mapped(root, MOUNT_UNIT_PATH), mode=0o644, fsync_dir=fsync_dir)
+    _atomic_bytes(_mapped(root, UDEV_RULE_PATH), UDEV_RULE,
+                  mode=0o644, fsync_dir=fsync_dir)
 
     legacy = plan.rollback_inventory.get("services", {}).get("legacy_user", {})
     _required(_legacy_service_command(operator_name, "stop", installer.SYSTEM_UNIT),
