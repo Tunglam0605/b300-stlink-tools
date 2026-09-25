@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Preflight and a guarded marker transition for isolated Ubuntu Gateway setup.
-
-The CLI deliberately exposes only read-only plan. A later administrator workflow
-may call the root-only transition API; no apply or rollback CLI exists here.
-"""
+"""Preflight and explicitly confirmed isolated Ubuntu Gateway migration.\n\nThe read-only plan command never mutates the host. The apply command is root-only,\nrequires explicit system-change confirmation, stages an exact hash-pinned bundle,\nvalidates the least-privilege hardware boundary, and rolls service/udev selection\nback to the legacy user Agent if a pre-flash migration gate fails. Neither command\nflashes the MCU.\n"""
 
 from __future__ import annotations
 
@@ -955,6 +951,20 @@ def _readonly_command(command: tuple[str, ...], operator_name: str) -> bool:
     if command[0] == "getfacl":
         return (len(command) == 3 and command[1] == "-cp"
                 and re.fullmatch(r"/dev/bus/usb/[0-9]{3}/[0-9]{3}", command[2]) is not None)
+    if command[0] == "/usr/sbin/runuser":
+        if len(command) != 11:
+            return False
+        if command[1:4] != ("-u", operator_name, "--"):
+            return False
+        if command[4] != "/usr/bin/env" or command[7:9] != ("/usr/bin/systemctl", "--user"):
+            return False
+        uid_match = re.fullmatch(r"XDG_RUNTIME_DIR=/run/user/([0-9]+)", command[5])
+        bus_match = re.fullmatch(
+            r"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/([0-9]+)/bus", command[6])
+        return (uid_match is not None and bus_match is not None
+                and uid_match.group(1) == bus_match.group(1)
+                and command[9] in {"is-enabled", "is-active"}
+                and command[10] == SYSTEM_UNIT)
     if command[0] != "systemctl":
         return False
     if len(command) == 3:
@@ -969,11 +979,15 @@ def _readonly_command(command: tuple[str, ...], operator_name: str) -> bool:
 def _run_readonly(command: tuple[str, ...]):
     if not _readonly_command(command, "aubot"):
         raise ValueError("Unsupported read-only host query")
-    executable = {"systemctl": "/usr/bin/systemctl",
-                  "getfacl": "/usr/bin/getfacl"}.get(command[0])
-    if executable is None:
-        raise ValueError("Unsupported read-only host query")
-    return subprocess.run((executable, *command[1:]), capture_output=True,
+    if command[0] == "/usr/sbin/runuser":
+        invocation = command
+    else:
+        executable = {"systemctl": "/usr/bin/systemctl",
+                      "getfacl": "/usr/bin/getfacl"}.get(command[0])
+        if executable is None:
+            raise ValueError("Unsupported read-only host query")
+        invocation = (executable, *command[1:])
+    return subprocess.run(invocation, capture_output=True,
                           text=True, timeout=4, check=False)
 
 
@@ -1017,7 +1031,19 @@ class LinuxHostProbe:
         raise ValueError("Unsupported read-only host query")
 
     def _service_state(self, name: str, *, user: bool = False) -> dict:
-        prefix = ("systemctl", "--user", "--machine=%s@.host" % self.operator_name) if user else ("systemctl",)
+        if user and getattr(os, "geteuid", lambda: -1)() == 0:
+            import pwd
+            operator_uid = pwd.getpwnam(self.operator_name).pw_uid
+            prefix = (
+                "/usr/sbin/runuser", "-u", self.operator_name, "--",
+                "/usr/bin/env", "XDG_RUNTIME_DIR=/run/user/%d" % operator_uid,
+                "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%d/bus" % operator_uid,
+                "/usr/bin/systemctl", "--user",
+            )
+        elif user:
+            prefix = ("systemctl", "--user", "--machine=%s@.host" % self.operator_name)
+        else:
+            prefix = ("systemctl",)
         enabled = self._query((*prefix, "is-enabled", name))
         active = self._query((*prefix, "is-active", name))
         return {
@@ -1131,6 +1157,14 @@ class LinuxHostProbe:
             "/etc/udev/rules.d/99-b300-agent.rules",
             "/var/lib/b300-stlink/gateway", "/var/spool/b300-stlink/ingress",
         )
+        try:
+            agent_uid = self.account_lookup("b300-agent").pw_uid
+        except (KeyError, OSError, ImportError):
+            agent_uid = None
+        agent_state_paths = {
+            self._mapped("/var/lib/b300-stlink"),
+            self._mapped("/var/lib/b300-stlink/gateway"),
+        }
         hazards = set()
         for target in targets:
             current = self.root
@@ -1143,8 +1177,15 @@ class LinuxHostProbe:
                 except OSError:
                     hazards.add(target)
                     break
-                if (stat.S_ISLNK(info.st_mode) or info.st_uid != 0
-                        or stat.S_IMODE(info.st_mode) & 0o022):
+                mode = stat.S_IMODE(info.st_mode)
+                if stat.S_ISLNK(info.st_mode) or mode & 0o022:
+                    hazards.add(target)
+                    break
+                if current in agent_state_paths and agent_uid is not None:
+                    if not stat.S_ISDIR(info.st_mode) or info.st_uid not in {0, agent_uid}:
+                        hazards.add(target)
+                        break
+                elif info.st_uid != 0:
                     hazards.add(target)
                     break
         return tuple(sorted(hazards))
@@ -1326,6 +1367,531 @@ def build_plan(bundle: Path, expected_sha256: str, *, host=None,
     return GatewayInstallPlan(candidate, public_host, inventory, tuple(blockers))
 
 
+
+TRUSTED_BUNDLE_ROOT = Path("/var/lib/b300-stlink-installer")
+SYSTEM_RUNTIME_ROOT = Path("/opt/b300-stlink")
+SYSTEM_RUNTIME_BIN = SYSTEM_RUNTIME_ROOT / "bin/b300-stlink"
+SYSTEMD_ROOT = Path("/etc/systemd/system")
+AGENT_UDEV_RULE = Path("/etc/udev/rules.d/99-b300-agent.rules")
+LEGACY_UDEV_OVERRIDE = Path("/etc/udev/rules.d/49-b300-stlink.rules")
+AGENT_UDEV_RULE_TEXT = (
+    '# B300 isolated Gateway: only b300-probe may open ST-Link devices.\n'
+    'SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="374?", '
+    'MODE="0660", GROUP="b300-probe"\n'
+)
+LEGACY_UDEV_MASK_TEXT = (
+    "# B300 isolated Gateway overrides the vendor 49-b300-stlink.rules file.\\n"
+    "# Direct plugdev/uaccess permission is intentionally disabled.\\n"
+)
+
+
+def _checked_command(command, *, timeout: float = 30.0, input_text: Optional[str] = None,
+                     runner=subprocess.run, reason_code: str = "SYSTEM_COMMAND_FAILED"):
+    try:
+        result = runner(tuple(str(item) for item in command), capture_output=True, text=True,
+                        input=input_text, timeout=timeout, check=False)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise StageError(reason_code) from error
+    if result.returncode != 0:
+        raise StageError(reason_code)
+    return result
+
+
+def _safe_mkdir(path: Path, mode: int, *, owner_uid: int = 0, owner_gid: int = 0) -> None:
+    selected = Path(path)
+    selected.mkdir(parents=True, exist_ok=True)
+    info = selected.lstat()
+    if not stat.S_ISDIR(info.st_mode) or selected.is_symlink():
+        raise StageError("SYSTEM_PATH_UNSAFE")
+    os.chown(selected, owner_uid, owner_gid)
+    os.chmod(selected, mode)
+
+
+def _trusted_bundle_copy(source: Path, expected_sha256: str, *,
+                         destination_root: Path = TRUSTED_BUNDLE_ROOT) -> Path:
+    if not sys.platform.startswith("linux") or getattr(os, "geteuid", lambda: -1)() != 0:
+        raise StageError("ROOT_LINUX_REQUIRED")
+    digest = str(expected_sha256).lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise StageError("EXPECTED_HASH_INVALID")
+    root = Path(destination_root)
+    _safe_mkdir(root, 0o700)
+    destination = root / ("candidate-" + digest + ".tar.gz")
+    if destination.exists() or destination.is_symlink():
+        info = destination.lstat()
+        _trusted_regular(info, owner_uid=0, maximum=MAX_BUNDLE_BYTES)
+        with destination.open("rb") as stream:
+            if _hash_open_bundle(stream) != digest:
+                raise StageError("TRUSTED_BUNDLE_CONFLICT")
+        return destination
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    descriptor = os.open(str(Path(source)), flags)
+    temporary = root / (".candidate-" + secrets.token_hex(8))
+    try:
+        opened = os.fstat(descriptor)
+        if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
+                or opened.st_size <= 0 or opened.st_size > MAX_BUNDLE_BYTES):
+            raise StageError("BUNDLE_PATH_UNSAFE")
+        out_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        out_fd = os.open(str(temporary), out_flags, 0o600)
+        calculated = hashlib.sha256()
+        total = 0
+        try:
+            with os.fdopen(descriptor, "rb", closefd=False) as source_stream, \
+                    os.fdopen(out_fd, "wb") as output:
+                while True:
+                    chunk = source_stream.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > MAX_BUNDLE_BYTES:
+                        raise StageError("BUNDLE_TOO_LARGE")
+                    calculated.update(chunk)
+                    output.write(chunk)
+                output.flush()
+                os.fsync(output.fileno())
+        finally:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        if calculated.hexdigest() != digest:
+            temporary.unlink(missing_ok=True)
+            raise StageError("BUNDLE_HASH_MISMATCH")
+        os.chown(temporary, 0, 0)
+        os.chmod(temporary, 0o600)
+        _rename_noreplace(temporary, destination)
+        _fsync_directory(root)
+        return destination
+    except Exception:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _ensure_group(name: str, *, runner=subprocess.run) -> bool:
+    import grp
+    try:
+        grp.getgrnam(name)
+        return False
+    except KeyError:
+        _checked_command(("/usr/sbin/groupadd", "--system", name), runner=runner)
+        return True
+
+
+def _ensure_isolated_identities(operator_name: str, *, runner=subprocess.run) -> dict:
+    import grp
+    import pwd
+    created_groups = []
+    for name in ("b300-agent", "b300-probe", "b300-upload", "b300-operator"):
+        if _ensure_group(name, runner=runner):
+            created_groups.append(name)
+    created_user = False
+    try:
+        agent = pwd.getpwnam("b300-agent")
+    except KeyError:
+        _checked_command((
+            "/usr/sbin/useradd", "--system", "--gid", "b300-agent",
+            "--home-dir", "/nonexistent", "--shell", "/usr/sbin/nologin",
+            "b300-agent",
+        ), runner=runner)
+        created_user = True
+        agent = pwd.getpwnam("b300-agent")
+    if agent.pw_uid <= 0:
+        raise StageError("IDENTITY_INVALID")
+    operator = pwd.getpwnam(operator_name)
+    _checked_command((
+        "/usr/sbin/usermod", "-a", "-G",
+        "b300-probe,b300-upload,b300-operator", "b300-agent",
+    ), runner=runner)
+    _checked_command((
+        "/usr/sbin/usermod", "-a", "-G", "b300-upload,b300-operator", operator_name,
+    ), runner=runner)
+    return {
+        "agent_uid": agent.pw_uid,
+        "agent_gid": grp.getgrnam("b300-agent").gr_gid,
+        "probe_gid": grp.getgrnam("b300-probe").gr_gid,
+        "upload_gid": grp.getgrnam("b300-upload").gr_gid,
+        "operator_uid": operator.pw_uid,
+        "operator_gid": grp.getgrnam("b300-operator").gr_gid,
+        "created_user": created_user,
+        "created_groups": created_groups,
+    }
+
+
+def _copy_staged_runtime(candidate: Path, *, runtime_root: Path = SYSTEM_RUNTIME_ROOT) -> None:
+    """Activate only the isolated Agent binary beside a verified shared runtime."""
+    import shutil
+    candidate = Path(candidate)
+    root = Path(runtime_root)
+    executable = candidate / "b300-stlink"
+    candidate_manifest = candidate / "vendor/openocd/OPENOCD-MANIFEST.sha256"
+    candidate_openocd = candidate / "vendor/openocd/bin/openocd"
+    active_manifest = root / "vendor/openocd/OPENOCD-MANIFEST.sha256"
+    active_openocd = root / "vendor/openocd/bin/openocd"
+    for required in (executable, candidate_manifest, candidate_openocd,
+                     active_manifest, active_openocd):
+        if not required.is_file() or required.is_symlink():
+            raise StageError("STAGED_RUNTIME_INCOMPLETE")
+    if (_hash_staged_file(candidate_manifest) != _hash_staged_file(active_manifest)
+            or _hash_staged_file(candidate_openocd) != _hash_staged_file(active_openocd)):
+        raise StageError("ACTIVE_RUNTIME_INCOMPATIBLE")
+
+    bin_dir = root / "bin"
+    if bin_dir.is_symlink():
+        raise StageError("ACTIVE_RUNTIME_OCCUPIED")
+    if bin_dir.exists():
+        info = bin_dir.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or stat.S_IMODE(info.st_mode) & 0o022:
+            raise StageError("ACTIVE_RUNTIME_OCCUPIED")
+    else:
+        os.mkdir(bin_dir, 0o755)
+        os.chown(bin_dir, 0, 0)
+
+    destination = bin_dir / "b300-stlink"
+    expected = _hash_staged_file(executable)
+    if destination.exists() or destination.is_symlink():
+        try:
+            info = destination.lstat()
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+                    or stat.S_IMODE(info.st_mode) & 0o022
+                    or _hash_staged_file(destination) != expected):
+                raise StageError("ACTIVE_RUNTIME_OCCUPIED")
+        except OSError as error:
+            raise StageError("ACTIVE_RUNTIME_OCCUPIED") from error
+        return
+
+    temporary = bin_dir / (".b300-stlink-" + secrets.token_hex(8))
+    try:
+        shutil.copy2(executable, temporary, follow_symlinks=False)
+        os.chown(temporary, 0, 0)
+        os.chmod(temporary, 0o755)
+        if _hash_staged_file(temporary) != expected:
+            raise StageError("ACTIVE_RUNTIME_COPY_MISMATCH")
+        _rename_noreplace(temporary, destination)
+        _fsync_directory(bin_dir)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _atomic_marker(record: dict, *, marker: Path = SYSTEM_MARKER) -> None:
+    parent = marker.parent
+    _safe_mkdir(parent, 0o755)
+    payload = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    if len(payload) > 4096:
+        raise StageError("MARKER_INVALID")
+    temporary = parent / (".isolated-gateway-" + secrets.token_hex(8))
+    # The marker contains no secret material. Both the isolated Agent and the
+    # approved operator-side CLI must be able to read it, while only root may
+    # replace or modify it.
+    _write_exclusive(temporary, payload, mode=0o644)
+    os.chown(temporary, 0, 0)
+    os.replace(temporary, marker)
+    _fsync_directory(parent)
+
+
+def _write_exact_file(path: Path, payload: bytes, mode: int = 0o644) -> None:
+    selected = Path(path)
+    selected.parent.mkdir(parents=True, exist_ok=True)
+    if selected.exists() or selected.is_symlink():
+        raise StageError("SYSTEM_TARGET_OCCUPIED")
+    _write_exclusive(selected, payload, mode=mode)
+    os.chown(selected, 0, 0)
+    _fsync_directory(selected.parent)
+
+
+def _run_as_operator(operator: str, command, *, timeout: float = 30.0,
+                     runner=subprocess.run, reason_code: str = "SYSTEM_COMMAND_FAILED"):
+    return _checked_command(("/usr/sbin/runuser", "-u", operator, "--", *command),
+                            timeout=timeout, runner=runner, reason_code=reason_code)
+
+
+def _verify_probe_boundary(node: Path, identities: dict, operator: str, *,
+                           runner=subprocess.run, group_lookup=None) -> None:
+    """Prove that only the isolated Agent group owns direct ST-Link access."""
+    if group_lookup is None:
+        import grp
+        group_lookup = grp.getgrnam
+    selected = Path(node)
+    info = selected.stat()
+    if (not stat.S_ISCHR(info.st_mode) or info.st_uid != 0
+            or info.st_gid != identities["probe_gid"]
+            or stat.S_IMODE(info.st_mode) != 0o660):
+        raise StageError("PROBE_PERMISSION_TRANSITION_FAILED")
+
+    probe_group = group_lookup("b300-probe")
+    members = set(probe_group.gr_mem)
+    if operator in members:
+        raise StageError("OPERATOR_DIRECT_PROBE_GROUP_ACCESS")
+    if "b300-agent" not in members:
+        raise StageError("AGENT_PROBE_GROUP_MISSING")
+
+    acl_result = _checked_command(
+        ("/usr/bin/getfacl", "-cp", str(selected)),
+        timeout=10.0, runner=runner, reason_code="PROBE_ACL_INSPECTION_FAILED")
+    for raw in acl_result.stdout.splitlines():
+        line = raw.strip()
+        if line.startswith("user:") and not line.startswith("user::"):
+            raise StageError("PROBE_DIRECT_USER_ACL_PRESENT")
+        if line.startswith("group:") and not line.startswith("group::"):
+            raise StageError("PROBE_DIRECT_GROUP_ACL_PRESENT")
+        if line.startswith("mask::"):
+            raise StageError("PROBE_EXTENDED_ACL_PRESENT")
+
+
+def _user_systemctl(operator: str, *arguments, runner=subprocess.run):
+    import pwd
+    uid = pwd.getpwnam(operator).pw_uid
+    return _run_as_operator(operator, (
+        "/usr/bin/env", "XDG_RUNTIME_DIR=/run/user/%d" % uid,
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%d/bus" % uid,
+        "/usr/bin/systemctl", "--user", *arguments,
+    ), runner=runner)
+
+
+def _json_from_output(output: str) -> dict:
+    for line in reversed(str(output).splitlines()):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict):
+            return record
+    raise StageError("CLI_RESPONSE_INVALID")
+
+
+def _verify_system_agent(operator: str, *, cli: Path = SYSTEM_RUNTIME_BIN,
+                         runner=subprocess.run) -> dict:
+    deadline = time.monotonic() + 15.0
+    status = None
+    while time.monotonic() < deadline:
+        try:
+            result = _run_as_operator(
+                operator, (str(cli), "debug", "gateway-agent-status", "--json"),
+                timeout=10.0, runner=runner,
+                reason_code="SYSTEM_AGENT_STATUS_UNAVAILABLE")
+            status = _json_from_output(result.stdout)
+            if status.get("status") == "ok" and status.get("state") == "IDLE":
+                break
+        except StageError:
+            pass
+        time.sleep(0.25)
+    if not isinstance(status, dict) or status.get("state") != "IDLE":
+        raise StageError("SYSTEM_AGENT_NOT_READY")
+
+    request_id = uuid.uuid4().hex if "uuid" in globals() else secrets.token_hex(16)
+    client_id = "isolated-install-" + secrets.token_hex(6)
+    acquired = _run_as_operator(operator, (
+        str(cli), "debug", "gateway-acquire",
+        "--request-id", request_id,
+        "--client-id", client_id,
+        "--client-label", "Isolated Gateway installation validation",
+        "--lease-mode", "LIVE_WATCH", "--json",
+    ), timeout=20.0, runner=runner, reason_code="LIVE_WATCH_ACQUIRE_FAILED")
+    acquire_record = _json_from_output(acquired.stdout)
+    result = acquire_record.get("result") if isinstance(acquire_record.get("result"), dict) else acquire_record
+    lease_id = result.get("lease_id")
+    lease_token = result.get("lease_token")
+    generation = result.get("lease_generation", result.get("generation"))
+    if (not isinstance(lease_id, str) or not lease_id
+            or not isinstance(lease_token, str) or not lease_token
+            or type(generation) is not int or generation <= 0):
+        raise StageError("LIVE_WATCH_VALIDATION_FAILED")
+    try:
+        if not result.get("tcl_endpoint") and result.get("state") not in {"ACTIVE", "READY"}:
+            raise StageError("LIVE_WATCH_VALIDATION_FAILED")
+    finally:
+        _run_as_operator(operator, (
+            str(cli), "debug", "gateway-release",
+            "--request-id", secrets.token_hex(16),
+            "--lease-id", lease_id, "--lease-token", lease_token,
+            "--lease-generation", str(generation), "--json",
+        ), timeout=15.0, runner=runner, reason_code="LIVE_WATCH_RELEASE_FAILED")
+
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        checked = _run_as_operator(
+            operator, (str(cli), "debug", "gateway-agent-status", "--json"),
+            timeout=10.0, runner=runner,
+            reason_code="LIVE_WATCH_CLEANUP_STATUS_FAILED")
+        final_status = _json_from_output(checked.stdout)
+        if final_status.get("status") == "ok" and final_status.get("state") == "IDLE":
+            return final_status
+        time.sleep(0.25)
+    raise StageError("LIVE_WATCH_CLEANUP_FAILED")
+
+
+def _set_flash_enabled(record: dict, enabled: bool, *, marker: Path = SYSTEM_MARKER) -> dict:
+    updated = dict(record)
+    updated["flash_enabled"] = bool(enabled)
+    _atomic_marker(updated, marker=marker)
+    return updated
+
+
+def _rollback_isolated_install(operator: str, *, runner=subprocess.run) -> None:
+    try:
+        if SYSTEM_MARKER.is_file():
+            try:
+                record = json.loads(SYSTEM_MARKER.read_text(encoding="utf-8"))
+                if isinstance(record, dict):
+                    _set_flash_enabled(record, False)
+            except Exception:
+                pass
+        subprocess.run(("/usr/bin/systemctl", "disable", "--now", SYSTEM_UNIT),
+                       capture_output=True, text=True, timeout=20, check=False)
+        subprocess.run(("/usr/bin/systemctl", "disable", "--now", MOUNT_UNIT),
+                       capture_output=True, text=True, timeout=20, check=False)
+        for path in (SYSTEMD_ROOT / SYSTEM_UNIT, SYSTEMD_ROOT / MOUNT_UNIT,
+                     AGENT_UDEV_RULE, LEGACY_UDEV_OVERRIDE, SYSTEM_MARKER):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+        subprocess.run(("/usr/bin/systemctl", "daemon-reload"),
+                       capture_output=True, text=True, timeout=15, check=False)
+        subprocess.run(("/usr/bin/udevadm", "control", "--reload-rules"),
+                       capture_output=True, text=True, timeout=15, check=False)
+        subprocess.run(("/usr/bin/udevadm", "trigger", "--subsystem-match=usb", "--action=change"),
+                       capture_output=True, text=True, timeout=20, check=False)
+        try:
+            _user_systemctl(operator, "enable", "--now", SYSTEM_UNIT, runner=runner)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def apply_isolated_gateway(bundle: Path, expected_sha256: str, *,
+                           operator: str = "aubot", probe_serial: Optional[str] = None,
+                           confirmed: bool = False, runner=subprocess.run) -> dict:
+    """Install and validate the isolated system Agent; never flashes the MCU."""
+    if not confirmed:
+        raise StageError("SYSTEM_CHANGE_CONFIRMATION_REQUIRED")
+    if not sys.platform.startswith("linux") or getattr(os, "geteuid", lambda: -1)() != 0:
+        raise StageError("ROOT_LINUX_REQUIRED")
+
+    trusted_bundle = _trusted_bundle_copy(bundle, expected_sha256)
+    host = LinuxHostProbe(operator_name=operator)
+    plan = build_plan(trusted_bundle, expected_sha256, host=host,
+                      probe_serial=probe_serial)
+    if not plan.ready:
+        raise StageError("PLAN_NOT_READY")
+
+    inventory_root = TRUSTED_BUNDLE_ROOT / "rollback"
+    _safe_mkdir(inventory_root, 0o700)
+    inventory_path = inventory_root / (
+        "pre-migration-" + time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + ".json")
+    _write_exclusive(
+        inventory_path,
+        (json.dumps(plan.to_record(), sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8"),
+        mode=0o600,
+    )
+    identities = _ensure_isolated_identities(operator, runner=runner)
+
+    staged = stage_candidate(
+        plan, trusted_bundle, expected_sha256, host=host,
+        identity_provider=lambda: (identities["agent_uid"], identities["upload_gid"]),
+        probe_serial=probe_serial,
+    )
+    candidate = Path(staged["candidate_dir"])
+
+    migration_started = False
+    try:
+        _user_systemctl(operator, "disable", "--now", SYSTEM_UNIT, runner=runner)
+        migration_started = True
+
+        _copy_staged_runtime(candidate)
+        service_payload = (candidate / "systemd/b300-stlink-gateway-agent.service").read_bytes()
+        mount_payload = (candidate / "systemd/b300-stlink-ingress.mount.rendered").read_bytes()
+        _write_exact_file(SYSTEMD_ROOT / SYSTEM_UNIT, service_payload)
+        _write_exact_file(SYSTEMD_ROOT / MOUNT_UNIT, mount_payload)
+
+        _safe_mkdir(Path("/var/lib/b300-stlink"), 0o755)
+        _safe_mkdir(Path("/var/lib/b300-stlink/gateway"), 0o700,
+                    owner_uid=identities["agent_uid"], owner_gid=identities["agent_gid"])
+        _safe_mkdir(Path("/var/spool/b300-stlink"), 0o755)
+        _safe_mkdir(Path("/var/spool/b300-stlink/ingress"), 0o755)
+
+        if LEGACY_UDEV_OVERRIDE.exists() or LEGACY_UDEV_OVERRIDE.is_symlink():
+            raise StageError("LEGACY_UDEV_OVERRIDE_PRESENT")
+        _write_exact_file(LEGACY_UDEV_OVERRIDE, LEGACY_UDEV_MASK_TEXT.encode("utf-8"))
+        _write_exact_file(AGENT_UDEV_RULE, AGENT_UDEV_RULE_TEXT.encode("utf-8"))
+
+        marker_record = {
+            "schema_version": 1,
+            "socket_path": "/run/b300-stlink/agent.sock",
+            "state_root": "/var/lib/b300-stlink/gateway",
+            "ingress_root": "/var/spool/b300-stlink/ingress",
+            "operator_uid": identities["operator_uid"],
+            "operator_gid": identities["operator_gid"],
+            "flash_enabled": False,
+        }
+        _atomic_marker(marker_record)
+
+        _checked_command(("/usr/bin/systemctl", "daemon-reload"), runner=runner,
+                         reason_code="SYSTEMD_DAEMON_RELOAD_FAILED")
+        _checked_command(("/usr/bin/udevadm", "control", "--reload-rules"), runner=runner,
+                         reason_code="UDEV_RELOAD_FAILED")
+        _checked_command(("/usr/bin/udevadm", "trigger", "--subsystem-match=usb", "--action=change"),
+                         timeout=20.0, runner=runner, reason_code="UDEV_TRIGGER_FAILED")
+        _checked_command(("/usr/bin/udevadm", "settle"), timeout=20.0, runner=runner,
+                         reason_code="UDEV_SETTLE_FAILED")
+
+        node = Path(plan.host["probe"]["node"])
+        if not node.is_char_device():
+            raise StageError("PROBE_NODE_INVALID")
+        # Remove every direct per-user ACL inherited from the legacy uaccess rule,
+        # then transfer direct probe access to the isolated Agent-only group.
+        _checked_command(("/usr/bin/setfacl", "-b", str(node)), runner=runner,
+                         reason_code="PROBE_ACL_RESET_FAILED")
+        os.chown(node, 0, identities["probe_gid"])
+        os.chmod(node, 0o660)
+        _verify_probe_boundary(node, identities, operator, runner=runner)
+
+        _checked_command(("/usr/bin/systemctl", "enable", "--now", MOUNT_UNIT),
+                         timeout=30.0, runner=runner, reason_code="INGRESS_MOUNT_START_FAILED")
+        _checked_command(("/usr/bin/systemctl", "enable", "--now", SYSTEM_UNIT),
+                         timeout=30.0, runner=runner, reason_code="SYSTEM_AGENT_START_FAILED")
+
+        pending_status = _verify_system_agent(operator, runner=runner)
+        marker_record = _set_flash_enabled(marker_record, True)
+
+        deadline = time.monotonic() + 5.0
+        active_status = pending_status
+        while time.monotonic() < deadline:
+            checked = _run_as_operator(
+                operator, (str(SYSTEM_RUNTIME_BIN), "debug", "gateway-agent-status", "--json"),
+                timeout=10.0, runner=runner,
+                reason_code="ISOLATED_CAPABILITY_STATUS_FAILED")
+            active_status = _json_from_output(checked.stdout)
+            if "remote_application_flash_isolated_v1" in active_status.get("capabilities", []):
+                break
+            time.sleep(0.25)
+        if "remote_application_flash_isolated_v1" not in active_status.get("capabilities", []):
+            raise StageError("ISOLATED_FLASH_CAPABILITY_NOT_READY")
+
+        return {
+            "schema_version": 1,
+            "status": "ok",
+            "state": "ACTIVE",
+            "version": plan.candidate.get("version"),
+            "bundle_sha256": expected_sha256.lower(),
+            "candidate_dir": str(candidate),
+            "rollback_inventory": str(inventory_path),
+            "system_agent_state": active_status.get("state"),
+            "isolated_flash_capability": True,
+            "flash_enabled": marker_record["flash_enabled"],
+        }
+    except Exception:
+        if migration_started:
+            _rollback_isolated_install(operator, runner=runner)
+        raise
+
 def main(argv=None, *, host=None, trust_root: Path = Path("/"),
          trusted_uid: int = 0, path_stat: Callable = os.lstat, output=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -1335,13 +1901,38 @@ def main(argv=None, *, host=None, trust_root: Path = Path("/"),
     selected.add_argument("--expected-sha256", required=True)
     selected.add_argument("--probe-serial")
     selected.add_argument("--json", action="store_true")
+
+    apply_parser = subcommands.add_parser(
+        "apply", help="root-only guarded migration to the isolated system Gateway")
+    apply_parser.add_argument("--bundle", required=True, type=Path)
+    apply_parser.add_argument("--expected-sha256", required=True)
+    apply_parser.add_argument("--operator", default="aubot")
+    apply_parser.add_argument("--probe-serial")
+    apply_parser.add_argument("--confirm-system-change", action="store_true")
+    apply_parser.add_argument("--json", action="store_true")
+
     args = parser.parse_args(argv)
-    plan = build_plan(args.bundle, args.expected_sha256, host=host,
-                      trust_root=trust_root, trusted_uid=trusted_uid,
-                      path_stat=path_stat, probe_serial=args.probe_serial)
     stream = output or sys.stdout
-    print(json.dumps(plan.to_record(), sort_keys=True, separators=(",", ":")), file=stream)
-    return 0 if plan.ready else 1
+    if args.action == "plan":
+        plan = build_plan(args.bundle, args.expected_sha256, host=host,
+                          trust_root=trust_root, trusted_uid=trusted_uid,
+                          path_stat=path_stat, probe_serial=args.probe_serial)
+        print(json.dumps(plan.to_record(), sort_keys=True, separators=(",", ":")), file=stream)
+        return 0 if plan.ready else 1
+    try:
+        result = apply_isolated_gateway(
+            args.bundle, args.expected_sha256, operator=args.operator,
+            probe_serial=args.probe_serial, confirmed=args.confirm_system_change)
+    except (StageError, TransitionError, OSError, KeyError, ValueError) as error:
+        record = {
+            "schema_version": 1, "status": "error",
+            "reason_code": getattr(error, "reason_code", type(error).__name__),
+            "message": str(error),
+        }
+        print(json.dumps(record, sort_keys=True, separators=(",", ":")), file=stream)
+        return 1
+    print(json.dumps(result, sort_keys=True, separators=(",", ":")), file=stream)
+    return 0
 
 
 if __name__ == "__main__":

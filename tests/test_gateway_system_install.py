@@ -258,11 +258,30 @@ class InstallerPlanTests(unittest.TestCase):
         self.assertTrue(json.loads(output.getvalue())['ready'])
         self.assertEqual(host.mutations, [])
 
-    def test_apply_is_not_an_implemented_subcommand(self):
+    def test_apply_requires_explicit_confirmation_before_any_mutation(self):
         host = self._host()
-        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-            self.installer.main(['apply', '--confirm-system-change'], host=host,
-                                output=io.StringIO())
+        output = io.StringIO()
+        code = self.installer.main([
+            'apply', '--bundle', str(self.bundle),
+            '--expected-sha256', self.digest,
+        ], host=host, output=output)
+        record = json.loads(output.getvalue())
+        self.assertEqual(code, 1)
+        self.assertEqual(record['reason_code'], 'SYSTEM_CHANGE_CONFIRMATION_REQUIRED')
+        self.assertEqual(host.reads, 0)
+
+    def test_apply_confirmed_still_requires_linux_root(self):
+        host = self._host()
+        output = io.StringIO()
+        with mock.patch.object(sys, 'platform', 'win32'):
+            code = self.installer.main([
+                'apply', '--bundle', str(self.bundle),
+                '--expected-sha256', self.digest,
+                '--confirm-system-change',
+            ], host=host, output=output)
+        record = json.loads(output.getvalue())
+        self.assertEqual(code, 1)
+        self.assertEqual(record['reason_code'], 'ROOT_LINUX_REQUIRED')
         self.assertEqual(host.reads, 0)
 
     def test_job_inventory_counts_states_without_returning_secret_fields(self):
@@ -278,6 +297,25 @@ class InstallerPlanTests(unittest.TestCase):
         counts = self.installer.inspect_job_states(jobs)
         self.assertEqual(counts, {'SUCCEEDED': 1, 'RUNNING': 1})
         self.assertNotIn('SECRET-NOT-OUTPUT', json.dumps(counts))
+
+    def test_root_user_service_query_allowlist_accepts_only_readonly_runuser_shape(self):
+        enabled = (
+            "/usr/sbin/runuser", "-u", "aubot", "--",
+            "/usr/bin/env",
+            "XDG_RUNTIME_DIR=/run/user/1000",
+            "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
+            "/usr/bin/systemctl", "--user", "is-enabled",
+            "b300-stlink-gateway-agent.service",
+        )
+        active = enabled[:-2] + ("is-active", enabled[-1])
+        unsafe = enabled[:-2] + ("start", enabled[-1])
+        wrong_user = list(enabled)
+        wrong_user[2] = "root"
+
+        self.assertTrue(self.installer._readonly_command(enabled, "aubot"))
+        self.assertTrue(self.installer._readonly_command(active, "aubot"))
+        self.assertFalse(self.installer._readonly_command(unsafe, "aubot"))
+        self.assertFalse(self.installer._readonly_command(tuple(wrong_user), "aubot"))
 
     def test_linux_host_probe_uses_only_readonly_queries(self):
         sysfs = self.root / 'sys/bus/usb/devices/1-1'
@@ -370,6 +408,41 @@ class InstallerPlanTests(unittest.TestCase):
         with mock.patch.object(self.installer, 'MAX_EXPANDED_BYTES', 1):
             with self.assertRaisesRegex(ValueError, 'expanded size exceeds'):
                 self.installer._inspect_bundle(self.bundle)
+
+    def test_b300_agent_owned_state_directory_is_not_a_path_blocker(self):
+        agent = SimpleNamespace(pw_uid=997)
+        probe = self.installer.LinuxHostProbe(
+            root=self.root, system_name='Linux',
+            account_lookup=lambda name: agent if name == 'b300-agent' else (_ for _ in ()).throw(KeyError(name)),
+        )
+        state_parent = self.root / 'var/lib/b300-stlink'
+        state_root = state_parent / 'gateway'
+
+        def path_info(path):
+            selected = Path(path)
+            uid = 997 if selected in {state_parent, state_root} else 0
+            return SimpleNamespace(st_mode=stat.S_IFDIR | 0o700, st_uid=uid)
+
+        with mock.patch.object(Path, 'lstat', autospec=True, side_effect=path_info):
+            hazards = probe._path_hazards()
+        self.assertNotIn('/var/lib/b300-stlink/gateway', hazards)
+
+    def test_unknown_owner_on_state_directory_remains_a_path_blocker(self):
+        agent = SimpleNamespace(pw_uid=997)
+        probe = self.installer.LinuxHostProbe(
+            root=self.root, system_name='Linux',
+            account_lookup=lambda name: agent if name == 'b300-agent' else (_ for _ in ()).throw(KeyError(name)),
+        )
+        state_parent = self.root / 'var/lib/b300-stlink'
+
+        def path_info(path):
+            selected = Path(path)
+            uid = 1234 if selected == state_parent else 0
+            return SimpleNamespace(st_mode=stat.S_IFDIR | 0o700, st_uid=uid)
+
+        with mock.patch.object(Path, 'lstat', autospec=True, side_effect=path_info):
+            hazards = probe._path_hazards()
+        self.assertIn('/var/lib/b300-stlink/gateway', hazards)
 
     def test_system_target_owned_by_operator_is_path_blocker(self):
         probe = self.installer.LinuxHostProbe(root=self.root, system_name='Linux')
@@ -847,6 +920,148 @@ class InstallerStageTests(unittest.TestCase):
             self._stage()
         self.assertFalse((self.root / 'outside').exists())
         self.assertFalse(self.install_root.exists())
+
+
+class InstallerProbeBoundaryTests(unittest.TestCase):
+    def setUp(self):
+        from scripts import install_isolated_gateway as installer
+        self.installer = installer
+        self.identities = {"probe_gid": 972}
+
+    def _stat(self):
+        return SimpleNamespace(st_mode=stat.S_IFCHR | 0o660, st_uid=0, st_gid=972)
+
+    def _runner(self, stdout):
+        return lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    def test_clean_agent_only_probe_boundary_passes(self):
+        group = SimpleNamespace(gr_mem=["b300-agent"])
+        with mock.patch.object(Path, "stat", autospec=True, return_value=self._stat()):
+            self.installer._verify_probe_boundary(
+                Path("/dev/bus/usb/001/013"), self.identities, "aubot",
+                runner=self._runner("user::rw-\ngroup::rw-\nother::---\n"),
+                group_lookup=lambda _name: group)
+
+    def test_direct_operator_acl_is_rejected(self):
+        group = SimpleNamespace(gr_mem=["b300-agent"])
+        with mock.patch.object(Path, "stat", autospec=True, return_value=self._stat()):
+            with self.assertRaises(self.installer.StageError) as captured:
+                self.installer._verify_probe_boundary(
+                    Path("/dev/bus/usb/001/013"), self.identities, "aubot",
+                    runner=self._runner(
+                        "user::rw-\nuser:aubot:rw-\ngroup::rw-\nmask::rw-\nother::---\n"),
+                    group_lookup=lambda _name: group)
+        self.assertEqual(captured.exception.reason_code, "PROBE_DIRECT_USER_ACL_PRESENT")
+
+    def test_operator_membership_in_probe_group_is_rejected(self):
+        group = SimpleNamespace(gr_mem=["b300-agent", "aubot"])
+        with mock.patch.object(Path, "stat", autospec=True, return_value=self._stat()):
+            with self.assertRaises(self.installer.StageError) as captured:
+                self.installer._verify_probe_boundary(
+                    Path("/dev/bus/usb/001/013"), self.identities, "aubot",
+                    runner=self._runner("user::rw-\ngroup::rw-\nother::---\n"),
+                    group_lookup=lambda _name: group)
+        self.assertEqual(captured.exception.reason_code, "OPERATOR_DIRECT_PROBE_GROUP_ACCESS")
+
+
+class InstallerMarkerInstallTests(unittest.TestCase):
+    def test_atomic_marker_is_root_owned_but_readable_by_agent_and_operator(self):
+        from scripts import install_isolated_gateway as installer
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / 'etc/b300-stlink/isolated-gateway.json'
+            record = {
+                'schema_version': 1,
+                'socket_path': '/run/b300-stlink/agent.sock',
+                'state_root': '/var/lib/b300-stlink/gateway',
+                'ingress_root': '/var/spool/b300-stlink/ingress',
+                'operator_uid': 1000,
+                'operator_gid': 2002,
+                'flash_enabled': False,
+            }
+            calls = []
+            original_write = installer._write_exclusive
+
+            def capture(path, payload, mode=0o600):
+                calls.append((Path(path), mode))
+                return original_write(path, payload, mode=mode)
+
+            with mock.patch.object(installer, '_write_exclusive', side_effect=capture), \
+                    mock.patch.object(installer.os, 'chown', create=True), \
+                    mock.patch.object(installer, '_fsync_directory'):
+                installer._atomic_marker(record, marker=marker)
+
+            self.assertEqual(calls[-1][1], 0o644)
+            self.assertEqual(json.loads(marker.read_text(encoding='utf-8')), record)
+            if os.name == 'posix':
+                self.assertFalse(stat.S_IMODE(marker.stat().st_mode) & 0o022)
+
+
+class InstallerRuntimeActivationTests(unittest.TestCase):
+    def setUp(self):
+        from scripts import install_isolated_gateway as installer
+        self.installer = installer
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.candidate = self.root / 'candidate'
+        self.runtime = self.root / 'runtime'
+        for base in (self.candidate, self.runtime):
+            (base / 'vendor/openocd/bin').mkdir(parents=True)
+            (base / 'vendor/openocd').mkdir(parents=True, exist_ok=True)
+        (self.candidate / 'b300-stlink').write_bytes(b'cli-0241')
+        manifest = b'manifest-0241\n'
+        openocd = b'openocd-0241'
+        (self.candidate / 'vendor/openocd/OPENOCD-MANIFEST.sha256').write_bytes(manifest)
+        (self.candidate / 'vendor/openocd/bin/openocd').write_bytes(openocd)
+        (self.runtime / 'vendor/openocd/OPENOCD-MANIFEST.sha256').write_bytes(manifest)
+        (self.runtime / 'vendor/openocd/bin/openocd').write_bytes(openocd)
+
+    def _activate(self):
+        with mock.patch.object(self.installer.os, 'chown', create=True), \
+                mock.patch.object(self.installer, '_fsync_directory'), \
+                mock.patch.object(
+                    self.installer, '_rename_noreplace',
+                    side_effect=lambda source, destination: os.replace(source, destination)):
+            self.installer._copy_staged_runtime(
+                self.candidate, runtime_root=self.runtime)
+
+    def test_existing_compatible_runtime_only_adds_agent_binary_and_is_retry_safe(self):
+        sentinel = self.runtime / 'b300-stlink-gui'
+        sentinel.write_bytes(b'keep-gui-runtime')
+
+        self._activate()
+        destination = self.runtime / 'bin/b300-stlink'
+        self.assertEqual(destination.read_bytes(), b'cli-0241')
+        self.assertEqual(sentinel.read_bytes(), b'keep-gui-runtime')
+
+        before = destination.stat().st_ino
+        original_lstat = Path.lstat
+
+        def linux_root_lstat(path):
+            info = original_lstat(path)
+            selected = Path(path)
+            if selected == self.runtime / 'bin':
+                mode = stat.S_IFDIR | 0o755
+            elif selected == destination:
+                mode = stat.S_IFREG | 0o755
+            else:
+                return info
+            return SimpleNamespace(
+                st_mode=mode, st_uid=0, st_gid=0, st_nlink=info.st_nlink,
+                st_size=info.st_size, st_dev=info.st_dev, st_ino=info.st_ino,
+            )
+
+        with mock.patch.object(Path, 'lstat', linux_root_lstat):
+            self._activate()
+        self.assertEqual(destination.stat().st_ino, before)
+        self.assertEqual(sentinel.read_bytes(), b'keep-gui-runtime')
+
+    def test_incompatible_shared_openocd_fails_closed_before_creating_bin(self):
+        (self.runtime / 'vendor/openocd/bin/openocd').write_bytes(b'wrong-openocd')
+        with self.assertRaises(self.installer.StageError) as captured:
+            self._activate()
+        self.assertEqual(captured.exception.reason_code, 'ACTIVE_RUNTIME_INCOMPATIBLE')
+        self.assertFalse((self.runtime / 'bin').exists())
 
 
 if __name__ == '__main__':
