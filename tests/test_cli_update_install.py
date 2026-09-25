@@ -225,7 +225,7 @@ class ManagedCliInstallTests(unittest.TestCase):
                 "windows-x64-cli", environ={"LOCALAPPDATA": str(local)},
                 home=root / "home",
             )
-            self.assertEqual(windows.root, (local / "B300-STLink").resolve())
+            self.assertEqual(windows.root, (local / "B300-STLink-CLI").resolve())
             self.assertEqual(windows.launcher, windows.root / "bin" / "b300-stlink.cmd")
 
             linux = cli_update_install.managed_install_paths(
@@ -562,6 +562,31 @@ class ManagedCliInstallTests(unittest.TestCase):
             self.assertIn("777", argv)
             self.assertFalse(kwargs["shell"])
             self.assertNotEqual(handoff.staged.root, paths.root)
+
+    def test_windows_gui_launcher_can_bootstrap_separate_cli_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            local = root / "home" / "AppData" / "Local"
+            paths = cli_update_install.managed_install_paths(
+                "windows-x64-cli", environ={"LOCALAPPDATA": str(local)}, home=root / "home",
+            )
+            legacy = local / "B300-STLink" / "b300-stlink.exe"
+            legacy.parent.mkdir(parents=True, exist_ok=True)
+            legacy.write_bytes(b"gui")
+            package = root / "B300-STLink-CLI-Windows-x64.zip"
+            _write_zip(package)
+            calls = []
+
+            handoff = cli_update_install.launch_managed_cli_install(
+                package, _asset(package, "windows-x64-cli"), "windows-x64-cli",
+                environ={"LOCALAPPDATA": str(local)}, home=root / "home",
+                current_executable=legacy, frozen=True, parent_pid=777,
+                spawner=lambda argv, **kwargs: calls.append((argv, kwargs)),
+            )
+
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(Path(calls[0][0][0]), handoff.staged.executable)
+            self.assertNotEqual(handoff.staged.root, legacy.parent)
 
     def test_linux_cli_metadata_identity_accepts_matching_platform(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

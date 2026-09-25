@@ -48,6 +48,7 @@ from b300_core.gateway_system_mode import load_isolated_gateway_config, ingress_
 from b300_core.gateway_program_jobs import GatewayProgramJobs
 from b300_core.gateway_unix_transport import GatewayUnixClient, GatewayUnixServer
 from b300_core.gateway_lease import GatewayLeasePublicSnapshot, GatewayLeaseStore
+from b300_core.gateway_lease_client import GatewayLeaseClient
 from b300_core.gateway_lease_coordinator import GatewayLeaseCoordinator
 from b300_core.gateway_protocol import gateway_capabilities
 from b300_core.gateway_supervisor import (
@@ -86,6 +87,8 @@ from b300_core.ssh_identity import (
 from b300_core.ssh_debug_tunnel import (
     SshDebugTunnel, SshDebugTunnelConfig, find_available_loopback_port,
 )
+from b300_core.remote_profile import RemoteGatewayProfile
+from b300_core.remote_session import RemoteAuthenticationError, RemoteSession
 from b300_core.remote_vscode import RemoteVsCodeProfile, workspace_executable
 from b300_core.remote_debug_guard import RemoteDebugGuard
 from b300_core.offline_setup import OPENOCD_VERSION, current_platform_name
@@ -577,15 +580,15 @@ def _resolve_client_symbols(args, symbols, tcl):
 
 
 def run_debug_client(args, reporter: Reporter) -> int:
-    """Run one bounded debug action through the canonical SSH Gateway tunnel."""
+    """Run one bounded debug action through an authenticated Gateway lease and SSH tunnel."""
     managed_profile = gateway_workflows.apply_saved_remote_profile(args)
-    action = args.client_action
-    if args.telnet_port is not None:
-        raise ValueError("debug client does not enable Telnet.")
     if not args.ssh_host or not args.ssh_user:
         raise ValueError("debug client requires --ssh-host HOST and --ssh-user USER.")
     if not 1 <= args.frames <= 64:
         raise ValueError("--frames must be in range 1..64.")
+    action = args.client_action
+    if args.telnet_port is not None:
+        raise ValueError("debug client does not enable Telnet.")
     if action in {"variable", "watch"} and not args.expression:
         raise ValueError("debug client %s requires --expression NAME." % action)
     if action == "sample":
@@ -640,14 +643,34 @@ def run_debug_client(args, reporter: Reporter) -> int:
         )
         return 0
 
+    profile = RemoteGatewayProfile(args.ssh_host, args.ssh_user, args.ssh_port).validate()
+    remote_session = RemoteSession(profile)
+    lease = None
     tunnel = SshDebugTunnel(tunnel_config)
     session = DebugSession(service=DebugService(executable=args.openocd))
     try:
+        try:
+            remote_session.connect()
+        except RemoteAuthenticationError as error:
+            if error.reason_code != "SSH_PASSWORD_REQUIRED":
+                raise
+            import getpass
+            remote_session.connect(getpass.getpass("Gateway SSH password: "))
+
+        client_id = "b300-cli-debug-" + uuid.uuid4().hex
+        lease = GatewayLeaseClient(
+            remote_session, client_id=client_id,
+            client_label="B300 CLI Remote Debug",
+        )
+        grant = lease.start("VSCODE_DEBUG", probe_serial=args.probe_serial)
+        public = grant.public
+        if public.get("gdb_endpoint") != "127.0.0.1:3333" or public.get("tcl_endpoint") != "127.0.0.1:6666":
+            raise RuntimeError("Gateway lease returned unexpected debug endpoints.")
+
         tunnel_version = tunnel.start()
         tcl = SafeTclClient(TclEndpoint("127.0.0.1", local_tcl))
         selected_symbols = _resolve_client_symbols(args, symbols, tcl)
 
-        session = DebugSession(service=DebugService(executable=args.openocd))
         info = session.start_external(
             symbol_file=selected_symbols,
             gdb_host="127.0.0.1", gdb_port=local_gdb,
@@ -661,6 +684,8 @@ def run_debug_client(args, reporter: Reporter) -> int:
             "status": "ok",
             "gateway": "%s@%s:%d" % (args.ssh_user, args.ssh_host, args.ssh_port),
             "remote_transport": "ssh-local-forwarding",
+            "gateway_lease_mode": "VSCODE_DEBUG",
+            "gateway_lease_id": grant.lease_id,
             "gdb_endpoint": info.gdb_endpoint,
             "tcl_endpoint": info.tcl_endpoint,
             "tcl_version": info.tcl_version or tunnel_version,
@@ -675,6 +700,9 @@ def run_debug_client(args, reporter: Reporter) -> int:
             session.stop()
         finally:
             tunnel.stop()
+            if lease is not None:
+                lease.close()
+            remote_session.disconnect()
 
 
 def run_debug_gateway(args: argparse.Namespace, reporter: Reporter) -> int:
