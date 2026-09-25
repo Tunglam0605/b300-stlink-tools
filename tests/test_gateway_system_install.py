@@ -887,6 +887,38 @@ class InstallerStageTests(unittest.TestCase):
         self.assertFalse(self.install_root.exists())
 
 
+class InstallerMarkerInstallTests(unittest.TestCase):
+    def test_atomic_marker_is_root_owned_but_readable_by_agent_and_operator(self):
+        from scripts import install_isolated_gateway as installer
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / 'etc/b300-stlink/isolated-gateway.json'
+            record = {
+                'schema_version': 1,
+                'socket_path': '/run/b300-stlink/agent.sock',
+                'state_root': '/var/lib/b300-stlink/gateway',
+                'ingress_root': '/var/spool/b300-stlink/ingress',
+                'operator_uid': 1000,
+                'operator_gid': 2002,
+                'flash_enabled': False,
+            }
+            calls = []
+            original_write = installer._write_exclusive
+
+            def capture(path, payload, mode=0o600):
+                calls.append((Path(path), mode))
+                return original_write(path, payload, mode=mode)
+
+            with mock.patch.object(installer, '_write_exclusive', side_effect=capture), \
+                    mock.patch.object(installer.os, 'chown', create=True), \
+                    mock.patch.object(installer, '_fsync_directory'):
+                installer._atomic_marker(record, marker=marker)
+
+            self.assertEqual(calls[-1][1], 0o644)
+            self.assertEqual(json.loads(marker.read_text(encoding='utf-8')), record)
+            if os.name == 'posix':
+                self.assertFalse(stat.S_IMODE(marker.stat().st_mode) & 0o022)
+
+
 class InstallerRuntimeActivationTests(unittest.TestCase):
     def setUp(self):
         from scripts import install_isolated_gateway as installer

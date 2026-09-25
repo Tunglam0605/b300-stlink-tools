@@ -1571,7 +1571,10 @@ def _atomic_marker(record: dict, *, marker: Path = SYSTEM_MARKER) -> None:
     if len(payload) > 4096:
         raise StageError("MARKER_INVALID")
     temporary = parent / (".isolated-gateway-" + secrets.token_hex(8))
-    _write_exclusive(temporary, payload, mode=0o600)
+    # The marker contains no secret material. Both the isolated Agent and the
+    # approved operator-side CLI must be able to read it, while only root may
+    # replace or modify it.
+    _write_exclusive(temporary, payload, mode=0o644)
     os.chown(temporary, 0, 0)
     os.replace(temporary, marker)
     _fsync_directory(parent)
