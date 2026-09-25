@@ -258,11 +258,30 @@ class InstallerPlanTests(unittest.TestCase):
         self.assertTrue(json.loads(output.getvalue())['ready'])
         self.assertEqual(host.mutations, [])
 
-    def test_apply_is_not_an_implemented_subcommand(self):
+    def test_apply_requires_explicit_confirmation_before_any_mutation(self):
         host = self._host()
-        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-            self.installer.main(['apply', '--confirm-system-change'], host=host,
-                                output=io.StringIO())
+        output = io.StringIO()
+        code = self.installer.main([
+            'apply', '--bundle', str(self.bundle),
+            '--expected-sha256', self.digest,
+        ], host=host, output=output)
+        record = json.loads(output.getvalue())
+        self.assertEqual(code, 1)
+        self.assertEqual(record['reason_code'], 'SYSTEM_CHANGE_CONFIRMATION_REQUIRED')
+        self.assertEqual(host.reads, 0)
+
+    def test_apply_confirmed_still_requires_linux_root(self):
+        host = self._host()
+        output = io.StringIO()
+        with mock.patch.object(sys, 'platform', 'win32'):
+            code = self.installer.main([
+                'apply', '--bundle', str(self.bundle),
+                '--expected-sha256', self.digest,
+                '--confirm-system-change',
+            ], host=host, output=output)
+        record = json.loads(output.getvalue())
+        self.assertEqual(code, 1)
+        self.assertEqual(record['reason_code'], 'ROOT_LINUX_REQUIRED')
         self.assertEqual(host.reads, 0)
 
     def test_job_inventory_counts_states_without_returning_secret_fields(self):
