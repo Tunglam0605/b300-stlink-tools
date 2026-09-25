@@ -298,6 +298,25 @@ class InstallerPlanTests(unittest.TestCase):
         self.assertEqual(counts, {'SUCCEEDED': 1, 'RUNNING': 1})
         self.assertNotIn('SECRET-NOT-OUTPUT', json.dumps(counts))
 
+    def test_root_user_service_query_allowlist_accepts_only_readonly_runuser_shape(self):
+        enabled = (
+            "/usr/sbin/runuser", "-u", "aubot", "--",
+            "/usr/bin/env",
+            "XDG_RUNTIME_DIR=/run/user/1000",
+            "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
+            "/usr/bin/systemctl", "--user", "is-enabled",
+            "b300-stlink-gateway-agent.service",
+        )
+        active = enabled[:-2] + ("is-active", enabled[-1])
+        unsafe = enabled[:-2] + ("start", enabled[-1])
+        wrong_user = list(enabled)
+        wrong_user[2] = "root"
+
+        self.assertTrue(self.installer._readonly_command(enabled, "aubot"))
+        self.assertTrue(self.installer._readonly_command(active, "aubot"))
+        self.assertFalse(self.installer._readonly_command(unsafe, "aubot"))
+        self.assertFalse(self.installer._readonly_command(tuple(wrong_user), "aubot"))
+
     def test_linux_host_probe_uses_only_readonly_queries(self):
         sysfs = self.root / 'sys/bus/usb/devices/1-1'
         sysfs.mkdir(parents=True)

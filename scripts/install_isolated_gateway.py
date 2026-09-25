@@ -951,6 +951,20 @@ def _readonly_command(command: tuple[str, ...], operator_name: str) -> bool:
     if command[0] == "getfacl":
         return (len(command) == 3 and command[1] == "-cp"
                 and re.fullmatch(r"/dev/bus/usb/[0-9]{3}/[0-9]{3}", command[2]) is not None)
+    if command[0] == "/usr/sbin/runuser":
+        if len(command) != 11:
+            return False
+        if command[1:4] != ("-u", operator_name, "--"):
+            return False
+        if command[4] != "/usr/bin/env" or command[7:9] != ("/usr/bin/systemctl", "--user"):
+            return False
+        uid_match = re.fullmatch(r"XDG_RUNTIME_DIR=/run/user/([0-9]+)", command[5])
+        bus_match = re.fullmatch(
+            r"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/([0-9]+)/bus", command[6])
+        return (uid_match is not None and bus_match is not None
+                and uid_match.group(1) == bus_match.group(1)
+                and command[9] in {"is-enabled", "is-active"}
+                and command[10] == SYSTEM_UNIT)
     if command[0] != "systemctl":
         return False
     if len(command) == 3:
@@ -965,11 +979,15 @@ def _readonly_command(command: tuple[str, ...], operator_name: str) -> bool:
 def _run_readonly(command: tuple[str, ...]):
     if not _readonly_command(command, "aubot"):
         raise ValueError("Unsupported read-only host query")
-    executable = {"systemctl": "/usr/bin/systemctl",
-                  "getfacl": "/usr/bin/getfacl"}.get(command[0])
-    if executable is None:
-        raise ValueError("Unsupported read-only host query")
-    return subprocess.run((executable, *command[1:]), capture_output=True,
+    if command[0] == "/usr/sbin/runuser":
+        invocation = command
+    else:
+        executable = {"systemctl": "/usr/bin/systemctl",
+                      "getfacl": "/usr/bin/getfacl"}.get(command[0])
+        if executable is None:
+            raise ValueError("Unsupported read-only host query")
+        invocation = (executable, *command[1:])
+    return subprocess.run(invocation, capture_output=True,
                           text=True, timeout=4, check=False)
 
 
