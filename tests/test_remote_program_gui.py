@@ -122,6 +122,18 @@ class RemoteProgramGuiTests(unittest.TestCase):
                 time.sleep(.01)
             self.app.processEvents()
 
+    def test_busy_interlock_reports_reason_instead_of_silent_return(self):
+        with mock.patch.object(
+                self.window, "_operation_state",
+                return_value=SimpleNamespace(is_hardware_busy=True)), \
+                mock.patch.object(self.window, "append_log") as append_log:
+            self.window._on_v18_flash_application(self.path, False)
+
+        self.assertEqual(self.window.program_view.banner.property("variant"), "info")
+        self.assertIn("bận", self.window.program_view.banner.title_label.text().lower())
+        append_log.assert_called_once()
+        self.assertIn("không có job nạp nào", append_log.call_args.args[0].lower())
+
     def test_gateway_dry_run_does_not_commit(self):
         self._run(True, QMessageBox.StandardButton.No)
         self.assertEqual(self.session.prepares, 1)

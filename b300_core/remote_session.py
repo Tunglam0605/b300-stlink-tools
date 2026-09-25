@@ -26,6 +26,7 @@ from .gateway_protocol import (
 )
 from .versioning import SemVer
 from .ssh_host_trust import trusted_known_hosts_file
+from .ssh_identity import managed_identity_file
 from .remote_programming import (
     FirmwareKind, RemoteFirmwareManifest, RemoteProgrammingOperation,
 )
@@ -473,30 +474,43 @@ class RemoteSession:
             self._connecting = True
             self._last_error_code = None
 
-        from_store = password is None
-        secret = password if password is not None else self.credential_store.load(self.profile)
-        if not secret:
+        managed_identity = None
+        if password is None and self._ssh_client_factory is None:
+            # Reuse the same explicitly enrolled B300 identity used by the
+            # OpenSSH Debug/Monitor path. Never inherit ssh-agent/default keys.
+            if trusted_known_hosts_file(self.profile.host, self.profile.port) is not None:
+                managed_identity = managed_identity_file()
+        from_store = password is None and managed_identity is None
+        secret = (
+            password if password is not None
+            else (None if managed_identity is not None else self.credential_store.load(self.profile))
+        )
+        if not secret and managed_identity is None:
             with self._lock:
                 self._connecting = False
                 self._last_error_code = "SSH_PASSWORD_REQUIRED"
             raise RemoteAuthenticationError(
-                "SSH password is required for the first connection.",
+                "SSH password or an enrolled B300 managed key is required.",
                 reason_code="SSH_PASSWORD_REQUIRED",
             )
 
         client = self._new_client()
+        connect_kwargs = {
+            "hostname": self.profile.host,
+            "port": self.profile.port,
+            "username": self.profile.user,
+            "timeout": timeout_seconds,
+            "auth_timeout": timeout_seconds,
+            "banner_timeout": timeout_seconds,
+            "allow_agent": False,
+            "look_for_keys": False,
+        }
+        if managed_identity is not None:
+            connect_kwargs["key_filename"] = str(managed_identity)
+        else:
+            connect_kwargs["password"] = secret
         try:
-            client.connect(
-                hostname=self.profile.host,
-                port=self.profile.port,
-                username=self.profile.user,
-                password=secret,
-                timeout=timeout_seconds,
-                auth_timeout=timeout_seconds,
-                banner_timeout=timeout_seconds,
-                allow_agent=False,
-                look_for_keys=False,
-            )
+            client.connect(**connect_kwargs)
             transport = client.get_transport()
             if transport is None or not transport.is_active():
                 raise RemoteSessionError("SSH transport did not become active after authentication.")
@@ -527,7 +541,7 @@ class RemoteSession:
             self._connecting = False
             self._generation += 1
             self._last_error_code = None
-        if remember:
+        if remember and secret:
             self.credential_store.save(self.profile, secret)
         elif password is not None:
             # An unchecked Remember box means this endpoint must not retain an older password.
@@ -934,14 +948,11 @@ class RemoteSession:
                 "Application HEX does not start at the B300 Application address.",
                 reason_code="FLASH_PLAN_INVALID", phase="validating", retriable=False,
             )
-        capabilities = self.ensure_gateway_agent()
-        if "remote_application_flash_isolated_v1" not in capabilities.get("capabilities", []):
-            raise RemoteSessionError(
-                "Gateway does not support managed Application programming.",
-                reason_code="REMOTE_FLASH_UNSUPPORTED", phase="gateway_protocol",
-                next_action="Update the Gateway B300 CLI to the matching release.",
-                retriable=False,
-            )
+        # FLASH_APPLICATION leases are acquired through gateway-program-request,
+        # whose response is already gated by remote_application_flash_isolated_v1.
+        # The ordinary per-user Gateway Agent has a different capability surface,
+        # so re-checking gateway-agent-ensure here would reject a valid isolated
+        # programming path after the lease had already been authorized.
         manifest_record = {
             key: value.value if hasattr(value, "value") else value
             for key, value in asdict(manifest).items()
