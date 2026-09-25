@@ -922,6 +922,48 @@ class InstallerStageTests(unittest.TestCase):
         self.assertFalse(self.install_root.exists())
 
 
+class InstallerProbeBoundaryTests(unittest.TestCase):
+    def setUp(self):
+        from scripts import install_isolated_gateway as installer
+        self.installer = installer
+        self.identities = {"probe_gid": 972}
+
+    def _stat(self):
+        return SimpleNamespace(st_mode=stat.S_IFCHR | 0o660, st_uid=0, st_gid=972)
+
+    def _runner(self, stdout):
+        return lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    def test_clean_agent_only_probe_boundary_passes(self):
+        group = SimpleNamespace(gr_mem=["b300-agent"])
+        with mock.patch.object(Path, "stat", autospec=True, return_value=self._stat()):
+            self.installer._verify_probe_boundary(
+                Path("/dev/bus/usb/001/013"), self.identities, "aubot",
+                runner=self._runner("user::rw-\ngroup::rw-\nother::---\n"),
+                group_lookup=lambda _name: group)
+
+    def test_direct_operator_acl_is_rejected(self):
+        group = SimpleNamespace(gr_mem=["b300-agent"])
+        with mock.patch.object(Path, "stat", autospec=True, return_value=self._stat()):
+            with self.assertRaises(self.installer.StageError) as captured:
+                self.installer._verify_probe_boundary(
+                    Path("/dev/bus/usb/001/013"), self.identities, "aubot",
+                    runner=self._runner(
+                        "user::rw-\nuser:aubot:rw-\ngroup::rw-\nmask::rw-\nother::---\n"),
+                    group_lookup=lambda _name: group)
+        self.assertEqual(captured.exception.reason_code, "PROBE_DIRECT_USER_ACL_PRESENT")
+
+    def test_operator_membership_in_probe_group_is_rejected(self):
+        group = SimpleNamespace(gr_mem=["b300-agent", "aubot"])
+        with mock.patch.object(Path, "stat", autospec=True, return_value=self._stat()):
+            with self.assertRaises(self.installer.StageError) as captured:
+                self.installer._verify_probe_boundary(
+                    Path("/dev/bus/usb/001/013"), self.identities, "aubot",
+                    runner=self._runner("user::rw-\ngroup::rw-\nother::---\n"),
+                    group_lookup=lambda _name: group)
+        self.assertEqual(captured.exception.reason_code, "OPERATOR_DIRECT_PROBE_GROUP_ACCESS")
+
+
 class InstallerMarkerInstallTests(unittest.TestCase):
     def test_atomic_marker_is_root_owned_but_readable_by_agent_and_operator(self):
         from scripts import install_isolated_gateway as installer

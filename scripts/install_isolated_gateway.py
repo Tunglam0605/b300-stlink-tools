@@ -1386,14 +1386,14 @@ LEGACY_UDEV_MASK_TEXT = (
 
 
 def _checked_command(command, *, timeout: float = 30.0, input_text: Optional[str] = None,
-                     runner=subprocess.run):
+                     runner=subprocess.run, reason_code: str = "SYSTEM_COMMAND_FAILED"):
     try:
         result = runner(tuple(str(item) for item in command), capture_output=True, text=True,
                         input=input_text, timeout=timeout, check=False)
     except (OSError, subprocess.SubprocessError) as error:
-        raise StageError("SYSTEM_COMMAND_FAILED") from error
+        raise StageError(reason_code) from error
     if result.returncode != 0:
-        raise StageError("SYSTEM_COMMAND_FAILED")
+        raise StageError(reason_code)
     return result
 
 
@@ -1606,9 +1606,42 @@ def _write_exact_file(path: Path, payload: bytes, mode: int = 0o644) -> None:
 
 
 def _run_as_operator(operator: str, command, *, timeout: float = 30.0,
-                     runner=subprocess.run):
+                     runner=subprocess.run, reason_code: str = "SYSTEM_COMMAND_FAILED"):
     return _checked_command(("/usr/sbin/runuser", "-u", operator, "--", *command),
-                            timeout=timeout, runner=runner)
+                            timeout=timeout, runner=runner, reason_code=reason_code)
+
+
+def _verify_probe_boundary(node: Path, identities: dict, operator: str, *,
+                           runner=subprocess.run, group_lookup=None) -> None:
+    """Prove that only the isolated Agent group owns direct ST-Link access."""
+    if group_lookup is None:
+        import grp
+        group_lookup = grp.getgrnam
+    selected = Path(node)
+    info = selected.stat()
+    if (not stat.S_ISCHR(info.st_mode) or info.st_uid != 0
+            or info.st_gid != identities["probe_gid"]
+            or stat.S_IMODE(info.st_mode) != 0o660):
+        raise StageError("PROBE_PERMISSION_TRANSITION_FAILED")
+
+    probe_group = group_lookup("b300-probe")
+    members = set(probe_group.gr_mem)
+    if operator in members:
+        raise StageError("OPERATOR_DIRECT_PROBE_GROUP_ACCESS")
+    if "b300-agent" not in members:
+        raise StageError("AGENT_PROBE_GROUP_MISSING")
+
+    acl_result = _checked_command(
+        ("/usr/bin/getfacl", "-cp", str(selected)),
+        timeout=10.0, runner=runner, reason_code="PROBE_ACL_INSPECTION_FAILED")
+    for raw in acl_result.stdout.splitlines():
+        line = raw.strip()
+        if line.startswith("user:") and not line.startswith("user::"):
+            raise StageError("PROBE_DIRECT_USER_ACL_PRESENT")
+        if line.startswith("group:") and not line.startswith("group::"):
+            raise StageError("PROBE_DIRECT_GROUP_ACL_PRESENT")
+        if line.startswith("mask::"):
+            raise StageError("PROBE_EXTENDED_ACL_PRESENT")
 
 
 def _user_systemctl(operator: str, *arguments, runner=subprocess.run):
@@ -1640,7 +1673,8 @@ def _verify_system_agent(operator: str, *, cli: Path = SYSTEM_RUNTIME_BIN,
         try:
             result = _run_as_operator(
                 operator, (str(cli), "debug", "gateway-agent-status", "--json"),
-                timeout=10.0, runner=runner)
+                timeout=10.0, runner=runner,
+                reason_code="SYSTEM_AGENT_STATUS_UNAVAILABLE")
             status = _json_from_output(result.stdout)
             if status.get("status") == "ok" and status.get("state") == "IDLE":
                 break
@@ -1658,7 +1692,7 @@ def _verify_system_agent(operator: str, *, cli: Path = SYSTEM_RUNTIME_BIN,
         "--client-id", client_id,
         "--client-label", "Isolated Gateway installation validation",
         "--lease-mode", "LIVE_WATCH", "--json",
-    ), timeout=20.0, runner=runner)
+    ), timeout=20.0, runner=runner, reason_code="LIVE_WATCH_ACQUIRE_FAILED")
     acquire_record = _json_from_output(acquired.stdout)
     result = acquire_record.get("result") if isinstance(acquire_record.get("result"), dict) else acquire_record
     lease_id = result.get("lease_id")
@@ -1677,13 +1711,14 @@ def _verify_system_agent(operator: str, *, cli: Path = SYSTEM_RUNTIME_BIN,
             "--request-id", secrets.token_hex(16),
             "--lease-id", lease_id, "--lease-token", lease_token,
             "--lease-generation", str(generation), "--json",
-        ), timeout=15.0, runner=runner)
+        ), timeout=15.0, runner=runner, reason_code="LIVE_WATCH_RELEASE_FAILED")
 
     deadline = time.monotonic() + 10.0
     while time.monotonic() < deadline:
         checked = _run_as_operator(
             operator, (str(cli), "debug", "gateway-agent-status", "--json"),
-            timeout=10.0, runner=runner)
+            timeout=10.0, runner=runner,
+            reason_code="LIVE_WATCH_CLEANUP_STATUS_FAILED")
         final_status = _json_from_output(checked.stdout)
         if final_status.get("status") == "ok" and final_status.get("state") == "IDLE":
             return final_status
@@ -1798,33 +1833,30 @@ def apply_isolated_gateway(bundle: Path, expected_sha256: str, *,
         }
         _atomic_marker(marker_record)
 
-        _checked_command(("/usr/bin/systemctl", "daemon-reload"), runner=runner)
-        _checked_command(("/usr/bin/udevadm", "control", "--reload-rules"), runner=runner)
+        _checked_command(("/usr/bin/systemctl", "daemon-reload"), runner=runner,
+                         reason_code="SYSTEMD_DAEMON_RELOAD_FAILED")
+        _checked_command(("/usr/bin/udevadm", "control", "--reload-rules"), runner=runner,
+                         reason_code="UDEV_RELOAD_FAILED")
         _checked_command(("/usr/bin/udevadm", "trigger", "--subsystem-match=usb", "--action=change"),
-                         timeout=20.0, runner=runner)
-        _checked_command(("/usr/bin/udevadm", "settle"), timeout=20.0, runner=runner)
+                         timeout=20.0, runner=runner, reason_code="UDEV_TRIGGER_FAILED")
+        _checked_command(("/usr/bin/udevadm", "settle"), timeout=20.0, runner=runner,
+                         reason_code="UDEV_SETTLE_FAILED")
 
         node = Path(plan.host["probe"]["node"])
         if not node.is_char_device():
             raise StageError("PROBE_NODE_INVALID")
-        # Remove any stale logind uaccess ACL from the pre-migration rule, then
-        # assert the exact current-node ownership expected from the new rule.
-        _checked_command(("/usr/bin/setfacl", "-b", str(node)), runner=runner)
+        # Remove every direct per-user ACL inherited from the legacy uaccess rule,
+        # then transfer direct probe access to the isolated Agent-only group.
+        _checked_command(("/usr/bin/setfacl", "-b", str(node)), runner=runner,
+                         reason_code="PROBE_ACL_RESET_FAILED")
         os.chown(node, 0, identities["probe_gid"])
         os.chmod(node, 0o660)
-        info = node.stat()
-        if info.st_gid != identities["probe_gid"] or stat.S_IMODE(info.st_mode) != 0o660:
-            raise StageError("PROBE_PERMISSION_TRANSITION_FAILED")
+        _verify_probe_boundary(node, identities, operator, runner=runner)
 
         _checked_command(("/usr/bin/systemctl", "enable", "--now", MOUNT_UNIT),
-                         timeout=30.0, runner=runner)
+                         timeout=30.0, runner=runner, reason_code="INGRESS_MOUNT_START_FAILED")
         _checked_command(("/usr/bin/systemctl", "enable", "--now", SYSTEM_UNIT),
-                         timeout=30.0, runner=runner)
-
-        _run_as_operator(operator, ("/usr/bin/test", "!", "-r", str(node)), runner=runner)
-        _run_as_operator(operator, ("/usr/bin/test", "!", "-w", str(node)), runner=runner)
-        _run_as_operator("b300-agent", ("/usr/bin/test", "-r", str(node)), runner=runner)
-        _run_as_operator("b300-agent", ("/usr/bin/test", "-w", str(node)), runner=runner)
+                         timeout=30.0, runner=runner, reason_code="SYSTEM_AGENT_START_FAILED")
 
         pending_status = _verify_system_agent(operator, runner=runner)
         marker_record = _set_flash_enabled(marker_record, True)
@@ -1834,7 +1866,8 @@ def apply_isolated_gateway(bundle: Path, expected_sha256: str, *,
         while time.monotonic() < deadline:
             checked = _run_as_operator(
                 operator, (str(SYSTEM_RUNTIME_BIN), "debug", "gateway-agent-status", "--json"),
-                timeout=10.0, runner=runner)
+                timeout=10.0, runner=runner,
+                reason_code="ISOLATED_CAPABILITY_STATUS_FAILED")
             active_status = _json_from_output(checked.stdout)
             if "remote_application_flash_isolated_v1" in active_status.get("capabilities", []):
                 break
