@@ -107,7 +107,7 @@ thật. Chỉ tiếp tục khi hai lệnh cùng trỏ tới đúng probe và đ�
 ## Nạp Application qua Gateway (Client Windows/Linux)
 
 Thiết lập Gateway và lưu profile SSH trước theo [hướng dẫn Gateway](04_DEBUG.md#gateway-setup-wizard-v0120).
-Client và Gateway cần cùng release hỗ trợ `remote_application_flash_v1`.
+Client và Gateway cần cùng release. Từ v0.24, remote Application flash chỉ được bật sau khi Ubuntu Gateway hoàn tất [isolated Gateway migration](10_ISOLATED_GATEWAY_MIGRATION.md) và Agent quảng bá `remote_application_flash_isolated_v1`; capability legacy `remote_application_flash_v1` một mình không đủ điều kiện nạp.
 Remote flash yêu cầu SSH host key của Gateway đã được pin trên Client. Đối chiếu
 fingerprint từ `b300-stlink gateway host-key --json` chạy trực tiếp trên Gateway,
 rồi dùng `gateway client-setup --confirm-host-fingerprint SHA256:...` hoặc

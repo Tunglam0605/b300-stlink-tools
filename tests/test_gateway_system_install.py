@@ -326,6 +326,9 @@ class InstallerPlanTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             probe._query(('systemctl', 'start', 'unsafe.service',
                           'is-active', 'b300-stlink-gateway-agent.service'))
+        probe.runner = lambda command: SimpleNamespace(
+            returncode=0, stdout='user:aubot:rw- #effective:---\n')
+        self.assertTrue(probe._probe_state(None, {'exists': False})['operator_acl'])
         self.assertEqual(before, sorted(path.relative_to(self.root).as_posix()
                                         for path in self.root.rglob('*')))
 
@@ -847,6 +850,202 @@ class InstallerStageTests(unittest.TestCase):
             self._stage()
         self.assertFalse((self.root / 'outside').exists())
         self.assertFalse(self.install_root.exists())
+
+
+class BoundaryVerificationTests(unittest.TestCase):
+    def setUp(self):
+        from scripts import install_isolated_gateway as installer
+        self.installer = installer
+        fixture = MarkerTransitionTests('test_transition_wins_and_fsyncs_pending_before_unlock')
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        self.fixture = fixture
+        record = json.loads(fixture.marker.read_text(encoding='utf-8'))
+        record['flash_enabled'] = False
+        fixture.marker.write_text(json.dumps(record), encoding='utf-8')
+        self.node = '/dev/bus/usb/001/002'
+        self.probe = {'count': 1, 'incomplete_count': 0, 'selected': True,
+                      'node': self.node, 'uid': 0, 'gid': 2002, 'mode': '0660',
+                      'device_type': 'char', 'st_dev': 7, 'st_ino': 42,
+                      'acl_known': True, 'operator_acl': False}
+        self.commands = []
+        self.proofs = []
+        self.identities = {'agent_uid': 2001, 'agent_gid': 2001,
+                           'probe_gid': 2002, 'upload_gid': 2003,
+                           'operator_access_gid': 2004,
+                           'operator_uid': 1000, 'operator_gid': 1000,
+                           'operator_groups': (1000, 46),
+                           'agent_groups': (2002, 2003, 2004)}
+        self.open_results = {'agent': 0, 'operator': 13}
+
+    def _runner(self, command):
+        self.commands.append(tuple(command))
+        if command[0] == '/usr/bin/setpriv' and command[1] == '--version':
+            return SimpleNamespace(returncode=0, stdout='setpriv from util-linux 2.39\n')
+        if command[0] == '/usr/bin/python3' and command[1] == '--version':
+            return SimpleNamespace(returncode=0, stdout='Python 3.11.0\n')
+        self.assertEqual(command[0], '/usr/bin/setpriv')
+        uid = int(command[command.index('--reuid') + 1])
+        role = 'agent' if uid == 2001 else 'operator'
+        return SimpleNamespace(returncode=self.open_results[role], stdout='')
+
+    def _node_stat(self, path):
+        self.assertEqual(path, self.node)
+        return SimpleNamespace(st_mode=stat.S_IFCHR | 0o660, st_uid=0,
+                               st_gid=2002, st_dev=7, st_ino=42)
+
+    def _quiescence(self, **overrides):
+        values = {'service_idle': True, 'agent_idle': True,
+                  'jobs_idle': True, 'openocd_quiescent': True}
+        values.update(overrides)
+        return SimpleNamespace(**{
+            name: (lambda selected=name: self.proofs.append(selected) or values[selected])
+            for name in values})
+
+    def _verify(self, *, probe_provider=None, mount_check=None,
+                identities=None, probes=None, runner=None, node_stat=None):
+        fixture = self.fixture
+        return self.installer._verify_boundary(
+            fixture.marker, fixture.lock, probe_serial='SAFE123',
+            probe_provider=probe_provider or (lambda serial: dict(self.probe)),
+            mount_check=mount_check or (lambda uid, gid: self.proofs.append('mount') or True),
+            identity_provider=identities or (lambda: dict(self.identities)),
+            node_stat=node_stat or self._node_stat,
+            runner=runner or self._runner,
+            probes=probes or self._quiescence(), locker=fixture.locker,
+            effective_uid=lambda: 0, system_name='linux', trusted_uid=fixture.test_uid,
+            path_stat=fixture._safe_stat, fd_stat=fixture._safe_fstat,
+            fsync_dir=lambda path: fixture.events.append('fsync_dir'))
+
+    def test_complete_boundary_proof_activates_after_under_lock_recheck(self):
+        result = self._verify()
+        self.assertEqual(result['state'], 'ACTIVE')
+        self.assertEqual(result['probe_node'], self.node)
+        self.assertTrue(json.loads(self.fixture.marker.read_text())['flash_enabled'])
+        opens = [command for command in self.commands if command[0] == '/usr/bin/setpriv'
+                 and command[1] != '--version']
+        self.assertEqual(len(opens), 4)
+        self.assertTrue(all('/usr/bin/python3' in command and self.node == command[-1]
+                            for command in opens))
+        self.assertTrue(all('sudo' not in command and 'openocd' not in command
+                            for command in opens))
+        self.assertTrue(all('--bounding-set=-all' in command
+                            and '--inh-caps=-all' in command
+                            and '--no-new-privs' in command
+                            and '--reset-env' in command for command in opens))
+        self.assertTrue(any('--groups=2002,2003,2004' in command for command in opens))
+        self.assertTrue(any('--init-groups' in command for command in opens))
+        compile(self.installer._USB_OPEN_SOURCE, '<usb-open>', 'exec')
+        self.assertEqual(self.proofs.count('mount'), 2)
+        for name in ('service_idle', 'agent_idle', 'jobs_idle', 'openocd_quiescent'):
+            self.assertEqual(self.proofs.count(name), 2)
+
+    def test_wrong_probe_acl_mount_or_open_result_keeps_marker_pending(self):
+        original = self.fixture.marker.read_bytes()
+        cases = (
+            ({'probe_provider': lambda serial: {**self.probe, 'gid': 46}}, 'USB_ACL_UNSAFE'),
+            ({'probe_provider': lambda serial: {**self.probe, 'mode': '0666'}}, 'USB_ACL_UNSAFE'),
+            ({'probe_provider': lambda serial: {**self.probe, 'device_type': 'other'}}, 'USB_ACL_UNSAFE'),
+            ({'probe_provider': lambda serial: {**self.probe, 'count': 2}}, 'PROBE_NOT_UNIQUE'),
+            ({'probe_provider': lambda serial: {**self.probe, 'incomplete_count': 1}}, 'PROBE_NOT_UNIQUE'),
+            ({'probe_provider': lambda serial: {**self.probe, 'operator_acl': True}}, 'USB_ACL_UNSAFE'),
+            ({'mount_check': lambda uid, gid: False}, 'INGRESS_MOUNT_UNSAFE'),
+        )
+        for options, expected_code in cases:
+            with self.subTest(options=options):
+                with self.assertRaises(Exception) as captured:
+                    self._verify(**options)
+                self.assertEqual(captured.exception.reason_code, expected_code)
+                self.assertEqual(self.fixture.marker.read_bytes(), original)
+        for role, value, expected_code in (
+                ('agent', 13, 'AGENT_USB_DENIED'),
+                ('operator', 0, 'OPERATOR_USB_ALLOWED'),
+                ('agent', 14, 'USB_OPEN_UNKNOWN')):
+            with self.subTest(role=role, value=value):
+                self.open_results = {'agent': 0, 'operator': 13}
+                self.open_results[role] = value
+                with self.assertRaises(Exception) as captured:
+                    self._verify()
+                self.assertEqual(captured.exception.reason_code, expected_code)
+                self.assertEqual(self.fixture.marker.read_bytes(), original)
+
+    def test_active_marker_and_wrong_tool_version_fail_before_device_open(self):
+        original = self.fixture.marker.read_bytes()
+        record = json.loads(original.decode('utf-8'))
+        record['flash_enabled'] = True
+        self.fixture.marker.write_text(json.dumps(record), encoding='utf-8')
+        with self.assertRaises(Exception) as captured:
+            self._verify()
+        self.assertEqual(captured.exception.reason_code, 'MARKER_NOT_PENDING')
+        self.assertEqual(self.commands, [])
+        record['flash_enabled'] = False
+        self.fixture.marker.write_text(json.dumps(record), encoding='utf-8')
+
+        def old_tools(command):
+            if command[0] == '/usr/bin/setpriv' and command[1] == '--version':
+                return SimpleNamespace(returncode=0, stdout='unrecognized tool')
+            return self._runner(command)
+
+        with self.assertRaises(Exception) as captured:
+            self._verify(runner=old_tools)
+        self.assertEqual(captured.exception.reason_code, 'OPEN_TOOLS_UNAVAILABLE')
+        self.assertFalse(json.loads(self.fixture.marker.read_text())['flash_enabled'])
+
+    def test_unreadable_service_state_fails_with_structured_reason(self):
+        original = self.fixture.marker.read_bytes()
+        probes = self._quiescence()
+        probes.service_idle = lambda: (_ for _ in ()).throw(OSError('unavailable'))
+        with self.assertRaises(Exception) as captured:
+            self._verify(probes=probes)
+        self.assertEqual(captured.exception.reason_code, 'SERVICE_NOT_IDLE')
+        self.assertEqual(self.fixture.marker.read_bytes(), original)
+
+    def test_public_boundary_verifier_requires_root(self):
+        with mock.patch.object(sys, 'platform', 'linux'), \
+             mock.patch.object(os, 'geteuid', return_value=1000, create=True):
+            with self.assertRaises(Exception) as captured:
+                self.installer.verify_boundary(probe_serial='SAFE123',
+                                               probes=self._quiescence())
+        self.assertEqual(captured.exception.reason_code, 'ROOT_LINUX_REQUIRED')
+        self.assertEqual(self.commands, [])
+
+    def test_bounded_mount_probe_rejects_wrong_capacity(self):
+        record = {'filesystems': [{'target': '/var/spool/b300-stlink/ingress',
+                  'fstype': 'tmpfs', 'size': 68157440,
+                  'options': 'rw,nodev,nosuid,noexec,nr_inodes=256,uid=2001,gid=2003,mode=710'}]}
+        with mock.patch.object(self.installer.subprocess, 'run',
+                               side_effect=lambda *args, **kwargs: SimpleNamespace(
+                                   returncode=0, stdout=json.dumps(record))) as run:
+            self.assertTrue(self.installer._bounded_ingress_mount(2001, 2003))
+            record['filesystems'][0]['size'] = 134217728
+            self.assertFalse(self.installer._bounded_ingress_mount(2001, 2003))
+        self.assertEqual(run.call_args.args[0][-1], '/var/spool/b300-stlink/ingress')
+
+    def test_boundary_change_during_lock_recheck_refuses_activation(self):
+        original = self.fixture.marker.read_bytes()
+        reads = [0]
+        def changing_probe(serial):
+            reads[0] += 1
+            return {**self.probe, 'operator_acl': reads[0] > 1}
+        with self.assertRaises(Exception):
+            self._verify(probe_provider=changing_probe)
+        self.assertEqual(reads[0], 2)
+        self.assertEqual(self.fixture.marker.read_bytes(), original)
+
+    def test_node_mode_change_after_under_lock_open_refuses_activation(self):
+        original = self.fixture.marker.read_bytes()
+        calls = [0]
+        def changed_node(path):
+            calls[0] += 1
+            info = self._node_stat(path)
+            if calls[0] == 4:
+                return SimpleNamespace(**{**vars(info),
+                                          'st_mode': stat.S_IFCHR | 0o666})
+            return info
+        with self.assertRaises(Exception) as captured:
+            self._verify(node_stat=changed_node)
+        self.assertEqual(captured.exception.reason_code, 'PROBE_CHANGED')
+        self.assertEqual(self.fixture.marker.read_bytes(), original)
 
 
 if __name__ == '__main__':

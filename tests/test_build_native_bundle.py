@@ -260,6 +260,27 @@ class NativeBundleTargetTests(unittest.TestCase):
                 self.assertIn("b300_bootloader_manifest.json", names)
                 self.assertIn("b300_bootloader_catalog.json", names)
 
+    def test_linux_native_archives_include_isolated_gateway_admin_tools(self) -> None:
+        module = builder()
+        expected = {
+            ROOT / "scripts" / "install_isolated_gateway.py",
+            ROOT / "scripts" / "activate_isolated_gateway.py",
+        }
+        for platform_name in ("linux-x64", "linux-arm64"):
+            with self.subTest(platform=platform_name):
+                self.assertEqual(set(module.admin_resources(platform_name)), expected)
+        self.assertEqual(module.admin_resources("windows-x64"), [])
+        self.assertEqual(
+            package_internal.resource_archive_name(
+                ROOT / "scripts" / "install_isolated_gateway.py"),
+            "tools/install_isolated_gateway.py",
+        )
+        self.assertEqual(
+            package_internal.resource_archive_name(
+                ROOT / "scripts" / "activate_isolated_gateway.py"),
+            "tools/activate_isolated_gateway.py",
+        )
+
     def test_gdb_trust_anchors_match_the_pinned_xpack_archives(self) -> None:
         module = builder()
         self.assertEqual(module.TRUSTED_GDB_PACKAGES["windows-x64"], (

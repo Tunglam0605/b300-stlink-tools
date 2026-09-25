@@ -5,11 +5,12 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
-## [0.24.0] - 2026-09-24
+## [0.24.0] - 2026-09-25
 
 - Consolidated the repository around the canonical production GUI and read-only CLI inspection paths while preserving the v0.23.2 functional-parity contract and existing Flash/Factory/Debug safety boundaries.
 - Added managed remote Application programming through the authenticated Gateway: staged upload, audited dry-run, explicit prepare/commit, reconnectable job status, exclusive ST-Link ownership, private artifact cleanup, and GUI/CLI Client flows.
 - Added an isolated Ubuntu Gateway deployment model with private Unix-socket control, bounded ingress staging, owner-verified pending state, system-service templates, and fail-closed recovery before remote programming can be enabled.
+- Completed the isolated Gateway administrator workflow with packaged PREPARE / ACTIVATE / ROLLBACK tools: PREPARE keeps `flash_enabled=false`, ACTIVATE requires duplicate USB/mount/owner proofs before advertising `remote_application_flash_isolated_v1`, and rollback is quiescence-gated without touching MCU flash.
 - Hardened Gateway/OpenOCD startup and health publication against concurrent reader/status races so latched USB/SWD/target faults cannot leak a false READY state or overwrite a newer service owner.
 - Preserved loopback-only GDB/TCL endpoints, zero-halt Live Monitor behavior, Sector 0-2 Bootloader protection, no mass erase, no normal-path RDP/WRP changes, and the canonical Sector 3-7 + 44-byte AppMeta Application transaction.
 - Fixed frozen Linux Gateway host inspection so external OS tools such as `systemctl`, `ss` and `ufw` do not inherit PyInstaller's bundled `LD_LIBRARY_PATH`; this prevents false `SSH_SERVICE_STOPPED` / `SSH_STARTUP_DISABLED` reports and unnecessary elevation attempts on an already-ready host.
