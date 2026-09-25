@@ -5,6 +5,12 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.24.1] - 2026-09-25
+
+- Fixed remote Live Monitor lease-bound TCL transport: the Windows Client now opens an authenticated SSH local forward to the Gateway loopback TCL endpoint instead of incorrectly treating the remote `127.0.0.1:PORT` as a local Windows endpoint.
+- Fixed in-process Gateway lease recovery after `CLEANUP_UNVERIFIED`: a lease already marked `RECOVERY_REQUIRED` is reconciled on the next Agent tick when owner/process evidence becomes safe, without requiring a Gateway Agent restart.
+- Added regression coverage for coordinated TCL forwarding and same-process recovery while preserving loopback-only debug endpoints, zero-halt monitoring, Application flash boundaries, Bootloader WRP protection, and no normal-path RDP/WRP changes.
+
 ## [0.24.0] - 2026-09-25
 
 - Consolidated the repository around the canonical production GUI and read-only CLI inspection paths while preserving the v0.23.2 functional-parity contract and existing Flash/Factory/Debug safety boundaries.
