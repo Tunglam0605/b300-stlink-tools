@@ -12,6 +12,7 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 - Unified Remote Program authentication with the existing B300 managed SSH identity: an enrolled ED25519 key plus pinned B300 `known_hosts` is used when no explicit password is supplied, while ambient ssh-agent/default keys remain disabled and password auth remains an explicit fallback.
 - Kept isolated remote-programming capability enforcement at the dedicated `gateway-program-request` boundary instead of re-checking the ordinary per-user Agent capability surface after a FLASH_APPLICATION lease has already been authorized.
 - Improved Program UX so a busy ST-Link/GUI preflight no longer drops a click silently; the operator receives an explicit banner/log reason and no remote job is created.
+- Added a guarded root-only isolated Ubuntu Gateway migration transaction with hash-pinned staging, retry-safe coexistence with the existing runtime, least-privilege ST-Link ownership (`root:b300-probe 0660`), bounded tmpfs ingress, rollback evidence, deterministic hardware-boundary validation, and explicit stage diagnostics before remote flash is enabled.
 - Added regression coverage for coordinated TCL forwarding, same-process recovery, managed-key Remote Program auth, capability-gate ownership and busy interlocks while preserving loopback-only debug endpoints, zero-halt monitoring, Application flash boundaries, Bootloader WRP protection, and no normal-path RDP/WRP changes.
 
 ## [0.24.0] - 2026-09-25
