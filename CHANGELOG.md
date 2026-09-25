@@ -5,6 +5,13 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.24.2] - 2026-09-25
+
+- Fixed standalone Client Debug to acquire and heartbeat a `VSCODE_DEBUG` Gateway lease before opening the SSH GDB/TCL tunnel, with deterministic endpoint validation and guaranteed lease/session cleanup.
+- Separated managed Windows CLI updates from the GUI installation root so a CLI self-update cannot replace or corrupt the installed GUI bundle. Existing `b300-stlink` launcher paths are migrated to a compatibility shim targeting the dedicated CLI root.
+- Allowed the managed CLI updater to bootstrap the dedicated CLI root when invoked from the existing managed GUI CLI executable, while retaining fail-closed metadata validation for an existing CLI root.
+- Added regression coverage for the Windows GUI-to-CLI update handoff and maintained Gateway lease/debug safety boundaries.
+
 ## [0.24.1] - 2026-09-25
 
 - Fixed remote Live Monitor lease-bound TCL transport: the Windows Client now opens an authenticated SSH local forward to the Gateway loopback TCL endpoint instead of incorrectly treating the remote `127.0.0.1:PORT` as a local Windows endpoint.

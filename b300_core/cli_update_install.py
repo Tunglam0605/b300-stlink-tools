@@ -408,8 +408,8 @@ def managed_install_paths(
             _managed_environment_base(local_app_data, "LOCALAPPDATA", selected_home)
             if local_app_data else selected_home / "AppData" / "Local"
         )
-        root = validate_managed_root(user_data / "B300-STLink", selected_home)
-        staging_base = validate_managed_root(user_data / "B300-STLink-updates", selected_home)
+        root = validate_managed_root(user_data / "B300-STLink-CLI", selected_home)
+        staging_base = validate_managed_root(user_data / "B300-STLink-CLI-updates", selected_home)
         launcher = root / "bin" / "b300-stlink.cmd"
         executable = root / "b300-stlink.exe"
     else:
@@ -593,6 +593,14 @@ def apply_staged_cli_install(
                     paths.launcher, _launcher_bytes(selected),
                     mode=0o755 if selected != "windows-x64-cli" else 0o600,
                 )
+                if selected == "windows-x64-cli":
+                    legacy_launcher = paths.root.parent / "B300-STLink" / "bin" / "b300-stlink.cmd"
+                    _validate_launcher_path(legacy_launcher, selected_home)
+                    _atomic_write(
+                        legacy_launcher,
+                        b'@echo off\r\n"%~dp0..\\..\\B300-STLink-CLI\\b300-stlink.exe" %*\r\n',
+                        mode=0o600,
+                    )
                 if selected.startswith("linux-"):
                     unit_source = (
                         paths.root / "packaging" / "linux" /
@@ -659,12 +667,14 @@ def launch_managed_cli_install(
     paths = managed_install_paths(selected, environ=environ, home=home)
     active = Path(sys.executable if current_executable is None else current_executable).resolve()
     is_frozen = bool(getattr(sys, "frozen", False)) if frozen is None else bool(frozen)
-    if not is_frozen or active != paths.executable:
+    legacy_gui_root = paths.root.parent / "B300-STLink"
+    legacy_gui_executable = (legacy_gui_root / "b300-stlink.exe").resolve()
+    if not is_frozen or (active != paths.executable and active != legacy_gui_executable):
         raise ManagedInstallUnsupported(
             "Managed self-update is available only from the standard per-user installation; "
             "download the signed CLI archive and run its install bootstrap manually."
         )
-    if not _managed_root_has_cli_identity(paths.root, selected):
+    if paths.root.exists() and not _managed_root_has_cli_identity(paths.root, selected):
         raise ManagedInstallUnsupported(
             "Managed self-update requires an installed CLI bundle with matching publisher metadata."
         )

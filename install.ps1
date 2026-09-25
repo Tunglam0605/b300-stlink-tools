@@ -1,3 +1,7 @@
+﻿param(
+    [string]$InstallRoot = ''
+)
+
 $ErrorActionPreference = 'Stop'
 
 function Get-NormalizedPath([string]$Path) {
@@ -79,7 +83,7 @@ if (-not (Test-PathWithin $localAppData $userProfile) -or
     [StringComparer]::OrdinalIgnoreCase.Equals($localAppData, $userProfile)) {
     throw 'Managed install requires LOCALAPPDATA beneath the per-user UserProfile.'
 }
-$installRoot = Get-NormalizedPath (Join-Path $localAppData 'B300-STLink')
+$installRoot = if ([String]::IsNullOrWhiteSpace($InstallRoot)) { Get-NormalizedPath (Join-Path $localAppData 'B300-STLink') } else { Get-NormalizedPath $InstallRoot }
 $binRoot = Join-Path $installRoot 'bin'
 $cliLauncher = Join-Path $binRoot 'b300-stlink.cmd'
 $guiLauncher = Join-Path $binRoot 'b300-stlink-gui.cmd'
@@ -146,3 +150,4 @@ if (-not (($userPath -split ';') -contains $binRoot)) {
     [Environment]::SetEnvironmentVariable('Path', ($userPath.TrimEnd(';') + ';' + $binRoot), 'User')
 }
 Write-Host 'Installed. Open a new terminal, then run: b300-stlink doctor, b300-stlink setup, or b300-stlink-gui'
+

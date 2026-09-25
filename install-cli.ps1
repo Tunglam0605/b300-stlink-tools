@@ -101,12 +101,12 @@ try {
         throw 'Verified package is incomplete after extraction.'
     }
 
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer -InstallRoot (Join-Path $env:LOCALAPPDATA 'B300-STLink-CLI')
     if ($LASTEXITCODE -ne 0) {
         throw "B300 managed installer failed with exit code $LASTEXITCODE."
     }
 
-    $launcher = Join-Path $env:LOCALAPPDATA 'B300-STLink\bin\b300-stlink.cmd'
+    $launcher = Join-Path $env:LOCALAPPDATA 'B300-STLink-CLI\bin\b300-stlink.cmd'
     if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
         throw 'B300 CLI launcher was not created by the managed installer.'
     }
