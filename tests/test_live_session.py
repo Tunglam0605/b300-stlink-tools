@@ -263,6 +263,35 @@ class LiveMonitorSessionTests(unittest.TestCase):
             session.close()
             self.assertEqual(remote.closed_forwards, [monitor_forward])
 
+    def test_coordinated_client_endpoint_uses_authenticated_ssh_forward(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch("b300_core.live_session.find_matching_symbol_file") as matcher:
+            symbols = self.make_symbols(directory)
+            matcher.return_value = (self.matched(symbols), ())
+            remote = FakeRemoteSession(connected=True)
+            session = LiveMonitorSession(
+                tcl_factory=FakeTcl, symbol_table_factory=FakeSymbolTable,
+            )
+
+            info = session.start_client(ClientLiveMonitorConfig(
+                "gateway.local", "automation", symbols, interval_seconds=0.5,
+                sample_limit=1, watch_specs=("xTickCount:u32",),
+                bound_tcl_endpoint="127.0.0.1:7666",
+            ), remote_session=remote)
+
+            self.assertEqual(info.transport, "gateway-client-coordinated-tcl-forward")
+            self.assertEqual(info.tcl_endpoint, "127.0.0.1:18666")
+            monitor_forward = remote.forward_calls[0][0]
+            self.assertEqual(
+                remote.forward_calls[0][1:],
+                (7666, 0, "127.0.0.1", "127.0.0.1"),
+            )
+            self.assertNotIn(monitor_forward, {"tcl", "gdb"})
+            self.assertEqual(session.run().samples, 1)
+            session.close()
+            self.assertEqual(remote.closed_forwards, [monitor_forward])
+            self.assertTrue(remote.connected)
+
     def test_client_startup_failure_closes_only_monitor_forward(self):
         for failure in ("symbols", "target", "table"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory, \

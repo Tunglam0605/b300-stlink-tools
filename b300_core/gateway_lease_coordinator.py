@@ -262,7 +262,9 @@ class GatewayLeaseCoordinator:
     def tick(self) -> GatewayLeasePublicSnapshot:
         with self._lock:
             now = self._clock()
-            if self._recovery_required:
+            if (self._recovery_required
+                    or (self._lease is not None and self._lease.state == "RECOVERY_REQUIRED")):
+                self._recovery_required = True
                 return self._reconcile_recovery_locked(now)
             if self._lease is None:
                 return _inactive("GATEWAY_IDLE")

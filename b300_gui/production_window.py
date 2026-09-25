@@ -696,6 +696,14 @@ class ProductionMainWindow(_BaseMainWindow):
 
     def _on_v18_flash_application(self, path: Path, is_dry_run: bool) -> None:
         if self._operation_state().is_hardware_busy:
+            self.program_view.banner.show_info(
+                "ST-Link đang bận",
+                "Một thao tác đọc, giám sát hoặc gỡ lỗi đang sử dụng ST-Link. "
+                "Chờ thao tác hiện tại hoàn tất hoặc bấm Dừng ở phiên Giám sát/Gỡ lỗi rồi nạp lại.",
+            )
+            self.append_log(
+                "Nạp ứng dụng chưa bắt đầu: ST-Link đang bận; không có job nạp nào được tạo."
+            )
             return
         if not self.app_context.selected_connection.is_local:
             self._begin_remote_application_program(path, is_dry_run)
@@ -720,7 +728,21 @@ class ProductionMainWindow(_BaseMainWindow):
 
     def _begin_remote_application_program(self, path: Path, is_dry_run: bool) -> None:
         gateway = self.app_context.selected_connection.gateway
-        if gateway is None or self.busy:
+        if gateway is None:
+            self.program_view.banner.show_fail(
+                "Chưa chọn Gateway", "Không có Gateway từ xa cho thao tác nạp.",
+                "Chọn lại kết nối Gateway rồi thử lại.",
+            )
+            return
+        if self.busy:
+            self.program_view.banner.show_info(
+                "ST-Link đang bận",
+                "Một tác vụ nền đang đọc hoặc sử dụng ST-Link. "
+                "Chờ tác vụ hiện tại hoàn tất rồi bấm nạp lại.",
+            )
+            self.append_log(
+                "Nạp ứng dụng chưa bắt đầu: GUI đang bận; không có job nạp nào được tạo."
+            )
             return
         self.program_view.set_file_path(path)
         if self.program_view._selected_file is None:
@@ -841,8 +863,15 @@ class ProductionMainWindow(_BaseMainWindow):
         def failed(failure):
             self.busy = False
             self._update_controls()
+            reason_code = getattr(failure, "reason_code", "UNKNOWN")
+            phase_name = getattr(failure, "phase", "gateway_preflight")
+            message = getattr(failure, "message", str(failure))
+            self.append_log(
+                "Gateway preflight FAIL [%s/%s]: %s"
+                % (reason_code, phase_name, message)
+            )
             self.program_view.banner.show_fail(
-                "Gateway kiểm tra không đạt", getattr(failure, "message", str(failure)),
+                "Gateway kiểm tra không đạt", message,
                 getattr(failure, "next_action", "Kiểm tra SSH, ST-Link và file HEX."),
             )
 

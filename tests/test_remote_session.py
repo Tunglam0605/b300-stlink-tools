@@ -133,19 +133,27 @@ class ForwardFactory:
 
 
 class RemoteSessionTests(unittest.TestCase):
-    def test_remote_flash_rejects_legacy_flash_capability(self):
+    def test_remote_flash_uses_isolated_program_request_as_capability_gate(self):
         with tempfile.TemporaryDirectory() as directory:
             image = write_hex(directory, 0x08010000, APPLICATION_VECTOR)
             session = RemoteSession(self.profile, credential_store=MemoryStore(), ssh_client_factory=FakeClient)
             session.connect("secret")
-            grant = SimpleNamespace(public={"probe_serial": "SAFE123"})
-            with mock.patch.object(session, "ensure_gateway_agent", return_value={
-                    "capabilities": ["remote_application_flash_v1"]}), \
-                    mock.patch.object(session, "_run_program_request") as program:
+            grant = SimpleNamespace(
+                lease_id="lease", token="secret", generation=1,
+                public={"probe_serial": "SAFE123"},
+            )
+            rejected = RemoteSessionError(
+                "isolated programming capability missing",
+                reason_code="CLI_TOO_OLD", phase="gateway_cli", retriable=False,
+            )
+            with mock.patch.object(session, "ensure_gateway_agent") as ensure, \
+                    mock.patch.object(session, "_run_program_request", side_effect=rejected) as program:
                 with self.assertRaises(RemoteSessionError) as captured:
                     session.prepare_remote_application(image, grant, "client-1")
-            self.assertEqual(captured.exception.reason_code, "REMOTE_FLASH_UNSUPPORTED")
-            program.assert_not_called()
+            self.assertEqual(captured.exception.reason_code, "CLI_TOO_OLD")
+            ensure.assert_not_called()
+            program.assert_called_once()
+            self.assertEqual(program.call_args.args[0], "program_create_upload")
 
     def test_lost_upload_slot_response_retries_same_request_id_once(self):
         session = RemoteSession(self.profile, credential_store=MemoryStore(), ssh_client_factory=FakeClient)
@@ -303,6 +311,24 @@ class RemoteSessionTests(unittest.TestCase):
         session.connect("new-secret", remember=False)
         self.assertIsNone(store.secret)
         self.assertEqual(store.clear_calls, 1)
+
+    def test_enrolled_managed_key_auth_is_used_without_password(self):
+        client = FakeClient()
+        session = RemoteSession(self.profile, credential_store=MemoryStore())
+        identity = Path("C:/Users/Admin/.ssh/b300_gateway_ed25519")
+        known_hosts = Path("C:/Users/Admin/.ssh/b300_known_hosts")
+        with mock.patch("b300_core.remote_session.managed_identity_file", return_value=identity), \
+                mock.patch("b300_core.remote_session.trusted_known_hosts_file", return_value=known_hosts), \
+                mock.patch.object(session, "_new_client", return_value=client):
+            state = session.connect()
+
+        self.assertTrue(state.authenticated)
+        self.assertEqual(len(client.connect_calls), 1)
+        call = client.connect_calls[0]
+        self.assertEqual(call["key_filename"], str(identity))
+        self.assertNotIn("password", call)
+        self.assertFalse(call["look_for_keys"])
+        self.assertFalse(call["allow_agent"])
 
     def test_missing_password_fails_before_network(self):
         client = FakeClient()

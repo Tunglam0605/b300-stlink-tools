@@ -242,7 +242,22 @@ class LiveMonitorSession:
             host, separator, port_text = str(config.bound_tcl_endpoint).rpartition(":")
             if host != "127.0.0.1" or not separator or not port_text.isdigit() or not 1 <= int(port_text) <= 65535:
                 raise ValueError("Coordinated Live Monitor TCL endpoint must be loopback HOST:PORT.")
-            local_tcl = int(port_text)
+            if remote_session is None:
+                raise RuntimeError(
+                    "Coordinated Client Live Monitor requires an authenticated RemoteSession."
+                )
+            profile = remote_session.profile
+            if (profile.host, profile.user, profile.port) != (config.host, config.user, config.ssh_port):
+                raise ValueError("Client Live Monitor endpoint does not match the authenticated RemoteSession.")
+            health = remote_session.check_health()
+            if not health.authenticated:
+                raise RuntimeError("Client Live Monitor requires an authenticated RemoteSession.")
+            forward = remote_session.open_forward(
+                self._remote_forward_name, remote_port=int(port_text), local_port=0,
+                remote_host=host,
+            )
+            local_tcl = forward.local_port
+            shared_remote = remote_session
             transport_name = "gateway-client-coordinated-tcl-forward"
         elif remote_session is not None:
             profile = remote_session.profile

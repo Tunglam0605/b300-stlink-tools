@@ -668,6 +668,24 @@ class GatewayLeaseCoordinatorTests(unittest.TestCase):
         self.assertEqual((self.supervisor.reconcile_calls, self.supervisor.stop_calls), (1, 1))
         self.assertIsNone(restarted.store.read())
 
+    def test_in_process_recovery_state_is_reconciled_on_next_tick(self):
+        self.supervisor.ensure_result = snapshot("WAITING_PROBE", "NO_PROBE")
+        self.supervisor.stop_confirmed = False
+        failed = self.coordinator.acquire(request())
+        self.assertEqual(
+            (failed.state, failed.reason_code),
+            ("RECOVERY_REQUIRED", "CLEANUP_UNVERIFIED"),
+        )
+
+        self.supervisor.stop_confirmed = True
+        recovered = self.coordinator.tick()
+
+        self.assertEqual(
+            (recovered.active, recovered.state, recovered.reason_code),
+            (False, "IDLE", "RECOVERY_RECONCILED"),
+        )
+        self.assertIsNone(self.coordinator.store.read())
+
 
 if __name__ == "__main__":
     unittest.main()
