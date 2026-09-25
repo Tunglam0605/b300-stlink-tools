@@ -1509,37 +1509,59 @@ def _ensure_isolated_identities(operator_name: str, *, runner=subprocess.run) ->
 
 
 def _copy_staged_runtime(candidate: Path, *, runtime_root: Path = SYSTEM_RUNTIME_ROOT) -> None:
+    """Activate only the isolated Agent binary beside a verified shared runtime."""
     import shutil
     candidate = Path(candidate)
     root = Path(runtime_root)
-    for required in ("b300-stlink", "B300-RUNTIME.sha256", "vendor"):
-        if not (candidate / required).exists():
+    executable = candidate / "b300-stlink"
+    candidate_manifest = candidate / "vendor/openocd/OPENOCD-MANIFEST.sha256"
+    candidate_openocd = candidate / "vendor/openocd/bin/openocd"
+    active_manifest = root / "vendor/openocd/OPENOCD-MANIFEST.sha256"
+    active_openocd = root / "vendor/openocd/bin/openocd"
+    for required in (executable, candidate_manifest, candidate_openocd,
+                     active_manifest, active_openocd):
+        if not required.is_file() or required.is_symlink():
             raise StageError("STAGED_RUNTIME_INCOMPLETE")
-    reserved = {"candidates", "bin"}
-    for source in candidate.iterdir():
-        if source.name in {"systemd", "STAGE-RECEIPT.json"}:
-            continue
-        destination = root / source.name
-        if destination.name in reserved or destination.exists() or destination.is_symlink():
-            raise StageError("ACTIVE_RUNTIME_OCCUPIED")
-        if source.is_dir():
-            shutil.copytree(source, destination, symlinks=False)
-        elif source.is_file():
-            shutil.copy2(source, destination)
-        else:
-            raise StageError("STAGED_RUNTIME_UNSAFE")
+    if (_hash_staged_file(candidate_manifest) != _hash_staged_file(active_manifest)
+            or _hash_staged_file(candidate_openocd) != _hash_staged_file(active_openocd)):
+        raise StageError("ACTIVE_RUNTIME_INCOMPATIBLE")
+
     bin_dir = root / "bin"
-    if bin_dir.exists() or bin_dir.is_symlink():
+    if bin_dir.is_symlink():
         raise StageError("ACTIVE_RUNTIME_OCCUPIED")
-    os.mkdir(bin_dir, 0o755)
-    shutil.copy2(candidate / "b300-stlink", bin_dir / "b300-stlink")
-    os.chmod(bin_dir / "b300-stlink", 0o755)
-    for directory, folders, files in os.walk(root):
-        for name in folders:
-            os.chown(Path(directory) / name, 0, 0)
-        for name in files:
-            os.chown(Path(directory) / name, 0, 0)
-    _fsync_directory(root)
+    if bin_dir.exists():
+        info = bin_dir.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or stat.S_IMODE(info.st_mode) & 0o022:
+            raise StageError("ACTIVE_RUNTIME_OCCUPIED")
+    else:
+        os.mkdir(bin_dir, 0o755)
+        os.chown(bin_dir, 0, 0)
+
+    destination = bin_dir / "b300-stlink"
+    expected = _hash_staged_file(executable)
+    if destination.exists() or destination.is_symlink():
+        try:
+            info = destination.lstat()
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+                    or stat.S_IMODE(info.st_mode) & 0o022
+                    or _hash_staged_file(destination) != expected):
+                raise StageError("ACTIVE_RUNTIME_OCCUPIED")
+        except OSError as error:
+            raise StageError("ACTIVE_RUNTIME_OCCUPIED") from error
+        return
+
+    temporary = bin_dir / (".b300-stlink-" + secrets.token_hex(8))
+    try:
+        shutil.copy2(executable, temporary, follow_symlinks=False)
+        os.chown(temporary, 0, 0)
+        os.chmod(temporary, 0o755)
+        if _hash_staged_file(temporary) != expected:
+            raise StageError("ACTIVE_RUNTIME_COPY_MISMATCH")
+        _rename_noreplace(temporary, destination)
+        _fsync_directory(bin_dir)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def _atomic_marker(record: dict, *, marker: Path = SYSTEM_MARKER) -> None:

@@ -887,5 +887,73 @@ class InstallerStageTests(unittest.TestCase):
         self.assertFalse(self.install_root.exists())
 
 
+class InstallerRuntimeActivationTests(unittest.TestCase):
+    def setUp(self):
+        from scripts import install_isolated_gateway as installer
+        self.installer = installer
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.candidate = self.root / 'candidate'
+        self.runtime = self.root / 'runtime'
+        for base in (self.candidate, self.runtime):
+            (base / 'vendor/openocd/bin').mkdir(parents=True)
+            (base / 'vendor/openocd').mkdir(parents=True, exist_ok=True)
+        (self.candidate / 'b300-stlink').write_bytes(b'cli-0241')
+        manifest = b'manifest-0241\n'
+        openocd = b'openocd-0241'
+        (self.candidate / 'vendor/openocd/OPENOCD-MANIFEST.sha256').write_bytes(manifest)
+        (self.candidate / 'vendor/openocd/bin/openocd').write_bytes(openocd)
+        (self.runtime / 'vendor/openocd/OPENOCD-MANIFEST.sha256').write_bytes(manifest)
+        (self.runtime / 'vendor/openocd/bin/openocd').write_bytes(openocd)
+
+    def _activate(self):
+        with mock.patch.object(self.installer.os, 'chown', create=True), \
+                mock.patch.object(self.installer, '_fsync_directory'), \
+                mock.patch.object(
+                    self.installer, '_rename_noreplace',
+                    side_effect=lambda source, destination: os.replace(source, destination)):
+            self.installer._copy_staged_runtime(
+                self.candidate, runtime_root=self.runtime)
+
+    def test_existing_compatible_runtime_only_adds_agent_binary_and_is_retry_safe(self):
+        sentinel = self.runtime / 'b300-stlink-gui'
+        sentinel.write_bytes(b'keep-gui-runtime')
+
+        self._activate()
+        destination = self.runtime / 'bin/b300-stlink'
+        self.assertEqual(destination.read_bytes(), b'cli-0241')
+        self.assertEqual(sentinel.read_bytes(), b'keep-gui-runtime')
+
+        before = destination.stat().st_ino
+        original_lstat = Path.lstat
+
+        def linux_root_lstat(path):
+            info = original_lstat(path)
+            selected = Path(path)
+            if selected == self.runtime / 'bin':
+                mode = stat.S_IFDIR | 0o755
+            elif selected == destination:
+                mode = stat.S_IFREG | 0o755
+            else:
+                return info
+            return SimpleNamespace(
+                st_mode=mode, st_uid=0, st_gid=0, st_nlink=info.st_nlink,
+                st_size=info.st_size, st_dev=info.st_dev, st_ino=info.st_ino,
+            )
+
+        with mock.patch.object(Path, 'lstat', linux_root_lstat):
+            self._activate()
+        self.assertEqual(destination.stat().st_ino, before)
+        self.assertEqual(sentinel.read_bytes(), b'keep-gui-runtime')
+
+    def test_incompatible_shared_openocd_fails_closed_before_creating_bin(self):
+        (self.runtime / 'vendor/openocd/bin/openocd').write_bytes(b'wrong-openocd')
+        with self.assertRaises(self.installer.StageError) as captured:
+            self._activate()
+        self.assertEqual(captured.exception.reason_code, 'ACTIVE_RUNTIME_INCOMPATIBLE')
+        self.assertFalse((self.runtime / 'bin').exists())
+
+
 if __name__ == '__main__':
     unittest.main()
