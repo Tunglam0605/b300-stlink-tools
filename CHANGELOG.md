@@ -5,7 +5,7 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
-## [0.24.0] - 2026-09-24
+## [0.24.0] - 2026-09-25
 
 - Consolidated the repository around the canonical production GUI and read-only CLI inspection paths while preserving the v0.23.2 functional-parity contract and existing Flash/Factory/Debug safety boundaries.
 - Added managed remote Application programming through the authenticated Gateway: staged upload, audited dry-run, explicit prepare/commit, reconnectable job status, exclusive ST-Link ownership, private artifact cleanup, and GUI/CLI Client flows.

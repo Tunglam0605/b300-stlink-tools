@@ -1,5 +1,18 @@
 # Biên bản nghiệm thu và phát hành B300 ST-Link Tools
 
+## Bản 0.24.0 - Remote Application programming + Gateway recovery
+
+- Release hardware baseline: `main@4008b06`, source version `0.24.0`.
+- Windows x64 final package: packaged CLI reports `0.24.0`; GUI smoke-test exit 0. GUI ZIP SHA-256 `F9DA6C74BBFF5630BC1A1E11C9BC5E3B1CE5291630AFB8A432C3DC0009D20E19`; CLI ZIP SHA-256 `D7A291055705E292E3236D7EAF11A524F57626E44B49B8AEBCA87DECC2799DF7`.
+- Ubuntu Vision physical acceptance: STM32F407 512 KiB, ST-Link/V2, about 3.08 V, RDP off, WRP S0-S2 protected.
+- Real v0.24.0 Application flash PASS: exact `** Verified OK **`, PC `0x08025936`, `BKP1R=0`, `STLM VERIFIED` -> `CONFIRMED`, no mass erase, S0-S2 untouched.
+- Managed-client disconnect PASS: job `060b9dc10b8f42beae321d72cee7e100` continued from `RUNNING` to `SUCCEEDED` after initiating client exit.
+- Real SSH drop during active managed flash PASS: job `13b2ff46699b4e3e944d9dfba0090c9e` remained independent and reached `SUCCEEDED`.
+- Agent crash recovery PASS: SIGKILL of the active Agent child caused one service restart, a new instance/PID returned `GATEWAY_IDLE`, no lease remained, hardware owner returned `IDLE`, and target stayed `BOOTABLE` with CRC32 `0x8C8A6ED2` and `STLM CONFIRMED`.
+- Packaged GUI destructive click-through remains explicitly **DEFERRED** under the existing release-gate allowance; packaged GUI smoke passes and the physical core/Gateway path is accepted.
+- Full evidence: [Managed remote Application programming acceptance](acceptance/remote-application-programming-2026-09-23.md).
+- Stable tag/publish is allowed only after the exact final evidence commit passes CI on the required platforms.
+
 ## Bản 0.19.1 - PROGRAM automatic read-only preflight
 
 - Independent pre-merge validation: **114/114 canonical test modules PASS**, including **21/21 PROGRAM preflight cases**.
