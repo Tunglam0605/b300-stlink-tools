@@ -70,6 +70,10 @@ def resource_archive_name(resource: Path) -> str:
             and resource.name in {"b300-stlink-gateway-agent-system.service",
                                   "b300-stlink-ingress.mount.in"}):
         return "packaging/linux/" + resource.name
+    if (resource.parent.name == "scripts"
+            and resource.name in {"install_isolated_gateway.py",
+                                  "activate_isolated_gateway.py"}):
+        return "tools/" + resource.name
     return resource.name
 
 

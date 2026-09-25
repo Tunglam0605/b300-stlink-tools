@@ -147,6 +147,16 @@ def runtime_resources(platform_name: str):
     return resources
 
 
+def admin_resources(platform_name: str):
+    """Standalone Linux administration helpers shipped beside native artifacts."""
+    if platform_name not in {"linux-x64", "linux-arm64"}:
+        return []
+    return [
+        ROOT / "scripts" / "install_isolated_gateway.py",
+        ROOT / "scripts" / "activate_isolated_gateway.py",
+    ]
+
+
 def pyinstaller_data_argument(source: Path) -> str:
     separator = ";" if platform.system().lower() == "windows" else ":"
     return "%s%sresources/firmware" % (source, separator)
@@ -685,13 +695,13 @@ def main(argv=None) -> int:
             assert cli_plan is not None
             package(
                 "cli", str(cli_plan.executable), cli_name,
-                [ROOT / "LICENSE"] + runtime_resources(platform_name),
+                [ROOT / "LICENSE"] + runtime_resources(platform_name) + admin_resources(platform_name),
                 application_root=cli_plan.application_root,
             )
         if args.flavor in {"all", "gui"}:
             package(
                 "gui", gui_executable, gui_name,
-                gui_resources(platform_name) + runtime_resources(platform_name),
+                gui_resources(platform_name) + runtime_resources(platform_name) + admin_resources(platform_name),
                 application_root=gui_application_root,
                 companion_cli=(
                     str(args.output_dir / cli_plan.executable)
