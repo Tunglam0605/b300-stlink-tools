@@ -198,7 +198,7 @@ class V018SimplifiedUiTests(unittest.TestCase):
             self.assertTrue(window.nav_program_btn.isChecked())
             self.assertEqual(
                 [button.text().strip() for button in window.v18_nav_buttons],
-                ["NẠP PHẦN MỀM", "GIÁM SÁT", "GỠ LỖI VS CODE", "THIẾT BỊ", "CÀI ĐẶT"],
+                ["Nạp phần mềm", "Giám sát", "Gỡ lỗi VS Code", "Thiết bị", "Cài đặt"],
             )
             self.assertEqual(window.page_title.text(), "NẠP PHẦN MỀM")
             self.assertNotIsInstance(window.tabs, QTabWidget)
