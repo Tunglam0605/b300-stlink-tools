@@ -11,7 +11,7 @@ from ..collapsible_card import CollapsibleCard
 from ..widgets.pass_fail_banner import PassFailBanner
 from ..widgets.pipeline_stepper import PipelineStepper
 from ..widgets.flash_plan_bar import FlashPlanBar
-from ..widgets.engineering import SectionCard, ActivityLogPanel
+from ..widgets.engineering import SectionCard, ActivityLogPanel, engineering_icon
 
 
 class ProgramView(QWidget):
@@ -36,15 +36,15 @@ class ProgramView(QWidget):
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         outer = QWidget()
         self.container_layout = QVBoxLayout(outer)
-        self.container_layout.setContentsMargins(16, 16, 16, 16)
-        self.container_layout.setSpacing(12)
+        self.container_layout.setContentsMargins(20, 18, 20, 20)
+        self.container_layout.setSpacing(16)
         self.banner = PassFailBanner(self)
         self.banner.layout().setContentsMargins(12, 5, 12, 5)
         self.banner.title_label.setObjectName("fieldLabel")
         self.banner.setMaximumHeight(58)
         self.container_layout.addWidget(self.banner)
         self.top_card_layout = QBoxLayout(QBoxLayout.Direction.LeftToRight)
-        self.top_card_layout.setSpacing(12)
+        self.top_card_layout.setSpacing(16)
         self.top_card_layout.addWidget(self._build_firmware_card(), 1)
         self.top_card_layout.addWidget(self._build_preflight_card(), 1)
         self.container_layout.addLayout(self.top_card_layout)
@@ -56,15 +56,21 @@ class ProgramView(QWidget):
         execution.body.setContentsMargins(14, 8, 14, 8)
         execution.body.setSpacing(6)
         buttons = QHBoxLayout()
+        buttons.setSpacing(10)
         self.btn_flash_app = self._button("NẠP ỨNG DỤNG", self._on_flash_app_clicked)
         self.btn_flash_app.setObjectName("primaryActionButton")
+        self.btn_flash_app.setIcon(engineering_icon("program", 18))
         self.btn_flash_app.setEnabled(False)
         self.btn_dry_run_action = self._button("CHẠY THỬ", self._on_dry_run_clicked)
+        self.btn_dry_run_action.setObjectName("ghostButton")
+        self.btn_dry_run_action.setIcon(engineering_icon("play", 16))
         self.btn_dry_run_action.setEnabled(False)
         self.btn_recent_job = self._button("Kiểm tra job gần nhất", self.job_status_requested.emit)
         self.btn_recent_job.setEnabled(False)
         self.btn_recent_job.hide()
         self.btn_toggle_adv = self._button("Chi tiết / Chế độ nhà máy", self._toggle_advanced_card)
+        self.btn_toggle_adv.setObjectName("ghostButton")
+        self.btn_toggle_adv.setIcon(engineering_icon("wrench", 16))
         for button in (self.btn_flash_app, self.btn_dry_run_action,
                        self.btn_recent_job, self.btn_toggle_adv):
             buttons.addWidget(button)
@@ -72,7 +78,7 @@ class ProgramView(QWidget):
         for button in (self.btn_flash_app, self.btn_dry_run_action,
                        self.btn_recent_job, self.btn_toggle_adv):
             button.setMinimumHeight(40)
-        execution.header_layout.addLayout(buttons, 2)
+        execution.body.addLayout(buttons)
         self.stepper = PipelineStepper(self)
         step_copy = (
             ("ST-Link", "Kết nối đầu dò"),
@@ -94,6 +100,7 @@ class ProgramView(QWidget):
         self.progress_bar.setValue(0)
         self.progress_bar.hide()
         execution.body.addWidget(self.progress_bar)
+        self.container_layout.addWidget(execution)
         self._build_advanced_section()
         self.adv_card.content_layout.insertWidget(0, self.stepper)
         self.activity_log = ActivityLogPanel(parent=self)
@@ -108,10 +115,6 @@ class ProgramView(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.addWidget(scroll, 1)
-        footer = QHBoxLayout()
-        footer.setContentsMargins(16, 0, 16, 12)
-        footer.addWidget(execution)
-        root.addLayout(footer)
 
     @staticmethod
     def _button(text, callback):
@@ -144,6 +147,7 @@ class ProgramView(QWidget):
         row.addWidget(self.app_file_edit, 1)
         self.btn_browse_app = self._button("Chọn HEX khác…", self._browse_app_file)
         self.btn_browse_app.setObjectName("ghostButton")
+        self.btn_browse_app.setIcon(engineering_icon("folder", 16))
         row.addWidget(self.btn_browse_app)
         card.body.addLayout(row)
         self.badge_file_valid = self._label("Chưa chọn HEX", "mutedLabel")
@@ -205,6 +209,8 @@ class ProgramView(QWidget):
         self.boot_info_label = self._label("Dùng Bootloader chuẩn nhúng sẵn; quy trình yêu cầu xác nhận chế độ nhà máy riêng.", "mutedLabel")
         self.bootloader_card.body.addWidget(self.boot_info_label)
         self.btn_flash_bootloader = self._button("NẠP BOOTLOADER", self._on_flash_bootloader_clicked)
+        self.btn_flash_bootloader.setObjectName("dangerButton")
+        self.btn_flash_bootloader.setIcon(engineering_icon("wrench", 16))
         self.bootloader_card.body.addWidget(self.btn_flash_bootloader)
         self.adv_card.content_layout.addWidget(self.bootloader_card)
         self.container_layout.addWidget(self.adv_card)
