@@ -46,8 +46,8 @@ class SectionCard(QFrame):
         super().__init__(parent)
         self.setObjectName('engineeringCard')
         self.body = QVBoxLayout(self)
-        self.body.setContentsMargins(14, 12, 14, 12)
-        self.body.setSpacing(10)
+        self.body.setContentsMargins(18, 16, 18, 16)
+        self.body.setSpacing(12)
         self.header_layout = QHBoxLayout()
         self.header_layout.setSpacing(12)
         if icon:
@@ -120,34 +120,151 @@ class ActivityLogPanel(SectionCard):
 
 def engineering_stylesheet(p):
     return f'''
-    QFrame#engineeringCard, QFrame#sharedContextBar {{
-        background: {p.surface};
-        border: 1px solid {p.border}; border-radius: 3px;
+    QMainWindow, QWidget#centralWidget, QWidget#programViewContainer, QStackedWidget#v18MainStack {{
+        background: {p.canvas};
+        color: {p.text};
     }}
-    QLabel#sectionTitle {{ font-size: 15px; font-weight: 600; color: {p.text}; border: none; }}
-    QLabel#iconTile {{ background: transparent; border: none; border-radius: 0; }}
-    QFrame#memorySegment {{ background: {p.surface_raised}; border: 1px solid {p.border_strong}; border-radius: 4px; }}
-    QFrame#memorySegment[region="app"] {{ background: {p.primary_light}; border: 1px solid {p.primary}; }}
-    QFrame#memorySegment[region="boot"] {{ background: {p.surface_raised}; border: 1px solid {p.text_muted}; }}
-    QFrame#memorySegment[region="meta"] {{ background: {p.surface_sunken}; border: 1px solid {p.border_strong}; }}
-    QFrame#headerBar {{ background: {p.canvas}; border-bottom: 1px solid {p.border}; }}
-    QFrame#sidebarPanel {{ background: {p.canvas}; border-right: 1px solid {p.border}; min-width: 174px; max-width: 174px; }}
-    QPushButton#navButton {{ font-size: 13px; font-weight: 600; min-height: 52px; text-align:left; padding: 3px 16px; border: none; border-left: 2px solid transparent; border-radius: 0; }}
-    QPushButton#navButton:hover {{ background: {p.surface}; color: {p.text}; }}
-    QPushButton#navButton:checked {{ background: {p.primary_light}; color: {p.text}; border-left: 2px solid {p.accent_cyan}; border-radius: 0; }}
-    QLabel#engineeringPageTitle {{ font-size: 24px; font-weight: 700; }}
-    QLabel#headerBrandTitle {{ font-size: 22px; font-weight: 700; }}
-    QFrame#resourceTile, QFrame#toolTile {{ background: {p.surface_raised}; border: 1px solid {p.border}; border-radius: 2px; }}
-    QLabel#engineeringPathField {{ background: {p.input_bg}; border: 1px solid {p.border_strong}; border-radius: 2px; padding: 7px 10px; }}
-    QFrame#sharedContextBar {{ background: transparent; border: none; }}
+    QScrollArea {{ background: transparent; border: none; }}
+
+    QFrame#headerBar {{
+        background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 {p.surface_sunken}, stop:1 {p.canvas});
+        border: none;
+        border-bottom: 1px solid {p.border};
+    }}
+    QFrame#sidebarPanel {{
+        background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 {p.surface_sunken}, stop:1 {p.canvas});
+        border: none;
+        border-right: 1px solid {p.border};
+        min-width: 206px; max-width: 206px;
+    }}
+    QPushButton#navButton {{
+        min-height: 48px;
+        text-align: left;
+        padding: 0 15px;
+        margin: 3px 10px;
+        border: 1px solid transparent;
+        border-radius: 9px;
+        color: {p.text_secondary};
+        background: transparent;
+        font-size: 12.5px;
+        font-weight: 650;
+    }}
+    QPushButton#navButton:hover {{
+        color: {p.text};
+        background: {p.surface};
+        border-color: {p.border};
+    }}
+    QPushButton#navButton:checked {{
+        color: {p.text};
+        background: {p.primary_light};
+        border: 1px solid {p.primary};
+        font-weight: 750;
+    }}
+
+    QLabel#engineeringPageTitle {{
+        font-size: 21px; font-weight: 800; color: {p.text};
+        letter-spacing: .2px;
+    }}
+    QLabel#headerBrandTitle {{ font-size: 15px; font-weight: 800; color: {p.text}; }}
     QFrame#pageContextHeader {{ background: transparent; border: none; }}
-    QLabel#sectionSubtitle, QLabel#contextFieldLabel {{ color: {p.text_secondary}; border: none; }}
-    QLabel#contextTarget {{ font-weight: 600; border: none; }}
-    QLabel#contextConnectionStatus {{ color: {p.text_secondary}; border: none; }}
-    QPushButton#primaryActionButton {{ background: {p.primary}; color: {p.text_on_accent};
-        border: 1px solid {p.accent_cyan}; border-radius: 3px; font-weight: 700; padding: 10px 16px; }}
-    QPushButton#primaryActionButton:disabled {{ background: {p.surface_raised}; color: {p.text_muted}; border-color: {p.border}; }}
+
+    QFrame#engineeringCard {{
+        background: {p.surface};
+        border: 1px solid {p.border};
+        border-radius: 10px;
+    }}
+    QFrame#engineeringCard:hover {{ border-color: {p.border_strong}; }}
+    QLabel#sectionTitle {{ font-size: 13px; font-weight: 750; color: {p.text}; border: none; }}
+    QLabel#sectionSubtitle {{ font-size: 11px; color: {p.text_secondary}; border: none; }}
+    QLabel#iconTile {{
+        background: {p.primary_light};
+        border: 1px solid {p.border};
+        border-radius: 8px;
+        padding: 4px;
+    }}
+    QFrame#resourceTile, QFrame#toolTile {{
+        background: {p.surface_raised};
+        border: 1px solid {p.border};
+        border-radius: 8px;
+        padding: 7px;
+    }}
+    QFrame#resourceTile:hover, QFrame#toolTile:hover {{ border-color: {p.primary}; }}
+
+    QFrame#sharedContextBar {{ background: transparent; border: none; }}
+    QLabel#contextFieldLabel {{
+        color: {p.text_muted}; border: none;
+        font-size: 9.5px; font-weight: 800; letter-spacing: .7px;
+    }}
+    QLabel#contextTarget {{ color: {p.text}; font-weight: 700; font-size: 11.5px; border: none; }}
+    QLabel#contextConnectionStatus {{ color: {p.text_secondary}; font-size: 10.5px; border: none; }}
+    QComboBox {{
+        min-height: 32px;
+        padding: 0 10px;
+        border: 1px solid {p.border};
+        border-radius: 7px;
+        background: {p.surface};
+        color: {p.text};
+    }}
+    QComboBox:hover, QComboBox:focus {{ border-color: {p.primary}; }}
+    QPushButton#contextAction {{
+        min-height: 32px;
+        padding: 0 11px;
+        border: 1px solid {p.border};
+        border-radius: 7px;
+        background: {p.surface};
+        color: {p.text_secondary};
+        font-weight: 650;
+    }}
+    QPushButton#contextAction:hover {{ color: {p.text}; border-color: {p.primary}; background: {p.surface_raised}; }}
+
+    QLabel#engineeringPathField {{
+        background: {p.surface_sunken};
+        border: 1px solid {p.border};
+        border-radius: 7px;
+        padding: 8px 10px;
+        color: {p.text};
+        font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+        font-size: 10.5px;
+    }}
+    QFrame#memorySegment {{ background: {p.surface_raised}; border: 1px solid {p.border}; border-radius: 7px; }}
+    QFrame#memorySegment[region="app"] {{ background: {p.primary_light}; border-color: {p.primary}; }}
+    QFrame#memorySegment[region="boot"] {{ background: {p.surface_raised}; border-color: {p.border_strong}; }}
+    QFrame#memorySegment[region="meta"] {{ background: {p.surface_sunken}; border-color: {p.border}; }}
+
+    QPushButton#primaryActionButton {{
+        min-height: 40px;
+        padding: 0 18px;
+        border-radius: 8px;
+        border: 1px solid {p.accent_cyan};
+        background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 {p.primary_hover}, stop:1 {p.primary});
+        color: {p.text_on_accent};
+        font-size: 12.5px; font-weight: 800;
+    }}
+    QPushButton#primaryActionButton:hover {{ border-color: {p.primary_hover}; }}
+    QPushButton#primaryActionButton:disabled {{
+        background: {p.surface_raised}; color: {p.text_muted}; border-color: {p.border};
+    }}
+    QPushButton#ghostButton {{
+        min-height: 36px; padding: 0 13px;
+        border: 1px solid {p.border}; border-radius: 8px;
+        background: {p.surface_raised}; color: {p.text_secondary};
+        font-weight: 650;
+    }}
+    QPushButton#ghostButton:hover {{ color: {p.text}; border-color: {p.border_strong}; background: {p.surface}; }}
+    QPushButton#dangerButton {{
+        min-height: 38px; padding: 0 14px;
+        border: 1px solid {p.danger}; border-radius: 8px;
+        background: transparent; color: {p.danger}; font-weight: 750;
+    }}
+
+    QPlainTextEdit#terminalView {{
+        background: {p.terminal_bg}; color: {p.text_secondary};
+        border: 1px solid {p.border}; border-radius: 8px; padding: 8px;
+        font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+        font-size: 10.5px;
+    }}
     QLabel[state="neutral"] {{ color: {p.text_secondary}; }}
-    QLabel[state="success"] {{ color: {p.success}; }}
-    QLabel[state="failure"] {{ color: {p.danger}; }}
+    QLabel[state="success"] {{ color: {p.success}; font-weight: 700; }}
+    QLabel[state="warning"] {{ color: {p.warning}; font-weight: 700; }}
+    QLabel[state="failure"] {{ color: {p.danger}; font-weight: 700; }}
     '''

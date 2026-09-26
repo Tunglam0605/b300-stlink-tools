@@ -24,7 +24,6 @@ from .debug_service import DebugConfig, DebugService, DebugState
 from .gateway_status import GatewaySnapshot
 from .gdb_runtime import resolve_gdb
 from .models import ProbeRef
-from .process_startup import child_process_kwargs
 from .remote_debug_guard import RemoteDebugGuard
 from .remote_session import RemoteForward, RemoteForwardError, RemoteSession
 from .remote_vscode import workspace_executable
@@ -397,19 +396,107 @@ def resolve_vscode(explicit: Optional[str] = None) -> str:
     )
 
 
+def _windows_vscode_window_handles(executable: str) -> set[int]:
+    """Return visible top-level windows owned by this exact VS Code executable."""
+    if os.name != "nt":
+        return set()
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    target = os.path.normcase(str(Path(executable).resolve()))
+    matches: set[int] = set()
+    enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    def visit(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+        if not handle:
+            return True
+        try:
+            size = wintypes.DWORD(32768)
+            buffer = ctypes.create_unicode_buffer(size.value)
+            if kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+                if os.path.normcase(buffer.value) == target:
+                    matches.add(int(hwnd))
+        finally:
+            kernel32.CloseHandle(handle)
+        return True
+
+    user32.EnumWindows(enum_proc(visit), 0)
+    return matches
+
+
+def _focus_windows_vscode_window(hwnd: int) -> bool:
+    """Restore and foreground one specific HWND without touching other windows."""
+    if os.name != "nt":
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    SW_RESTORE = 9
+    SWP_NOSIZE = 0x0001
+    SWP_NOMOVE = 0x0002
+    SWP_SHOWWINDOW = 0x0040
+    HWND_TOP = 0
+    user32.ShowWindow(wintypes.HWND(hwnd), SW_RESTORE)
+    user32.SetWindowPos(
+        wintypes.HWND(hwnd), wintypes.HWND(HWND_TOP), 0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+    )
+    return bool(user32.SetForegroundWindow(wintypes.HWND(hwnd)))
+
+
+def _focus_new_windows_vscode_window(executable: str, previous: set[int],
+                                      timeout_seconds: float = 8.0) -> None:
+    """Focus only the VS Code window created after the B300 launch request."""
+    deadline = time.monotonic() + max(0.1, float(timeout_seconds))
+    while time.monotonic() < deadline:
+        created = _windows_vscode_window_handles(executable) - set(previous)
+        if created:
+            _focus_windows_vscode_window(max(created))
+            return
+        time.sleep(0.1)
+
+
 def launch_vscode(workspace: Path, *, executable: Optional[str] = None,
                   process_factory: ProcessFactory = subprocess.Popen,
                   platform_name: Optional[str] = None):
-    """Open a workspace in a new VS Code window after an explicit caller action."""
+    """Open a dedicated new VS Code window without disturbing existing windows."""
     root = Path(workspace).expanduser().resolve()
     if not root.is_dir():
         raise ValueError("VS Code workspace directory does not exist.")
     launcher = resolve_vscode(executable)
-    return process_factory(
-        (launcher, "--new-window", str(root)),
-        shell=False,
-        **child_process_kwargs(platform_name),
-    )
+    existing_windows: set[int] = set()
+    should_focus = os.name == "nt" and process_factory is subprocess.Popen
+    argv = [launcher, "--new-window"]
+    if os.name == "nt":
+        session_dir = Path(tempfile.mkdtemp(prefix="b300-vscode-"))
+        argv.extend(["--user-data-dir", str(session_dir)])
+        extensions_dir = Path.home() / ".vscode" / "extensions"
+        if extensions_dir.is_dir():
+            argv.extend(["--extensions-dir", str(extensions_dir)])
+    argv.append(str(root))
+    if should_focus:
+        existing_windows = _windows_vscode_window_handles(launcher)
+
+    # VS Code is an interactive desktop application. Do not apply the backend
+    # SW_HIDE / CREATE_NO_WINDOW child-process policy here.
+    process = process_factory(tuple(argv), shell=False)
+    if should_focus:
+        threading.Thread(
+            target=_focus_new_windows_vscode_window,
+            args=(launcher, existing_windows),
+            name="b300-vscode-focus",
+            daemon=True,
+        ).start()
+    return process
 
 
 class VsCodeDebugBridge:
@@ -703,7 +790,10 @@ class VsCodeDebugBridge:
                 self._client_activity_generation = int(snapshot.gdb_activity_generation)
                 self._client_activity_count = int(snapshot.gdb_connection_count)
                 self._client_activity_sequence = int(snapshot.sequence)
-                self._client_observed_attach = self._client_activity_count > 0
+                # The start snapshot is baseline evidence only. Gateway readiness
+                # probes may briefly use GDB before VS Code exists; a real attach
+                # is observed only from a newer snapshot after the Client bridge.
+                self._client_observed_attach = False
         self._last_detail = "VS Code GDB is forwarded through the authenticated SSH session."
         return self.state
 

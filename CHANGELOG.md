@@ -5,6 +5,13 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.24.3] - 2026-09-26
+
+- Fixed managed VS Code launch on Windows so B300 opens a dedicated visible VS Code instance without reusing or disturbing existing editor windows.
+- Kept the remote VS Code bridge READY until a real post-start GDB attach is observed, preventing readiness probes from being mistaken for debugger attach/detach activity.
+- Refined the production GUI shell and Program workflow with a more compact header, clearer navigation, modernized engineering cards and stronger action hierarchy while preserving existing flash/debug safety behavior.
+- Preserved loopback-only GDB/TCL forwarding, Application flash boundaries, protected Bootloader sectors and existing Gateway ownership rules.
+
 ## [0.24.2] - 2026-09-25
 
 - Fixed standalone Client Debug to acquire and heartbeat a `VSCODE_DEBUG` Gateway lease before opening the SSH GDB/TCL tunnel, with deterministic endpoint validation and guaranteed lease/session cleanup.
