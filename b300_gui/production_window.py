@@ -101,51 +101,53 @@ class ProductionMainWindow(_BaseMainWindow):
 
     def _configure_engineering_shell(self):
         header = self.header_bar
-        header.setFixedHeight(84)
+        header.setFixedHeight(74)
         self.header_logo = QLabel()
-        self.header_logo.setPixmap(QPixmap(str(asset_path('b300-stlink-icon.png'))).scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
-        self.header_logo.setFixedSize(52, 52)
+        self.header_logo.setPixmap(QPixmap(str(asset_path('b300-stlink-icon.png'))).scaled(38, 38, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        self.header_logo.setFixedSize(44, 44)
         self.header_logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.header_logo.setAccessibleName('B300 ST-Link Tools')
         header.layout().insertWidget(0, self.header_logo)
         header.brand_title.setStyleSheet('')
-        header.brand_subtitle.setStyleSheet('font-size: 12px;')
-        header.brand_container.setMinimumWidth(215)
+        header.brand_subtitle.setText('STM32 · Nạp · Gỡ lỗi · Giám sát')
+        header.brand_subtitle.setStyleSheet('font-size: 10px; font-weight: 600;')
+        header.brand_container.setMinimumWidth(190)
         self.brand_logo.parentWidget().hide()
         for label in self.sidebar.findChildren(QLabel):
             if label.objectName() == 'navSectionTitle':
                 label.hide()
-        self.sidebar.layout().setContentsMargins(0, 16, 0, 12)
-        navigation_labels = {
-            'program': 'NẠP PHẦN MỀM',
-            'monitor': 'GIÁM SÁT',
-            'debug': 'GỠ LỖI VS CODE',
-            'device': 'THIẾT BỊ',
-            'settings': 'CÀI ĐẶT',
+        self.sidebar.layout().setContentsMargins(0, 18, 0, 14)
+        labels = {
+            'program': 'Nạp phần mềm',
+            'monitor': 'Giám sát',
+            'debug': 'Gỡ lỗi VS Code',
+            'device': 'Thiết bị',
+            'settings': 'Cài đặt',
         }
-        for page, button in zip(('program','monitor','debug','device','settings'),self.v18_nav_buttons):
-            button.setText('  ' + navigation_labels[page])
-            button.setIcon(engineering_icon(page, 22, ThemeManager.instance().palette.text_secondary))
-            button.setIconSize(QSize(22,22))
-            button.setMinimumHeight(58)
+        for page, button in zip(('program','monitor','debug','device','settings'), self.v18_nav_buttons):
+            button.setText('   ' + labels[page])
+            button.setIcon(engineering_icon(page, 20, ThemeManager.instance().palette.text_secondary))
+            button.setIconSize(QSize(20,20))
+            button.setMinimumHeight(48)
         self.shared_context_bar.parentWidget().layout().removeWidget(self.shared_context_bar)
         header.layout().insertWidget(2, self.shared_context_bar, 1)
         self.shared_context_bar.manage_projects_button.hide()
         self.shared_context_bar.manage_connections_button.hide()
         header.btn_open_project.setText('Dự án')
-        header.btn_open_project.setIcon(engineering_icon('folder',20))
+        header.btn_open_project.setIcon(engineering_icon('folder',18))
         header.btn_history.setText('Phiên bản')
-        header.btn_history.setIcon(engineering_icon('history',20))
-        for button in (header.btn_open_project,header.btn_history):
-            button.setFixedHeight(38)
+        header.btn_history.setIcon(engineering_icon('history',18))
+        for button in (header.btn_open_project, header.btn_history):
+            button.setFixedHeight(34)
+            button.setObjectName('contextAction')
         self.page_title.setObjectName('engineeringPageTitle')
         self.page_icon = QLabel()
-        self.page_icon.setFixedSize(38,38)
+        self.page_icon.setFixedSize(34,34)
         self.page_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         page_header = self.page_title.parentWidget()
         page_header.layout().insertWidget(0,self.page_icon)
-        page_header.setMinimumHeight(60)
-        self.status_banner.setMaximumWidth(260)
+        page_header.setMinimumHeight(54)
+        self.status_banner.setMaximumWidth(250)
 
     def _apply_density(self, value=None):
         if value is not None:
@@ -178,19 +180,17 @@ class ProductionMainWindow(_BaseMainWindow):
     # Main navigation
     # ------------------------------------------------------------------
     def _configure_v18_navigation(self) -> None:
-        # Keep global utilities in one predictable place. Page-local duplicates
-        # remain as compatibility attributes but are not part of production UX.
         self.header_bar.segmented_control.hide()
         self.header_bar.conn_mode_control.hide()
         self.header_bar.probe_container.hide()
         self.header_bar.target_mcu_badge.hide()
-        self.header_bar.probe_refresh_btn.setObjectName("refreshProbeAction")
+        self.header_bar.probe_refresh_btn.setObjectName('refreshProbeAction')
         self.header_bar.theme_btn.hide()
         self.header_bar.machine_setup_btn.hide()
         self.header_bar.help_btn.hide()
         self.machine_setup_button.hide()
         self.update_channel_label.hide()
-        for btn_name in ("nav_flash_btn", "nav_memory_btn", "nav_debug_btn", "nav_gateway_btn"):
+        for btn_name in ('nav_flash_btn', 'nav_memory_btn', 'nav_debug_btn', 'nav_gateway_btn'):
             button = getattr(self, btn_name, None)
             if button is not None:
                 button.setVisible(False)
@@ -200,20 +200,17 @@ class ProductionMainWindow(_BaseMainWindow):
             return
         self.v18_nav_buttons = []
         specs = [
-            ("program", "NẠP PHẦN MỀM", "Nạp ứng dụng và bộ nạp khởi động an toàn"),
-            ("monitor", "GIÁM SÁT", "Quan sát biến và luồng thực thi theo thời gian thực"),
-            ("debug", "GỠ LỖI VS CODE", "Chuẩn bị gỡ lỗi trong VS Code"),
-            ("device", "THIẾT BỊ", "Thông tin MCU đích, ST-Link và byte tùy chọn"),
-            ("settings", "CÀI ĐẶT", "Thiết lập môi trường và cấu hình hệ thống"),
+            ('program', 'Nạp phần mềm', 'Chọn firmware, kiểm tra an toàn và nạp Application'),
+            ('monitor', 'Giám sát', 'Live Monitor và quan sát trạng thái thời gian thực'),
+            ('debug', 'Gỡ lỗi VS Code', 'Mở phiên VS Code riêng và gỡ lỗi qua Gateway'),
+            ('device', 'Thiết bị', 'Thông tin MCU, ST-Link và trạng thái bảo vệ'),
+            ('settings', 'Cài đặt', 'Môi trường, Gateway, cập nhật và hỗ trợ'),
         ]
-        attrs = [
-            "nav_program_btn", "nav_monitor_btn", "nav_debug_btn_v18",
-            "nav_device_btn", "nav_settings_btn",
-        ]
+        attrs = ['nav_program_btn','nav_monitor_btn','nav_debug_btn_v18','nav_device_btn','nav_settings_btn']
         insert_idx = 3
         for index, (page, text, tooltip) in enumerate(specs):
             button = QPushButton(text)
-            button.setObjectName("navButton")
+            button.setObjectName('navButton')
             button.setCheckable(True)
             button.setToolTip(tooltip)
             button.clicked.connect(lambda _checked=False, selected=page: self.show_page(selected))
