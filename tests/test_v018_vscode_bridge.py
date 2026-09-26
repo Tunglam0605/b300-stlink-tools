@@ -149,16 +149,76 @@ class V018VsCodeBridgeTests(unittest.TestCase):
                 platform_name="windows",
             )
 
-        self.assertEqual(
-            captured["argv"],
-            (
-                str(executable.resolve()),
-                "--new-window",
-                str(workspace.resolve()),
-            ),
-        )
-        self.assertNotIn("--reuse-window", captured["argv"])
+        argv = captured["argv"]
+        self.assertEqual(argv[0], str(executable.resolve()))
+        self.assertEqual(argv[1], "--new-window")
+        self.assertIn("--user-data-dir", argv)
+        self.assertEqual(argv[-1], str(workspace.resolve()))
+        self.assertNotIn("--reuse-window", argv)
         self.assertFalse(captured["kwargs"]["shell"])
+        self.assertNotIn("creationflags", captured["kwargs"])
+        self.assertNotIn("startupinfo", captured["kwargs"])
+
+    def test_windows_launch_uses_isolated_user_data_and_shared_extensions(self) -> None:
+        captured = {}
+
+        def process_factory(argv, **kwargs):
+            captured["argv"] = argv
+            captured["kwargs"] = kwargs
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            executable = root / "Code.exe"
+            executable.touch()
+            fake_home = root / "home"
+            extensions = fake_home / ".vscode" / "extensions"
+            extensions.mkdir(parents=True)
+            isolated = root / "isolated-profile"
+            with patch("b300_core.vscode_bridge.os.name", "nt"), \
+                 patch("b300_core.vscode_bridge.Path.home", return_value=fake_home), \
+                 patch("b300_core.vscode_bridge.tempfile.mkdtemp", return_value=str(isolated)):
+                launch_vscode(
+                    workspace, executable=str(executable),
+                    process_factory=process_factory, platform_name="windows",
+                )
+
+        argv = captured["argv"]
+        self.assertEqual(
+            argv[:4],
+            (str(executable.resolve()), "--new-window", "--user-data-dir", str(isolated)),
+        )
+        self.assertIn("--extensions-dir", argv)
+        self.assertIn(str(extensions), argv)
+        self.assertEqual(argv[-1], str(workspace.resolve()))
+
+    def test_focus_new_vscode_window_never_activates_preexisting_handles(self) -> None:
+        from b300_core import vscode_bridge as module
+
+        snapshots = [
+            {101, 202},
+            {101, 202},
+            {101, 202, 303},
+        ]
+        focused = []
+
+        def handles(_executable):
+            return snapshots.pop(0) if snapshots else {101, 202, 303}
+
+        with patch.object(module, "_windows_vscode_window_handles", side_effect=handles), \
+             patch.object(
+                 module, "_focus_windows_vscode_window",
+                 side_effect=lambda hwnd: focused.append(hwnd) or True,
+             ), \
+             patch.object(module.time, "sleep", return_value=None):
+            module._focus_new_windows_vscode_window(
+                "C:/VSCode/Code.exe", {101, 202}, 1.0,
+            )
+
+        self.assertEqual(focused, [303])
+        self.assertNotIn(101, focused)
+        self.assertNotIn(202, focused)
 
     def test_external_profile_is_attach_only_and_loopback_only(self) -> None:
         profile = VsCodeExternalProfile(
@@ -288,8 +348,9 @@ class V018VsCodeBridgeTests(unittest.TestCase):
             profile_id="lab",
         )
 
-        bridge.observe_gateway_snapshot(self.gateway_snapshot(sequence=2, count=0, activity=2, ever=True))
-        bridge.observe_gateway_snapshot(self.gateway_snapshot(sequence=3, count=0, activity=4, ever=True))
+        bridge.observe_gateway_snapshot(self.gateway_snapshot(sequence=2, count=1, activity=2, ever=True))
+        bridge.observe_gateway_snapshot(self.gateway_snapshot(sequence=3, count=0, activity=3, ever=True))
+        bridge.observe_gateway_snapshot(self.gateway_snapshot(sequence=4, count=0, activity=4, ever=True))
         self.assertEqual(len(scheduled), 2)
 
         scheduled.pop(0)()
@@ -306,15 +367,38 @@ class V018VsCodeBridgeTests(unittest.TestCase):
         )
         bridge.set_last_client_detached_handler(bridge.stop_if_generation)
         bridge.start_client(session, snapshot=self.gateway_snapshot(sequence=1, count=1, activity=1, ever=True), profile_id="lab")
-        bridge.observe_gateway_snapshot(self.gateway_snapshot(sequence=2, count=0, activity=2, ever=True))
-        bridge.observe_gateway_snapshot(self.gateway_snapshot(sequence=3, count=1, activity=3, ever=True))
+        bridge.observe_gateway_snapshot(self.gateway_snapshot(sequence=2, count=1, activity=2, ever=True))
+        bridge.observe_gateway_snapshot(self.gateway_snapshot(sequence=3, count=0, activity=3, ever=True))
+        bridge.observe_gateway_snapshot(self.gateway_snapshot(sequence=4, count=1, activity=4, ever=True))
         scheduled.pop()()
         self.assertEqual(session.closed, [])
 
         self.assertFalse(bridge.observe_gateway_snapshot(
-            self.gateway_snapshot(sequence=4, count=0, activity=4, ever=True, generation=2)
+            self.gateway_snapshot(sequence=5, count=0, activity=5, ever=True, generation=2)
         ))
         self.assertEqual(session.closed, [])
+
+    def test_client_does_not_treat_start_snapshot_activity_as_vscode_attach(self) -> None:
+        scheduled = []
+        session = FakeRemoteSession()
+        bridge = VsCodeDebugBridge(
+            debug_service=FakeDebugService(), client_reclaim_delay_seconds=0.0,
+            client_reclaim_scheduler=lambda _delay, callback: scheduled.append(callback),
+        )
+        bridge.set_last_client_detached_handler(bridge.stop_if_generation)
+        bridge.start_client(
+            session,
+            snapshot=self.gateway_snapshot(sequence=1, count=1, activity=1, ever=True),
+            profile_id="lab",
+        )
+
+        bridge.observe_gateway_snapshot(
+            self.gateway_snapshot(sequence=2, count=0, activity=2, ever=True)
+        )
+
+        self.assertEqual(scheduled, [])
+        self.assertEqual(session.closed, [])
+        self.assertEqual(bridge.state.state, BridgeState.READY)
 
     def test_client_missing_activity_capability_never_reclaims_forward(self) -> None:
         session = FakeRemoteSession()
