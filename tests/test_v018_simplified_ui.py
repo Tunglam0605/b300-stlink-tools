@@ -11,6 +11,8 @@ from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import shiboken6
+from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QApplication, QPushButton, QTabWidget, QComboBox, QLineEdit
 
@@ -58,13 +60,24 @@ class V018SimplifiedUiTests(unittest.TestCase):
         window._test_profile_dir = root
         return window
 
+    def _dispose_qt_widget(self, widget) -> None:
+        """Complete deleteLater while the shared QApplication is still alive."""
+        widget.deleteLater()
+        self.app.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        self.app.processEvents()
+
     def _close(self, window: ProductionMainWindow) -> None:
         root = getattr(window, "_test_profile_dir", None)
         window.close()
-        window.deleteLater()
-        self.app.processEvents()
+        self._dispose_qt_widget(window)
         if root is not None:
             shutil.rmtree(root, ignore_errors=True)
+
+    def test_window_cleanup_destroys_deferred_qt_objects_before_process_shutdown(self) -> None:
+        window = self._make_window()
+        self._close(window)
+        self.assertFalse(shiboken6.isValid(window))
 
     def test_ready_bridge_roles_lock_hardware_and_update_install_until_stopped(self) -> None:
         window = self._make_window()
@@ -320,8 +333,7 @@ class V018SimplifiedUiTests(unittest.TestCase):
                 self.assertIn("0x12345678", view.app_meta_label.text())
                 self.assertIn("0x08010101", view.app_meta_label.text())
         finally:
-            view.deleteLater()
-            self.app.processEvents()
+            self._dispose_qt_widget(view)
 
     def test_program_hides_unavailable_remote_tools_and_keeps_factory_advanced(self) -> None:
         window = self._make_window()
@@ -674,8 +686,7 @@ class V018SimplifiedUiTests(unittest.TestCase):
             self.assertEqual(view.val_wrp.text(), "Chưa kiểm tra")
             self.assertEqual(view.val_rdp.text(), "Chưa kiểm tra")
         finally:
-            view.deleteLater()
-            self.app.processEvents()
+            self._dispose_qt_widget(view)
 
     def test_target_info_syncs_across_views(self) -> None:
         window = self._make_window()

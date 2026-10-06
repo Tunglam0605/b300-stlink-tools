@@ -7,6 +7,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+import shiboken6
+
 from b300_core.live_monitor import LiveSample, LiveValue, LiveWatch
 from b300_core.models import ProbeRef
 from b300_core.offline_symbols import SourceLocation
@@ -18,7 +20,16 @@ from b300_gui.views.monitor_view import MonitorView
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QApplication, QWidget
+
+
+def _dispose_qt_widget(app, widget) -> None:
+    """Complete deleteLater while the shared QApplication is still alive."""
+    widget.deleteLater()
+    app.processEvents()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
 
 
 class _Signal:
@@ -138,6 +149,14 @@ class _Session:
 
 
 class LiveMonitorControllerTests(unittest.TestCase):
+    def test_production_live_panel_cleanup_releases_deferred_object(self) -> None:
+        from b300_gui.production_live_panel import ProductionLivePanel
+
+        app = QApplication.instance() or QApplication([])
+        panel = ProductionLivePanel()
+        _dispose_qt_widget(app, panel)
+        self.assertFalse(shiboken6.isValid(panel))
+
     def _restart_fixture(self, directory, *, worker_wait=True):
         class ControlledWorker(_InlineWorker):
             def __init__(self, operation, parent=None):
@@ -329,7 +348,7 @@ class LiveMonitorControllerTests(unittest.TestCase):
 
         app = QApplication.instance() or QApplication([])
         panel = ProductionLivePanel()
-        self.addCleanup(panel.deleteLater)
+        self.addCleanup(_dispose_qt_widget, app, panel)
         controller = LiveMonitorController(panel)
         received = []
         panel.sample_received.connect(received.append)
@@ -1065,6 +1084,11 @@ class LiveMonitorViewTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
 
+    def test_monitor_view_cleanup_releases_deferred_object(self) -> None:
+        view = MonitorView()
+        _dispose_qt_widget(self.app, view)
+        self.assertFalse(shiboken6.isValid(view))
+
     def test_start_button_runs_selected_elf_through_production_controller(self) -> None:
         from b300_gui.app_context import AppContext
         from b300_core.project_profiles import ProjectProfile
@@ -1108,8 +1132,7 @@ class LiveMonitorViewTests(unittest.TestCase):
             panel.clear_button.click()
             self.assertEqual(len(panel.buffer), 0)
         finally:
-            view.deleteLater()
-            self.app.processEvents()
+            _dispose_qt_widget(self.app, view)
 
     def test_client_mode_uses_saved_gateway_profile_without_transport_fields(self) -> None:
         class ClientSession(_Session):
@@ -1160,8 +1183,7 @@ class LiveMonitorViewTests(unittest.TestCase):
             self.assertNotIn("tcl", visible_controls)
             self.assertNotIn("gdb", visible_controls)
         finally:
-            view.deleteLater()
-            self.app.processEvents()
+            _dispose_qt_widget(self.app, view)
 
 
 if __name__ == "__main__":

@@ -98,11 +98,7 @@ jobs:
             }
             $exitCode = $LASTEXITCODE
             $verdict = if (Test-Path $resultFile) { (Get-Content $resultFile -Raw).Trim() } else { '' }
-            if ($exitCode -ne 0 -and $verdict -eq 'PASS') {
-              Write-Warning "$module passed unittest assertions but Qt native teardown returned $exitCode; accepting verified PASS sentinel."
-              $global:LASTEXITCODE = 0
-              continue
-            }
+            # A recorded assertion verdict cannot override a native process failure.
             if ($exitCode -ne 0) { exit $exitCode }
             if ($verdict -ne 'PASS') {
               Write-Error "$module exited without a verified PASS sentinel."

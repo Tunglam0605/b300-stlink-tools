@@ -1032,13 +1032,27 @@ def run_gateway_runtime_command(args: argparse.Namespace) -> int:
         emit_snapshot(record, args.json,
                       "Gateway %s: %s" % (args.debug_mode, record.get("reason_code", "OK")))
         return 0 if record.get("status") == "ok" and record.get("state") == "READY" else 1
-    manager = GatewayProcessManager()
-    if args.debug_mode == "gateway-status":
-        snapshot = manager.status()
-    elif args.debug_mode == "gateway-rescan":
-        snapshot = manager.rescan(_managed_gateway_command(args))
+    agent_manager = GatewayAgentProcessManager()
+    if args.debug_mode != "gateway-status":
+        agent_manager.ensure_running(_managed_agent_command())
+    if agent_manager.status() is not None:
+        operation = "runtime_" + args.debug_mode.removeprefix("gateway-")
+        response = GatewayRequestStore().submit_request(
+            GatewayRequest.create(operation, {}), timeout_seconds=10.0,
+        )
+        if response.get("status") != "ok":
+            raise RuntimeError("Gateway Agent runtime request failed: %s" %
+                               response.get("reason_code", "UNKNOWN"))
+        snapshot = GatewaySnapshot.from_record(response["result"])
+    elif args.debug_mode == "gateway-status":
+        snapshot = GatewaySnapshot.from_record({
+            "schema_version": 1, "instance_id": "stopped", "generation": 0,
+            "sequence": 0, "state": "STOPPED", "reason_code": "GATEWAY_AGENT_NOT_RUNNING",
+            "selected_probe": None, "gdb_endpoint": None, "tcl_endpoint": None,
+            "cpu_state": "unknown", "evidence_age_ms": None,
+        })
     else:
-        snapshot = manager.ensure(_managed_gateway_command(args))
+        raise RuntimeError("Gateway Agent did not become ready; no unleased Gateway was started.")
     record = snapshot.to_record()
     record.update(gateway_capabilities())
     record["command"] = "debug %s" % args.debug_mode

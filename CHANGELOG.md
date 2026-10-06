@@ -5,6 +5,16 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.24.3] - 2026-10-06
+
+- Routed per-user Gateway status, ensure and rescan through the authenticated Gateway Agent queue. Rescanning an idle Agent no longer starts an unleased OpenOCD owner that conflicts with the next Live Monitor or Debug session.
+- Kept Gateway status fail-closed when the Agent is unavailable, with no fallback to a legacy unleased Gateway process or stale debug endpoints.
+- Corrected GUI health reporting for an authenticated idle Agent without an active lease. Idle is shown without a stale-process warning and does not claim the target is ready to attach.
+- Added release notes for the current version so the What's New dialog appears after upgrading.
+- Completed deferred Qt widget deletion in GUI test fixtures and made the test runner and Windows CI reject abnormal native process exits even when an assertion verdict has already been recorded.
+- Made GUI smoke shutdown respect a refused window close and complete accepted window deletion while QApplication is still alive.
+- Added regression coverage for Agent routing, idle rescans, lease ownership and GUI health while preserving SSH-only remote transport, loopback-only GDB/TCL and zero-halt Live Monitor behavior.
+
 ## [0.24.2] - 2026-09-25
 
 - Fixed standalone Client Debug to acquire and heartbeat a `VSCODE_DEBUG` Gateway lease before opening the SSH GDB/TCL tunnel, with deterministic endpoint validation and guaranteed lease/session cleanup.

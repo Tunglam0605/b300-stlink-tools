@@ -55,6 +55,18 @@ class IsolatedUnittestRunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(verdict, "PASS")
 
+    def test_split_cases_rejects_nonzero_child_even_with_pass_sentinel(self):
+        result, verdict = self.run_case(
+            "import os\nimport unittest\nfrom pathlib import Path\n"
+            "class T(unittest.TestCase):\n"
+            "    def test_native_exit(self):\n"
+            "        Path(os.environ['B300_UNITTEST_RESULT_FILE']).write_text('PASS\\n', encoding='ascii')\n"
+            "        os._exit(23)\n",
+            "--split-cases",
+        )
+        self.assertEqual(result.returncode, 23, result.stdout + result.stderr)
+        self.assertEqual(verdict, "FAIL")
+
     def test_split_cases_returns_timeout_when_one_child_exceeds_its_budget(self):
         result, verdict = self.run_case(
             "import time\nimport unittest\n"

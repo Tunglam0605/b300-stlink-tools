@@ -13,6 +13,7 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import shiboken6
 from PySide6.QtCore import QCoreApplication, QEvent, QSettings
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QWidget
@@ -141,6 +142,34 @@ class GuiSmokeTests(unittest.TestCase):
             self.assertEqual(main(["--smoke-test"]), 0)
         shutdown.assert_not_called()
         self.assertIs(QApplication.instance(), app)
+
+    def test_smoke_entry_point_disposes_its_accepted_production_window(self) -> None:
+        from b300_gui.__main__ import main
+        from b300_gui.production_window import ProductionMainWindow
+
+        windows = []
+
+        def construct(**kwargs):
+            window = ProductionMainWindow(**kwargs)
+            windows.append(window)
+            return window
+
+        with mock.patch("b300_gui.__main__.MainWindow", side_effect=construct):
+            self.assertEqual(main(["--smoke-test"]), 0)
+
+        self.assertEqual(len(windows), 1)
+        self.assertFalse(shiboken6.isValid(windows[0]))
+
+    def test_smoke_entry_point_does_not_destroy_a_window_that_refuses_to_close(self) -> None:
+        from b300_gui.__main__ import main
+
+        window = mock.Mock()
+        window.close.return_value = False
+
+        with mock.patch("b300_gui.__main__.MainWindow", return_value=window):
+            self.assertEqual(main(["--smoke-test"]), 1)
+
+        window.deleteLater.assert_not_called()
 
     def test_smoke_entry_point_does_not_write_to_console(self) -> None:
         """The windowed PyInstaller launcher has no safe console output stream."""

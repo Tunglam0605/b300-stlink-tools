@@ -1,5 +1,15 @@
 # Biên bản nghiệm thu và phát hành B300 ST-Link Tools
 
+## Bản 0.24.3 - Gateway lease routing and Qt lifecycle
+
+- Local Windows canonical module-isolated regression: **159/159 modules PASS, 1,705 tests**, with zero abnormal native exits and no PASS-sentinel overrides. The monolithic discovery command exceeded its 120-second evidence budget; it is not counted as a passing gate. The canonical runner matches the module/case isolation used by CI.
+- Repository hygiene, functional parity, source/tag version validation, Python compilation and `git diff --check` PASS.
+- Independent review accepted the Gateway routing/idle-health changes, strict native-exit gate, production smoke shutdown and deferred Qt fixture cleanup. Lifetime regressions failed before the fixes and passed after them.
+- Windows Client to Ubuntu x64 IPC physical debug retest: five lease/rescan/Live Monitor cycles, 100 advancing `xTickCount` samples, zero-halt monitoring and final target RUNNING. Source/stack inspection over SSH passed and restored RUNNING; cleanup returned Agent IDLE and closed GDB/TCL ports.
+- Matching firmware symbols: `B300-Main-Custom@3eb901e6a5872fb337226fd2065672c2325748ea`, branch `feature/custom-main-b300-ota`, `Objects/F407/Main_V2_F407.axf`.
+- This acceptance covers Gateway/debug behavior. No flash, erase, Option Bytes, RDP or WRP change was performed; existing board WRP condition is outside this change.
+- Publication remains gated on CI for the exact final commit on Windows x64, Ubuntu x64 and Ubuntu ARM64, native package smoke, and candidate package debug verification on IPC. The release workflow must validate all 16 assets and signed GUI/CLI updater state before completion.
+
 ## Bản 0.24.0 - Remote Application programming + Gateway recovery
 
 - Release hardware baseline: `main@4008b06`, source version `0.24.0`.

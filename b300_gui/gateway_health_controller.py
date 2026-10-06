@@ -227,7 +227,18 @@ class GatewayHealthController(QObject):
         self._had_snapshot = True
         self._publish_snapshot(value)
         current_ready = self.attach_ready
-        if current_ready:
+        agent = value.agent_status
+        lease = value.lease_snapshot
+        authenticated_idle = (
+            value.state == "STOPPED"
+            and value.reason_code in {"GATEWAY_IDLE", "GATEWAY_PROCESS_NOT_RUNNING", "USER_STOPPED"}
+            and isinstance(agent, GatewayAgentStatus)
+            and agent.state == "IDLE" and agent.reason_code == "GATEWAY_IDLE"
+            and (lease is None or (not lease.active and lease.state == "IDLE"))
+        )
+        if authenticated_idle:
+            self._set_warning("")
+        elif current_ready:
             self._set_warning("")
             endpoint_changed = previous is not None and (
                 previous.instance_id,

@@ -16,12 +16,11 @@ if str(ROOT) not in sys.path:
 
 
 class HardExitTextResult(unittest.TextTestResult):
-    """Report the module result, then exit before Qt/PySide native teardown."""
+    """Report the module result before the isolated process exits."""
 
     def stopTestRun(self) -> None:
-        # Record the unittest verdict before any Qt/PySide finalization can crash
-        # the hosted process. CI may accept a non-zero native teardown exit only
-        # when this sentinel proves every unittest assertion already passed.
+        # Record the unittest assertion verdict for the parent process. The parent
+        # still treats every abnormal child exit as a failed native test process.
         successful = self.wasSuccessful()
         exit_code = 0 if successful else 1
         result_file = os.environ.get("B300_UNITTEST_RESULT_FILE", "").strip()
@@ -86,11 +85,8 @@ def _read_verdict(path: Path) -> str:
 def run_split_cases(module: str, *, case_timeout: int | None = None) -> int:
     """Run every test case in a new interpreter to bound native Qt state.
 
-    Every child writes its unittest verdict before native Qt teardown. This matters
-    on Windows hosted runners where a process can occasionally return a native
-    non-zero code after all Python assertions have already passed. A child is only
-    accepted in that situation when its private PASS sentinel exists; a missing or
-    FAIL sentinel always fails the split suite.
+    Every child writes its unittest assertion verdict before it exits. The aggregate
+    suite accepts a child only when both its process exit status and verdict pass.
     """
     suite = unittest.defaultTestLoader.loadTestsFromName(module)
     cases = tuple(iter_test_cases(suite))
@@ -124,14 +120,6 @@ def run_split_cases(module: str, *, case_timeout: int | None = None) -> int:
                 return 124
 
             verdict = _read_verdict(child_result)
-            if result.returncode and verdict == "PASS":
-                print(
-                    "WARNING: %s passed assertions but native Qt teardown returned %s; "
-                    "accepting verified child PASS sentinel." % (case.id(), result.returncode),
-                    file=sys.stderr,
-                    flush=True,
-                )
-                continue
             if result.returncode:
                 write_split_verdict(False)
                 return result.returncode

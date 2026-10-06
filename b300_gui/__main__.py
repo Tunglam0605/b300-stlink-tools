@@ -5,6 +5,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QApplication
 
 if __name__ == "__main__" and not __package__:
@@ -56,7 +57,11 @@ def main(argv=None) -> int:
     window = MainWindow(**kwargs)
     if args.smoke_test:
         app.processEvents()
-        window.close()
+        if not window.close():
+            return 1
+        window.deleteLater()
+        app.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         app.processEvents()
         app.quit()
         return 0

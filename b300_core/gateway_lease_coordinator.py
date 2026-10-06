@@ -346,6 +346,8 @@ class GatewayLeaseCoordinator:
                           and lease.mode in {"LIVE_WATCH", "VSCODE_DEBUG"}
                           and lease.state == "ACTIVE" and self._clock() < lease.deadline_mono)
             snapshot = self.supervisor.snapshot
+            if lease is None and not self._recovery_required and snapshot.state == "STOPPED":
+                return replace(snapshot, reason_code="GATEWAY_IDLE")
             if active or not snapshot.attach_ready:
                 return snapshot
             return replace(snapshot, state="DISCONNECTED",

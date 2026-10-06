@@ -7,6 +7,8 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import shiboken6
+from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QApplication
 
 from b300_core.live_monitor import LiveSample, LiveValue
@@ -88,6 +90,10 @@ class MonitorFreshnessTests(unittest.TestCase):
             self.assertIn("STALE", panel.table.item(0, 9).text())
         finally:
             panel.deleteLater()
+            self.app.processEvents()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            self.app.processEvents()
+            self.assertFalse(shiboken6.isValid(panel))
 
     def test_stale_view_keeps_last_value_and_timestamp_but_marks_quality(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -123,6 +129,11 @@ class MonitorFreshnessTests(unittest.TestCase):
                 self.assertIn("Mất liên lạc Gateway", panel.status.text())
             finally:
                 view.close()
+                view.deleteLater()
+                self.app.processEvents()
+                QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+                self.app.processEvents()
+                self.assertFalse(shiboken6.isValid(view))
 
 
 if __name__ == "__main__":

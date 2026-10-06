@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from b300_core.gateway_profiles import GatewayProfile, GatewayProfileStore
@@ -107,6 +108,8 @@ class RemoteProgramGuiTests(unittest.TestCase):
             time.sleep(.01)
         self.window.close()
         self.window.deleteLater()
+        self.app.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         self.app.processEvents()
         self.temp.cleanup()
 

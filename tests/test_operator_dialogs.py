@@ -5,6 +5,8 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import shiboken6
+from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QApplication
 
 from b300_gui.operator_dialogs import SafetyActionDialog
@@ -33,6 +35,9 @@ class SafetyActionDialogTests(unittest.TestCase):
         finally:
             dialog.deleteLater()
             self.app.processEvents()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            self.app.processEvents()
+            self.assertFalse(shiboken6.isValid(dialog))
 
 
 if __name__ == "__main__":

@@ -303,43 +303,27 @@ class GatewayProtocolTests(unittest.TestCase):
         ])
         self.assertEqual(args.lease_mode, "VSCODE_DEBUG")
 
-    def test_gateway_status_cli_emits_runtime_snapshot_and_capabilities(self) -> None:
-        ready = self._ready()
-        manager = mock.Mock()
-        manager.status.return_value = ready
-        output = io.StringIO()
-        with mock.patch.object(b300_stlink, "GatewayProcessManager", return_value=manager), \
-                redirect_stdout(output):
-            result = b300_stlink.main(["debug", "gateway-status", "--json"])
-        self.assertEqual(result, 0)
-        record = json.loads(output.getvalue())
-        self.assertEqual(record["state"], "READY")
-        self.assertIn("gateway-ensure", record["capabilities"])
-        self.assertIn("gateway-gdb-activity-v1", record["capabilities"])
-
-    def test_gateway_ensure_cli_spawns_explicit_loopback_child(self) -> None:
-        manager = mock.Mock()
-        manager.ensure.return_value = self._ready()
-        output = io.StringIO()
-        with mock.patch.object(b300_stlink, "GatewayProcessManager", return_value=manager), \
-                redirect_stdout(output):
-            result = b300_stlink.main(["debug", "gateway-ensure", "--json"])
-        self.assertEqual(result, 0)
-        command = tuple(manager.ensure.call_args.args[0])
-        self.assertIn("--bind-address", command)
-        self.assertEqual(command[command.index("--bind-address") + 1], "127.0.0.1")
-        self.assertNotIn("sudo", tuple(item.lower() for item in command))
-
-    def test_gateway_rescan_cli_signals_the_managed_owner(self) -> None:
-        manager = mock.Mock()
-        manager.rescan.return_value = self._ready()
-        output = io.StringIO()
-        with mock.patch.object(b300_stlink, "GatewayProcessManager", return_value=manager), \
-                redirect_stdout(output):
-            result = b300_stlink.main(["debug", "gateway-rescan", "--json"])
-        self.assertEqual(result, 0)
-        self.assertTrue(manager.rescan.called)
-        self.assertFalse(manager.ensure.called)
+    def test_gateway_runtime_commands_use_agent_without_spawning_legacy_owner(self):
+        for mode in ("gateway-status", "gateway-ensure", "gateway-rescan"):
+            with self.subTest(mode=mode):
+                manager = mock.Mock()
+                manager.status.return_value = GatewayAgentStatus("agent", 123, 1.0, "IDLE", "GATEWAY_IDLE")
+                store = mock.Mock()
+                store.submit_request.return_value = {"status": "ok", "result": self._ready().to_record()}
+                with mock.patch.object(b300_stlink, "_isolated_gateway_config", return_value=None), \
+                        mock.patch.object(b300_stlink, "GatewayAgentProcessManager", return_value=manager), \
+                        mock.patch.object(b300_stlink, "GatewayRequestStore", return_value=store), \
+                        mock.patch.object(b300_stlink, "GatewayProcessManager") as legacy, \
+                        redirect_stdout(io.StringIO()):
+                    self.assertEqual(b300_stlink.main(["debug", mode, "--json"]), 0)
+                legacy.assert_not_called()
+                self.assertEqual(store.submit_request.call_args.args[0].operation, "runtime_" + mode[8:])
+                if mode != "gateway-status":
+                    command = manager.ensure_running.call_args.args[0]
+                    self.assertIn("gateway-agent", command)
+                    self.assertNotIn("sudo", command)
+                else:
+                    manager.ensure_running.assert_not_called()
 
     def test_managed_gateway_child_publishes_ready_only_after_targets_evidence(self) -> None:
         store = mock.Mock()

@@ -8,6 +8,8 @@ from pathlib import Path
 from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+import shiboken6
+from PySide6.QtCore import QCoreApplication, QEvent
 from PySide6.QtWidgets import QApplication
 from b300_core.gateway_profiles import GatewayProfileStore
 from b300_core.gateway_sessions import GatewaySessionManager
@@ -47,8 +49,10 @@ class ProgramPreflightTests(unittest.TestCase):
     def tearDown(self):
         self.drain()
         self.approval.stop()
-        self.window.close()
+        self.assertTrue(self.window.close(), "production window refused fixture shutdown")
         self.window.deleteLater()
+        self.app.processEvents()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         self.app.processEvents()
         self.temp.cleanup()
 
@@ -69,6 +73,10 @@ class ProgramPreflightTests(unittest.TestCase):
         self.assertEqual(view.banner.property("variant"), "info")
         self.assertIn("Chưa", view.lbl_target.text())
         self.assertTrue(view.btn_flash_app.isEnabled())
+
+    def test_fixture_teardown_releases_production_window_before_process_shutdown(self):
+        window = self.window
+        self.addCleanup(lambda: self.assertFalse(shiboken6.isValid(window)))
 
     def test_click_inspects_before_canonical_confirmation(self):
         self.click()
