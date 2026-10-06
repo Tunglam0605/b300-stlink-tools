@@ -229,6 +229,36 @@ class GuiPackagingTests(unittest.TestCase):
             ("B300-STLink-GUI-Ubuntu-arm64.AppImage", "b300-stlink-gui_arm64.deb"),
         )
 
+    def test_appimage_builder_uses_supplied_runtime_without_upstream_download(self) -> None:
+        module = gui_builder()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tool = root / "appimagetool"
+            runtime = root / "runtime-x86_64"
+            tool.write_bytes(b"tool")
+            runtime.write_bytes(b"verified-runtime")
+            with mock.patch.object(module, "stage_linux_appdir", return_value=root / "AppDir"), \
+                    mock.patch.object(module, "stage_deb_root", return_value=root / "deb"), \
+                    mock.patch.object(module.subprocess, "check_call") as call:
+                self.assertEqual(module.main([
+                    "--bundle-dir", str(root / "bundle"), "--output-dir", str(root / "out"),
+                    "--architecture", "x86_64", "--appimagetool", str(tool),
+                    "--runtime-file", str(runtime),
+                ]), 0)
+            command = call.call_args.args[0]
+            self.assertIn("--runtime-file", command)
+            self.assertEqual(command[command.index("--runtime-file") + 1], str(runtime.resolve()))
+
+    def test_missing_supplied_runtime_fails_before_appimagetool_launch(self) -> None:
+        module = gui_builder()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with mock.patch.object(module.subprocess, "check_call") as call:
+                with self.assertRaises(ValueError):
+                    module.run_appimagetool(Path("tool"), root / "AppDir", root / "out", {},
+                                           runtime_file=root / "missing-runtime")
+            call.assert_not_called()
+
     def test_appimagetool_transient_failure_retries_and_cleans_partial_output(self) -> None:
         module = gui_builder()
         with tempfile.TemporaryDirectory() as directory:

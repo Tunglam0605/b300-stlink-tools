@@ -13,6 +13,7 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 - Added release notes for the current version so the What's New dialog appears after upgrading.
 - Completed deferred Qt widget deletion in GUI test fixtures and made the test runner and Windows CI reject abnormal native process exits even when an assertion verdict has already been recorded.
 - Made GUI smoke shutdown respect a refused window close and complete accepted window deletion while QApplication is still alive.
+- Pinned the Linux AppImage builder to appimagetool 1.9.1 and type2 runtime 20251108 with architecture-specific SHA-256 verification and an explicit runtime file, preventing mutable upstream assets from breaking release builds.
 - Added regression coverage for Agent routing, idle rescans, lease ownership and GUI health while preserving SSH-only remote transport, loopback-only GDB/TCL and zero-halt Live Monitor behavior.
 
 ## [0.24.2] - 2026-09-25

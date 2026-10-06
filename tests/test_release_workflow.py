@@ -21,6 +21,43 @@ def load_workflow(name: str):
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
+    def test_appimagetool_downloads_use_one_immutable_release_tag(self) -> None:
+        tags = []
+        for name in ("release.yml", "release-dry-run.yml"):
+            text = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+            workflow_tags = re.findall(
+                r"https://github\.com/AppImage/appimagetool/releases/download/([^/\s]+)/", text,
+            )
+            self.assertTrue(workflow_tags, name)
+            for tag in workflow_tags:
+                self.assertRegex(tag, r"^\d+\.\d+\.\d+$", name)
+            self.assertIn("sha256sum -c -", text, name)
+            tags.extend(workflow_tags)
+        self.assertEqual(len(set(tags)), 1, "Development and release must pin the same upstream version")
+
+    def test_appimage_workflows_supply_checksum_verified_immutable_runtimes(self) -> None:
+        tags = []
+        for name in ("release.yml", "release-dry-run.yml"):
+            workflow = load_workflow(name)
+            text = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+            runtime_tags = re.findall(
+                r"https://github\.com/AppImage/type2-runtime/releases/download/([^/\s]+)/", text,
+            )
+            self.assertTrue(runtime_tags, name)
+            for tag in runtime_tags:
+                self.assertRegex(tag, r"^\d{8}$", name)
+            tags.extend(runtime_tags)
+            for job in workflow["jobs"].values():
+                for step in job.get("steps", []):
+                    command = step.get("run", "")
+                    if "AppImage/type2-runtime/releases/download/" in command:
+                        self.assertRegex(command, r'echo "[^"\n]*runtime-[^"\n]*" \| sha256sum -c -', name)
+                    if "packaging/build_gui.py" in command:
+                        self.assertIn("--runtime-file", command, name)
+            self.assertIn("runtime", text)
+            self.assertIn("sha256sum -c -", text)
+        self.assertEqual(len(set(tags)), 1)
+
     def test_tag_pushes_do_not_repeat_main_or_native_ci(self) -> None:
         for name in ("ci.yml", "native-ci.yml", "native-package-ci.yml"):
             workflow = load_workflow(name)

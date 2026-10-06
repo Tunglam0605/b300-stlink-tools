@@ -136,7 +136,8 @@ jobs:
             cli: B300-STLink-CLI-Linux-x64.tar.gz
             architecture: x86_64
             appimagetool: appimagetool-x86_64.AppImage
-            appimagetool_sha256: A6D71E2B6CD66F8E8D16C37AD164658985E0CF5FCAA950C90A482890CB9D13E0
+            appimagetool_sha256: ED4CE84F0D9CAFF66F50BCCA6FF6F35AAE54CE8135408B3FA33ABFC3CB384EB0
+            runtime_sha256: 2FCA8B443C92510F1483A883F60061AD09B46B978B2631C807CD873A47EC260D
             appimage: B300-STLink-GUI-Ubuntu-x64.AppImage
             deb: b300-stlink-gui_amd64.deb
           - runner: ubuntu-24.04-arm
@@ -145,7 +146,8 @@ jobs:
             cli: B300-STLink-CLI-Linux-arm64.tar.gz
             architecture: aarch64
             appimagetool: appimagetool-aarch64.AppImage
-            appimagetool_sha256: 1B00524BA8C6B678DC15EF88A5C25EC24DEF36CDFC7E3ABB32DDCD068E8007FE
+            appimagetool_sha256: F0837E7448A0C1E4E650A93BB3E85802546E60654EF287576F46C71C126A9158
+            runtime_sha256: 00CBDFCF917CC6C0FF6D3347D59E0CA1F7F45A6DF1A428A0D6D8A78664D87444
             appimage: B300-STLink-GUI-Ubuntu-arm64.AppImage
             deb: b300-stlink-gui_arm64.deb
     runs-on: ${{ matrix.runner }}
@@ -195,9 +197,12 @@ jobs:
           gdb_dir=release/linux-gui-bundle/vendor/gdb/bin
           "$gdb_dir/arm-none-eabi-gdb" --version
           curl -fL --retry 3 -o "release/${{ matrix.appimagetool }}" \
-            "https://github.com/AppImage/appimagetool/releases/download/continuous/${{ matrix.appimagetool }}"
+            "https://github.com/AppImage/appimagetool/releases/download/1.9.1/${{ matrix.appimagetool }}"
           echo "${{ matrix.appimagetool_sha256 }}  release/${{ matrix.appimagetool }}" | sha256sum -c -
           chmod +x "release/${{ matrix.appimagetool }}"
+          curl -fL --retry 3 -o "release/runtime-${{ matrix.architecture }}" \
+            "https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-${{ matrix.architecture }}"
+          echo "${{ matrix.runtime_sha256 }}  release/runtime-${{ matrix.architecture }}" | sha256sum -c -
           version=$(python3 -c 'from b300_version import __version__; print(__version__)')
           python3 packaging/build_gui.py \
             --bundle-dir release/linux-gui-bundle \
@@ -205,6 +210,7 @@ jobs:
             --architecture "${{ matrix.architecture }}" \
             --version "$version" \
             --appimagetool "release/${{ matrix.appimagetool }}" \
+            --runtime-file "release/runtime-${{ matrix.architecture }}" \
             --build-deb
       - name: Smoke-test packaged Linux GUI companion CLI
         env:

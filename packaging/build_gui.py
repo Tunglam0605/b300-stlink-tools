@@ -178,12 +178,18 @@ def run_appimagetool(
     appimage: Path,
     environment: dict,
     *,
+    runtime_file: Path | None = None,
     attempts: int = APPIMAGETOOL_MAX_ATTEMPTS,
     retry_delay: float = APPIMAGETOOL_RETRY_DELAY_SECONDS,
 ) -> None:
     if attempts < 1:
         raise ValueError("appimagetool attempts must be >= 1")
-    command = [str(appimagetool), str(appdir), str(appimage)]
+    command = [str(appimagetool)]
+    if runtime_file is not None:
+        if not runtime_file.is_file():
+            raise ValueError("Supplied AppImage runtime does not exist")
+        command.extend(["--runtime-file", str(runtime_file.resolve())])
+    command.extend([str(appdir), str(appimage)])
     for attempt in range(1, attempts + 1):
         try:
             subprocess.check_call(command, env=environment)
@@ -208,8 +214,15 @@ def main(argv=None) -> int:
     parser.add_argument("--architecture", choices=("x86_64", "aarch64"), required=True)
     parser.add_argument("--version", default=TOOL_VERSION)
     parser.add_argument("--appimagetool", type=Path)
+    parser.add_argument("--runtime-file", type=Path,
+                        help="Use a runtime binary whose SHA-256 was verified by the caller.")
     parser.add_argument("--build-deb", action="store_true")
     args = parser.parse_args(argv)
+    if args.runtime_file is not None:
+        if args.appimagetool is None:
+            parser.error("--runtime-file requires --appimagetool")
+        if not args.runtime_file.is_file():
+            parser.error("--runtime-file does not exist")
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     appdir = stage_linux_appdir(args.bundle_dir, args.output_dir, args.architecture)
@@ -220,7 +233,8 @@ def main(argv=None) -> int:
         environment = os.environ.copy()
         environment["ARCH"] = args.architecture
         appimage = args.output_dir / appimage_name
-        run_appimagetool(args.appimagetool, appdir, appimage, environment)
+        run_appimagetool(args.appimagetool, appdir, appimage, environment,
+                        runtime_file=args.runtime_file)
 
     deb_arch = "amd64" if args.architecture == "x86_64" else "arm64"
     debroot = stage_deb_root(args.bundle_dir, args.output_dir, deb_arch, args.version)

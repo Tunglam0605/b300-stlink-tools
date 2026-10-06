@@ -229,9 +229,12 @@ jobs:
       - name: Fetch verified appimagetool
         run: |
           curl -fL --retry 3 -o release/appimagetool-x86_64.AppImage \
-            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
-          echo "A6D71E2B6CD66F8E8D16C37AD164658985E0CF5FCAA950C90A482890CB9D13E0  release/appimagetool-x86_64.AppImage" | sha256sum -c -
+            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          echo "ED4CE84F0D9CAFF66F50BCCA6FF6F35AAE54CE8135408B3FA33ABFC3CB384EB0  release/appimagetool-x86_64.AppImage" | sha256sum -c -
           chmod +x release/appimagetool-x86_64.AppImage
+          curl -fL --retry 3 -o release/runtime-x86_64 \
+            https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+          echo "2FCA8B443C92510F1483A883F60061AD09B46B978B2631C807CD873A47EC260D  release/runtime-x86_64" | sha256sum -c -
       - name: Build AppImage and DEB
         env:
           APPIMAGE_EXTRACT_AND_RUN: "1"
@@ -242,6 +245,7 @@ jobs:
             --architecture x86_64 \
             --version "${{ needs.prepare-release.outputs.version }}" \
             --appimagetool release/appimagetool-x86_64.AppImage \
+            --runtime-file release/runtime-x86_64 \
             --build-deb
       - name: Smoke-test packaged Linux x64 GUI companion CLI
         env:
@@ -318,9 +322,12 @@ jobs:
       - name: Fetch verified ARM64 appimagetool
         run: |
           curl -fL --retry 3 -o release/appimagetool-aarch64.AppImage \
-            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-aarch64.AppImage
-          echo "1B00524BA8C6B678DC15EF88A5C25EC24DEF36CDFC7E3ABB32DDCD068E8007FE  release/appimagetool-aarch64.AppImage" | sha256sum -c -
+            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-aarch64.AppImage
+          echo "F0837E7448A0C1E4E650A93BB3E85802546E60654EF287576F46C71C126A9158  release/appimagetool-aarch64.AppImage" | sha256sum -c -
           chmod +x release/appimagetool-aarch64.AppImage
+          curl -fL --retry 3 -o release/runtime-aarch64 \
+            https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-aarch64
+          echo "00CBDFCF917CC6C0FF6D3347D59E0CA1F7F45A6DF1A428A0D6D8A78664D87444  release/runtime-aarch64" | sha256sum -c -
       - name: Build AppImage and DEB
         env:
           APPIMAGE_EXTRACT_AND_RUN: "1"
@@ -331,6 +338,7 @@ jobs:
             --architecture aarch64 \
             --version "${{ needs.prepare-release.outputs.version }}" \
             --appimagetool release/appimagetool-aarch64.AppImage \
+            --runtime-file release/runtime-aarch64 \
             --build-deb
       - name: Smoke-test packaged Linux ARM64 GUI companion CLI
         env:
