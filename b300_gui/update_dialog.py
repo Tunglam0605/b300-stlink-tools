@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import math
+import time
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
@@ -86,6 +88,12 @@ class UpdateDialog(QDialog):
         self.progress.setVisible(False)
         root.addWidget(self.progress)
 
+        self.download_details = QLabel("")
+        self.download_details.setWordWrap(True)
+        self.download_details.setVisible(False)
+        root.addWidget(self.download_details)
+        self._download_started = None
+
         self.install_reason = QLabel("")
         self.install_reason.setWordWrap(True)
         self.install_reason.setStyleSheet("color: #B45309; font-size: 12px;")
@@ -126,6 +134,9 @@ class UpdateDialog(QDialog):
             self.install_requested.emit()
 
     def set_downloading(self) -> None:
+        self._download_started = time.monotonic()
+        self.download_details.setVisible(True)
+        self.download_details.setText("Đang kết nối máy chủ tải…")
         self.progress.setVisible(True)
         self.progress.setValue(0)
         self.action_button.setText("Đang tải…")
@@ -135,12 +146,23 @@ class UpdateDialog(QDialog):
     def set_download_progress(self, done: int, total: int) -> None:
         percent = int(done * 100 / total) if total else 0
         self.progress.setValue(max(0, min(100, percent)))
+        if self._download_started is None or done <= 0 or total <= 0:
+            return
+        elapsed = max(0.001, time.monotonic() - self._download_started)
+        speed = done / elapsed
+        remaining = math.ceil(max(0, total - done) / speed)
+        self.download_details.setText(
+            "%.1f / %.1f MiB · %.2f MiB/s · Còn khoảng %d giây" %
+            (done / 1048576, total / 1048576, speed / 1048576, remaining)
+        )
 
     def set_ready(self, package: Path) -> None:
         self.ready_package = Path(package)
         self.progress.setVisible(True)
         self.progress.setValue(100)
         self.action_button.setText("Cài đặt ngay")
+        self.download_details.setVisible(True)
+        self.download_details.setText("Đã xác minh gói cập nhật · Sẵn sàng cài đặt")
 
     def set_install_allowed(self, allowed: bool, reason: str = "") -> None:
         if self.ready_package is None:

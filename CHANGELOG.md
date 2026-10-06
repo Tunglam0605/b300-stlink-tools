@@ -5,8 +5,11 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.24.4] - 2026-10-06
+
 - Accelerated large GUI/CLI update packages with up to four concurrent HTTP byte-range downloads, exact range validation, and a verified sequential fallback for servers that do not support ranges.
 - Reused complete cached update packages only after rechecking the signed size and SHA-256, avoiding duplicate downloads. Partial/corrupt downloads cannot replace an existing package; cancellation cleans temporary files, and download progress reaches 100% only after verification.
+- Displayed downloaded size, average transfer speed and estimated remaining time in the GUI update dialog, with a clear verified-package state before installation.
 
 ## [0.24.3] - 2026-10-06
 

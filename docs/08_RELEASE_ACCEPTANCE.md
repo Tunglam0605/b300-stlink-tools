@@ -1,5 +1,12 @@
 # Biên bản nghiệm thu và phát hành B300 ST-Link Tools
 
+## Bản 0.24.4 - Verified update download performance
+
+- A signed 64,069,037-byte Windows installer took 122.515 seconds with the released single-connection downloader and 42.781 seconds with four concurrent ranges on the same workstation. Both copies matched the signed SHA-256; verified cache reuse took 0.079 seconds. This is a measured run, not a guarantee for every network.
+- GUI and CLI share bounded range downloading and signed cache validation. Invalid ranges, byte counts, encoding or hash fail closed; unsupported ranges fall back to a verified full download; cancellation preserves an existing package and removes partial files.
+- The GUI displays transferred size, average speed, estimated remaining time and verified-ready status. Existing hardware-busy installation guards remain in force.
+- Publication requires exact-commit CI on Windows x64, Ubuntu x64 and Ubuntu ARM64, native package smoke, independent review, and signed GUI/CLI updater validation. This update does not change flash/debug transactions and does not authorize firmware or Bootloader programming.
+
 ## Bản 0.24.3 - Gateway lease routing and Qt lifecycle
 
 - Local Windows canonical module-isolated regression: **159/159 modules PASS, 1,705 tests**, with zero abnormal native exits and no PASS-sentinel overrides. The monolithic discovery command exceeded its 120-second evidence budget; it is not counted as a passing gate. The canonical runner matches the module/case isolation used by CI.
