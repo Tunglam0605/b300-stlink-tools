@@ -10,9 +10,10 @@ from unittest import mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPoint
+from PySide6.QtCore import QPoint, QCoreApplication, QEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton, QWidget
+from shiboken6 import isValid
 
 from b300_core.gateway_setup import GatewayHostCheck, GatewayHostReport
 from b300_core.ssh_identity import (
@@ -74,6 +75,25 @@ class GatewaySetupTabTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
+
+    def tearDown(self):
+        widgets = list(QApplication.topLevelWidgets())
+        for widget in widgets:
+            if isinstance(widget, GatewaySetupTab):
+                self.wait_until(lambda widget=widget: not widget.has_active_operation)
+        for widget in widgets:
+            if isValid(widget):
+                widget.close()
+                widget.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        self.app.processEvents()
+
+    def test_fixture_deletes_closed_gateway_widgets(self):
+        tab = GatewaySetupTab(identity_inspector=lambda: identity_report(False),
+                              profile_loader=lambda: None, auto_refresh=False)
+        tab.close()
+        self.tearDown()
+        self.assertFalse(isValid(tab), "Closed Gateway widgets must be deleted before native teardown")
 
     def wait_until(self, predicate, timeout=2.0):
         deadline = time.monotonic() + timeout
