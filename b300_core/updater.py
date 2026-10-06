@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import os
-import tempfile
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -21,18 +18,13 @@ from .release_manifest import (
 )
 from .versioning import SemVer
 from .update_channel import UpdateChannel, channel_endpoints, normalize_update_channel
+from .update_download import (
+    DownloadCancelled, UpdateDownloadError, download_verified_package,
+)
 
 
 DEFAULT_MANIFEST_URL, DEFAULT_SIGNATURE_URL = channel_endpoints(UpdateChannel.RELEASE)
 USER_AGENT = "B300-STLink-Tools-Updater/0.3"
-
-
-class UpdateDownloadError(RuntimeError):
-    """Network or package verification failed."""
-
-
-class DownloadCancelled(UpdateDownloadError):
-    """The operator cancelled a package download."""
 
 
 @dataclass(frozen=True)
@@ -64,7 +56,9 @@ class UpdateClient:
             signature_url: Optional[str] = None,
             channel: UpdateChannel = UpdateChannel.RELEASE,
             open_url: Callable = urllib.request.urlopen,
-            timeout_seconds: float = 8.0) -> None:
+            timeout_seconds: float = 8.0, download_workers: int = 4) -> None:
+        if isinstance(download_workers, bool) or not isinstance(download_workers, int) or not 1 <= download_workers <= 4:
+            raise ValueError("Update downloads require between one and four workers.")
         self.public_key = public_key
         self.platform_name = platform_name
         self.channel = normalize_update_channel(channel)
@@ -73,9 +67,12 @@ class UpdateClient:
         self.signature_url = signature_url or default_signature
         self.open_url = open_url
         self.timeout_seconds = timeout_seconds
+        self.download_workers = download_workers
 
-    def _request(self, url: str):
-        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    def _request(self, url: str, headers=None):
+        selected_headers = {"User-Agent": USER_AGENT, "Accept-Encoding": "identity"}
+        selected_headers.update(headers or {})
+        request = urllib.request.Request(url, headers=selected_headers)
         return self.open_url(request, timeout=self.timeout_seconds)
 
     def _fetch_limited(self, url: str, limit: int, label: str) -> bytes:
@@ -135,46 +132,6 @@ class UpdateClient:
         self._validate_download_asset(asset)
         if cancel.is_set():
             raise DownloadCancelled("Update download was cancelled.")
-        destination = Path(destination_dir)
-        destination.mkdir(parents=True, exist_ok=True)
-        final_path = destination / asset.filename
-        temporary_path: Optional[Path] = None
-        digest = hashlib.sha256()
-        received = 0
-        try:
-            with self._request(asset.url) as response:
-                content_length = response.headers.get("Content-Length")
-                if content_length is not None and int(content_length) != asset.size:
-                    raise UpdateDownloadError("Update Content-Length does not match manifest.")
-                with tempfile.NamedTemporaryFile(
-                        mode="wb", delete=False, dir=str(destination),
-                        prefix=asset.filename + ".", suffix=".part") as output:
-                    temporary_path = Path(output.name)
-                    while True:
-                        if cancel.is_set():
-                            raise DownloadCancelled("Update download was cancelled.")
-                        chunk = response.read(min(64 * 1024, asset.size - received + 1))
-                        if not chunk:
-                            break
-                        received += len(chunk)
-                        if received > asset.size:
-                            raise UpdateDownloadError("Update is larger than the signed size.")
-                        output.write(chunk)
-                        digest.update(chunk)
-                        progress(received, asset.size)
-                    output.flush()
-                    os.fsync(output.fileno())
-            if received != asset.size:
-                raise UpdateDownloadError("Update is smaller than the signed size.")
-            if digest.hexdigest() != asset.sha256:
-                raise UpdateDownloadError("Update SHA-256 does not match the signed manifest.")
-            os.replace(str(temporary_path), str(final_path))
-            temporary_path = None
-            return final_path
-        except (UpdateDownloadError, DownloadCancelled):
-            raise
-        except Exception as error:
-            raise UpdateDownloadError("Unable to download update package: %s" % error) from error
-        finally:
-            if temporary_path is not None and temporary_path.exists():
-                temporary_path.unlink()
+        return download_verified_package(
+            self._request, asset, destination_dir, progress, cancel, self.download_workers,
+        )

@@ -5,6 +5,9 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+- Accelerated large GUI/CLI update packages with up to four concurrent HTTP byte-range downloads, exact range validation, and a verified sequential fallback for servers that do not support ranges.
+- Reused complete cached update packages only after rechecking the signed size and SHA-256, avoiding duplicate downloads. Partial/corrupt downloads cannot replace an existing package; cancellation cleans temporary files, and download progress reaches 100% only after verification.
+
 ## [0.24.3] - 2026-10-06
 
 - Routed per-user Gateway status, ensure and rescan through the authenticated Gateway Agent queue. Rescanning an idle Agent no longer starts an unleased OpenOCD owner that conflicts with the next Live Monitor or Debug session.
