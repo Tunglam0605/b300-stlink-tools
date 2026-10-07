@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 from types import SimpleNamespace
 from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QCoreApplication, QEvent
 from b300_gui.production_window import ProductionMainWindow
 from b300_core.project_profiles import ProjectProfile, ProjectProfileStore
 from b300_core.gateway_profiles import GatewayProfile, GatewayProfileStore
@@ -17,8 +18,12 @@ from tests.test_core_hex_policy import write_hex, APPLICATION_VECTOR
 
 
 class EngineeringIntegrationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
     def test_shared_context_routes_and_guards_local_hardware(self):
-        app = QApplication.instance() or QApplication([])
+        app = self.app
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             symbols = root / 'app.axf'
@@ -76,4 +81,6 @@ class EngineeringIntegrationTests(unittest.TestCase):
             finally:
                 window.close()
                 window.deleteLater()
+                app.processEvents()
+                QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
                 app.processEvents()

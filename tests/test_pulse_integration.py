@@ -30,7 +30,8 @@ class PulseIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.assertIsNotNone(MainWindowPulse, 'Production Pulse window must exist')
         self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
+        # Windows CI may provide an 8.3 TEMP path; profiles canonicalize paths.
+        self.root = Path(self.temp.name).resolve()
         self.projects = ProjectProfileStore(self.root / 'projects.json')
         self.gateways = GatewayProfileStore(self.root / 'gateways.json', legacy_path=self.root/'legacy.json')
         self.workspace = self.root / 'project'
