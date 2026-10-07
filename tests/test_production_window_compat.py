@@ -11,7 +11,7 @@ from b300_gui.production_window import ProductionMainWindow
 
 class ProductionWindowCompatibilityTests(unittest.TestCase):
     def test_executable_uses_canonical_production_window(self) -> None:
-        self.assertIs(EntryMainWindow, ProductionMainWindow)
+        self.assertTrue(issubclass(EntryMainWindow, ProductionMainWindow))
         self.assertEqual(ProductionMainWindow.__module__, "b300_gui.production_window")
 
     def test_historical_main_window_v18_import_remains_compatible(self) -> None:

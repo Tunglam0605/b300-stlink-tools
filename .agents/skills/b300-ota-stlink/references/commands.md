@@ -12,6 +12,38 @@ b300-stlink debug vscode --ssh-host <IPC-IP> --ssh-user <SSH-USER> --program-rel
 
 ## Ubuntu IPC
 
+Inspect an installed Gateway before starting another owner:
+
+```bash
+b300-stlink --version --json
+b300-stlink gateway doctor --json
+```
+
+Only for an authorized setup/repair:
+
+```bash
+b300-stlink gateway quickstart --confirm-system-change --json
+```
+
+The Gateway Agent owns exclusive leases and starts OpenOCD on demand. Do not
+launch another raw OpenOCD alongside it. A system Gateway installation and a
+per-user CLI can have separate paths; update and verify the actual service
+executable, not only the command found first on PATH.
+
+Read both possible unit identities before changing an installation:
+
+```bash
+systemctl show b300-stlink-gateway-agent.service --property=ActiveState,SubState,FragmentPath,ExecStart,User
+systemctl --user show b300-stlink-gateway-agent.service --property=ActiveState,SubState,FragmentPath,ExecStart
+```
+
+Run `--version --json` on the executable reported by the active unit. Managed
+one-shot `debug client --client-action inspect` cleans up its own tunnel/lease;
+do not invent a separate raw lease-release command. For an interactive generated
+VS Code kit, use its managed tasks and finish the debug session before stopping
+the bridge. For the GUI use **Dừng**. Do not stop an Agent with another owner's
+active lease merely to check its version.
+
 ```bash
 b300-stlink doctor
 b300-stlink flash /opt/firmware/Main_V2_F407.hex --dry-run --json
@@ -41,6 +73,10 @@ b300-stlink debug vscode --ssh-host <IPC-IP> --ssh-user <SSH-USER> \
 Only SSH TCP/22 is LAN-facing; do not expose or NAT GDB/TCL ports 3333/6666.
 Open the generated workspace with VS Code + Cortex-Debug. Manual GDB is an
 Advanced workflow only. Never use GDB `load`, `restore`, or flash commands.
+
+In Pulse GUI v0.24.5+, the same operation is **Debug → Kết nối → IPC profile →
+Mở debug**; local debugging selects **Máy này**. Both open VS Code. Use F5 to
+attach, Shift+F5 to end the VS Code session, then **Dừng** to release B300.
 
 ## Useful output
 

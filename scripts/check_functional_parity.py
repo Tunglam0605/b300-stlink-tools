@@ -12,6 +12,9 @@ REQUIRED_RUNTIME_PATHS = (
     "b300_cli/inspection_commands.py",
     "b300_gui/__main__.py",
     "b300_gui/production_window.py",
+    "b300_gui/main_window_pulse.py",
+    "b300_gui/pulse_view.py",
+    "b300_gui/pulse_tasks.py",
     "b300_gui/main_window_v18.py",
     "b300_gui/debug_tab_compat.py",
     "b300_core/service.py",
@@ -64,6 +67,10 @@ REQUIRED_TEST_MODULES = (
     "tests/test_v018_simplified_ui.py",
     "tests/test_gui_smoke.py",
     "tests/test_production_window_compat.py",
+    "tests/test_pulse_integration.py",
+    "tests/test_pulse_view.py",
+    "tests/test_pulse_tasks.py",
+    "tests/test_pulse_resources.py",
     "tests/test_debug_tab.py",
     "tests/test_debug_connection_ux.py",
     "tests/test_updater.py",
@@ -103,11 +110,18 @@ def main() -> int:
         problems.append("functional parity document no longer identifies the v0.23.2 baseline commit")
 
     gui_entry = (ROOT / "b300_gui/__main__.py").read_text(encoding="utf-8")
-    if "production_window" not in gui_entry or "ProductionMainWindow as MainWindow" not in gui_entry:
+    if "main_window_pulse" not in gui_entry or "MainWindowPulse as MainWindow" not in gui_entry:
         problems.append(
-            "production GUI entry changed from ProductionMainWindow; update the parity contract "
-            "and replacement regression coverage deliberately before changing this guard"
+            "production GUI entry must select the documented Pulse default; update the parity "
+            "contract and replacement regression coverage before changing this guard"
         )
+    pulse_path = ROOT / "b300_gui/main_window_pulse.py"
+    if pulse_path.is_file():
+        pulse_source = pulse_path.read_text(encoding="utf-8")
+        if "class MainWindowPulse(ProductionMainWindow):" not in pulse_source:
+            problems.append("Pulse must inherit the canonical ProductionMainWindow backend")
+        if "def _pulse_advanced(" not in pulse_source or "self.takeCentralWidget()" not in pulse_source:
+            problems.append("Pulse must retain the canonical advanced GUI surface")
 
     compat_entry = (ROOT / "b300_gui/main_window_v18.py").read_text(encoding="utf-8")
     if "MainWindowV18 = ProductionMainWindow" not in compat_entry:

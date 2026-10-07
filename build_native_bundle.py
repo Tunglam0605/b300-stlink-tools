@@ -112,6 +112,8 @@ def gui_resources(platform_name: str):
         ROOT / "branding" / "b300-industrial-mark.svg",
         ROOT / "branding" / "b300-stlink-icon.ico",
         ROOT / "branding" / "b300-stlink-wordmark.png",
+        ROOT / "branding" / "pulse-logo.png",
+        ROOT / "branding" / "pulse-wordmark.png",
     ]
     if platform_name.startswith("linux-"):
         resources.extend([

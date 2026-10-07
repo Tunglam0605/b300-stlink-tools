@@ -1,5 +1,12 @@
 # GUI B300 trên Windows và Ubuntu
 
+Từ v0.24.5, giao diện Pulse Dock có hai mục **Debug** và **Nạp code**. Trong
+**Debug**, chọn dự án và **Kết nối**: **Máy này** cho ST-Link cục bộ hoặc hồ sơ IPC
+cho debug qua SSH. Bấm **Mở debug** để tự mở VS Code; nhấn F5 trong VS Code để
+attach. **Thiết lập máy**, **Đăng nhập SSH** và **Tùy chọn** nằm trên thanh đầu.
+Các trang và công cụ chi tiết mô tả bên dưới nằm trong **Tùy chọn → Nâng cao /
+Nhật ký**. Mục Nạp code đơn giản dùng ST-Link trên máy này và giữ bước xác nhận.
+
 GUI dùng ST-Link/SWD cho hai workflow tách biệt: nạp Application an toàn và Factory Bootloader được ủy quyền. Normal Application không bao giờ mass erase, ghi Bootloader hoặc sửa WRP/RDP; chỉ tab Factory mới có quyền tạm thay đổi WRP Sector 0-2 theo transaction cố định.
 
 ## Bước 1 — Cài ứng dụng

@@ -5,6 +5,15 @@ Keep a Changelog; phiên bản phát hành dự kiến dùng Semantic Versioning
 
 ## [Unreleased]
 
+## [0.24.5] - 2026-10-07
+
+- Made the approved native Pulse Dock the default GUI, with two tasks: Debug and Nạp code. Debug selects local ST-Link or a saved IPC/SSH connection and opens VS Code for both.
+- Integrated setup, project/profile selection, SSH login, programming preflight and advanced tools with the existing production backend. Debug connection selection is retained across programming navigation.
+- Serialized SSH/debug/stop/cleanup operations off the UI thread and rejected stale lifecycle callbacks while preserving hardware and lease ownership.
+- Fixed VS Code launch from Codex/Electron environments and report immediate launcher failure instead of false success.
+- Included Pulse artwork in native packages and updated the portable agent skill for the current GUI and managed Gateway lifecycle.
+- Retained the v0.24.4 Gateway fixes, verified update-download acceleration, remote programming backend and bootloader/flash safety contracts.
+
 ## [0.24.4] - 2026-10-06
 
 - Accelerated large GUI/CLI update packages with up to four concurrent HTTP byte-range downloads, exact range validation, and a verified sequential fallback for servers that do not support ranges.

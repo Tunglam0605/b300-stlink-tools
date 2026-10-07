@@ -32,11 +32,11 @@ A future refactor may move or rename implementation files, but it must preserve 
 | Gateway debug | Gateway retains ST-Link/OpenOCD ownership and safe lifecycle/recovery | Preserved; Linux frozen-host inspection is hardened against inherited PyInstaller loader paths | `test_gateway_supervisor.py`, `test_gateway_agent.py`, `test_gateway_readiness.py`, `test_gateway_status.py`, `test_gateway_setup.py`, `test_subprocess_env.py` | PASS |
 | Client remote debug | Authenticated saved Gateway profile + SSH transport + bounded remote debug path | Preserved; connect-check prefers the provisioned managed key/host trust and fails structurally on timeout | `test_gateway_client.py`, `test_gateway_access.py`, `test_remote_session.py`, `test_remote_profile.py`, `test_debug_connection_ux.py` | PASS |
 | Gateway lease/recovery | Exclusive lease and fail-closed recovery semantics remain authoritative | Core unchanged | `test_gateway_lease.py`, `test_gateway_lease_client.py`, `test_gateway_lease_coordinator.py`, `test_gateway_health_controller.py` | PASS |
-| VS Code bridge | LOCAL/GATEWAY/CLIENT orchestration and managed launch remain available | Core unchanged; production GUI is exposed canonically as ProductionMainWindow | `test_v018_vscode_bridge.py`, `test_v018_vscode_controller.py`, `test_v018_simplified_ui.py` | PASS |
+| VS Code bridge | LOCAL/GATEWAY/CLIENT orchestration and managed launch remain available | Pulse inherits the canonical production controller; launcher removes inherited ELECTRON_RUN_AS_NODE and rejects immediate launch failure | `test_v018_vscode_bridge.py`, `test_v018_vscode_controller.py`, `test_pulse_integration.py` | PASS |
 | Local live monitor | Continuous zero-halt/read-only monitoring and typed watch decoding remain available | Core unchanged | `test_live_monitor.py`, `test_live_session.py`, `test_live_service.py` | PASS |
 | Remote live monitor | Gateway/client TCL tunnel, restart/recovery and shared ownership remain available | Core unchanged | `test_live_monitor_controller.py`, `test_cli_live_monitor.py`, `test_engineering_monitor.py` | PASS |
 | Engineering diagnostics | FreeRTOS, target-aware/SVD peripheral inspection, stack/register/variable diagnostics remain available | Core unchanged | `test_freertos_inspector.py`, `test_target_awareness.py`, `test_gui_workstation.py`, `test_core_diagnostics.py` | PASS |
-| Production GUI | Five primary workspaces PROGRAM / MONITOR / DEBUG / DEVICE / SETTINGS remain the production surface | Canonical implementation is ProductionMainWindow; MainWindowV18 remains a compatibility alias | `test_v018_simplified_ui.py`, `test_gui_smoke.py`, `test_production_window_compat.py`, `test_engineering_integration.py`, `test_engineering_program.py`, `test_engineering_device_settings.py` | PASS |
+| Production GUI | PROGRAM / MONITOR / DEBUG / DEVICE / SETTINGS capabilities remain available | Since v0.24.5, MainWindowPulse is the default with Debug / Nạp code. It inherits ProductionMainWindow and retains all canonical workspaces under Options → Advanced / Logs; MainWindowV18 remains a compatibility alias | `test_pulse_integration.py`, `test_pulse_view.py`, `test_pulse_tasks.py`, `test_pulse_resources.py`, `test_production_window_compat.py`, `test_v018_simplified_ui.py`, `test_gui_smoke.py`, `test_engineering_integration.py`, `test_engineering_program.py`, `test_engineering_device_settings.py` | PASS |
 | Compatibility DebugTab import | Historical package-level DebugTab compatibility remains available while version-layer stack is retired | `debug_tab_compat.py` retained as thin wrapper over canonical DebugTab | `test_debug_tab.py`, `test_debug_connection_ux.py` | PASS |
 | Update / self-update | Public signed update channel, version policy and install flow remain available | Core unchanged | `test_updater.py`, `test_updater_versioning.py`, `test_cli_update.py`, `test_cli_update_install.py`, `test_gui_updater.py` | PASS |
 | Machine/offline setup | New-machine prerequisite checks, Linux USB setup and trusted offline runtime setup remain available | Core unchanged | `test_machine_setup.py`, `test_machine_setup_dialog.py`, `test_linux_usb_setup.py`, `test_offline_setup.py` | PASS |
@@ -52,6 +52,17 @@ For the initial v0.24 consolidation commits, the baseline-to-head diff intention
 - `b300_stlink.py`
 
 The removed GUI files were historical version-layer workbenches not selected by the production executable. After the follow-up canonicalization slice, `b300_gui/__main__.py` selects `ProductionMainWindow` from `production_window.py`; `main_window_v18.py` remains only as a compatibility alias.
+
+## v0.24.5 default GUI decision
+
+The executable now selects `MainWindowPulse`, a thin native Qt subclass of
+`ProductionMainWindow`. Debug unifies local and saved IPC connections and opens
+VS Code through the canonical controller. The simple programming task uses the
+canonical local preflight/confirmation path. Advanced retains the production
+workspaces, remote-programming history and callbacks. This changes navigation,
+not the safety boundary or availability of advanced capabilities. Pulse tests
+cover connection restoration, backend routing, background lifecycle, retained
+advanced views, and packaging resources; the parity guard requires these paths.
 
 ## CI acceptance
 

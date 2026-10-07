@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from b300_core.debug_service import DebugState
@@ -135,6 +137,7 @@ class V018VsCodeBridgeTests(unittest.TestCase):
         def process_factory(argv, **kwargs):
             captured["argv"] = argv
             captured["kwargs"] = kwargs
+            return SimpleNamespace(wait=lambda timeout: 0)
 
         with tempfile.TemporaryDirectory(prefix="B300 Workspace ") as directory:
             workspace = Path(directory) / "Firmware Workspace"
@@ -159,6 +162,55 @@ class V018VsCodeBridgeTests(unittest.TestCase):
         )
         self.assertNotIn("--reuse-window", captured["argv"])
         self.assertFalse(captured["kwargs"]["shell"])
+
+    def test_launch_vscode_does_not_inherit_electron_node_mode(self) -> None:
+        """Launching from Codex must open Electron, rather than reject GUI flags."""
+        captured = {}
+
+        def process_factory(_argv, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(wait=lambda timeout: 0)
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            with patch.dict(os.environ, {
+                "ELECTRON_RUN_AS_NODE": "1", "B300_LAUNCH_TEST": "preserved",
+            }, clear=True), patch("b300_core.vscode_bridge.resolve_vscode", return_value="Code.exe"):
+                launch_vscode(workspace, process_factory=process_factory)
+                self.assertEqual(os.environ["ELECTRON_RUN_AS_NODE"], "1")
+
+        self.assertIn("env", tuple(captured), "Launcher must supply its GUI environment")
+        self.assertIsNone(captured["env"].get("ELECTRON_RUN_AS_NODE"))
+        self.assertEqual(captured["env"]["B300_LAUNCH_TEST"], "preserved")
+
+    def test_launch_vscode_rejects_an_immediate_nonzero_exit(self) -> None:
+        class RejectedLauncher:
+            def wait(self, timeout):
+                return 9
+
+        with tempfile.TemporaryDirectory() as directory, \
+             patch("b300_core.vscode_bridge.resolve_vscode", return_value="Code.exe"):
+            with self.assertRaisesRegex(RuntimeError, "9"):
+                launch_vscode(Path(directory), process_factory=lambda *_a, **_kw: RejectedLauncher())
+
+    def test_launch_vscode_accepts_a_running_or_forwarded_window(self) -> None:
+        class Launcher:
+            def __init__(self, result):
+                self.result = result
+
+            def wait(self, timeout):
+                if self.result is None:
+                    raise subprocess.TimeoutExpired("Code.exe", timeout)
+                return self.result
+
+        with tempfile.TemporaryDirectory() as directory, \
+             patch("b300_core.vscode_bridge.resolve_vscode", return_value="Code.exe"):
+            for result in (0, None):
+                with self.subTest(result=result):
+                    process = Launcher(result)
+                    self.assertIs(launch_vscode(
+                        Path(directory), process_factory=lambda *_a, **_kw: process,
+                    ), process)
 
     def test_external_profile_is_attach_only_and_loopback_only(self) -> None:
         profile = VsCodeExternalProfile(

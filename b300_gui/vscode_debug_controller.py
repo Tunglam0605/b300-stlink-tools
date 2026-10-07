@@ -11,7 +11,7 @@ from pathlib import Path
 import threading
 import uuid
 from typing import Callable, Optional
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Signal, Slot, Qt
 
 from b300_core.models import ProbeRef
 from b300_core.gateway_lease import GatewayLeasePublicSnapshot
@@ -42,7 +42,11 @@ class GuiDispatcher(QObject):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.dispatched.connect(lambda callback: callback())
+        self.dispatched.connect(self._invoke, Qt.ConnectionType.QueuedConnection)
+
+    @Slot(object)
+    def _invoke(self, callback) -> None:
+        callback()
 
     def submit(self, callback: Callable[[], None]) -> None:
         self.dispatched.emit(callback)
@@ -64,6 +68,22 @@ class VsCodeDebugController:
         self._lease_token = None
         self._lease_client_factory = lease_client_factory
         self._gateway_lease_client = None
+        self._lease_epoch = 0
+        self._context_revision = 0
+        self._lifecycle_scheduler = None
+
+    def set_lifecycle_scheduler(self, scheduler) -> None:
+        """Route asynchronous cleanup through the window's serial worker lane."""
+        self._lifecycle_scheduler = scheduler
+
+    def _schedule_lifecycle(self, operation) -> None:
+        scheduler = self._lifecycle_scheduler
+        if scheduler is None:
+            operation()
+        elif self._ui_dispatcher is None:
+            scheduler(operation)
+        else:
+            self._ui_dispatcher.submit(lambda: scheduler(operation))
 
     def set_ui_dispatcher(self, dispatcher) -> None:
         self._ui_dispatcher = dispatcher
@@ -71,34 +91,56 @@ class VsCodeDebugController:
     def set_context(self, context) -> None:
         self._context = context
 
+    def _apply_context_updates(self, updates: dict, *, revision=None) -> None:
+        context = self._context
+        if context is None:
+            return
+        # Capture the values now: a later stop/start may replace the lease token
+        # before this callback reaches the GUI thread.
+        def callback():
+            if revision is None or revision == self._context_revision:
+                context.apply_device_state(**updates)
+        if self._ui_dispatcher is None:
+            callback()
+        else:
+            self._ui_dispatcher.submit(callback)
+
     def _publish_debug(self, state: VsCodeBridgeState) -> None:
         if self._context is None or state.state != BridgeState.READY:
             return
         if self._lease_token is None:
             self._lease_token = uuid.uuid4().hex
+        self._context_revision += 1
         updates = dict(
             owner_kind="DEBUGGING", lease_token=self._lease_token, gdb_endpoint=state.gdb_target,
             reason=state.detail,
         )
         if state.binding is not None:
             updates["ssh_generation"] = state.binding.session_generation
-        self._context.apply_device_state(**updates)
+        self._apply_context_updates(updates, revision=self._context_revision)
 
     def _release_debug(self, reason: str) -> None:
+        self._context_revision += 1
         if self._context is not None:
             updates = dict(owner_kind=None, target_state=None, gdb_endpoint=None,
                            tcl_endpoint=None, reason=reason)
             if self._lease_token is not None:
                 updates["lease_token"] = self._lease_token
-            self._context.apply_device_state(**updates)
+            self._apply_context_updates(updates)
         self._lease_token = None
 
-    def _on_gateway_lease_lost(self) -> None:
+    def _on_gateway_lease_lost(self, epoch=None) -> None:
+        observed_epoch = self._lease_epoch if epoch is None else epoch
         def teardown():
+            if observed_epoch != self._lease_epoch:
+                return
             try:
-                self.bridge.stop()
+                self.stop()
             finally:
                 self._release_debug("Gateway lease lost")
+        if self._lifecycle_scheduler is not None:
+            self._schedule_lifecycle(teardown)
+            return
         dispatcher = self._ui_dispatcher
         if dispatcher is None:
             teardown()
@@ -128,16 +170,17 @@ class VsCodeDebugController:
 
     def _on_last_client_detached(self, lifecycle_generation: int) -> None:
         """Release only the B300 bridge after its final observed GDB client leaves."""
-        state = self.bridge.stop_if_generation(lifecycle_generation)
-        if state.state == BridgeState.STOPPED:
-            with self._client_reclaim_lock:
-                self._client_reclaimed = True
-            release = lambda: self._release_debug("VS Code client released debug ownership")
-            dispatcher = self._ui_dispatcher
-            if dispatcher is None:
-                release()
-            else:
-                dispatcher.submit(release)
+        def teardown():
+            state = self.bridge.stop_if_generation(lifecycle_generation)
+            if state.state == BridgeState.STOPPED:
+                if self._gateway_lease_client is not None:
+                    self._gateway_lease_client.close()
+                    self._gateway_lease_client = None
+                    self._lease_epoch += 1
+                with self._client_reclaim_lock:
+                    self._client_reclaimed = True
+                self._release_debug("VS Code client released debug ownership")
+        self._schedule_lifecycle(teardown)
 
     def observe_gateway_snapshot(self, snapshot) -> bool:
         observed = bool(self.bridge.observe_gateway_snapshot(snapshot))
@@ -234,10 +277,12 @@ class VsCodeDebugController:
                     and callable(getattr(session, "ensure_gateway_agent", None))
                     and callable(getattr(session, "acquire_gateway", None))):
                 try:
+                    self._lease_epoch += 1
+                    lease_epoch = self._lease_epoch
                     self._gateway_lease_client = self._lease_client_factory(
                         session, client_id=selected_profile,
                         client_label=selected_profile,
-                        on_lost=self._on_gateway_lease_lost,
+                        on_lost=lambda: self._on_gateway_lease_lost(lease_epoch),
                     )
                 except TypeError:
                     self._gateway_lease_client = self._lease_client_factory(
@@ -304,6 +349,7 @@ class VsCodeDebugController:
             if self._gateway_lease_client is not None:
                 self._gateway_lease_client.close()
                 self._gateway_lease_client = None
+                self._lease_epoch += 1
             self._release_debug("VS Code remote debug launch failed")
             raise
 
@@ -335,11 +381,16 @@ class VsCodeDebugController:
             raise
 
     def stop(self) -> VsCodeBridgeState:
-        state = self.bridge.stop()
-        if self._gateway_lease_client is not None:
-            self._gateway_lease_client.close()
-            self._gateway_lease_client = None
-        self._release_debug("VS Code debug stopped")
+        self._lease_epoch += 1
+        try:
+            state = self.bridge.stop()
+        finally:
+            try:
+                if self._gateway_lease_client is not None:
+                    self._gateway_lease_client.close()
+            finally:
+                self._gateway_lease_client = None
+                self._release_debug("VS Code debug stopped")
         return state
 
 

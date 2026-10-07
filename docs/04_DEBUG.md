@@ -4,9 +4,18 @@
 không nạp flash. Khi debugger kết nối, CPU có
 thể bị halt/reset nên chỉ dùng khi board và cơ cấu đang ở trạng thái an toàn.
 
-## GUI hiện tại: MONITOR và DEBUG
+## GUI Pulse: một mục Debug
 
-Production có năm trang **PROGRAM / MONITOR / DEBUG / DEVICE / SETTINGS**.
+Từ v0.24.5, mở **Debug**, chọn dự án và **Kết nối → Máy này** hoặc hồ sơ IPC,
+sau đó bấm **Mở debug**. Cả hai lựa chọn đều mở VS Code với cấu hình attach-only.
+Nếu IPC chưa xác thực, dùng **Đăng nhập SSH**. Mật khẩu của luồng Pulse chỉ giữ
+trong bộ nhớ tiến trình. Nhấn F5 trong VS Code để attach, Shift+F5 để dừng phiên,
+và **Dừng** trong B300 để giải phóng bridge/tunnel.
+
+## Giao diện nâng cao: MONITOR và DEBUG
+
+**Tùy chọn → Nâng cao / Nhật ký** mở năm trang **PROGRAM / MONITOR / DEBUG /
+DEVICE / SETTINGS**.
 
 - **MONITOR** quan sát qua các SWD/TCL read giới hạn, giữ MCU RUNNING. Chọn trang này khi cần theo dõi mà không halt/step/reset.
 - **DEBUG** chuẩn bị bridge cho **VS Code + Cortex-Debug**. VS Code quản lý source, breakpoint/watchpoint, variables, registers, call stack và step/continue. B300 quản lý ST-Link, OpenOCD, managed GDB, SSH tunnel và cleanup.

@@ -31,6 +31,8 @@ a = Analysis(
         (str(project_root / "branding" / "b300-industrial-mark.svg"), "branding"),
         (str(project_root / "branding" / "b300-stlink-wordmark.png"), "branding"),
         (str(project_root / "branding" / "b300-stlink-wordmark-dark.png"), "branding"),
+        (str(project_root / "branding" / "pulse-logo.png"), "branding"),
+        (str(project_root / "branding" / "pulse-wordmark.png"), "branding"),
         (str(project_root / "CHANGELOG.md"), "."),
         (str(build_commit_file), "."),
         (str(trusted_bootloader.image.path), "resources/firmware"),

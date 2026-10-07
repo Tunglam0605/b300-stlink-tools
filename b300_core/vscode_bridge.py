@@ -405,11 +405,25 @@ def launch_vscode(workspace: Path, *, executable: Optional[str] = None,
     if not root.is_dir():
         raise ValueError("VS Code workspace directory does not exist.")
     launcher = resolve_vscode(executable)
-    return process_factory(
+    # Codex/VS Code extension hosts run Electron as Node. GUI children must
+    # not inherit that mode or Code.exe rejects --new-window and exits.
+    environment = {key: value for key, value in os.environ.items()
+                   if key.upper() != "ELECTRON_RUN_AS_NODE"}
+    process = process_factory(
         (launcher, "--new-window", str(root)),
         shell=False,
+        env=environment,
         **child_process_kwargs(platform_name),
     )
+    try:
+        exit_code = process.wait(timeout=0.75)
+    except subprocess.TimeoutExpired:
+        # A GUI process may stay alive; the launcher can also exit zero after
+        # handing the new window request to an existing VS Code instance.
+        return process
+    if exit_code != 0:
+        raise RuntimeError("VS Code failed to open (exit code %s)." % exit_code)
+    return process
 
 
 class VsCodeDebugBridge:

@@ -10,6 +10,48 @@ terminal automation and structured `--json` evidence. The safety boundary is
 fixed: Bootloader is Sector 0--2; metadata is Sector 3; Application is Sector
 4--7 (`0x08010000..0x0807FFFF`).
 
+## Pulse GUI (v0.24.5+)
+
+The normal native GUI has two tasks: **Debug** and **Nạp code**. There is no
+separate remote-debug or VS Code-debug task.
+
+1. Use **Thiết lập máy** to prepare local prerequisites.
+2. Add/select the project with its local workspace and matching ELF/AXF.
+3. On **Debug**, choose **Kết nối → Máy này** for local ST-Link, or the saved
+   IPC/SSH profile for remote ST-Link. The saved default IPC stays selected;
+   returning from programming restores the last Debug connection.
+4. For IPC, use **Đăng nhập SSH** if needed; passwords stay in process memory.
+5. Press **Mở debug**. B300 prepares the attach-only configuration and opens
+   VS Code for either connection. Use F5 in VS Code to attach; Shift+F5 ends
+   its debug session, and **Dừng** releases the B300 bridge/tunnel.
+
+Monitoring, diagnostics, probe selection and additional programming workflows
+are under **Tùy chọn → Nâng cao / Nhật ký**. The simple **Nạp code** task uses
+local ST-Link and the existing preflight/confirmation; debug never programs.
+
+## Headless agent / SSH workflow
+
+For terminal automation, use the canonical CLI instead of driving GUI controls.
+Read the repository's DOWNLOAD.md, pin the requested version and choose the
+native CLI artifact only when terminal/headless automation is requested. Keep
+host/user/port/profile identity explicit; do not put passwords in files, logs,
+command arguments or skill examples. Reuse an authorized session or enrolled
+B300 SSH identity, or receive the password through a hidden prompt.
+
+On an existing IPC, inspect `b300-stlink --version --json` and
+`b300-stlink gateway doctor --json` first. Use
+`b300-stlink gateway quickstart --confirm-system-change --json` only when setup
+or repair is authorized. The managed Gateway Agent grants an exclusive debug
+lease and starts the owned OpenOCD on demand; do not start a parallel OpenOCD.
+
+Use the managed Client/debug commands in references/commands.md with the
+matching local symbols. The GUI's **Mở debug** opens VS Code; CLI
+`debug vscode` generates the attach configuration/kit and may require opening
+that workspace separately. Do not assume kit generation is a debugger attach.
+Observe READY and the current lease/generation, release tunnels/leases on exit,
+and stop on transport loss or mismatched symbols. Keep SSH and GDB loopback
+forwarding; never expose GDB/TCL to the network or add GDB load/restore.
+
 ## Before flash
 
 1. Identify the board, Application HEX, and probe serial when multiple probes

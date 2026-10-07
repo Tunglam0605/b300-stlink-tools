@@ -171,6 +171,17 @@ class GuiSmokeTests(unittest.TestCase):
 
         window.deleteLater.assert_not_called()
 
+    def test_smoke_entry_point_keeps_window_when_async_cleanup_fails(self) -> None:
+        from b300_gui.__main__ import main
+
+        window = mock.Mock()
+        window.close.return_value = False
+        window._pulse_cleanup_done = False
+        window._pulse_tasks.busy = False
+        with mock.patch("b300_gui.__main__.MainWindow", return_value=window):
+            self.assertEqual(main(["--smoke-test"]), 1)
+        window.deleteLater.assert_not_called()
+
     def test_smoke_entry_point_does_not_write_to_console(self) -> None:
         """The windowed PyInstaller launcher has no safe console output stream."""
         with mock.patch("builtins.print") as print_output:
