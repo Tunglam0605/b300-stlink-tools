@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Callable
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QObject, QTimer, Signal, Slot
 from .workers import FunctionWorker
 
 
@@ -54,7 +54,16 @@ class PulseTasks(QObject):
         self._outcome = _Outcome(error=RuntimeError(failure.message))
 
     @Slot()
-    def _finish(self):
+    def _finish(self, expected_worker=None):
+        worker = self._worker
+        if worker is None or (expected_worker is not None and worker is not expected_worker):
+            return
+        # finished() precedes native thread-local cleanup. Keep the ownership
+        # gate and wrapper alive until wait() confirms a full join, without
+        # blocking Qt's UI thread.
+        if not worker.wait(0):
+            QTimer.singleShot(1, self, lambda: self._finish(worker))
+            return
         worker, name, outcome = self._worker, self._name, self._outcome
         self._worker, self._outcome, self._name = None, None, ''
         worker.operation = None  # Drop closures, including submitted SSH secrets.

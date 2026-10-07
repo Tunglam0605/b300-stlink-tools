@@ -121,6 +121,11 @@ def run_split_cases(module: str, *, case_timeout: int | None = None) -> int:
 
             verdict = _read_verdict(child_result)
             if result.returncode:
+                print(
+                    "Child test process exited %s (verdict %s): %s"
+                    % (result.returncode, verdict or "missing", case.id()),
+                    file=sys.stderr,
+                )
                 write_split_verdict(False)
                 return result.returncode
             if verdict != "PASS":

@@ -12,6 +12,7 @@ permissions:
 
 env:
   QT_QPA_PLATFORM: offscreen
+  PYTHONFAULTHANDLER: "1"
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -99,7 +100,10 @@ jobs:
             $exitCode = $LASTEXITCODE
             $verdict = if (Test-Path $resultFile) { (Get-Content $resultFile -Raw).Trim() } else { '' }
             # A recorded assertion verdict cannot override a native process failure.
-            if ($exitCode -ne 0) { exit $exitCode }
+            if ($exitCode -ne 0) {
+              Write-Host "$module exited $exitCode (verdict: $verdict)."
+              exit $exitCode
+            }
             if ($verdict -ne 'PASS') {
               Write-Error "$module exited without a verified PASS sentinel."
               exit 1

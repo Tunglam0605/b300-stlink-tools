@@ -5,7 +5,7 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 import threading
 import time
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
@@ -51,6 +51,39 @@ class PulseTasksTests(unittest.TestCase):
             self.wait_for(lambda: not tasks.busy)
             timer.stop()
         self.assertEqual(outcomes, [('connect', 'ready', False)])
+
+    def test_finished_thread_retains_busy_gate_until_native_cleanup_is_joined(self):
+        from b300_gui.pulse_tasks import _Outcome
+        tasks = PulseTasks()
+        worker = Mock()
+        worker.wait.side_effect = [False, True]
+        tasks._worker, tasks._name, tasks._outcome = worker, 'close', _Outcome(value='closed')
+        observed, queued = [], []
+        tasks.completed.connect(lambda name, value: observed.append((name, value)))
+        with patch('PySide6.QtCore.QTimer.singleShot', side_effect=lambda *args: queued.append(args[-1])):
+            tasks._finish()
+            self.assertTrue(tasks.busy)
+            worker.deleteLater.assert_not_called()
+            self.assertEqual(observed, [])
+            queued.pop()()
+        self.assertFalse(tasks.busy)
+        worker.deleteLater.assert_called_once()
+        self.assertEqual(observed, [('close', 'closed')])
+
+    def test_stale_join_retry_cannot_finalize_a_new_task(self):
+        from b300_gui.pulse_tasks import _Outcome
+        tasks, old, new, queued = PulseTasks(), Mock(), Mock(), []
+        old.wait.side_effect = [False, True]
+        tasks._worker, tasks._name, tasks._outcome = old, 'old', _Outcome()
+        with patch('PySide6.QtCore.QTimer.singleShot', side_effect=lambda *args: queued.append(args[-1])):
+            tasks._finish()
+            tasks._finish(old)
+            tasks._worker, tasks._name, tasks._outcome = new, 'new', _Outcome()
+            queued.pop()()
+        self.assertIs(tasks._worker, new)
+        self.assertTrue(tasks.busy)
+        new.wait.assert_not_called()
+        new.deleteLater.assert_not_called()
 
     def test_failure_preserves_exception_and_can_start_again(self):
         self.assertIsNotNone(PulseTasks)
