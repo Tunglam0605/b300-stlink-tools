@@ -25,7 +25,9 @@ class PulseView(QWidget):
         workspace = QFrame(); workspace.setObjectName("PulseWorkspace"); workspace.setMinimumHeight(380); workspace.setMaximumHeight(440); work = QHBoxLayout(workspace); work.setContentsMargins(32, 28, 32, 28); work.setSpacing(32)
         self.stack = QStackedWidget(); self.stack.setObjectName("PulseStack"); self.debug_page = self._debug_page(); self.program_page = self._program_page()
         for page in (self.debug_page, self.program_page): self.stack.addWidget(page)
-        self.stack.setMaximumWidth(500); self.stack.setMaximumHeight(310); work.addWidget(self.stack, 1, Qt.AlignmentFlag.AlignVCenter)
+        # Native font metrics differ across platforms; the workspace bounds the
+        # panel while its layout keeps the full title and controls visible.
+        self.stack.setMaximumWidth(500); work.addWidget(self.stack, 1, Qt.AlignmentFlag.AlignVCenter)
         self.illustration = PulseBrand(); work.addWidget(self.illustration, 0, Qt.AlignmentFlag.AlignVCenter); root.addWidget(workspace)
         root.addStretch(1)
         dock = QFrame(); dock.setObjectName("PulseDock"); dl = QHBoxLayout(dock); dl.setContentsMargins(12, 10, 12, 10); dl.setSpacing(8)
